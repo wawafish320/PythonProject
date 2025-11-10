@@ -1,0 +1,81 @@
+Warning: tqdm not found. For a progress bar, run: pip install tqdm
+[ARPG-PATCH] 参数准备完毕，即将进入训练入口: train_entry()
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[IndexOpt] stride=1 min_speed=0.0 -> windows=89
+[AngVelUnits] meta says rad/s; skip harmonization.
+[Export][Dims] Dx=420, Dy=276, Dc=7 | L=2, H=512, K=16
+[MPL][WARN] cannot load encoder: [Errno 2] No such file or directory: 'models/motion_encoder.pth'
+[LossWeights] w_speed_curve=0.2 w_rot_geo=0.01 w_rot_ortho=0.001 w_free=0.0 free_k=0
+[Dt] dt_traj=0.016667s | dt_bone=0.016667s (dataset fps=60.0)
+[LR-DBG:init] arg_lr=3.00e-05 opt_pg0=3.00e-05
+[s_eff][Y] min=0.001 med=0.06325 max=0.9559
+[s_eff][X] min=1e-06 med=0.1204 max=1
+[s_eff] alpha=1.1038 | rot6d_x=276 rot6d_y=276
+[s_eff][CHK] yaw π=3.142 | rv_scales=True | ang_scales=True
+[DiagSlices][final] yaw=None rootvel=None angvel=None rot6d_x=(6, 282) rot6d_y=(0, 276)
+[DiagSlices][X] yaw_x=slice(5, 6, None) rootvel_x=slice(3, 5, None) angvel_x=slice(282, 420, None) rot6d_x=(6, 282)
+[DiagSlices][Y] yaw=None rootvel=None angvel=None rot6d_y=(0, 276)
+[Bundle->Trainer post] MuX/StdX: 420 420 | MuY/StdY: 276 276
+[NormDiag] shapes: Xz (16, 60, 420) Yz (16, 60, 276) muX 1 seX 1 muY 1 seY 1
+[NormDiag] roundtrip_err: X=2.384185791015625e-07  Y=4.76837158203125e-07  thr=8.0
+[NormDiag] X.yaw(z): absmax=1.468 p99=1.468 p999=1.468 pct>|thr|=0.00% mean=0.057 std=1.077
+[NormDiag] X.rootvel(z): absmax=11.859 p99=7.030 p999=11.540 pct>|thr|=0.52% mean=-0.173 std=1.411
+[NormDiag] X.angvel(z): absmax=1.100 p99=0.866 p999=1.018 pct>|thr|=0.00% mean=0.001 std=0.306
+[NormDiag] X.rot6d(z): absmax=4.318 p99=2.559 p999=3.309 pct>|thr|=0.00% mean=-0.049 std=0.813
+[NormDiag] Y.rot6d(z): absmax=16.006 p99=4.727 p999=9.149 pct>|thr|=0.18% mean=-0.100 std=1.237
+[NormDiag] Y.rot6d(raw): min=-1.0000 p1=-0.9909 p50=0.0105 p99=1.0000 max=1.0000
+[NormDiag] X top-8 dims by p99(|z|): [(4, 8.337939262390137), (0, 5.4476447105407715), (72, 3.9104230403900146), (76, 3.594703197479248), (34, 3.566575765609741), (197, 3.499016284942627), (84, 3.489276647567749), (156, 3.383533239364624)]
+[LR-DBG:fit-epoch001-start] pg0=3.00e-05
+[X:RootYaw] rms|z|=1.147
+[X:RootVelocity] rms|z|=0.886
+[X:AngVel(ALL)] rms|z|=0.336
+[GeoLoss] TRAIN denorm(Y.rot6d) applied on flat D.
+[LR-DBG:after-opt-step] pg0=3.00e-05
+[LR-DBG:after-opt-step] pg0=3.00e-05
+[LR-DBG:after-opt-step] pg0=3.00e-05
+[LR-DBG:after-opt-step] pg0=3.00e-05
+[LR-DBG:after-opt-step] pg0=3.00e-05
+[LR-DBG:after-opt-step] pg0=3.00e-05
+[LR-DBG:after-opt-step] pg0=3.00e-05
+[LR-DBG:after-opt-step] pg0=3.00e-05
+[LR-DBG:after-opt-step] pg0=3.00e-05
+[LR-DBG:after-opt-step] pg0=3.00e-05
+[Train][ep 001] loss=0.0058
+[LossParts] motion=0.0000 | rot_geo=0.1414 | rot_ortho=0.0007 | rot_ortho_raw=0.7396 | speed_curve=0.0182 | energy=0.0000
+[Diag][RootHeight] pred_mean_range=0.000 pred_max_range=0.000
+[Diag][RootHeight] gt_mean_range=0.000
+[Diag][RootVelocity] mean=0.787 max=0.924
+[Diag][FootContact] L_ratio_mean=0.905 L_switch_avg=6.97
+[Diag][FootContact] R_ratio_mean=0.834 R_switch_avg=8.31
+[Diag][Limb] thigh_L: disp_pred=6.96° disp_gt=35.03° ang_pred=3.49 rad/s ang_gt=1.91 rad/s
+[Diag][Limb] thigh_R: disp_pred=5.77° disp_gt=29.40° ang_pred=3.42 rad/s ang_gt=1.50 rad/s
+[Diag][Limb] calf_L: disp_pred=3.93° disp_gt=46.16° ang_pred=2.20 rad/s ang_gt=4.42 rad/s
+[Diag][Limb] calf_R: disp_pred=6.58° disp_gt=38.19° ang_pred=3.62 rad/s ang_gt=2.10 rad/s
+[Diag][Limb] upperarm_L: disp_pred=6.03° disp_gt=23.31° ang_pred=3.18 rad/s ang_gt=0.76 rad/s
+[Diag][Limb] upperarm_R: disp_pred=4.39° disp_gt=22.25° ang_pred=2.11 rad/s ang_gt=0.99 rad/s
+[Diag][Limb] forearm_L: disp_pred=7.67° disp_gt=31.49° ang_pred=4.68 rad/s ang_gt=0.82 rad/s
+[Diag][Limb] forearm_R: disp_pred=2.82° disp_gt=18.96° ang_pred=1.13 rad/s ang_gt=0.59 rad/s
+[ValFree@ep 001] MSEnormY=1.672371 | GeoDeg=12.906° | YawAbsDeg=12.219 | RootVelMAE=0.70145 | AngVelMAE=0.37619 rad/s | AngMagRel=0.585 | AngVecSRE=0.931 | StaticExcess=0.04084 rad/s
+[Gap@ep 001] teach_loss=0.004228 | GeoDeg=12.906° | AngVelMAE=0.37619 | MSEnormY=1.672371
+[Diag][RootHeight] pred_mean_range=0.000 pred_max_range=0.000
+[Diag][RootHeight] gt_mean_range=0.000
+[Diag][RootVelocity] mean=0.798 max=0.918
+[Diag][FootContact] L_ratio_mean=0.911 L_switch_avg=6.47
+[Diag][FootContact] R_ratio_mean=0.825 R_switch_avg=9.09
+[Diag][Limb] thigh_L: disp_pred=7.43° disp_gt=30.88° ang_pred=3.47 rad/s ang_gt=1.85 rad/s
+[Diag][Limb] thigh_R: disp_pred=5.82° disp_gt=26.99° ang_pred=3.51 rad/s ang_gt=1.45 rad/s
+[Diag][Limb] calf_L: disp_pred=4.35° disp_gt=49.40° ang_pred=2.24 rad/s ang_gt=4.31 rad/s
+[Diag][Limb] calf_R: disp_pred=6.84° disp_gt=39.36° ang_pred=3.82 rad/s ang_gt=2.12 rad/s
+[Diag][Limb] upperarm_L: disp_pred=6.13° disp_gt=20.62° ang_pred=3.17 rad/s ang_gt=0.77 rad/s
+[Diag][Limb] upperarm_R: disp_pred=4.62° disp_gt=18.24° ang_pred=2.21 rad/s ang_gt=0.95 rad/s
+[Diag][Limb] forearm_L: disp_pred=7.47° disp_gt=28.83° ang_pred=4.59 rad/s ang_gt=0.87 rad/s
+[Diag][Limb] forearm_R: disp_pred=2.81° disp_gt=17.49° ang_pred=1.17 rad/s ang_gt=0.59 rad/s
+[ValFree@last] MSEnormY=1.455279 GeoDeg=12.799 YawAbsDeg=8.529 RootVelMAE=0.71006AngVelMAE=0.36955 rad/s
+[Export][ENTER] preparing to export ONNX...
+[Export][ProbeDims] Dx=420 Dy=276 Dc=7
+[Export][Sanity] input dims check OK
+[Export][BatchShapes] {'motion': (16, 60, 420), 'gt_motion': (16, 60, 276), 'clip_id': (16,), 'start': (16,), 'cond_in': (16, 60, 7), 'cond_tgt': (16, 60, 7), 'cond_tgt_raw': (16, 60, 7)}
+[Export][Dims] Dx=420, Dy=276, Dc=7 | L=2, H=512, K=16
+[Export][Check] batch Y shape=(16, 60, 276)（仅核对，不参与导出）
+[Export][ERROR] Module onnx is not installed!

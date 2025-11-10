@@ -1,0 +1,28 @@
+{
+  "src_offsets": "config/FullOffsets.json",
+  "ue_offsets": "config/FullOffsets.json",
+  "A_src_to_ue": [
+    [
+      1.0,
+      2.346421652812423e-16,
+      -1.464246232693387e-16
+    ],
+    [
+      -1.4639648805623624e-16,
+      0.9999999999999998,
+      -1.244214899835169e-16
+    ],
+    [
+      -1.856508822469725e-16,
+      5.101902612256988e-17,
+      1.0
+    ]
+  ],
+  "unit_scale": 0.9999999999999998,
+  "determinant": 0.9999999999999998,
+  "rms_error_cm": 4.606037638219851e-15,
+  "rotation_close_to_identity_deg<=1": true,
+  "scale_close_to_1_abs<=1e-3": true,
+  "CONFORMS_TO_UE": true,
+  "notes": "If CONFORMS_TO_UE=false, convert vectors/poses by: p_ue = A @ p_src * unit_scale; R_ue = A @ R_src @ A.T (for rotation matrices). For quaternions, convert to matrix, transform, then convert back."
+}
