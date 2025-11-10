@@ -4294,10 +4294,12 @@ class Trainer:
                 joint_weights = self._joint_weights(pred_root, J)
                 weights_sum = joint_weights.sum().clamp_min(1e-6)
                 w = joint_weights.view(1, 1, -1)
-                geo_local = geodesic_R(pred_root, gt_root) * (180.0 / _math.pi)
+                geo_local_rad = geodesic_R(pred_root, gt_root)
+                geo_local = geo_local_rad * (180.0 / _math.pi)
                 geo_local_mean = (geo_local * w).sum() / (weights_sum * geo_local.shape[0] * geo_local.shape[1])
                 stats['rot_local_mean_deg'] = float(geo_local_mean.item())
                 stats['rot_local_step_deg'] = ((geo_local * w).sum(dim=-1) / weights_sum).mean(dim=0).detach().cpu().tolist()
+                stats['_geo_local_rad'] = geo_local_rad.detach()
                 fk_pred = self._fk_positions(pred_root)
                 fk_gt = self._fk_positions(gt_root)
                 if fk_pred is not None and fk_gt is not None:
@@ -4305,62 +4307,27 @@ class Trainer:
                     fk_cm = fk_err * 100.0
                     stats['fk_pos_cm'] = float(((fk_cm * w).sum() / (weights_sum * fk_cm.shape[0] * fk_cm.shape[1])).item())
                     stats['fk_pos_step_cm'] = (((fk_cm * w).sum(dim=-1) / weights_sum).mean(dim=0)).detach().cpu().tolist()
-                if steps >= 2:
-                    fps = float(getattr(self, 'bone_hz', 60.0) or 60.0)
-                    pred_parent = self._parent_relative_matrices(pred_root)
-                    gt_parent = self._parent_relative_matrices(gt_root)
-                    pred_w = angvel_vec_from_R_seq(pred_parent, fps=fps)
-                    gt_w = angvel_vec_from_R_seq(gt_parent, fps=fps)
-                    if pred_w.shape[-3] != gt_w.shape[-3]:
-                        L = min(pred_w.shape[-3], gt_w.shape[-3])
-                        pred_w = pred_w[:, :L]
-                        gt_w = gt_w[:, :L]
-                    pred_norm = pred_w.norm(dim=-1)
-                    gt_norm = gt_w.norm(dim=-1)
-                    mask = (pred_norm > 1e-5) & (gt_norm > 1e-5)
-                    if mask.any():
-                        denom = (pred_norm * gt_norm).clamp_min(1e-6)
-                        cos = ((pred_w * gt_w).sum(dim=-1) / denom).clamp(-1.0 + 1e-6, 1.0 - 1e-6)
-                        ang = torch.acos(cos) * (180.0 / _math.pi)
-                        stats['angvel_dir_mean_deg'] = float(ang[mask].mean().item())
-                        ang_step = ang.mean(dim=(0, 2)).detach().cpu().tolist()
-                        stats['angvel_dir_step_deg'] = ang_step
-                    # std ratio diagnostics
-                    try:
-                        Tav = pred_w.shape[1]
-                        std_ratios = []
-                        for t in range(Tav):
-                            pred_flat = pred_w[:, t].reshape(B, -1)
-                            gt_flat = gt_w[:, t].reshape(B, -1)
-                            pred_std = float(pred_flat.std().item())
-                            gt_std = float(gt_flat.std().item()) if gt_flat.numel() > 0 else float('nan')
-                            ratio = pred_std / (gt_std + 1e-8) if _math.isfinite(gt_std) else float('nan')
-                            std_ratios.append({'pred': pred_std, 'gt': gt_std, 'ratio': ratio})
-                        stats['angvel_std_ratio'] = std_ratios
-                    except Exception:
-                        pass
-        if pred_w is not None:
-            stats['_angvel_pred_seq'] = pred_w.detach()
-        if gt_w is not None:
-            stats['_angvel_gt_seq'] = gt_w.detach()
-        if pred_w is not None and gt_w is not None:
+        geo_local_tensor_rad = stats.get('_geo_local_rad')
+        limb_summary = {}
+        collect_fn = getattr(self.loss_fn, '_collect_limb_geo_stats', None)
+        if geo_local_tensor_rad is not None and callable(collect_fn):
             try:
-                stats['angvel_dir_summary'] = self._summarize_angvel_dir(pred_w, gt_w)
+                limb_summary = collect_fn(geo_local_tensor_rad)
             except Exception as exc:
-                print(f"[HistDrift][ERR] summarize_angvel_dir failed: {exc}")
+                print(f"[HistDrift][ERR] limb summary failed: {exc}")
         try:
             if not stats:
                 return
             geo_val = stats.get('rot_geo_mean_deg', float('nan'))
-            ang_val = stats.get('angvel_dir_mean_deg', float('nan'))
-            summary = stats.get('angvel_dir_summary') or {}
+            ang_val = stats.get('rot_local_mean_deg', float('nan'))
             extra = ""
-            if summary:
-                extra = (
-                    f" raw={summary.get('raw', float('nan')):.2f}°"
-                    f" weighted={summary.get('weighted', float('nan')):.2f}°"
-                    f" smooth={summary.get('smooth', float('nan')):.2f}°"
-                )
+            if limb_summary:
+                limb_raw = limb_summary.get('rot_geo_limb_deg', float('nan'))
+                limb_weighted = limb_summary.get('rot_geo_limb_over_torso', float('nan'))
+                if _math.isfinite(limb_raw):
+                    extra += f" limb={limb_raw:.2f}°"
+                if _math.isfinite(limb_weighted):
+                    extra += f" limb/torso={limb_weighted:.2f}"
             fk_val = stats.get('fk_pos_cm')
             fk_extra = ""
             if isinstance(fk_val, (float, int)) and _math.isfinite(fk_val):
@@ -4376,49 +4343,30 @@ class Trainer:
                 f"rot_geo={geo_val:.2f}° ang_dir={ang_val:.2f}° steps={steps}{extra}{local_extra}{fk_extra}"
             )
             geo_curve = stats.get('rot_geo_step_deg')
-            ang_curve = stats.get('angvel_dir_step_deg')
             local_curve = stats.get('rot_local_step_deg')
             fk_curve = stats.get('fk_pos_step_cm')
-            std_curve = stats.get('angvel_std_ratio')
-            per_step_pred = stats.get('_angvel_pred_seq')
-            per_step_gt = stats.get('_angvel_gt_seq')
+            geo_local_tensor_rad = stats.get('_geo_local_rad')
             if isinstance(geo_curve, list):
                 for idx, val in enumerate(geo_curve, start=1):
-                    ang_val_step = ang_curve[idx - 1] if isinstance(ang_curve, list) and idx - 1 < len(ang_curve) else float('nan')
-                    local_val_step = local_curve[idx - 1] if isinstance(local_curve, list) and idx - 1 < len(local_curve) else float('nan')
+                    ang_val_step = local_curve[idx - 1] if isinstance(local_curve, list) and idx - 1 < len(local_curve) else float('nan')
+                    local_val_step = ang_val_step
                     fk_val_step = fk_curve[idx - 1] if isinstance(fk_curve, list) and idx - 1 < len(fk_curve) else float('nan')
-                    std_info = std_curve[idx - 1] if isinstance(std_curve, list) and idx - 1 < len(std_curve) else None
-                    step_summary = None
-                    if isinstance(per_step_pred, torch.Tensor) and isinstance(per_step_gt, torch.Tensor):
-                        try:
-                            step_summary = self._summarize_angvel_dir(
-                                per_step_pred[:, idx - 1:idx],
-                                per_step_gt[:, idx - 1:idx],
-                            )
-                        except Exception as exc:
-                            print(f"[HistDrift][ERR] step_summary failed (step={idx}): {exc}")
-                            step_summary = None
                     summary_txt = ""
-                    if step_summary:
-                        summary_txt = (
-                            f" raw={step_summary.get('raw', float('nan')):.2f}°"
-                            f" weighted={step_summary.get('weighted', float('nan')):.2f}°"
-                        )
-                    if std_info:
-                        ratio = std_info.get('ratio', float('nan'))
-                        gt_std = std_info.get('gt', float('nan'))
-                        pred_std = std_info.get('pred', float('nan'))
-                        if not (_math.isnan(ratio) or ratio == float('inf')):
-                            print(
-                                "[HistDrift]"
-                                f"[ep {int(epoch):03d}]"
-                                f"[bi {int(batch_idx):04d}]"
-                                f"[step {idx:02d}] rot_geo={val:.2f}° ang_dir={ang_val_step:.2f}° "
-                                f"angvel_std GT={gt_std:.3f} Pred={pred_std:.3f} ratio={ratio:.2f}"
-                                f"{summary_txt}"
-                            )
-                            continue
-                    if not (_math.isnan(ang_val_step) or (summary_txt and 'nan' in summary_txt)):
+                    if isinstance(geo_local_tensor_rad, torch.Tensor) and geo_local_tensor_rad.shape[1] >= idx and callable(collect_fn):
+                        try:
+                            step_tensor = geo_local_tensor_rad[:, idx - 1:idx]
+                            limb_step = collect_fn(step_tensor)
+                        except Exception as exc:
+                            print(f"[HistDrift][ERR] limb step summary failed (step={idx}): {exc}")
+                            limb_step = None
+                        if limb_step:
+                            limb_deg = limb_step.get('rot_geo_limb_deg', float('nan'))
+                            torso_deg = limb_step.get('rot_geo_torso_deg', float('nan'))
+                            if _math.isfinite(limb_deg):
+                                summary_txt += f" limb={limb_deg:.2f}°"
+                            if _math.isfinite(torso_deg):
+                                summary_txt += f" torso={torso_deg:.2f}°"
+                    if not _math.isnan(ang_val_step):
                         extra_txt = ""
                         if not (_math.isnan(local_val_step) or local_val_step in (float('inf'), float('-inf'))):
                             extra_txt += f" local={local_val_step:.2f}°"
@@ -4428,11 +4376,10 @@ class Trainer:
                             "[HistDrift]"
                             f"[ep {int(epoch):03d}]"
                             f"[bi {int(batch_idx):04d}]"
-                            f"[step {idx:02d}] rot_geo={val:.2f}° ang_dir={ang_val_step:.2f}°{extra_txt or ''}{summary_txt or ''}"
+                            f"[step {idx:02d}] rot_geo={val:.2f}° ang_dir={ang_val_step:.2f}°{extra_txt or ''}{summary_txt}"
                         )
         finally:
-            stats.pop('_angvel_pred_seq', None)
-            stats.pop('_angvel_gt_seq', None)
+            stats.pop('_geo_local_rad', None)
 
     def _joint_group_masks(self, J: int, bone_names: Optional[Sequence[str]] = None):
         masks = {}
