@@ -544,8 +544,6 @@ def __apply_layout_center(ds_train, trainer):
     trainer.normalizer = DataNormalizer(
         mu_x=_center.mu_x, std_x=_center.std_x,
         mu_y=_center.mu_y, std_y=_center.std_y,
-        s_eff_x=getattr(trainer, 's_eff_x', None),
-        s_eff_y=getattr(trainer, 's_eff_y', None),
         y_to_x_map=_center.materialize_y_to_x_map(),
         yaw_x_slice=trainer.yaw_x_slice,   yaw_y_slice=trainer.yaw_slice,
         rootvel_x_slice=trainer.rootvel_x_slice, rootvel_y_slice=trainer.rootvel_slice,
@@ -557,70 +555,7 @@ def __apply_layout_center(ds_train, trainer):
         angvel_std=getattr(ds_train, 'angvel_std', None),
     )
 
-    # 4) 同步计算并注入 s_eff_y 与 s_eff_x（支持 282→276 的裁剪）
-    try:
-        # 4.1 取必要材料
-        ylay = _center.output_layout   # dict: {'BoneRotations6D': {'start':..., 'size':...}, ...}
-        xlay = _center.state_layout
-        std_y = _center.std_y          # np.ndarray, shape=[Dy]
-        std_x = _center.std_x          # np.ndarray, shape=[Dx]
-
-        # Rot6D：alpha*prior floor（按你的模板）
-        priors = np.asarray(_center.bundle["group_priors_rot6d"]["prior_per_dim"], dtype=np.float32)  # len=282
-        alpha  = float(_center.bundle["cond_norm_config"]["floor_rot6d"]["alpha"])  # e.g. 1.1037
-
-        sl_y = parse_layout_entry(ylay.get("BoneRotations6D"), "BoneRotations6D")
-        sl_x = parse_layout_entry(xlay.get("BoneRotations6D"), "BoneRotations6D")
-        assert isinstance(sl_y, slice) and isinstance(sl_x, slice), "[s_eff] Rot6D 切片缺失"
-
-        Dy_r6 = sl_y.stop - sl_y.start  # 276
-        Dx_r6 = sl_x.stop - sl_x.start  # 276
-
-        def _align_priors(target_len: int) -> np.ndarray:
-            if len(priors) == target_len:
-                return priors
-            if len(priors) == target_len + 6:
-                return priors[6:6 + target_len]  # 丢掉 root 的 6 维
-            print(f"[s_eff][WARN] prior_len={len(priors)} 与 target_len={target_len} 不匹配，使用常量 1.0 回退")
-            return np.ones(target_len, dtype=np.float32)
-
-        prior_y = _align_priors(Dy_r6)
-        prior_x = _align_priors(Dx_r6)
-
-        s_eff_y = std_y.copy()
-        s_eff_x = std_x.copy()
-
-        y_block = s_eff_y[sl_y.start:sl_y.stop]
-        x_block = s_eff_x[sl_x.start:sl_x.stop]
-        y_block = np.maximum(y_block, alpha * prior_y)
-        x_block = np.maximum(x_block, alpha * prior_x)
-        y_block = np.maximum(y_block, 1e-3)
-        x_block = np.maximum(x_block, 1e-3)
-        s_eff_y[sl_y.start:sl_y.stop] = y_block
-        s_eff_x[sl_x.start:sl_x.stop] = x_block
-
-        # 4.2 注入到 loss（_pick_s_eff 会 .to(device,dtype) 并按 D 适配）
-        trainer.loss_fn.s_eff_y = torch.as_tensor(s_eff_y, dtype=torch.float32)
-        # 你这版 loss 支持 X 的 z-safe，所以一并注入
-        trainer.loss_fn.s_eff_x = torch.as_tensor(s_eff_x, dtype=torch.float32)
-
-        # 4.3 一次性诊断
-        if not getattr(trainer.loss_fn, "_s_eff_dbg_once", False):
-            def _stats(arr, name):
-                m, M = float(arr.min()), float(arr.max())
-                med = float(np.median(arr))
-                print(f"[s_eff][{name}] min={m:.4g} med={med:.4g} max={M:.4g}")
-
-            _stats(s_eff_y, "Y"); _stats(s_eff_x, "X")
-            print(f"[s_eff] alpha={alpha:.4f} | rot6d_x={Dx_r6} rot6d_y={Dy_r6}")
-            print(f"[s_eff][CHK] yaw π={np.pi:.3f} | rv_scales={_center.bundle.get('tanh_scales_rootvel', None) is not None} | "
-                  f"ang_scales={_center.bundle.get('tanh_scales_angvel', None) is not None}")
-            trainer.loss_fn._s_eff_dbg_once = True
-
-    except Exception as e:
-        print(f"[s_eff][ERROR] 计算/注入失败：{e}，回退到 Std。")
-
-    # 5) 诊断输出（保持你原来的格式）
+    # 4) 诊断输出（保持你原来的格式）
     xlay = getattr(trainer, "_x_layout", getattr(ds_train, "state_layout", None))
     ylay = getattr(trainer, "_y_layout", getattr(ds_train, "output_layout", None))
 
@@ -641,12 +576,6 @@ def __apply_layout_center(ds_train, trainer):
     len_sx = int(sx.numel()) if hasattr(sx, 'numel') else (len(sx) if sx is not None else 0)
     len_my = int(my.numel()) if hasattr(my, 'numel') else (len(my) if my is not None else 0)
     len_sy = int(sy.numel()) if hasattr(sy, 'numel') else (len(sy) if sy is not None else 0)
-
-    print(f"[DiagSlices][final] yaw={yaw} rootvel={rootv} angvel={angv} rot6d_x={rot6d_x_span} rot6d_y={rot6d_y_span}")
-    print(f"[DiagSlices][X] yaw_x={yaw_x} rootvel_x={rootv_x} angvel_x={angv_x} rot6d_x={rot6d_x_span}")
-    print(f"[DiagSlices][Y] yaw={yaw} rootvel={rootv} angvel={angv} rot6d_y={rot6d_y_span}")
-    print(f"[Bundle->Trainer post] MuX/StdX: {len_mx} {len_sx} | MuY/StdY: {len_my} {len_sy}")
-
 
 from torch import nn
 
@@ -2086,57 +2015,11 @@ class EventMotionModel(nn.Module):
         return meta
 
 class MotionJointLoss(nn.Module):
-    def _pick_s_eff(self, D: int, device, dtype):
-        """
-        Return per-dim effective scale tensor of length D.
-        Priority: match Y length -> match X length -> merge by layout; missing values raise.
-        Strictly uses 'state_layout' and 'output_layout' from self.meta if present.
-        """
-        import torch, math
-        if getattr(self, 's_eff_y', None) is not None and self.s_eff_y.numel() == D:
-            return self.s_eff_y.to(device=device, dtype=dtype).view(1, -1)
-        if getattr(self, 's_eff_x', None) is not None and self.s_eff_x.numel() == D:
-            return self.s_eff_x.to(device=device, dtype=dtype).view(1, -1)
-        if getattr(self, 'meta', None):
-            y_layout = (self.meta.get('output_layout') or {})
-            x_layout = (self.meta.get('state_layout') or {})
-            s = torch.empty(D, device=device, dtype=dtype)
-            s[:] = float('nan')
-            if getattr(self, 's_eff_y', None) is not None and isinstance(y_layout, dict):
-                for k, v in y_layout.items():
-                    st, sz = int(v[0]), int(v[1])
-                    if st >= 0 and st + sz <= self.s_eff_y.numel() and st + sz <= D:
-                        s[st:st+sz] = self.s_eff_y[st:st+sz].to(device=device, dtype=dtype)
-            if getattr(self, 's_eff_x', None) is not None and isinstance(x_layout, dict):
-                for k, v in x_layout.items():
-                    st, sz = int(v[0]), int(v[1])
-                    if st >= 0 and st + sz <= self.s_eff_x.numel() and st + sz <= D:
-                            m = s[st:st+sz]
-                            mask = torch.isnan(m)
-                            if mask.any():
-                                m[mask] = self.s_eff_x[st:st+sz].to(device=device, dtype=dtype)[mask]
-                                s[st:st+sz] = m
-            if torch.isnan(s).any():
-                missing = int(torch.isnan(s).sum().item())
-                msg = self._format_template_hint(
-                    f"[FATAL] MotionJointLoss.s_eff 缺失 {missing} 个维度，无法从模板恢复有效尺度。"
-                )
-                raise RuntimeError(msg)
-            return s.view(1, -1)
-        msg = self._format_template_hint(
-            "[FATAL] MotionJointLoss.s_eff 未注入，请确认 bundle_json 与 norm_template 是否一致。"
-        )
-        raise RuntimeError(msg)
-
-
     def __init__(
         self,
         w_attn_reg: float = 0.01,
         output_layout: Dict[str, Any] = None,
         fps: float = 60.0,
-        traj_hz: float = 60.0,
-        use_huber: bool = True,
-        huber_delta: float = 1.0,
         rot6d_spec: Dict[str, Any] = None,
         w_rot_geo: float = 0.0,
         w_rot_ortho: float = 0.0,
@@ -2144,9 +2027,6 @@ class MotionJointLoss(nn.Module):
         w_rot_delta: float = 1.0,
         w_rot_delta_root: float = 0.0,
         w_rot_log: float = 0.0,
-        w_angvel: float = 0.0,
-        w_angvel_dir: float = 0.0,
-        w_ang_acc: float = 0.0,
         w_cond_yaw: float = 0.0,
         cond_yaw_min_speed: float = 0.0,
         meta: Optional[Dict[str, Any]] = None,
@@ -2156,23 +2036,17 @@ class MotionJointLoss(nn.Module):
         super().__init__()
         self.meta = dict(meta) if isinstance(meta, dict) else {}
         self.w_attn_reg = float(w_attn_reg)
-        self.use_huber = bool(use_huber)
-        self.huber_delta = float(huber_delta)
         self.w_rot_geo = float(w_rot_geo)
         self.w_rot_ortho = float(w_rot_ortho)
         self.w_rot_delta = float(w_rot_delta)
         self.w_rot_delta_root = float(w_rot_delta_root)
         self.w_rot_log = float(w_rot_log)
-        self.w_angvel = float(w_angvel)
-        self.w_angvel_dir = float(w_angvel_dir)
-        self.w_ang_acc = float(w_ang_acc)
         self.w_cond_yaw = float(w_cond_yaw)
         self.cond_yaw_min_speed = float(cond_yaw_min_speed)
         self.w_fk_pos = float(w_fk_pos)
         self.w_rot_local = float(w_rot_local)
         self.angvel_eps = 1e-6
         self.fps = float(fps)
-        self.traj_hz = float(traj_hz)
         self.output_layout = output_layout or {}
         self.rot6d_spec = rot6d_spec or {}
         self._rot6d_columns = self._resolve_rot6d_columns(self.rot6d_spec)
@@ -2187,10 +2061,6 @@ class MotionJointLoss(nn.Module):
         self.template_hint: Optional[str] = None
         self.bundle_hint: Optional[str] = None
         self._joint_weight_cache: dict[tuple[str, str, int], torch.Tensor] = {}
-        # z-safe loss params (filled later from template)
-        self.s_eff_y = None
-        self.sigma_cap = 6.0
-        self.s_eff_x = None
         self.root_idx = 0
         self.bone_names: list[str] = []
         self.limb_monitor_names: list[str] = [
@@ -2331,20 +2201,6 @@ class MotionJointLoss(nn.Module):
             return cache[key]
         import torch
         weights = torch.ones(joint_count, device=device, dtype=dtype)
-        rot_slice = None
-        if isinstance(self.group_slices, dict):
-            rot_slice = self.group_slices.get('BoneRotations6D')
-        if rot_slice and self.s_eff_y is not None:
-            try:
-                s_eff = torch.as_tensor(self.s_eff_y, dtype=dtype, device=device)
-                if rot_slice.stop <= s_eff.numel():
-                    rot_vals = s_eff[rot_slice]
-                    if rot_vals.numel() == joint_count * 6:
-                        rot_vals = rot_vals.view(joint_count, -1)
-                        weights = (1.0 / rot_vals.clamp_min(1e-3)).mean(dim=-1)
-            except Exception:
-                pass
-        weights = weights / weights.mean().clamp_min(1e-6)
         cache[key] = weights
         return weights
 
@@ -2421,46 +2277,6 @@ class MotionJointLoss(nn.Module):
         Z = lambda v: gt_motion.new_tensor(float(v))
         pm, gm = (pred_motion, gt_motion)
         assert pm.shape == gm.shape, f'pred/gt shape mismatch: {pm.shape} vs {gm.shape}'
-        D = pm.shape[-1]
-        # === z-safe motion loss (优先使用) ===
-        s = self._pick_s_eff(D=pm.shape[-1], device=pm.device, dtype=pm.dtype)
-
-        
-        # --- z-safe on non-rot6d dims; yaw uses wrapped difference ---
-        # slices
-        yaw_sl = self.group_slices.get('RootYaw', None) or self.group_slices.get('Yaw', None)
-        rot_sl = self.group_slices.get('BoneRotations6D', None)
-
-        # residual in raw domain semantics for linear dims
-        r = pm - gm
-        # yaw: wrap to [-pi, pi]
-        if isinstance(yaw_sl, slice):
-            r[..., yaw_sl] = torch.remainder(r[..., yaw_sl] + math.pi, 2.0 * math.pi) - math.pi
-
-        # s_eff per-dim
-        s_use = s.view(*([1] * (r.ndim - 1)), -1).clamp_min(1e-6)
-
-        # mask out rot6d dims from this term
-        if isinstance(rot_sl, slice):
-            mask = torch.ones(r.shape[-1], dtype=torch.float32, device=r.device)
-            mask[rot_sl] = 0.0
-        else:
-            mask = torch.ones(r.shape[-1], dtype=torch.float32, device=r.device)
-
-        use_motion = bool(mask.any().item()) if torch.is_tensor(mask) else bool(mask)
-        if use_motion:
-            r_scaled = r / s_use
-            sc = float(getattr(self, 'sigma_cap', 6.0))
-            r_scaled = r_scaled / (1.0 + r_scaled.abs() / sc)
-
-            # reduce only over included dims
-            w = mask.view(*([1] * (r.dim() - 1)), -1)
-            denom = w.sum(dim=-1).clamp_min(1.0)  # per-timestep denom if needed
-            # square error and mean over dims with mask
-            err2 = (r_scaled * r_scaled) * w
-            l_motion = (err2.sum(dim=-1) / denom).mean()
-        else:
-            l_motion = Z(0.0)
 
         # === 其他辅助项 ===
         if attn_weights is not None:
@@ -2478,20 +2294,13 @@ class MotionJointLoss(nn.Module):
             l_geo = Z(0.0)
         l_delta = Z(0.0)
         l_ortho = Z(0.0)
-        loss = (
-            l_motion
-            + self.w_attn_reg * l_attn
-            + self.w_rot_geo * l_geo
-        )
+        loss = self.w_attn_reg * l_attn + self.w_rot_geo * l_geo
         stats = {
-            'motion': float(l_motion.detach().cpu()), 'attn': float(l_attn.detach().cpu()),
+            'attn': float(l_attn.detach().cpu()),
             'rot_geo': float(l_geo.detach().cpu()),
             'rot_delta': 0.0,
             'rot_ortho': 0.0,
             'rot_ortho_raw': 0.0,
-            'angvel': 0.0,
-            'angvel_dir': 0.0,
-            'ang_acc': 0.0,
         }
         if geo_details is not None:
             limb_stats = self._collect_limb_geo_stats(geo_details.detach())
@@ -3063,26 +2872,6 @@ class MotionJointLoss(nn.Module):
             except Exception:
                 stats['rot_ortho_fallback'] = float('nan')
 
-        ang_payload = self._prepare_angvel_payload(pm, gm, delta_pm)
-        if ang_payload is not None:
-            omega_pred, omega_gt = ang_payload
-            omega_pred = omega_pred.contiguous()
-            omega_gt = omega_gt.contiguous()
-            if self.w_angvel > 0:
-                l_angvel = F.smooth_l1_loss(omega_pred, omega_gt)
-                loss = loss + self.w_angvel * l_angvel
-                stats['angvel'] = float(l_angvel.detach().cpu())
-            if self.w_angvel_dir > 0:
-                dir_loss = self._angular_direction_loss(omega_pred, omega_gt)
-                if dir_loss is not None:
-                    loss = loss + self.w_angvel_dir * dir_loss
-                    stats['angvel_dir'] = float(dir_loss.detach().cpu())
-            if self.w_ang_acc > 0 and omega_pred.shape[-3] >= 2 and omega_gt.shape[-3] >= 2:
-                acc_pred = (omega_pred[..., 1:, :, :] - omega_pred[..., :-1, :, :]).contiguous()
-                acc_gt = (omega_gt[..., 1:, :, :] - omega_gt[..., :-1, :, :]).contiguous()
-                acc_loss = F.smooth_l1_loss(acc_pred, acc_gt)
-                loss = loss + self.w_ang_acc * acc_loss
-                stats['ang_acc'] = float(acc_loss.detach().cpu())
 
         cond_yaw_loss = self._compute_cond_yaw_loss(pm, batch)
         if cond_yaw_loss is not None:
@@ -3133,7 +2922,6 @@ class DataNormalizer:
     """封装数据规格与(反)归一化逻辑。"""
     def __init__(self, *,
                  mu_x=None, std_x=None, mu_y=None, std_y=None,
-                 s_eff_x=None, s_eff_y=None,
                  y_to_x_map=None,
                  yaw_x_slice=None, yaw_y_slice=None,
                  rootvel_x_slice=None, rootvel_y_slice=None,
@@ -3146,8 +2934,6 @@ class DataNormalizer:
         self.std_x = None if std_x is None else np.asarray(std_x, dtype=np.float32)
         self.mu_y = None if mu_y is None else np.asarray(mu_y, dtype=np.float32)
         self.std_y = None if std_y is None else np.asarray(std_y, dtype=np.float32)
-        self.s_eff_x = None if s_eff_x is None else np.asarray(s_eff_x, dtype=np.float32)
-        self.s_eff_y = None if s_eff_y is None else np.asarray(s_eff_y, dtype=np.float32)
         self.y_to_x_map = y_to_x_map or []
         self.yaw_x_slice      = parse_layout_entry(yaw_x_slice,      'RootYaw')
         self.yaw_y_slice      = parse_layout_entry(yaw_y_slice,      'RootYaw')
@@ -3474,7 +3260,6 @@ class DataNormalizer:
         return cls(
             mu_x = get('MuX'), std_x = get('StdX'),
             mu_y = get('MuY'), std_y = get('StdY'),
-            s_eff_x = get('s_eff_x'), s_eff_y = get('s_eff_y'),
             y_to_x_map = get('y_to_x_map', []),
             yaw_x_slice     = key2slice(s_layout, 'RootYaw') or key2slice(s_layout, 'Yaw'),
             yaw_y_slice     = key2slice(o_layout, 'RootYaw') or key2slice(o_layout, 'Yaw'),
@@ -3488,41 +3273,158 @@ class DataNormalizer:
         )
 
 
-def _parse_stage_schedule(spec: Optional[str]):
+def _parse_stage_schedule(spec: Optional[Any]):
+    """Parse stage schedule definitions from CLI strings or structured JSON."""
+
+    def _coerce_value(key: str, val: Any) -> Any:
+        if isinstance(val, (int, float)):
+            return val
+        if isinstance(val, bool) or val is None:
+            return val
+        if isinstance(val, str):
+            txt = val.strip()
+            if not txt:
+                return txt
+            lowered = txt.lower()
+            if lowered in ('true', 'false'):
+                return lowered == 'true'
+            if lowered == 'none':
+                return None
+            try:
+                if key.endswith(('steps', 'horizon', 'epoch', 'epochs')):
+                    return int(float(txt))
+                return float(txt)
+            except ValueError:
+                try:
+                    return int(txt)
+                except ValueError:
+                    return txt
+        return val
+
+    def _append_stage(stages: list, start: int, end: int, params: Dict[str, Any], label: Optional[str] = None):
+        if start is None or end is None:
+            return
+        stage = {'start': int(start), 'end': int(end), 'params': dict(params)}
+        if label:
+            stage['label'] = str(label)
+        stages.append(stage)
+
+    def _parse_string(spec_str: str):
+        out = []
+        for entry in spec_str.split(';'):
+            chunk = entry.strip()
+            if not chunk or ':' not in chunk:
+                continue
+            range_part, params_part = chunk.split(':', 1)
+            label = None
+            if '@' in range_part:
+                range_part, label = [seg.strip() for seg in range_part.split('@', 1)]
+            range_part = range_part.strip()
+            if '-' in range_part:
+                start_s, end_s = range_part.split('-', 1)
+                start = int(start_s.strip())
+                end = int(end_s.strip())
+            else:
+                start = end = int(range_part.strip())
+            params = {}
+            for token in params_part.split(','):
+                token = token.strip()
+                if not token or '=' not in token:
+                    continue
+                key, val = token.split('=', 1)
+                key = key.strip()
+                val = val.strip()
+                params[key] = _coerce_value(key, val)
+            _append_stage(out, start, end, params, label)
+        return out
+
+    def _normalize_range(entry: Mapping[str, Any]):
+        start = entry.get('start')
+        end = entry.get('end')
+        if start is None and end is None:
+            rng = entry.get('range') or entry.get('epochs')
+            if isinstance(rng, str):
+                part = rng.strip()
+                if '-' in part:
+                    s, e = part.split('-', 1)
+                    return int(s.strip()), int(e.strip())
+                return int(part), int(part)
+            if isinstance(rng, Sequence) and rng:
+                if len(rng) == 1:
+                    val = int(rng[0])
+                    return val, val
+                return int(rng[0]), int(rng[-1])
+        if start is None and end is not None:
+            start = end
+        if end is None and start is not None:
+            end = start
+        if start is None:
+            return None, None
+        return int(start), int(end)
+
+    def _merge_params(entry: Mapping[str, Any]) -> Dict[str, Any]:
+        params: Dict[str, Any] = {}
+        if not isinstance(entry, Mapping):
+            return params
+        base = entry.get('params') if isinstance(entry.get('params'), Mapping) else {}
+        for key, val in base.items():
+            params[key] = val
+
+        def _ingest(source: Optional[Mapping[str, Any]], prefix: Optional[str] = None):
+            if not isinstance(source, Mapping):
+                return
+            for k, v in source.items():
+                name = f"{prefix}.{k}" if prefix else k
+                params[name] = v
+
+        _ingest(entry.get('trainer'))
+        _ingest(entry.get('loss'), prefix='loss')
+        tf_cfg = entry.get('tf')
+        if isinstance(tf_cfg, Mapping):
+            if 'max' in tf_cfg:
+                params['tf_max'] = tf_cfg['max']
+            if 'min' in tf_cfg:
+                params['tf_min'] = tf_cfg['min']
+
+        reserved = {'start', 'end', 'range', 'epochs', 'params', 'trainer', 'loss', 'tf', 'label', 'name', 'updates'}
+        for key, val in entry.items():
+            if key in reserved:
+                continue
+            params[key] = val
+
+        updates = entry.get('updates')
+        if isinstance(updates, Sequence) and not isinstance(updates, (str, bytes)):
+            for item in updates:
+                if isinstance(item, Mapping):
+                    target = item.get('key') or item.get('name') or item.get('param')
+                    value = item.get('value')
+                    if target:
+                        params[target] = value
+        # coerce
+        return {k: _coerce_value(k, v) for k, v in params.items()}
+
     if not spec:
         return []
-    stages = []
-    entries = spec.split(';')
+    if isinstance(spec, str):
+        return _parse_string(spec)
+    stages: list = []
+    entries: Sequence[Any]
+    if isinstance(spec, Mapping):
+        entries = [spec]
+    elif isinstance(spec, Sequence):
+        entries = list(spec)
+    else:
+        return []
     for entry in entries:
-        chunk = entry.strip()
-        if not chunk:
+        if isinstance(entry, str):
+            stages.extend(_parse_string(entry))
             continue
-        if ':' not in chunk:
+        if not isinstance(entry, Mapping):
             continue
-        range_part, params_part = chunk.split(':', 1)
-        range_part = range_part.strip()
-        if '-' in range_part:
-            start_s, end_s = range_part.split('-', 1)
-            start = int(start_s.strip())
-            end = int(end_s.strip())
-        else:
-            start = end = int(range_part.strip())
-        params = {}
-        for token in params_part.split(','):
-            token = token.strip()
-            if not token or '=' not in token:
-                continue
-            key, val = token.split('=', 1)
-            key = key.strip()
-            val = val.strip()
-            try:
-                if key.endswith('steps') or key.endswith('horizon') or key.endswith('epoch') or key.endswith('epochs'):
-                    params[key] = int(float(val))
-                else:
-                    params[key] = float(val)
-            except ValueError:
-                params[key] = val
-        stages.append({'start': start, 'end': end, 'params': params})
+        start, end = _normalize_range(entry)
+        label = entry.get('label') or entry.get('name')
+        params = _merge_params(entry)
+        _append_stage(stages, start, end, params, label)
     return stages
 
 
@@ -4473,39 +4375,83 @@ class Trainer:
 
     def _apply_stage_schedule(self, epoch: int):
         schedule = getattr(self, 'lookahead_stage_schedule', None)
-        overrides = {}
+        overrides: Dict[str, Any] = {}
         if not schedule:
             return overrides
+
+        def _coerce_like(current, new_val):
+            if new_val is None:
+                return None
+            if isinstance(current, bool):
+                if isinstance(new_val, str):
+                    return new_val.strip().lower() not in ('0', 'false', 'no', 'off')
+                return bool(new_val)
+            if isinstance(current, int) and not isinstance(current, bool):
+                try:
+                    return int(round(float(new_val)))
+                except Exception:
+                    return current
+            if isinstance(current, float):
+                try:
+                    return float(new_val)
+                except Exception:
+                    return current
+            return new_val
+
+        def _assign(key: str, value: Any) -> bool:
+            target = self
+            attr_name = key
+            prefix = None
+            if '.' in key:
+                prefix, attr_name = key.split('.', 1)
+                if prefix in ('loss', 'loss_fn'):
+                    target = getattr(self, 'loss_fn', None)
+                elif prefix in ('opt', 'optimizer'):
+                    target = getattr(self, 'optimizer', None)
+                elif prefix in ('trainer', 'self'):
+                    target = self
+                else:
+                    target = getattr(self, prefix, None)
+            elif not hasattr(target, attr_name):
+                loss_candidate = getattr(self, 'loss_fn', None)
+                if loss_candidate is not None and hasattr(loss_candidate, attr_name):
+                    target = loss_candidate
+                    prefix = 'loss'
+                else:
+                    target = None
+            if target is None or not hasattr(target, attr_name):
+                return False
+            current = getattr(target, attr_name)
+            coerced = _coerce_like(current, value) if current is not None else value
+            setattr(target, attr_name, coerced)
+            key_name = key if prefix else attr_name
+            overrides[key_name] = coerced
+            return True
+
         selected = None
         for stage in schedule:
-            if stage['start'] <= epoch <= stage['end']:
+            try:
+                st = int(stage.get('start'))
+                ed = int(stage.get('end'))
+            except Exception:
+                continue
+            if st <= epoch <= ed:
                 params = stage.get('params') or {}
-                selected = {'start': stage['start'], 'end': stage['end'], 'params': params}
-                if 'lookahead_steps' in params:
-                    self.lookahead_steps = int(params['lookahead_steps'])
-                if 'lookahead_weight' in params:
-                    self.lookahead_weight = float(params['lookahead_weight'])
-                if 'freerun_weight' in params:
-                    self.freerun_weight = float(params['freerun_weight'])
-                if 'freerun_horizon' in params:
-                    self.freerun_horizon = int(params['freerun_horizon'])
-                if 'tf_max' in params:
-                    overrides['tf_max'] = float(params['tf_max'])
-                if 'tf_min' in params:
-                    overrides['tf_min'] = float(params['tf_min'])
+                selected = {'start': st, 'end': ed, 'params': params, 'label': stage.get('label')}
+                for key, value in params.items():
+                    _assign(key, value)
                 break
+
         if selected:
-            params = selected.get('params', {})
+            label = f" {selected['label']}" if selected.get('label') else ''
+            if overrides:
+                summary = ', '.join(f"{k}={overrides[k]}" for k in sorted(overrides))
+            else:
+                summary = 'no overrides'
             print(
                 "[StageSched]"
-                f"[ep {epoch:03d}] "
-                f"stage={selected['start']}-{selected['end']} "
-                f"lookahead_steps={self.lookahead_steps} "
-                f"lookahead_weight={self.lookahead_weight} "
-                f"freerun_weight={self.freerun_weight} "
-                f"freerun_horizon={self.freerun_horizon} "
-                f"tf_max={overrides.get('tf_max', 'NA')} "
-                f"tf_min={overrides.get('tf_min', 'NA')}"
+                f"[ep {epoch:03d}] stage={selected['start']}-{selected['end']}{label} | "
+                f"{summary}"
             )
         return overrides
     def _log_freerun_vs_teacher_stats(self, epoch: int, batch_idx: int, free_stats: Optional[dict]) -> None:
@@ -4516,7 +4462,7 @@ class Trainer:
             return
         if not isinstance(free_stats, dict):
             return
-        keys = ('rot_geo', 'rot_delta', 'angvel', 'angvel_dir', 'ang_acc')
+        keys = ('rot_geo', 'rot_delta', 'angvel_dir')
         parts = []
         for key in keys:
             t = teacher_stats.get(key)
@@ -5065,24 +5011,6 @@ class Trainer:
             avg_train = running / max(1, cnt)
             history['train'].append(avg_train)
             print("[Train][ep %03d] loss=%.4f" % (ep, avg_train))
-
-            if epoch_cnt > 0:
-                keys = (
-                    "motion",
-                    "rot_geo",
-                    "rot_delta",
-                    "rot_ortho",
-                    "rot_ortho_raw",
-                    "angvel",
-                    "angvel_dir",
-                    "ang_acc",
-                    "rot_geo_limb_deg",
-                    "rot_geo_torso_deg",
-                    "rot_geo_limb_over_torso",
-                )
-                parts = [f"{k}={epoch_sums[k] / max(1, epoch_cnt):.4f}" for k in keys if k in epoch_sums]
-                if parts:
-                    print("[LossParts]", " | ".join(parts))
 
             # --- 阶段化评估与日志输出 ---
             is_teacher_phase = float(getattr(self, '_last_tf_ratio', 1.0)) >= 0.999
@@ -6332,9 +6260,9 @@ def _norm_debug_once(trainer, train_loader, thr=8.0, topk=8, print_to_console=Tr
         xz = _to_np(batch)
 
     mu_x = _to_np(getattr(trainer, "mu_x", None))
-    se_x = _to_np(getattr(trainer, "s_eff_x", None) or getattr(trainer, "std_x", None))
+    se_x = _to_np(getattr(trainer, "std_x", None))
     mu_y = _to_np(getattr(trainer, "mu_y", None))
-    se_y = _to_np(getattr(trainer, "s_eff_y", None) or getattr(trainer, "std_y", None))
+    se_y = _to_np(getattr(trainer, "std_y", None))
 
     yaw_x     = getattr(trainer, "yaw_x_slice", None)
     rootvel_x = getattr(trainer, "rootvel_x_slice", None)
@@ -6486,7 +6414,7 @@ def _norm_debug_once(trainer, train_loader, thr=8.0, topk=8, print_to_console=Tr
 
 def train_entry():
     global GLOBAL_ARGS
-    import argparse, warnings, os, glob, time, math, json
+    import argparse, warnings, os, glob, time, math, json, ast
     from pathlib import Path
     import torch
     from torch.utils.data import DataLoader
@@ -6496,7 +6424,69 @@ def train_entry():
         if isinstance(maybe_slice, slice):
             setattr(obj, attr, maybe_slice)
 
-    p = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument(
+        '--config_json',
+        type=str,
+        default=None,
+        help='JSON 配置文件路径。键名需与 CLI 参数一致，并作为默认值参与解析。',
+    )
+
+    config_args, remaining_argv = config_parser.parse_known_args()
+
+    def _load_config_defaults(config_path: Optional[str], parser: argparse.ArgumentParser) -> Dict[str, Any]:
+        if not config_path:
+            return {}
+        cfg_path = os.path.expanduser(config_path)
+        if not os.path.isfile(cfg_path):
+            parser.error(f"[config_json] 文件不存在: {cfg_path}")
+        with open(cfg_path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+        if not isinstance(payload, Mapping):
+            parser.error(f"[config_json] 根对象必须是 JSON dict，当前类型 {type(payload).__name__}")
+        valid_dests = {action.dest for action in parser._actions if action.dest and action.dest != 'help'}
+        unknown_keys = sorted(k for k in payload.keys() if k not in valid_dests)
+        if unknown_keys:
+            parser.error(f"[config_json] 存在未识别字段: {', '.join(unknown_keys)}")
+        print(f"[config_json] Loaded defaults from {cfg_path} ({len(payload)} keys)")
+        return dict(payload)
+
+    def _apply_config_overrides(namespace: argparse.Namespace, overrides: Optional[Sequence[str]], parser: argparse.ArgumentParser) -> None:
+        if not overrides:
+            return
+
+        def _parse_literal(raw: str):
+            txt = raw.strip()
+            if not txt:
+                return txt
+            try:
+                return ast.literal_eval(txt)
+            except Exception:
+                lowered = txt.lower()
+                if lowered == 'none':
+                    return None
+                return txt
+
+        applied: Dict[str, Any] = {}
+        for entry in overrides:
+            if not entry:
+                continue
+            if '=' not in entry:
+                parser.error(f"[config_override] 期望 KEY=VALUE，实际收到: {entry}")
+            key, value_expr = entry.split('=', 1)
+            key = key.strip()
+            if not key:
+                parser.error('[config_override] 键名不能为空')
+            if not hasattr(namespace, key):
+                parser.error(f"[config_override] 未知键名: {key}")
+            new_value = _parse_literal(value_expr)
+            setattr(namespace, key, new_value)
+            applied[key] = new_value
+        if applied:
+            formatted = ', '.join(f"{k}={applied[k]}" for k in sorted(applied))
+            print(f"[config_override] Applied: {formatted}")
+
+    p = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter, parents=[config_parser])
     p.add_argument('--val_mode', type=str, default='online', choices=['online','none'])
     p.add_argument(
         '--encoder_path',
@@ -6510,6 +6500,8 @@ def train_entry():
     p.add_argument('--data', type=str, required=True, help='数据目录（含 *.npz）')
     p.add_argument('--out', type=str, default='./runs', help='输出目录根路径')
     p.add_argument('--run_name', type=str, default=None, help='子目录名；未给则用时间戳')
+    p.add_argument('--config_override', action='append', default=None, metavar='KEY=VALUE',
+                   help='在解析后覆写配置值，可重复，例如 --config_override lr=5e-5')
     p.add_argument('--train_files', type=str, default='', help='逗号分隔的路径/通配/或 @list.txt')
     p.add_argument('--diag_topk', type=int, default=8, help='free-run 评估时打印 X_norm 的 |z| Top-K')
     p.add_argument('--diag_thr', type=float, default=8.0, help='|z| 阈值，统计 X_norm 爆炸比例')
@@ -6581,12 +6573,6 @@ def train_entry():
     p.add_argument('--w_rot_delta', type=float, default=1.0)
     p.add_argument('--w_rot_delta_root', type=float, default=0.0)
     p.add_argument('--w_rot_log', type=float, default=0.0)
-    p.add_argument('--w_angvel', type=float, default=None,
-                   help='角速度向量损失权重（默认跟随 w_rot_delta，<=0 关闭）。')
-    p.add_argument('--w_angvel_dir', type=float, default=None,
-                   help='角速度方向余弦损失权重（默认 0.5 * w_angvel，<=0 关闭）。')
-    p.add_argument('--w_ang_acc', type=float, default=0.1,
-                   help='角加速度平滑项权重（<=0 关闭）。')
     p.add_argument('--w_cond_yaw', type=float, default=None,
                    help='yaw 指令对齐损失权重（默认 0.1 * w_rot_delta，<=0 关闭）。')
     p.add_argument('--w_fk_pos', type=float, default=0.0,
@@ -6617,7 +6603,28 @@ def train_entry():
     p.add_argument('--freerun_debug_path', type=str, default=None, help='若提供，则将首个 freerun batch 的诊断数据保存至该路径')
     p.add_argument('--no_grad_conn_test', action='store_true', help='跳过训练前的梯度连通性自检')
 
-    GLOBAL_ARGS = p.parse_args()
+    required_actions = []
+    for action in p._actions:
+        if getattr(action, 'required', False):
+            required_actions.append(action)
+            action.required = False
+
+    config_defaults = _load_config_defaults(config_args.config_json, p)
+    namespace = argparse.Namespace(**config_defaults)
+    namespace.config_json = config_args.config_json
+    GLOBAL_ARGS = p.parse_args(remaining_argv, namespace=namespace)
+    _apply_config_overrides(GLOBAL_ARGS, getattr(GLOBAL_ARGS, 'config_override', None), p)
+    GLOBAL_ARGS.config_override = None
+
+    missing_required = [act for act in required_actions if getattr(GLOBAL_ARGS, act.dest, None) is None]
+    if missing_required:
+        missing_opts = []
+        for act in missing_required:
+            if act.option_strings:
+                missing_opts.append(act.option_strings[-1])
+            else:
+                missing_opts.append(act.dest)
+        p.error(f"missing required arguments: {', '.join(missing_opts)}")
 
     def _arg(name, default=None):
         return getattr(GLOBAL_ARGS, name, default)
@@ -6759,13 +6766,6 @@ def train_entry():
         pass
     fps_data = float(getattr(ds_train, 'fps', 60.0) or 60.0)
     w_rot_delta = float(_arg('w_rot_delta', 1.0))
-    w_angvel = _arg('w_angvel', None)
-    if w_angvel is None:
-        w_angvel = max(0.0, w_rot_delta)
-    w_angvel_dir = _arg('w_angvel_dir', None)
-    if w_angvel_dir is None:
-        w_angvel_dir = max(0.0, 0.5 * w_angvel)
-    w_ang_acc = max(0.0, float(_arg('w_ang_acc', 0.1)))
     w_cond_yaw = _arg('w_cond_yaw', None)
     if w_cond_yaw is None:
         w_cond_yaw = max(0.0, 0.1 * w_rot_delta)
@@ -6775,14 +6775,10 @@ def train_entry():
     loss_fn = MotionJointLoss(
         output_layout=ds_train.output_layout,
         fps=fps_data,
-        traj_hz=fps_data,
         rot6d_spec=getattr(ds_train, 'rot6d_spec', {}),
         w_rot_geo=_arg('w_rot_geo', 0.01),
         w_rot_delta=w_rot_delta,
         w_rot_ortho=_arg('w_rot_ortho', 0.001),
-        w_angvel=w_angvel,
-        w_angvel_dir=w_angvel_dir,
-        w_ang_acc=w_ang_acc,
         w_cond_yaw=w_cond_yaw,
         cond_yaw_min_speed=cond_yaw_min_speed,
         meta=None,
@@ -6809,9 +6805,6 @@ def train_entry():
         f"w_rot_geo={loss_fn.w_rot_geo} "
         f"w_rot_delta={loss_fn.w_rot_delta} "
         f"w_rot_ortho={loss_fn.w_rot_ortho} "
-        f"w_angvel={loss_fn.w_angvel} "
-        f"w_angvel_dir={loss_fn.w_angvel_dir} "
-        f"w_ang_acc={loss_fn.w_ang_acc} "
         f"w_cond_yaw={loss_fn.w_cond_yaw} "
         f"w_fk_pos={loss_fn.w_fk_pos} "
         f"w_rot_local={loss_fn.w_rot_local}"
@@ -6848,10 +6841,9 @@ def train_entry():
         except Exception:
             pass
 
-    trainer.foot_contact_threshold = float(_arg('foot_contact_threshold', 1.5))
+    trainer.foot_contact_threshold = float(_arg('foot_contact_threshold'))
     # 一次性归一化数值诊断
-    _norm_debug_once(trainer, train_loader, thr=float(_arg('diag_thr', 8.0)), topk=int(_arg('diag_topk', 8)), print_to_console=False)
-    trainer.traj_hz = fps_data
+    _norm_debug_once(trainer, train_loader, thr=float(_arg('diag_thr')), topk=int(_arg('diag_topk')), print_to_console=False)
     trainer.bone_hz = fps_data
 
 
@@ -6875,8 +6867,8 @@ def train_entry():
         trainer.yaw_forward_axis_offset = float(_math_local.radians(float(offset_override)))
     else:
         trainer.yaw_forward_axis_offset = float(getattr(ds_train, 'forward_axis_offset', 0.0) or 0.0)
-    trainer.eval_angvel_dir_percentile = float(_arg('eval_angvel_dir_percentile', 0.75))
-    trainer.diag_input_stats = bool(_arg('diag_input_stats', False))
+    trainer.eval_angvel_dir_percentile = float(_arg('eval_angvel_dir_percentile'))
+    trainer.diag_input_stats = bool(_arg('diag_input_stats'))
 
     # === validation/monitor switches ===
     trainer.val_mode = _arg('val_mode', 'online')
