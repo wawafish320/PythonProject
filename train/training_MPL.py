@@ -6434,6 +6434,8 @@ def train_entry():
 
     config_args, remaining_argv = config_parser.parse_known_args()
 
+    META_KEYS = {'dataset_profile', 'strategy_meta'}
+
     def _load_config_defaults(config_path: Optional[str], parser: argparse.ArgumentParser) -> Dict[str, Any]:
         if not config_path:
             return {}
@@ -6445,7 +6447,7 @@ def train_entry():
         if not isinstance(payload, Mapping):
             parser.error(f"[config_json] 根对象必须是 JSON dict，当前类型 {type(payload).__name__}")
         valid_dests = {action.dest for action in parser._actions if action.dest and action.dest != 'help'}
-        unknown_keys = sorted(k for k in payload.keys() if k not in valid_dests)
+        unknown_keys = sorted(k for k in payload.keys() if k not in valid_dests and k not in META_KEYS)
         if unknown_keys:
             parser.error(f"[config_json] 存在未识别字段: {', '.join(unknown_keys)}")
         print(f"[config_json] Loaded defaults from {cfg_path} ({len(payload)} keys)")
