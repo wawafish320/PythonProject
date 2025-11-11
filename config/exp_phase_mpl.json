@@ -33,5 +33,111 @@
   "history_debug_steps": 8,
   "w_fk_pos": 0.3,
   "w_rot_local": 0.3,
-  "lookahead_stage_schedule": "1-5:lookahead_steps=3,lookahead_weight=0.0,freerun_weight=0.0,freerun_horizon=8,tf_max=1.0,w_latent_consistency=0.0;6-15:lookahead_steps=6,lookahead_weight=0.15,freerun_weight=0.1,freerun_horizon=12,tf_max=0.8,w_latent_consistency=0.1;16-30:lookahead_steps=10,lookahead_weight=0.25,freerun_weight=0.3,freerun_horizon=18,tf_max=0.6,w_latent_consistency=0.2"
+  "lookahead_stage_schedule": [
+    {
+      "range": [
+        1,
+        5
+      ],
+      "label": "stage1_warmup",
+      "trainer": {
+        "lookahead_steps": 3,
+        "lookahead_weight": 0.0,
+        "freerun_weight": 0.0,
+        "freerun_horizon": 8,
+        "w_latent_consistency": 0.05
+      },
+      "loss": {
+        "w_fk_pos": 0.1,
+        "w_rot_local": 0.1
+      },
+      "tf": {
+        "max": 1.0
+      },
+      "targets": {
+        "yaw": {
+          "lo": 18.0,
+          "hi": 28.0
+        },
+        "root": {
+          "lo": 0.016,
+          "hi": 0.022
+        },
+        "rot": {
+          "lo": 2.1,
+          "hi": 2.6
+        }
+      }
+    },
+    {
+      "range": [
+        6,
+        15
+      ],
+      "label": "stage2_alignment",
+      "trainer": {
+        "lookahead_steps": 6,
+        "lookahead_weight": 0.15,
+        "freerun_weight": 0.1,
+        "freerun_horizon": 12,
+        "w_latent_consistency": 0.15
+      },
+      "loss": {
+        "w_fk_pos": 0.25,
+        "w_rot_local": 0.25
+      },
+      "tf": {
+        "max": 0.8
+      },
+      "targets": {
+        "yaw": {
+          "lo": 14.0,
+          "hi": 22.0
+        },
+        "root": {
+          "lo": 0.0145,
+          "hi": 0.019
+        },
+        "rot": {
+          "lo": 2.0,
+          "hi": 2.3
+        }
+      }
+    },
+    {
+      "range": [
+        16,
+        30
+      ],
+      "label": "stage3_stability",
+      "trainer": {
+        "lookahead_steps": 10,
+        "lookahead_weight": 0.25,
+        "freerun_weight": 0.35,
+        "freerun_horizon": 18,
+        "w_latent_consistency": 0.25
+      },
+      "loss": {
+        "w_fk_pos": 0.35,
+        "w_rot_local": 0.35
+      },
+      "tf": {
+        "max": 0.6
+      },
+      "targets": {
+        "yaw": {
+          "lo": 11.0,
+          "hi": 18.0
+        },
+        "root": {
+          "lo": 0.013,
+          "hi": 0.0175
+        },
+        "rot": {
+          "lo": 1.85,
+          "hi": 2.15
+        }
+      }
+    }
+  ]
 }
