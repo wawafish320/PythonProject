@@ -5,7 +5,7 @@ from __future__ import annotations
 
 # ========== [Unified Geometry Utilities] ==========
 import torch
-from typing import Any, Optional, Dict, Mapping, Sequence
+from typing import Any, Optional, Dict, Mapping, Sequence, Callable
 
 from .eval_utils import FreeRunSettings, evaluate_teacher, evaluate_freerun
 
@@ -4703,6 +4703,11 @@ class Trainer:
         self.w_latent_consistency: float = 0.0
         self._latent_consistency_dim_warned: bool = False
         self._latent_encoder_warned: bool = False
+        # ---- Metrics buffering for in-process consumers ----
+        self.metric_history: list[dict[str, Any]] = []
+        self.metric_history_maxlen: int = 256
+        self.latest_metrics: dict[str, dict[str, Any]] = {}
+        self._metric_callbacks: list[Callable[[dict[str, Any]], None]] = []
 
     def _diag_norm_x(self, x_raw, mu_x=None, std_x=None):
         # 仅使用 DataNormalizer；缺失即视为致命错误
@@ -5100,8 +5105,10 @@ class Trainer:
                 print(f"[{phase_label}@ep {ep:03d}] skipped due to error: {_e}")
 
             if metrics_for_json is not None and metrics_tag is not None:
+                self._record_epoch_metrics(metrics_for_json, tag=metrics_tag, epoch=ep)
                 self._dump_metrics_json(metrics_for_json, tag=metrics_tag, epoch=ep)
             if (not is_teacher_phase) and teacher_metrics_cached is not None:
+                self._record_epoch_metrics(teacher_metrics_cached, tag='teacher', epoch=ep)
                 self._dump_metrics_json(teacher_metrics_cached, tag='teacher', epoch=ep)
 
             # --- 依据在线评估的 MSEnormY 记录最佳模型 ---
@@ -5541,6 +5548,64 @@ class Trainer:
         if isinstance(value, (int, str, bool)) or value is None:
             return value
         return str(value)
+
+    def register_metric_callback(self, callback: Callable[[dict[str, Any]], None]) -> None:
+        """注册监听器，在每次记录指标时得到通知（运行在同一进程内）。"""
+        if not callable(callback):
+            return
+        if callback not in self._metric_callbacks:
+            self._metric_callbacks.append(callback)
+
+    def unregister_metric_callback(self, callback: Callable[[dict[str, Any]], None]) -> None:
+        if not callable(callback):
+            return
+        try:
+            self._metric_callbacks.remove(callback)
+        except ValueError:
+            pass
+
+    def get_metric_history(self, tag: Optional[str] = None, last: Optional[int] = None) -> list[dict[str, Any]]:
+        """返回内存中的指标快照，用于训练过程内的策略决策。"""
+        records = self.metric_history
+        if tag is not None:
+            records = [rec for rec in records if rec.get('tag') == tag]
+        if last is not None and last > 0:
+            records = records[-last:]
+        return [dict(rec) for rec in records]
+
+    def latest_epoch_metrics(self, tag: Optional[str] = None) -> Optional[dict[str, Any]]:
+        """获取最近一次写入的指标（可按 tag 过滤）。"""
+        if tag is not None:
+            record = self.latest_metrics.get(str(tag))
+            return None if record is None else dict(record)
+        if not self.metric_history:
+            return None
+        return dict(self.metric_history[-1])
+
+    def _record_epoch_metrics(self, metrics: Dict[str, Any], *, tag: str, epoch: int) -> None:
+        if metrics is None:
+            return
+        payload: dict[str, Any] = {
+            'epoch': int(epoch),
+            'tag': str(tag),
+            'metrics': self._metrics_json_safe(metrics),
+        }
+        tf_ratio = getattr(self, '_last_tf_ratio', None)
+        if tf_ratio is not None:
+            try:
+                payload['tf_ratio'] = float(tf_ratio)
+            except Exception:
+                payload['tf_ratio'] = tf_ratio
+        maxlen = max(1, int(getattr(self, 'metric_history_maxlen', 256) or 256))
+        self.metric_history.append(payload)
+        if len(self.metric_history) > maxlen:
+            self.metric_history.pop(0)
+        self.latest_metrics[str(tag)] = payload
+        for callback in list(self._metric_callbacks):
+            try:
+                callback(payload)
+            except Exception as exc:
+                print(f"[MetricsCallback][WARN] {callback} raised: {exc}")
 
     def _dump_metrics_json(self, metrics: Dict[str, Any], *, tag: str, epoch: int) -> None:
         out_dir = getattr(self, 'out_dir', None)

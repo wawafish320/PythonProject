@@ -5,7 +5,7 @@
   "run_name": "exp_phase_MLP",
   "epochs": 30,
   "batch": 8,
-  "lr": 3e-05,
+  "lr": 0.00031732900585132803,
   "seq_len": 60,
   "tf_mode": "epoch_linear",
   "tf_start_epoch": 1,
@@ -45,11 +45,11 @@
         "lookahead_weight": 0.07,
         "freerun_weight": 0.0,
         "freerun_horizon": 9,
-        "w_latent_consistency": 0.03
+        "w_latent_consistency": 0.036
       },
       "loss": {
-        "w_fk_pos": 0.07,
-        "w_rot_local": 0.07
+        "w_fk_pos": 0.0805,
+        "w_rot_local": 0.0805
       },
       "tf": {
         "max": 1.0
@@ -83,11 +83,11 @@
         "lookahead_weight": 0.21,
         "freerun_weight": 0.175,
         "freerun_horizon": 14,
-        "w_latent_consistency": 0.12
+        "w_latent_consistency": 0.144
       },
       "loss": {
-        "w_fk_pos": 0.2275,
-        "w_rot_local": 0.2275
+        "w_fk_pos": 0.2616,
+        "w_rot_local": 0.2616
       },
       "tf": {
         "max": 0.75
