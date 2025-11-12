@@ -2098,6 +2098,7 @@ class MotionJointLoss(nn.Module):
             "rot_local",
             "cond_yaw",
             "rot_delta",
+            "rot_ortho",
         )
         self._reset_adaptive_tracking()
 
@@ -2868,11 +2869,15 @@ class MotionJointLoss(nn.Module):
         if self.w_rot_ortho > 0 and not delta_fallback:
             target_for_ortho = delta_pm if delta_pm is not None else pm
             l_ortho = self.compute_rot6d_ortho_loss(target_for_ortho)
-            loss = loss + self.w_rot_ortho * l_ortho
-            stats['rot_ortho'] = float((self.w_rot_ortho * l_ortho).detach().cpu())
+            weighted_ortho = self.w_rot_ortho * l_ortho
+            loss = loss + weighted_ortho
+            stats['rot_ortho'] = float(l_ortho.detach().cpu())
+            stats['rot_ortho_weighted'] = float(weighted_ortho.detach().cpu())
             stats['rot_ortho_raw'] = float(l_ortho.detach().cpu())
+            self._register_component_loss('rot_ortho', l_ortho, self.w_rot_ortho)
         else:
             stats.setdefault('rot_ortho', 0.0)
+            stats.setdefault('rot_ortho_weighted', 0.0)
             stats.setdefault('rot_ortho_raw', 0.0)
 
         if delta_fallback and self.w_rot_ortho > 0 and delta_pm is not None:
