@@ -42,14 +42,14 @@
       "label": "stage1_teacher",
       "trainer": {
         "lookahead_steps": 2,
-        "lookahead_weight": 0.07,
+        "lookahead_weight": 0.063,
         "freerun_weight": 0.0,
-        "freerun_horizon": 9,
-        "w_latent_consistency": 0.036
+        "freerun_horizon": 8,
+        "w_latent_consistency": 0.03
       },
       "loss": {
-        "w_fk_pos": 0.0805,
-        "w_rot_local": 0.0805
+        "w_fk_pos": 0.07,
+        "w_rot_local": 0.07
       },
       "tf": {
         "max": 1.0
@@ -83,11 +83,11 @@
         "lookahead_weight": 0.21,
         "freerun_weight": 0.175,
         "freerun_horizon": 14,
-        "w_latent_consistency": 0.144
+        "w_latent_consistency": 0.12
       },
       "loss": {
-        "w_fk_pos": 0.2616,
-        "w_rot_local": 0.2616
+        "w_fk_pos": 0.2275,
+        "w_rot_local": 0.2275
       },
       "tf": {
         "max": 0.75
@@ -121,11 +121,11 @@
         "lookahead_weight": 0.315,
         "freerun_weight": 0.325,
         "freerun_horizon": 18,
-        "w_latent_consistency": 0.24
+        "w_latent_consistency": 0.288
       },
       "loss": {
-        "w_fk_pos": 0.35,
-        "w_rot_local": 0.35
+        "w_fk_pos": 0.4025,
+        "w_rot_local": 0.4025
       },
       "tf": {
         "max": 0.5

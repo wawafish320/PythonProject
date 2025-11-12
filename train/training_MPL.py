@@ -5,8 +5,10 @@ from __future__ import annotations
 
 # ========== [Unified Geometry Utilities] ==========
 import torch
-from typing import Any, Optional, Dict, Mapping, Sequence, Callable
+from typing import Any, Optional, Dict, Mapping, Sequence, Callable, List, Tuple
 
+from .adaptive_loss import build_adaptive_loss
+from .adaptive_scheduler import AdaptiveHyperparamScheduler
 from .eval_utils import FreeRunSettings, evaluate_teacher, evaluate_freerun
 
 
@@ -2091,6 +2093,13 @@ class MotionJointLoss(nn.Module):
                 except Exception:
                     self.bone_offsets = None
         self.has_fk = bool(self.parents and self.bone_offsets is not None)
+        self._adaptive_loss_terms: Tuple[str, ...] = (
+            "fk_pos",
+            "rot_local",
+            "cond_yaw",
+            "rot_delta",
+        )
+        self._reset_adaptive_tracking()
 
     def _format_template_hint(self, prefix: str) -> str:
         hints: list[str] = []
@@ -2820,6 +2829,7 @@ class MotionJointLoss(nn.Module):
         pm = pred_motion.get('out') if isinstance(pred_motion, dict) else pred_motion
         gm = gt_motion
         delta_pm = pred_motion.get('delta') if isinstance(pred_motion, dict) else None
+        self._reset_adaptive_tracking()
 
         # _forward_base_inner 已包含核心动作损失与统计
         base_out = self._forward_base_inner(pm, gt_motion, attn_weights=attn_weights)  # type: ignore
@@ -2837,6 +2847,7 @@ class MotionJointLoss(nn.Module):
             l_delta = self.compute_rot6d_delta_loss(delta_pm, gt_motion)
             loss = loss + self.w_rot_delta * l_delta
             stats['rot_delta'] = float(l_delta.detach().cpu())
+            self._register_component_loss('rot_delta', l_delta, self.w_rot_delta)
         else:
             stats.setdefault('rot_delta', 0.0)
 
@@ -2877,6 +2888,7 @@ class MotionJointLoss(nn.Module):
         if cond_yaw_loss is not None:
             loss = loss + self.w_cond_yaw * cond_yaw_loss
             stats['cond_yaw'] = float(cond_yaw_loss.detach().cpu())
+            self._register_component_loss('cond_yaw', cond_yaw_loss, self.w_cond_yaw)
         else:
             stats.setdefault('cond_yaw', 0.0)
 
@@ -2900,6 +2912,7 @@ class MotionJointLoss(nn.Module):
                     fk_loss = (fk_res * w).mean()
                     loss = loss + self.w_fk_pos * fk_loss
                     stats['fk_pos'] = float(fk_loss.detach().cpu())
+                    self._register_component_loss('fk_pos', fk_loss, self.w_fk_pos)
         else:
             stats.setdefault('fk_pos', 0.0)
 
@@ -2913,10 +2926,58 @@ class MotionJointLoss(nn.Module):
                 local_loss = (geo_local * w).mean()
                 loss = loss + self.w_rot_local * local_loss
                 stats['rot_local_deg'] = float((local_loss * (180.0 / math.pi)).detach().cpu())
+                self._register_component_loss('rot_local', local_loss, self.w_rot_local)
         else:
             stats.setdefault('rot_local_deg', 0.0)
 
+        self._finalize_adaptive_payload(loss)
         return loss, stats
+
+    def _reset_adaptive_tracking(self):
+        self._last_component_losses: Dict[str, torch.Tensor] = {}
+        self._last_component_weights: Dict[str, float] = {}
+        self._last_component_total_weight: float = 0.0
+        self._last_core_loss: Optional[torch.Tensor] = None
+
+    def _register_component_loss(self, name: str, tensor: Optional[torch.Tensor], weight: float):
+        if tensor is None or weight <= 0:
+            return
+        if name not in self._adaptive_loss_terms:
+            return
+        self._last_component_losses[name] = tensor
+        self._last_component_weights[name] = float(weight)
+
+    def _finalize_adaptive_payload(self, total_loss: torch.Tensor):
+        if not self._last_component_losses:
+            self._last_core_loss = total_loss
+            self._last_component_total_weight = 0.0
+            return
+        contrib = None
+        for name, tensor in self._last_component_losses.items():
+            weight = self._last_component_weights.get(name, 0.0)
+            if weight <= 0:
+                continue
+            term = tensor * weight
+            contrib = term if contrib is None else contrib + term
+        if contrib is None:
+            self._last_core_loss = total_loss
+            self._last_component_total_weight = 0.0
+        else:
+            self._last_core_loss = total_loss - contrib
+            self._last_component_total_weight = float(
+                sum(w for w in self._last_component_weights.values() if w > 0.0)
+            )
+
+    def adaptive_loss_payload(self) -> Optional[Dict[str, Any]]:
+        if not self._last_component_losses:
+            return None
+        payload = {
+            'losses': dict(self._last_component_losses),
+            'weights': dict(self._last_component_weights),
+            'total_weight': float(self._last_component_total_weight),
+            'core_loss': self._last_core_loss,
+        }
+        return payload
 
 class DataNormalizer:
     """封装数据规格与(反)归一化逻辑。"""
@@ -4621,6 +4682,63 @@ class Trainer:
         self.optimizer.zero_grad(set_to_none=True)
         self._grad_connection_checked = True
         print(f"[GradConn] ok: window={window} grad_hits={grad_hits}.")
+
+    def _maybe_apply_adaptive_loss(self, loss, stats):
+        module = getattr(self, 'adaptive_loss_module', None)
+        if module is None:
+            return loss, stats
+        payload_fn = getattr(self.loss_fn, 'adaptive_loss_payload', None)
+        if not callable(payload_fn):
+            return loss, stats
+        payload = payload_fn()
+        if not payload:
+            return loss, stats
+        raw_losses = payload.get('losses') or {}
+        total_weight = float(payload.get('total_weight', 0.0))
+        if total_weight <= 0:
+            return loss, stats
+        filtered = {
+            name: raw_losses[name]
+            for name in module.loss_names
+            if name in raw_losses and raw_losses[name] is not None
+        }
+        if not filtered:
+            return loss, stats
+        core_loss = payload.get('core_loss') or loss
+        weighted_loss, rel_weights = module(
+            filtered,
+            model=self.model,
+            epoch=getattr(self, 'cur_epoch', 0),
+        )
+        adapted = core_loss + weighted_loss * total_weight
+        if not isinstance(stats, dict):
+            stats = {} if stats is None else dict(stats)
+        stats = dict(stats)
+        stats['adaptive_loss/total_weight'] = float(total_weight)
+        try:
+            stats['adaptive_loss/base'] = float(core_loss.detach().cpu())
+        except Exception:
+            pass
+        for name, rel in rel_weights.items():
+            stats[f'adaptive_loss/weight/{name}'] = float(rel * total_weight)
+        return adapted, stats
+
+    def _step_hyperparam_scheduler(self, loss_tensor, grad_norm_value):
+        scheduler = getattr(self, 'hyperparam_scheduler', None)
+        if scheduler is None:
+            return
+        try:
+            loss_val = float(loss_tensor.detach().cpu())
+        except Exception:
+            loss_val = float('nan')
+        scheduler.step(loss_val, float(grad_norm_value))
+        params = scheduler.get_params()
+        if 'freerun_horizon' in params:
+            self.freerun_horizon = int(params['freerun_horizon'])
+        if 'teacher_forcing_ratio' in params:
+            self.teacher_forcing_ratio = float(params['teacher_forcing_ratio'])
+        if 'lookahead_weight' in params:
+            self.lookahead_weight = float(params['lookahead_weight'])
     def __init__(self, model, loss_fn, lr=0.0001, grad_clip=0.0, weight_decay=0.01, tf_warmup_steps=0, tf_total_steps=0, augmentor=None, use_amp=None, accum_steps=1, *, pin_memory=False):
         import torch
         self.model = model
@@ -4703,6 +4821,9 @@ class Trainer:
         self.w_latent_consistency: float = 0.0
         self._latent_consistency_dim_warned: bool = False
         self._latent_encoder_warned: bool = False
+        self.adaptive_loss_module = None
+        self.hyperparam_scheduler: Optional[AdaptiveHyperparamScheduler] = None
+        self.teacher_forcing_ratio: float = 1.0
         # ---- Metrics buffering for in-process consumers ----
         self.metric_history: list[dict[str, Any]] = []
         self.metric_history_maxlen: int = 256
@@ -4803,6 +4924,7 @@ class Trainer:
                     tf_ratio = tf_max_epoch + (tf_min_epoch - tf_max_epoch) * r
             else:
                 tf_ratio = tf_max_epoch
+            self.teacher_forcing_ratio = float(tf_ratio)
             self._last_tf_ratio = float(tf_ratio)
             running, cnt = 0.0, 0
             self.model.train()
@@ -4838,6 +4960,8 @@ class Trainer:
                 pose_hist_seq = _to_device(batch.get('pose_hist')) if isinstance(batch, dict) else None
 
                 # === 插入开始：一次性打印训练端 X(z) 的 RMS，验证不是 0 ===
+                current_tf_ratio = float(getattr(self, 'teacher_forcing_ratio', tf_ratio))
+                tf_ratio = current_tf_ratio
                 preds_dict, last_attn = self._rollout_sequence(
                     state_seq,
                     cond_seq,
@@ -4847,7 +4971,7 @@ class Trainer:
                     pose_hist_seq=pose_hist_seq,
                     gt_seq=gt_seq,
                     mode='mixed',
-                    tf_ratio=tf_ratio,
+                    tf_ratio=current_tf_ratio,
                 )
 
                 stats = {}
@@ -4859,6 +4983,8 @@ class Trainer:
                     loss, stats = out, {}
                 if not isinstance(stats, dict):
                     stats = {} if stats is None else dict(stats)
+
+                loss, stats = self._maybe_apply_adaptive_loss(loss, stats)
 
                 log_grad = self._should_log_freerun_gradients(bi)
                 freerun_payload = self.compute_freerun_loss(
@@ -4978,6 +5104,9 @@ class Trainer:
                         self.model.parameters(),
                         max_norm=float(getattr(self, 'grad_clip', 1.0))
                     )
+                    self._step_hyperparam_scheduler(loss, float(gn))
+                    tf_ratio = float(getattr(self, 'teacher_forcing_ratio', tf_ratio))
+                    self._last_tf_ratio = float(tf_ratio)
                     if log_every and (bi % int(log_every or 50) == 0):
                         lr0 = float(self.optimizer.param_groups[0].get('lr', 0.0))
                         print(f"[Grad] ep={ep:03d} bi={bi:04d} gn={float(gn):.3e} lr={lr0:.2e}")
@@ -6623,6 +6752,24 @@ def train_entry():
                    help='train_free lookahead loss 的权重')
     p.add_argument('--lookahead_stage_schedule', type=str, default=None,
                    help='按阶段调整 lookahead/freerun/tf 的日程表，格式如 "1-3:lookahead_steps=3,lookahead_weight=0.3;4-6:lookahead_steps=6,lookahead_weight=0.4"')
+    p.add_argument('--adaptive_loss_method', type=str, default='none', choices=['none', 'gradnorm', 'uncertainty', 'dwa'],
+                   help='在线损失权重策略（none/gradnorm/uncertainty/dwa）。')
+    p.add_argument('--adaptive_loss_alpha', type=float, default=1.5,
+                   help='GradNorm 等策略的调节超参。')
+    p.add_argument('--adaptive_loss_temperature', type=float, default=2.0,
+                   help='DWA 策略温度，默认 2.0。')
+    p.add_argument('--adaptive_loss_terms', type=str, default='fk_pos,rot_local,cond_yaw,rot_delta',
+                   help='需要自适应权重的 loss 名称，逗号分隔。')
+    p.add_argument('--adaptive_scheduler', action='store_true',
+                   help='启用在线超参调度器（freerun horizon / tf 比例）。')
+    p.add_argument('--adaptive_sched_loss_spike', type=float, default=1.5,
+                   help='判定 loss spike 的倍数阈值。')
+    p.add_argument('--adaptive_sched_convergence', type=float, default=0.02,
+                   help='判定收敛的相对标准差阈值。')
+    p.add_argument('--adaptive_sched_adjustment', type=float, default=0.1,
+                   help='调度器每次调整的相对幅度。')
+    p.add_argument('--adaptive_sched_interval', type=int, default=50,
+                   help='调度器检查周期（batch 数）。')
     p.add_argument('--teacher_rot_noise_deg', type=float, default=0.0,
                    help='Teacher 阶段对上一帧 rot6d 注入的最大扰动角度（度）。0 = 不扰动。')
     p.add_argument('--teacher_rot_noise_prob', type=float, default=0.0,
@@ -6995,8 +7142,36 @@ def train_entry():
     trainer.freerun_grad_log = bool(_arg('freerun_grad_log', False))
     trainer.freerun_grad_log_interval = int(_arg('freerun_grad_log_interval', 50) or 50)
     trainer.freerun_grad_ratio_alert = float(_arg('freerun_grad_ratio_alert', 0.01) or 0.01)
+    adaptive_loss_method = str(_arg('adaptive_loss_method', 'none') or 'none').lower()
+    adaptive_loss_terms = [
+        term.strip()
+        for term in str(_arg('adaptive_loss_terms', 'fk_pos,rot_local,cond_yaw,rot_delta') or '').split(',')
+        if term.strip()
+    ]
+    if adaptive_loss_method != 'none' and adaptive_loss_terms:
+        trainer.adaptive_loss_module = build_adaptive_loss(
+            adaptive_loss_terms,
+            adaptive_loss_method,
+            alpha=float(_arg('adaptive_loss_alpha', 1.5)),
+            dwa_temperature=float(_arg('adaptive_loss_temperature', 2.0)),
+        )
     trainer.teacher_rot_noise_deg = float(_arg('teacher_rot_noise_deg', 0.0))
     trainer.teacher_rot_noise_prob = float(_arg('teacher_rot_noise_prob', 0.0))
+    if _arg('adaptive_scheduler', False):
+        scheduler_init = {
+            'freerun_horizon': int(trainer.freerun_horizon or trainer.freerun_init_horizon),
+            'freerun_min': int(trainer.freerun_horizon_min),
+            'freerun_max': int(max(trainer.freerun_horizon, trainer.freerun_init_horizon, trainer.freerun_horizon_min)),
+            'teacher_forcing_ratio': float(_arg('tf_max', 1.0)),
+            'lookahead_weight': float(trainer.lookahead_weight),
+        }
+        trainer.hyperparam_scheduler = AdaptiveHyperparamScheduler(
+            scheduler_init,
+            loss_spike_threshold=float(_arg('adaptive_sched_loss_spike', 1.5)),
+            convergence_threshold=float(_arg('adaptive_sched_convergence', 0.02)),
+            adjustment_rate=float(_arg('adaptive_sched_adjustment', 0.1)),
+            check_interval=int(_arg('adaptive_sched_interval', 50) or 50),
+        )
     steps_per_epoch = max(1, len(train_loader))
     total_steps = max(1, _arg('epochs', 300) * steps_per_epoch)
     effective_warmup = min(_arg('warmup_steps', 1000), int(total_steps * 0.1))
