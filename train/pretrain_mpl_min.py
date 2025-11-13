@@ -32,7 +32,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 # ---- exact imports from your project (no fallback) ----
-from train.training_MPL import reproject_rot6d, rot6d_to_matrix, angvel_vec_from_R_seq  # noqa: E402
+from train.geometry import reproject_rot6d, rot6d_to_matrix, angvel_vec_from_R_seq  # noqa: E402
 
 
 # ----------------------------- small utils -----------------------------

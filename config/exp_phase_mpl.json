@@ -29,7 +29,7 @@
   "width": 512,
   "w_latent_consistency": 0.03,
   "freerun_debug_steps": 10,
-  "yaw_forward_offset": -1.57079632679,
+  "yaw_forward_offset": 0,
   "history_debug_steps": 8,
   "w_fk_pos": 0.07,
   "w_rot_local": 0.07,

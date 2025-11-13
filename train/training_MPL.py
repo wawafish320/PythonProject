@@ -4,12 +4,44 @@ from __future__ import annotations
 # ===== Common Helpers (extracted) =====
 
 # ========== [Unified Geometry Utilities] ==========
+import math as _math
+import numpy as np
 import torch
+import torch.nn.functional as F
 from typing import Any, Optional, Dict, Mapping, Sequence, Callable, List, Tuple
 
 from .adaptive_loss import build_adaptive_loss
 from .adaptive_scheduler import AdaptiveHyperparamScheduler
 from .eval_utils import FreeRunSettings, evaluate_teacher, evaluate_freerun
+from .geometry import (
+    rot6d_to_matrix,
+    matrix_to_rot6d,
+    compose_rot6d_delta,
+    infer_rot6d_delta_from_abs,
+    axis_angle_to_matrix,
+    geodesic_R,
+    so3_log_map,
+    angvel_vec_from_R_seq,
+    reproject_rot6d,
+    root_relative_matrices,
+    _root_relative_matrices,
+    _matrix_log_map,
+    normalize_rot6d_delta,
+    _rot6d_identity_like,
+    wrap_to_pi_np as _wrap_to_pi_np,
+    gram_schmidt_renorm_np,
+)
+from .layout_utils import (
+    parse_layout_entry,
+    normalize_layout as _normalize_layout,
+    layout_span as _layout_span,
+)
+from .io_utils import (
+    load_soft_contacts_from_json as _load_soft_contacts_from_json,
+    direction_yaw_from_array as _direction_yaw_from_array,
+    velocity_yaw_from_array as _velocity_yaw_from_array,
+    speed_from_X_layout as _speed_from_X_layout,
+)
 
 
 # ===== MPL Expert (embedded) =====
@@ -77,323 +109,7 @@ class PeriodHead(nn.Module):
 # ===== /MPL Expert =====
 
 
-def rot6d_to_matrix(xJ6: torch.Tensor, *, columns=("X","Z")) -> torch.Tensor:
-    """
-    xJ6: (..., J, 6)
-      columns=("X","Z") 表示提供的是 X 列和 Z 列（列即轴，columns_are_axes），派生列按左手系规则补齐：
-        remaining = second_column × first_column
-      例如 X、Z 提供，则 Y = Z × X
-    返回: (..., J, 3, 3)  列即轴
-    """
-    assert xJ6.shape[-1] == 6
-    # 取两列
-    a = xJ6[..., 0:3].clone()   # first column
-    b = xJ6[..., 3:6].clone()   # second column
-
-    # 归一化 + 正交化
-    def _norm(v):
-        return v / (v.norm(dim=-1, keepdim=True) + 1e-8)
-
-    ax1 = columns[0]  # "X" or "Y" or "Z"
-    ax2 = columns[1]
-
-    r = {}
-    r[ax1] = _norm(a)
-    # 让第二列与第一列正交
-    b = b - (r[ax1] * b).sum(dim=-1, keepdim=True) * r[ax1]
-    r[ax2] = _norm(b)
-
-    # 派生列（左手）：remaining = second × first
-    remaining = [ax for ax in ("X","Y","Z") if ax not in (ax1, ax2)][0]
-    def _cross(u, v):  # torch.cross(u, v)
-        return torch.cross(u, v, dim=-1)
-    r[remaining] = _norm(_cross(r[ax2], r[ax1]))
-
-    # 组装列为轴
-    RX = r["X"].unsqueeze(-1)
-    RY = r["Y"].unsqueeze(-1)
-    RZ = r["Z"].unsqueeze(-1)
-    R = torch.cat([RX, RY, RZ], dim=-1)  # (..., J, 3, 3)
-
-    # 行列式修正：若 det<0，仅翻转“派生列”
-    orig_shape = R.shape[:-2]  # (..., J)
-    det = torch.linalg.det(R.reshape(-1, 3, 3)).reshape(orig_shape)
-    neg = (det < 0.0).unsqueeze(-1)  # (..., J, 1)
-
-    col_idx = {"X": 0, "Y": 1, "Z": 2}[remaining]
-    R = R.clone()
-    # R[..., :, col_idx] 选择的是“该列”的 3 个分量（行方向切片）
-    R[..., :, col_idx] = torch.where(neg, -R[..., :, col_idx], R[..., :, col_idx])
-
-    return R
-
-
-def matrix_to_rot6d(R: torch.Tensor, *, columns=("X", "Z")) -> torch.Tensor:
-    """
-    逆变换：从 (..., J, 3, 3) 的旋转矩阵提取指定的两列，拼接成 (..., J, 6) 的 6D 表示。
-    """
-    if R.shape[-1] != 3 or R.shape[-2] != 3:
-        raise ValueError("[matrix_to_rot6d] expects (..., 3, 3) matrices.")
-    axis_idx = {"X": 0, "Y": 1, "Z": 2}
-    col_a = axis_idx[columns[0]]
-    col_b = axis_idx[columns[1]]
-    a = R[..., :, col_a]
-    b = R[..., :, col_b]
-    return torch.cat([a, b], dim=-1)
-
-
-def _rot6d_identity_like(residual: torch.Tensor, *, columns=("X", "Z")) -> torch.Tensor:
-    """
-    residual: (..., J, 6)
-    返回与 residual 同形状的 6D 单位旋转表示，用于将 Δrot6d 残差偏移到单位附近。
-    """
-    axis_vec = {
-        "X": (1.0, 0.0, 0.0),
-        "Y": (0.0, 1.0, 0.0),
-        "Z": (0.0, 0.0, 1.0),
-    }
-    if columns[0] not in axis_vec or columns[1] not in axis_vec:
-        raise ValueError(f"[rot6d_identity] unsupported columns {columns}")
-    first = residual.new_tensor(axis_vec[columns[0]])
-    second = residual.new_tensor(axis_vec[columns[1]])
-    base = residual.new_zeros(residual.shape)
-    base[..., 0:3] = first
-    base[..., 3:6] = second
-    return base
-
-
-def normalize_rot6d_delta(delta_flat: torch.Tensor, *, columns=("X", "Z")) -> torch.Tensor:
-    """
-    将模型输出的 Δrot6d（残差形式）转换为有效的 6D 旋转（接近单位旋转）。
-    返回形状 (..., J, 6)。
-    """
-    if delta_flat.shape[-1] % 6 != 0:
-        raise ValueError(f"[normalize_rot6d_delta] last dim {delta_flat.shape[-1]} not divisible by 6")
-    orig = delta_flat.shape
-    J = orig[-1] // 6
-    residual = delta_flat.view(*orig[:-1], J, 6)
-    delta_with_identity = residual + _rot6d_identity_like(residual, columns=columns)
-    delta_flat = delta_with_identity.view(*orig[:-1], 6 * J)
-    delta_proj = reproject_rot6d(delta_flat)
-    return delta_proj.view(*orig[:-1], J, 6)
-
-
-def compose_rot6d_delta(prev_rot6d: torch.Tensor, delta_rot6d: torch.Tensor, *, columns=("X", "Z")) -> torch.Tensor:
-    """
-    给定上一帧的绝对 6D 旋转向量 prev_rot6d 和模型预测的增量 Δrot6d，
-    先将两者正交化生成矩阵，再执行 ΔR @ R_{t-1}，返回新的绝对 6D 旋转。
-    """
-    if prev_rot6d.shape != delta_rot6d.shape:
-        raise ValueError(f"[compose_rot6d_delta] shape mismatch: prev={prev_rot6d.shape}, delta={delta_rot6d.shape}")
-    if prev_rot6d.shape[-1] % 6 != 0:
-        raise ValueError(f"[compose_rot6d_delta] last dim must be multiple of 6, got {prev_rot6d.shape[-1]}")
-    orig_shape = prev_rot6d.shape
-    J = orig_shape[-1] // 6
-    prev = reproject_rot6d(prev_rot6d).view(*orig_shape[:-1], J, 6)
-    delta = normalize_rot6d_delta(delta_rot6d, columns=columns)
-    R_prev = rot6d_to_matrix(prev, columns=columns)
-    R_delta = rot6d_to_matrix(delta, columns=columns)
-    R_next = torch.matmul(R_delta, R_prev)
-    return matrix_to_rot6d(R_next, columns=columns).view(orig_shape)
-
-
-def infer_rot6d_delta_from_abs(rot6d_seq: torch.Tensor, *, columns=("X", "Z")) -> Optional[torch.Tensor]:
-    """
-    从绝对 rot6d 序列推导相邻帧 delta（同形状，首帧为单位旋转）。
-    rot6d_seq: (..., T, J*6)
-    返回: (..., T, J*6) delta 序列
-    """
-    if rot6d_seq is None:
-        return None
-    if rot6d_seq.dim() < 2:
-        return None
-    D = rot6d_seq.shape[-1]
-    if D % 6 != 0:
-        return None
-    T = rot6d_seq.shape[-2]
-    if T < 2:
-        return None
-    J = D // 6
-    lead = rot6d_seq.shape[:-2]
-    # 先重新投影到有效 rot6d，再展平成 (Bflat, T, J, 6)
-    reproj = reproject_rot6d(rot6d_seq).contiguous()
-    flat = reproj.reshape(-1, T, J, 6)
-    mats = rot6d_to_matrix(flat, columns=columns)
-    dR = torch.matmul(mats[:, 1:], mats[:, :-1].transpose(-1, -2))
-    delta_body = matrix_to_rot6d(dR, columns=columns).reshape(flat.shape[0], T - 1, J * 6)
-    delta_seq = rot6d_seq.new_zeros((flat.shape[0], T, J * 6))
-    base = _rot6d_identity_like(flat[:, :1], columns=columns).reshape(flat.shape[0], 1, J * 6)
-    delta_seq[:, :1] = base
-    delta_seq[:, 1:] = delta_body
-    return delta_seq.reshape(*lead, T, D)
-
-
-def axis_angle_to_matrix(axis: torch.Tensor, angle: torch.Tensor) -> torch.Tensor:
-    """
-    Rodrigues' rotation formula. axis: (...,3), angle: (...) in radians.
-    Returns (...,3,3).
-    """
-    axis = F.normalize(axis, dim=-1, eps=1e-8)
-    x, y, z = axis.unbind(dim=-1)
-    cos = torch.cos(angle)
-    sin = torch.sin(angle)
-    one_minus = 1.0 - cos
-
-    row0 = torch.stack([
-        cos + x * x * one_minus,
-        x * y * one_minus - z * sin,
-        x * z * one_minus + y * sin,
-    ], dim=-1)
-    row1 = torch.stack([
-        y * x * one_minus + z * sin,
-        cos + y * y * one_minus,
-        y * z * one_minus - x * sin,
-    ], dim=-1)
-    row2 = torch.stack([
-        z * x * one_minus - y * sin,
-        z * y * one_minus + x * sin,
-        cos + z * z * one_minus,
-    ], dim=-1)
-    return torch.stack([row0, row1, row2], dim=-2)
-
-def geodesic_R(R_pred: torch.Tensor, R_gt: torch.Tensor, *, reduce=None) -> torch.Tensor:
-    """
-    Geodesic angular distance (radians) between two rotation matrices (...,J,3,3).
-    Returns tensor shape (...,J) unless reduced.
-    """
-    assert R_pred.shape[-2:] == (3,3) and R_gt.shape[-2:] == (3,3)
-    Rt = torch.matmul(R_pred.transpose(-1, -2), R_gt)  # (...,J,3,3)
-    # Clamp trace for numerical stability
-    trace = Rt[..., 0,0] + Rt[..., 1,1] + Rt[..., 2,2]
-    cos = (trace - 1.) * 0.5
-    cos = cos.clamp(-1.0 + 1e-6, 1.0 - 1e-6)
-    ang = torch.acos(cos)  # radians
-    if reduce == "mean":
-        return ang.mean()
-    if reduce == "sum":
-        return ang.sum()
-    return ang
-
-def _matrix_log_map(R: torch.Tensor) -> torch.Tensor:
-    """Log map from SO(3) to so(3) as a 3D rotation vector."""
-    trace = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]
-    cos_theta = ((trace - 1.0) * 0.5).clamp(-1.0 + 1e-6, 1.0 - 1e-6)
-    theta = torch.acos(cos_theta)
-    sin_theta = torch.sin(theta)
-    skew = R - R.transpose(-1, -2)
-    vec = torch.stack([skew[..., 2, 1], skew[..., 0, 2], skew[..., 1, 0]], dim=-1) * 0.5
-    denom = (2.0 * sin_theta).unsqueeze(-1)
-    factor = theta.unsqueeze(-1) / denom.clamp_min(1e-6)
-    small = (sin_theta.abs() < 1e-4).unsqueeze(-1)
-    approx = 0.5 * vec
-    exact = vec * factor
-    return torch.where(small, approx, exact)
-
-def _root_relative_matrices(R: torch.Tensor, root_idx: int) -> torch.Tensor:
-    """Express joint rotations in the root joint frame."""
-    if root_idx < 0 or root_idx >= R.shape[-3]:
-        return R
-    R_root = R[..., root_idx, :, :]
-    R_root_T = R_root.transpose(-1, -2).unsqueeze(-3)
-    return torch.matmul(R_root_T, R)
-# ========== [End Utilities] ==========
-
-
 # ========== [End Loader] ==========
-import math as _math
-
-# === Unified layout entry parser (single source of truth) ===
-from typing import Any, Optional
-
-def parse_layout_entry(
-    entry_value: Any,
-    entry_name: Optional[str] = None,
-    total_dim: Optional[int] = None
-) -> Optional[slice]:
-    """
-    将布局条目解析为 slice，采用“严格 SIZE 语义”：
-      - dict: {'start': s, 'size': k} / {'start': s, 'dim': k} / {'start': s, 'end': e}
-      - list/tuple: [s, k]  ->  slice(s, s+k)   # 永远把第二项当 size
-    不做任何启发式，不根据名称或 total_dim 改变语义。
-    total_dim 仅用于（可选）越界检查（若提供）。
-    """
-    if entry_value is None:
-        return None
-    if isinstance(entry_value, slice):
-        return entry_value
-    # dict 形式
-    if isinstance(entry_value, dict):
-        if 'start' not in entry_value:
-            return None
-        s = int(entry_value['start'])
-        if 'end' in entry_value:
-            e = int(entry_value['end'])
-            if (total_dim is not None) and not (0 <= s <= e <= total_dim):
-                # 仅检查，不更改行为
-                pass
-            return slice(s, e)
-        # 支持 size/dim 同义
-        k = entry_value.get('size', entry_value.get('dim', None))
-        if k is None:
-            return None
-        k = int(k)
-        if (total_dim is not None) and not (0 <= s <= s+k <= total_dim):
-            # 仅检查，不更改行为
-            pass
-        return slice(s, s + max(0, k))
-    # list/tuple 形式：严格把第二项当 size
-    if isinstance(entry_value, (list, tuple)) and len(entry_value) >= 2:
-        s = int(entry_value[0])
-        k = int(entry_value[1])
-        if (total_dim is not None) and not (0 <= s <= s+k <= total_dim):
-            # 仅检查，不更改行为
-            pass
-        return slice(s, s + max(0, k))
-    return None
-
-
-
-def _normalize_layout(raw_layout: Dict[str, Any], D: int) -> Dict[str, Tuple[int, int]]:
-    """Normalize diverse span specs (start/size/end, tuple/list) -> (start, size).
-    Strict checks: 0 <= start < end <= D.
-    """
-    norm = {}
-    for name, meta in (raw_layout or {}).items():
-        st = ed = sz = None
-        if isinstance(meta, dict):
-            if 'start' in meta and 'end' in meta:
-                st = int(meta['start']); ed = int(meta['end']); sz = ed - st
-            elif 'start' in meta and 'size' in meta:
-                st = int(meta['start']); sz = int(meta['size']); ed = st + sz
-        elif isinstance(meta, (list, tuple)) and len(meta) >= 2:
-            # Heuristic: treat as (start,size); if looks like (start,end) with end>start and D known, still valid
-            st = int(meta[0]); second = int(meta[1])
-            if D is not None and second > st and second <= D:
-                # ambiguous; prefer (start,size) since project uses [start,size], but accept (start,end) too
-                # If interpreted as size and exceeds bound, switch to end
-                as_size_ok = (st + second) <= D
-                if as_size_ok:
-                    sz = second; ed = st + sz
-                else:
-                    ed = second; sz = ed - st
-            else:
-                sz = second; ed = st + sz
-        if st is None or (sz is None and ed is None):
-            raise AssertionError(f"[FATAL] layout[{name}] cannot be normalized: {meta}")
-        if ed is None: ed = st + sz
-        if sz is None: sz = ed - st
-        if not (0 <= st < ed <= D):
-            raise AssertionError(f"[FATAL] layout[{name}] must be [start,end) with 0<=start<end<=D, got ({st},{ed}) and D={D}")
-        norm[name] = (int(st), int(sz))
-    return norm
-
-
-def _layout_span(layout: Dict[str, Any], key: str) -> Optional[Tuple[int,int]]:
-    sl = parse_layout_entry(layout.get(key), key)
-    if sl is None:
-        return None
-    return (int(sl.start), int(sl.stop))
-
 
 # ===== End Helpers =====
 # =========================
@@ -582,41 +298,6 @@ def __apply_layout_center(ds_train, trainer):
 from torch import nn
 
 # ==== ARPG-PATCH: angular velocity helpers (eval-only) ====
-import torch
-import math as _math
-
-def so3_log_map(R: torch.Tensor) -> torch.Tensor:
-    """
-    SO(3) log map. R: [...,3,3] -> axis-angle vector phi [...,3] (radians * axis)
-    """
-    tr = (R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2] - 1.0) * 0.5
-    tr = torch.clamp(tr, -1.0 + 1e-7, 1.0 - 1e-7)
-    theta = torch.acos(tr)
-    W = R - R.transpose(-1, -2)
-    vee = torch.stack([W[..., 2, 1], W[..., 0, 2], W[..., 1, 0]], dim=-1) * 0.5
-    sin_theta = torch.sin(theta)
-    k = theta / torch.clamp(2.0 * sin_theta, min=1e-6)
-    k = k.unsqueeze(-1)
-    phi = k * vee
-    small = (theta < 1e-5).unsqueeze(-1)
-    phi = torch.where(small, 0.5 * vee, phi)
-    return phi
-
-def angvel_vec_from_R_seq(R_seq: torch.Tensor, fps: float) -> torch.Tensor:
-    """
-    R_seq: [B,T,J,3,3] GS'ed rotation matrices
-    Returns omega: [B,T-1,J,3] in rad/s
-    """
-    dR = torch.matmul(R_seq[:, 1:], R_seq[:, :-1].transpose(-1, -2))
-    phi = so3_log_map(dR)
-    omega = phi * float(fps)
-    return omega
-
-import torch
-import torch.nn.functional as F
-import numpy as np
-
-
 def validate_and_fix_model_(m: nn.Module, Dx: int | None = None, Dc: int | None = None, *, reinit_on_nonfinite: bool = True) -> None:
     """
     Single entrypoint for production sanity:
@@ -771,7 +452,6 @@ from dataclasses import dataclass
 
 from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
-from typing import Dict, Any, Tuple, Optional
 
 try:
     from .cli_utils import (
@@ -792,24 +472,6 @@ except ImportError:
 
     def tqdm(iterable, *GLOBAL_ARGS, **kwargs):
         return iterable
-
-def reproject_rot6d(flat_6d: torch.Tensor) -> torch.Tensor:
-    orig = flat_6d.shape                    # (..., D)
-    D = orig[-1]
-    if D % 6 != 0:
-        raise ValueError(f"[reproject_rot6d] last dim={D} not divisible by 6")
-    J = D // 6
-
-    x = flat_6d.view(*orig[:-1], J, 6)      # (..., J, 6)
-    b1 = F.normalize(x[..., :3], dim=-1, eps=1e-8)
-    b2 = x[..., 3:]
-    b2 = b2 - (b1 * b2).sum(dim=-1, keepdim=True) * b1
-    b2 = F.normalize(b2, dim=-1, eps=1e-8)
-
-    y = torch.cat([b1, b2], dim=-1)        # (..., J, 6)
-    return y.view(*orig[:-1], 6 * J)        # 还原到 (..., D)
-
-
 
 class MotionAugmentation:
     """
@@ -870,81 +532,6 @@ def _npz_scalar_to_str(v) -> Optional[str]:
     if isinstance(v, (bytes, bytearray)):
         v = v.decode("utf-8", "ignore")
     return v if isinstance(v, str) and v else None
-
-
-def _load_soft_contacts_from_json(json_path: str) -> np.ndarray:
-    with open(json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    frames = data.get("Frames")
-    if not isinstance(frames, list) or len(frames) == 0:
-        raise ValueError(f"{json_path}: JSON missing/empty Frames.")
-    sc = []
-    for i, fr in enumerate(frames):
-        fe = (fr.get("FootEvidence") or {})
-        L = (fe.get("L") or {})
-        R = (fe.get("R") or {})
-        if "soft_contact_score" not in L or "soft_contact_score" not in R:
-            raise ValueError(f"{json_path}: frame {i} missing soft_contact_score.")
-        sc.append([float(L["soft_contact_score"]), float(R["soft_contact_score"])])
-    return np.asarray(sc, dtype=np.float32)
-
-
-def _wrap_to_pi_np(x: np.ndarray) -> np.ndarray:
-    return (x + np.pi) % (2.0 * np.pi) - np.pi
-
-
-def _direction_yaw_from_array(arr: Optional[np.ndarray]) -> Optional[np.ndarray]:
-    if arr is None:
-        return None
-    try:
-        a = np.asarray(arr)
-    except Exception:
-        return None
-    if a.ndim != 2 or a.shape[1] < 2:
-        return None
-    # Prefer最后三维: [dir_x, dir_y, speed]
-    dir_xy = None
-    speed = None
-    if a.shape[1] >= 3:
-        cand = a[:, -3:-1]
-        norms = np.linalg.norm(cand, axis=-1)
-        if np.nanmedian(norms) > 1e-4:
-            dir_xy = cand
-            speed = a[:, -1]
-    if dir_xy is None:
-        cand = a[:, -2:]
-        norms = np.linalg.norm(cand, axis=-1)
-        if np.nanmedian(norms) > 1e-4:
-            dir_xy = cand
-    if dir_xy is None:
-        return None
-    yaw = np.arctan2(dir_xy[..., 1], dir_xy[..., 0])
-    if speed is not None:
-        try:
-            mask = np.asarray(speed) > 1e-3
-            if mask.shape == yaw.shape and mask.any():
-                yaw = yaw[mask]
-        except Exception:
-            pass
-    return yaw if yaw.size > 0 else None
-
-
-def _velocity_yaw_from_array(arr: Optional[np.ndarray]) -> Optional[np.ndarray]:
-    if arr is None:
-        return None
-    try:
-        a = np.asarray(arr, dtype=np.float32)
-    except Exception:
-        return None
-    if a.ndim != 2 or a.shape[1] < 2:
-        return None
-    xy = a[:, :2]
-    speed = np.linalg.norm(xy, axis=1)
-    mask = speed > 1e-4
-    if not mask.any():
-        return None
-    yaw = np.arctan2(xy[:, 1], xy[:, 0])
-    return yaw[mask]
 
 
 def _infer_forward_axis_from_clip(
@@ -6317,67 +5904,6 @@ def _diagnose_free_run_impl(
     if w_pred is not None:
         contact_pred = (w_pred.norm(dim=-1) < contact_threshold).float()
         result['FootContact'] = float(contact_pred.mean().item())
-
-    return result
-def _speed_from_X_layout(X, state_layout):
-    """
-    返回每帧“速度标量”（z 域）用于 IndexOpt 的 min_speed 过滤。
-    兼容 state_layout 形态：
-      - {'RootVelocity': {'start': 3, 'size': 2}}
-      - {'RootVelocity': (3, 5)}   # [start, end)
-      - {'RootVelocity': (3, 2)}   # [start, size]
-      - {'RootVelocity': [3, 2]}   # 同上
-      - 数值为 str/np 标量时自动 int()
-    """
-    import numpy as np
-
-    try:
-        if not isinstance(state_layout, dict):
-            return None
-
-        # ✅ 优先使用你已有的解析工具，避免重复实现
-        try:
-            sl = parse_layout_entry(state_layout.get('RootVelocity'), 'RootVelocity')
-        except Exception:
-            sl = None
-
-        a = b = None
-        if isinstance(sl, slice):
-            a = int(sl.start or 0)
-            b = int(sl.stop)
-        else:
-            rv = state_layout.get('RootVelocity')
-            if rv is None:
-                return None
-
-            # dict 形式: {'start': x, 'size': y}
-            if isinstance(rv, dict):
-                a = int(rv.get('start', 0))
-                sz = int(rv.get('size', 0))
-                b = a + sz
-            else:
-                # 序列形式: (start, size) 或 (start, end)
-                if hasattr(rv, '__iter__'):
-                    r0 = int(rv[0])
-                    r1 = int(rv[1])
-                    # 判断 r1 是 size 还是 end（RootVelocity 通常 2 或 3 维）
-                    if r1 in (1, 2, 3):
-                        a, b = r0, r0 + r1
-                    else:
-                        a, b = r0, r1
-                else:
-                    return None
-
-        if b is None or b <= a:
-            return None
-
-        v = X[:, a:b]
-        spd = np.linalg.norm(v[:, :2], axis=1) if v.shape[1] >= 2 else np.abs(v[:, 0])
-        return spd.astype(np.float32)
-    except Exception:
-        # 紧急兜底：过滤失效，但不会中断训练
-        return None
-
 
 def _maybe_optimize_dataset_index(ds, args):
     """
