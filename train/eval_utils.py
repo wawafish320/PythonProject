@@ -465,6 +465,8 @@ def evaluate_freerun(
             angvel_seq=angvel_seq,
             pose_hist_seq=pose_hist_seq,
         )
+        if batch_stats is None:
+            continue
         batch_stats["MSEnormY"] = mse_normY
 
         for key, value in batch_stats.items():

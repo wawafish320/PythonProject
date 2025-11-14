@@ -5,6 +5,7 @@ from __future__ import annotations
 
 # ========== [Unified Geometry Utilities] ==========
 import math as _math
+from collections import deque
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -1621,6 +1622,9 @@ class MotionJointLoss(nn.Module):
         meta: Optional[Dict[str, Any]] = None,
         w_fk_pos: float = 0.0,
         w_rot_local: float = 0.0,
+        w_limb_geo: float = 0.0,
+        limb_geo_margin_deg: float = 5.0,
+        limb_geo_topk: int = 16,
     ):
         super().__init__()
         self.meta = dict(meta) if isinstance(meta, dict) else {}
@@ -1634,6 +1638,9 @@ class MotionJointLoss(nn.Module):
         self.cond_yaw_min_speed = float(cond_yaw_min_speed)
         self.w_fk_pos = float(w_fk_pos)
         self.w_rot_local = float(w_rot_local)
+        self.w_limb_geo = float(w_limb_geo)
+        self.limb_geo_margin_deg = float(limb_geo_margin_deg)
+        self.limb_geo_topk = int(max(0, limb_geo_topk))
         self.angvel_eps = 1e-6
         self.fps = float(fps)
         self.output_layout = output_layout or {}
@@ -1688,6 +1695,20 @@ class MotionJointLoss(nn.Module):
             "rot_ortho",
         )
         self._reset_adaptive_tracking()
+        self._last_geo_tensor: Optional[torch.Tensor] = None
+        self._loss_group_totals: Dict[str, float] = {}
+        self._loss_group_alias = {
+            'attn': 'aux',
+            'rot_geo': 'core',
+            'limb_geo': 'aux',
+            'rot_delta': 'core',
+            'rot_delta_root': 'aux',
+            'rot_log': 'aux',
+            'rot_ortho': 'core',
+            'cond_yaw': 'core',
+            'fk_pos': 'core',
+            'rot_local': 'core',
+        }
 
     def _format_template_hint(self, prefix: str) -> str:
         hints: list[str] = []
@@ -1892,6 +1913,9 @@ class MotionJointLoss(nn.Module):
         l_delta = Z(0.0)
         l_ortho = Z(0.0)
         loss = self.w_attn_reg * l_attn + self.w_rot_geo * l_geo
+        self._last_geo_tensor = geo_details
+        self._accumulate_loss_contrib('attn', l_attn, self.w_attn_reg, group='aux')
+        self._accumulate_loss_contrib('rot_geo', l_geo, self.w_rot_geo, group='core')
         stats = {
             'attn': float(l_attn.detach().cpu()),
             'rot_geo': float(l_geo.detach().cpu()),
@@ -2411,6 +2435,8 @@ class MotionJointLoss(nn.Module):
 
     def forward(self, pred_motion, gt_motion, attn_weights=None, batch=None):
         # 统一拿出模型输出（可能是 dict 或 tensor）
+        self._init_loss_group_tracker()
+        self._last_geo_tensor = None
         delta_fallback = False
         if isinstance(pred_motion, dict):
             delta_fallback = bool(pred_motion.get('_delta_fallback', False))
@@ -2434,6 +2460,7 @@ class MotionJointLoss(nn.Module):
         if self.w_rot_delta > 0 and delta_pm is not None:
             l_delta = self.compute_rot6d_delta_loss(delta_pm, gt_motion)
             loss = loss + self.w_rot_delta * l_delta
+            self._accumulate_loss_contrib('rot_delta', l_delta, self.w_rot_delta, group='core')
             stats['rot_delta'] = float(l_delta.detach().cpu())
             self._register_component_loss('rot_delta', l_delta, self.w_rot_delta)
         else:
@@ -2442,6 +2469,7 @@ class MotionJointLoss(nn.Module):
         if self.w_rot_delta_root > 0 and delta_pm is not None:
             l_delta_root = self.compute_rot6d_delta_root_loss(delta_pm, gt_motion)
             loss = loss + self.w_rot_delta_root * l_delta_root
+            self._accumulate_loss_contrib('rot_delta_root', l_delta_root, self.w_rot_delta_root, group='aux')
             stats['rot_delta_root'] = float(l_delta_root.detach().cpu())
         else:
             stats.setdefault('rot_delta_root', 0.0)
@@ -2449,6 +2477,7 @@ class MotionJointLoss(nn.Module):
         if self.w_rot_log > 0 and delta_pm is not None and not delta_fallback:
             l_rot_log = self.compute_rot6d_log_loss(delta_pm, gt_motion)
             loss = loss + self.w_rot_log * l_rot_log
+            self._accumulate_loss_contrib('rot_log', l_rot_log, self.w_rot_log, group='aux')
             stats['rot_log'] = float(l_rot_log.detach().cpu())
         else:
             stats.setdefault('rot_log', 0.0)
@@ -2458,6 +2487,7 @@ class MotionJointLoss(nn.Module):
             l_ortho = self.compute_rot6d_ortho_loss(target_for_ortho)
             weighted_ortho = self.w_rot_ortho * l_ortho
             loss = loss + weighted_ortho
+            self._accumulate_loss_contrib('rot_ortho', l_ortho, self.w_rot_ortho, group='core')
             stats['rot_ortho'] = float(l_ortho.detach().cpu())
             stats['rot_ortho_weighted'] = float(weighted_ortho.detach().cpu())
             stats['rot_ortho_raw'] = float(l_ortho.detach().cpu())
@@ -2479,10 +2509,19 @@ class MotionJointLoss(nn.Module):
         cond_yaw_loss = self._compute_cond_yaw_loss(pm, batch)
         if cond_yaw_loss is not None:
             loss = loss + self.w_cond_yaw * cond_yaw_loss
+            self._accumulate_loss_contrib('cond_yaw', cond_yaw_loss, self.w_cond_yaw, group='core')
             stats['cond_yaw'] = float(cond_yaw_loss.detach().cpu())
             self._register_component_loss('cond_yaw', cond_yaw_loss, self.w_cond_yaw)
         else:
             stats.setdefault('cond_yaw', 0.0)
+
+        if self.w_limb_geo > 0.0:
+            limb_geo_loss = self.compute_limb_geo_aux_loss(self._last_geo_tensor)
+            loss = loss + self.w_limb_geo * limb_geo_loss
+            self._accumulate_loss_contrib('limb_geo', limb_geo_loss, self.w_limb_geo, group='aux')
+            stats['limb_geo'] = float(limb_geo_loss.detach().cpu())
+        else:
+            stats.setdefault('limb_geo', 0.0)
 
         Rp_world = Rg_world = None
         Rp_root = Rg_root = None
@@ -2503,6 +2542,7 @@ class MotionJointLoss(nn.Module):
                     w = weights.view(1, 1, -1)
                     fk_loss = (fk_res * w).mean()
                     loss = loss + self.w_fk_pos * fk_loss
+                    self._accumulate_loss_contrib('fk_pos', fk_loss, self.w_fk_pos, group='core')
                     stats['fk_pos'] = float(fk_loss.detach().cpu())
                     self._register_component_loss('fk_pos', fk_loss, self.w_fk_pos)
         else:
@@ -2517,12 +2557,14 @@ class MotionJointLoss(nn.Module):
                 w = weights.view(1, 1, -1)
                 local_loss = (geo_local * w).mean()
                 loss = loss + self.w_rot_local * local_loss
+                self._accumulate_loss_contrib('rot_local', local_loss, self.w_rot_local, group='core')
                 stats['rot_local_deg'] = float((local_loss * (180.0 / math.pi)).detach().cpu())
                 self._register_component_loss('rot_local', local_loss, self.w_rot_local)
         else:
             stats.setdefault('rot_local_deg', 0.0)
 
         self._finalize_adaptive_payload(loss)
+        stats.update(self._loss_group_stats())
         return loss, stats
 
     def _reset_adaptive_tracking(self):
@@ -2530,6 +2572,60 @@ class MotionJointLoss(nn.Module):
         self._last_component_weights: Dict[str, float] = {}
         self._last_component_total_weight: float = 0.0
         self._last_core_loss: Optional[torch.Tensor] = None
+        self._last_geo_tensor = None
+
+    def _init_loss_group_tracker(self):
+        self._loss_group_totals = {key: 0.0 for key in ('core', 'aux', 'long')}
+
+    def _accumulate_loss_contrib(self, name: str, tensor: Optional[torch.Tensor], weight: float, group: Optional[str] = None):
+        if tensor is None:
+            return
+        try:
+            w = float(weight)
+        except Exception:
+            w = float(weight.item()) if hasattr(weight, 'item') else 0.0
+        if not _math.isfinite(w) or abs(w) < 1e-9:
+            return
+        if group is None:
+            group = self._loss_group_alias.get(name, 'core')
+        if group not in self._loss_group_totals:
+            self._loss_group_totals[group] = 0.0
+        try:
+            contrib = float((tensor.detach().cpu()) * w)
+        except Exception:
+            contrib = 0.0
+        if _math.isfinite(contrib):
+            self._loss_group_totals[group] += contrib
+
+    def _loss_group_stats(self) -> Dict[str, float]:
+        return {f'loss_group/{k}': float(v) for k, v in self._loss_group_totals.items()}
+
+    def compute_limb_geo_aux_loss(self, geo_tensor: Optional[torch.Tensor]) -> torch.Tensor:
+        Z = lambda v: geo_tensor.new_tensor(float(v)) if isinstance(geo_tensor, torch.Tensor) else torch.tensor(float(v))
+        if geo_tensor is None or geo_tensor.numel() == 0:
+            return Z(0.0)
+        import torch
+        J = geo_tensor.shape[-1]
+        masks = self._resolve_limb_masks(J, geo_tensor.device)
+        if not masks:
+            return Z(0.0)
+        limb_mask, _ = masks
+        if not limb_mask.any():
+            return Z(0.0)
+        flat = geo_tensor.reshape(-1, J)
+        limb_vals = flat[:, limb_mask]
+        if limb_vals.numel() == 0:
+            return Z(0.0)
+        deg = limb_vals * (180.0 / _math.pi)
+        hinge = torch.relu(deg - self.limb_geo_margin_deg)
+        if hinge.numel() == 0:
+            return Z(0.0)
+        if self.limb_geo_topk > 0 and hinge.numel() > self.limb_geo_topk:
+            topk_vals, _ = torch.topk(hinge.view(-1), self.limb_geo_topk)
+            loss = topk_vals.mean()
+        else:
+            loss = hinge.mean()
+        return loss
 
     def _register_component_loss(self, name: str, tensor: Optional[torch.Tensor], weight: float):
         if tensor is None or weight <= 0:
@@ -2954,12 +3050,57 @@ def _parse_stage_schedule(spec: Optional[Any]):
                     return txt
         return val
 
-    def _append_stage(stages: list, start: int, end: int, params: Dict[str, Any], label: Optional[str] = None):
+    def _normalize_goal(goal_entry: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(goal_entry, Mapping):
+            return None
+        metrics_cfg = goal_entry.get('metrics')
+        if not isinstance(metrics_cfg, Mapping):
+            return None
+        normalized_metrics: Dict[str, Dict[str, Any]] = {}
+        for name, cfg in metrics_cfg.items():
+            if not isinstance(cfg, Mapping):
+                continue
+            metric = {
+                'ref': float(cfg.get('ref', 0.0) or 0.0),
+            }
+            if 'hi' in cfg:
+                metric['hi'] = float(cfg['hi'])
+            if 'lo' in cfg:
+                metric['lo'] = float(cfg['lo'])
+            if 'hi_ratio' in cfg:
+                metric['hi_ratio'] = float(cfg['hi_ratio'])
+            if 'lo_ratio' in cfg:
+                metric['lo_ratio'] = float(cfg['lo_ratio'])
+            metric['mode'] = cfg.get('mode')
+            normalized_metrics[str(name)] = metric
+        if not normalized_metrics:
+            return None
+        tags = goal_entry.get('tags') or goal_entry.get('tag') or ['valfree']
+        if isinstance(tags, str):
+            tags = [tags]
+        elif isinstance(tags, Sequence):
+            tags = [str(t) for t in tags]
+        else:
+            tags = ['valfree']
+        window = int(goal_entry.get('window', 3) or 3)
+        min_epochs = int(goal_entry.get('min_epochs', 0) or 0)
+        return {
+            'metrics': normalized_metrics,
+            'tags': tags,
+            'window': max(1, window),
+            'min_epochs': max(0, min_epochs),
+        }
+
+    def _append_stage(stages: list, start: int, end: int, params: Dict[str, Any], label: Optional[str] = None, extra: Optional[Dict[str, Any]] = None):
         if start is None or end is None:
             return
         stage = {'start': int(start), 'end': int(end), 'params': dict(params)}
         if label:
             stage['label'] = str(label)
+        if extra:
+            for key, value in extra.items():
+                if value is not None:
+                    stage[key] = value
         stages.append(stage)
 
     def _parse_string(spec_str: str):
@@ -3015,10 +3156,11 @@ def _parse_stage_schedule(spec: Optional[Any]):
             return None, None
         return int(start), int(end)
 
-    def _merge_params(entry: Mapping[str, Any]) -> Dict[str, Any]:
+    def _merge_params(entry: Mapping[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
         params: Dict[str, Any] = {}
+        extras: Dict[str, Any] = {}
         if not isinstance(entry, Mapping):
-            return params
+            return params, extras
         base = entry.get('params') if isinstance(entry.get('params'), Mapping) else {}
         for key, val in base.items():
             params[key] = val
@@ -3039,7 +3181,22 @@ def _parse_stage_schedule(spec: Optional[Any]):
             if 'min' in tf_cfg:
                 params['tf_min'] = tf_cfg['min']
 
-        reserved = {'start', 'end', 'range', 'epochs', 'params', 'trainer', 'loss', 'tf', 'label', 'name', 'updates'}
+        loss_groups_cfg = entry.get('loss_groups')
+        normalized_groups = {}
+        if isinstance(loss_groups_cfg, Mapping):
+            for group_name, group_vals in loss_groups_cfg.items():
+                if not isinstance(group_vals, Mapping):
+                    continue
+                group_norm = {}
+                for key, val in group_vals.items():
+                    group_norm[key] = val
+                    params[f'loss.{key}'] = val
+                if group_norm:
+                    normalized_groups[str(group_name)] = group_norm
+        if normalized_groups:
+            extras['loss_groups'] = normalized_groups
+
+        reserved = {'start', 'end', 'range', 'epochs', 'params', 'trainer', 'loss', 'tf', 'label', 'name', 'updates', 'loss_groups', 'goal'}
         for key, val in entry.items():
             if key in reserved:
                 continue
@@ -3053,8 +3210,13 @@ def _parse_stage_schedule(spec: Optional[Any]):
                     value = item.get('value')
                     if target:
                         params[target] = value
-        # coerce
-        return {k: _coerce_value(k, v) for k, v in params.items()}
+
+        goal_norm = _normalize_goal(entry.get('goal'))
+        if goal_norm:
+            extras['goal'] = goal_norm
+
+        coerced = {k: _coerce_value(k, v) for k, v in params.items()}
+        return coerced, extras
 
     if not spec:
         return []
@@ -3076,8 +3238,10 @@ def _parse_stage_schedule(spec: Optional[Any]):
             continue
         start, end = _normalize_range(entry)
         label = entry.get('label') or entry.get('name')
-        params = _merge_params(entry)
-        _append_stage(stages, start, end, params, label)
+        params, extra = _merge_params(entry)
+        _append_stage(stages, start, end, params, label, extra)
+    for idx, stage in enumerate(stages):
+        stage['index'] = idx
     return stages
 
 
@@ -4032,24 +4196,23 @@ class Trainer:
         if not schedule:
             return overrides
 
-        def _coerce_like(current, new_val):
-            if new_val is None:
-                return None
-            if isinstance(current, bool):
-                if isinstance(new_val, str):
-                    return new_val.strip().lower() not in ('0', 'false', 'no', 'off')
-                return bool(new_val)
-            if isinstance(current, int) and not isinstance(current, bool):
+        if not hasattr(self, '_stage_active_idx') or self._stage_active_idx is None:
+            idx = 0
+            for i, stage in enumerate(schedule):
                 try:
-                    return int(round(float(new_val)))
+                    st = int(stage.get('start', 1))
+                    ed = int(stage.get('end', st))
                 except Exception:
-                    return current
-            if isinstance(current, float):
-                try:
-                    return float(new_val)
-                except Exception:
-                    return current
-            return new_val
+                    continue
+                if st <= epoch <= ed:
+                    idx = i
+                    break
+                if epoch >= st:
+                    idx = i
+            self._activate_stage(idx, epoch)
+
+        if getattr(self, '_stage_pending_advance', False):
+            self._advance_stage(epoch)
 
         def _assign(key: str, value: Any) -> bool:
             target = self
@@ -4075,38 +4238,154 @@ class Trainer:
             if target is None or not hasattr(target, attr_name):
                 return False
             current = getattr(target, attr_name)
-            coerced = _coerce_like(current, value) if current is not None else value
+            coerced = value
+            if current is not None:
+                if isinstance(current, bool):
+                    coerced = bool(value)
+                elif isinstance(current, int) and not isinstance(current, bool):
+                    try:
+                        coerced = int(round(float(value)))
+                    except Exception:
+                        coerced = current
+                elif isinstance(current, float):
+                    try:
+                        coerced = float(value)
+                    except Exception:
+                        coerced = current
             setattr(target, attr_name, coerced)
             key_name = key if prefix else attr_name
             overrides[key_name] = coerced
             return True
 
-        selected = None
-        for stage in schedule:
-            try:
-                st = int(stage.get('start'))
-                ed = int(stage.get('end'))
-            except Exception:
-                continue
-            if st <= epoch <= ed:
-                params = stage.get('params') or {}
-                selected = {'start': st, 'end': ed, 'params': params, 'label': stage.get('label')}
-                for key, value in params.items():
-                    _assign(key, value)
-                break
+        selected = self._current_stage()
+        if selected is None:
+            return overrides
 
-        if selected:
-            label = f" {selected['label']}" if selected.get('label') else ''
-            if overrides:
-                summary = ', '.join(f"{k}={overrides[k]}" for k in sorted(overrides))
-            else:
-                summary = 'no overrides'
-            print(
-                "[StageSched]"
-                f"[ep {epoch:03d}] stage={selected['start']}-{selected['end']}{label} | "
-                f"{summary}"
-            )
+        while epoch > selected.get('end', epoch) and (self._stage_active_idx or 0) < len(schedule) - 1:
+            self._advance_stage(epoch)
+            selected = self._current_stage()
+            if selected is None:
+                return overrides
+
+        params = selected.get('params') or {}
+        for key, value in params.items():
+            _assign(key, value)
+
+        label = selected.get('label')
+        stage_tag = f"{selected.get('start', '?')}-{selected.get('end', '?')}"
+        if label:
+            stage_tag += f" {label}"
+        if overrides:
+            summary = ', '.join(f"{k}={overrides[k]}" for k in sorted(overrides))
+        else:
+            summary = 'no overrides'
+        print(f"[StageSched][ep {epoch:03d}] stage={stage_tag} | {summary}")
         return overrides
+
+    def _activate_stage(self, idx: int, epoch: int) -> None:
+        schedule = getattr(self, 'lookahead_stage_schedule', None)
+        if not schedule:
+            return
+        idx = max(0, min(idx, len(schedule) - 1))
+        self._stage_active_idx = idx
+        self._stage_epoch_entered = epoch
+        self._stage_goal_history = {}
+        stage = schedule[idx]
+        stage.pop('_goal_state', None)
+
+    def _advance_stage(self, epoch: int) -> None:
+        schedule = getattr(self, 'lookahead_stage_schedule', None)
+        if not schedule:
+            self._stage_pending_advance = False
+            return
+        idx = (self._stage_active_idx or 0) + 1
+        if idx >= len(schedule):
+            self._stage_pending_advance = False
+            return
+        self._activate_stage(idx, epoch)
+        self._stage_pending_advance = False
+
+    def _current_stage(self) -> Optional[Dict[str, Any]]:
+        schedule = getattr(self, 'lookahead_stage_schedule', None)
+        idx = getattr(self, '_stage_active_idx', None)
+        if schedule and idx is not None and 0 <= idx < len(schedule):
+            return schedule[idx]
+        return None
+
+    def _maybe_finish_stage(self, epoch: int, metrics: Dict[str, Any], *, tag: str) -> None:
+        stage = self._current_stage()
+        if stage is None:
+            return
+        goal = stage.get('goal')
+        if not goal:
+            return
+        tags = goal.get('tags') or ['valfree']
+        if tag not in tags:
+            return
+        window = int(goal.get('window', 3) or 3)
+        if not isinstance(self._stage_goal_history, dict):
+            self._stage_goal_history = {}
+        history = self._stage_goal_history.get(tag)
+        if history is None or history.maxlen != window:
+            history = deque(maxlen=window)
+            self._stage_goal_history[tag] = history
+        history.append(dict(metrics))
+        min_epochs = int(goal.get('min_epochs', 0) or 0)
+        elapsed = 0
+        if self._stage_epoch_entered is not None:
+            elapsed = epoch - self._stage_epoch_entered + 1
+        if elapsed < min_epochs:
+            return
+        if len(history) < window:
+            return
+        metrics_cfg = goal.get('metrics') or {}
+        if not metrics_cfg:
+            return
+        for metric_name, cfg in metrics_cfg.items():
+            values = [self._extract_metric_from_record(rec, metric_name) for rec in history]
+            values = [v for v in values if v is not None]
+            if not values:
+                return
+            avg_val = sum(values) / len(values)
+            if not self._metric_within_goal(avg_val, cfg):
+                return
+        goal_state = stage.get('_goal_state')
+        if not isinstance(goal_state, dict):
+            goal_state = {}
+            stage['_goal_state'] = goal_state
+        if goal_state.get('met'):
+            return
+        goal_state['met'] = True
+        goal_state['epoch'] = epoch
+        label = stage.get('label') or f"{stage.get('start', '?')}-{stage.get('end', '?')}"
+        print(f"[StageGoal] stage={label} met at epoch {epoch:03d}; scheduling advance")
+        self._stage_pending_advance = True
+
+    def _extract_metric_from_record(self, record: Mapping[str, Any], name: str) -> Optional[float]:
+        target: Any = record
+        for part in str(name).split('/'):
+            if isinstance(target, Mapping) and part in target:
+                target = target[part]
+            else:
+                return None
+        try:
+            return float(target)
+        except Exception:
+            return None
+
+    def _metric_within_goal(self, value: float, cfg: Mapping[str, Any]) -> bool:
+        ref = float(cfg.get('ref', 0.0) or 0.0)
+        hi = cfg.get('hi')
+        lo = cfg.get('lo')
+        if hi is None and cfg.get('hi_ratio') is not None:
+            hi = ref * float(cfg['hi_ratio'])
+        if lo is None and cfg.get('lo_ratio') is not None:
+            lo = ref * float(cfg['lo_ratio'])
+        if hi is not None and value > float(hi):
+            return False
+        if lo is not None and value < float(lo):
+            return False
+        return True
     def _log_freerun_vs_teacher_stats(self, epoch: int, batch_idx: int, free_stats: Optional[dict]) -> None:
         if not bool(getattr(self, 'freerun_grad_log', False)):
             return
@@ -4346,6 +4625,10 @@ class Trainer:
         self.lookahead_steps: int = 0
         self.lookahead_weight: float = 0.0
         self.lookahead_stage_schedule = []
+        self._stage_active_idx: Optional[int] = None
+        self._stage_epoch_entered: Optional[int] = None
+        self._stage_goal_history: Dict[str, deque] = {}
+        self._stage_pending_advance: bool = False
 
         self.grad_clip = float(grad_clip)
         self.tf_warmup_steps = int(tf_warmup_steps)
@@ -4823,13 +5106,17 @@ class Trainer:
                         )
             except Exception as _e:
                 phase_label = 'ValTeacher' if is_teacher_phase else 'ValFree'
+                import traceback
+                traceback.print_exc()
                 print(f"[{phase_label}@ep {ep:03d}] skipped due to error: {_e}")
 
             if metrics_for_json is not None and metrics_tag is not None:
                 self._record_epoch_metrics(metrics_for_json, tag=metrics_tag, epoch=ep)
                 self._dump_metrics_json(metrics_for_json, tag=metrics_tag, epoch=ep)
+                self._maybe_finish_stage(ep, metrics_for_json, tag=str(metrics_tag))
             if (not is_teacher_phase) and teacher_metrics_cached is not None:
                 self._record_epoch_metrics(teacher_metrics_cached, tag='teacher', epoch=ep)
+                self._maybe_finish_stage(ep, teacher_metrics_cached, tag='teacher')
                 self._dump_metrics_json(teacher_metrics_cached, tag='teacher', epoch=ep)
 
             # --- 依据在线评估的 MSEnormY 记录最佳模型 ---
@@ -5362,7 +5649,7 @@ class Trainer:
         pose_hist_seq,
         angvel_raw_seq=None,
     ):
-        return _diagnose_free_run_impl(
+        diag = _diagnose_free_run_impl(
             self,
             batch,
             predY,
@@ -5376,6 +5663,15 @@ class Trainer:
             pose_hist_seq,
             angvel_raw_seq=angvel_raw_seq,
         )
+        if diag is None:
+            clip = None
+            start = None
+            if isinstance(batch, dict):
+                clip = batch.get('clip_id')
+                start = batch.get('start')
+            msg = f"_diagnose_free_run returned None (clip={clip}, start={start})"
+            print(f"[FreeRunDiag][WARN] {msg}")
+        return diag
 
 
     def _dump_nan_grad_report(self, epoch, batch_idx, batch, state_seq, gt_seq, preds_dict, loss_value, stats):
@@ -5905,6 +6201,8 @@ def _diagnose_free_run_impl(
         contact_pred = (w_pred.norm(dim=-1) < contact_threshold).float()
         result['FootContact'] = float(contact_pred.mean().item())
 
+    return result
+
 def _maybe_optimize_dataset_index(ds, args):
     """
     Rebuild ds.index using a stride strategy (optionally filtered by root speed).
@@ -6256,11 +6554,11 @@ def train_entry():
     p.add_argument('--freerun_weight', type=float, default=0.1,
                    help='短 horizon 自由滚动 loss 的权重。')
     p.add_argument('--freerun_weight_init', type=float, default=None,
-                   help='自由滚动 loss 的初始权重（未指定则按最终权重的 20% 推断，并在 ramp_epochs 内过渡）。')
+                   help='自由滚动 loss 的初始权重（未指定则按最终权重的 20%% 推断，并在 ramp_epochs 内过渡）。')
     p.add_argument('--freerun_horizon_min', type=int, default=6,
                    help='自由滚动窗口的最小 horizon（默认 6，对应 100ms 左右）。')
     p.add_argument('--freerun_init_horizon', type=int, default=None,
-                   help='训练早期的初始 horizon，上限不超过 --freerun_horizon。未指定时自动取约 70% 的最终 horizon。')
+                   help='训练早期的初始 horizon，上限不超过 --freerun_horizon。未指定时自动取约 70%% 的最终 horizon。')
     p.add_argument('--freerun_horizon_ramp_epochs', type=int, default=5,
                    help='多少个 epoch 内将 freerun horizon 从初始值平滑提升到 --freerun_horizon。')
     p.add_argument('--freerun_weight_mode', type=str, default='epoch_linear', choices=['constant', 'epoch_linear'],
@@ -6324,6 +6622,12 @@ def train_entry():
                    help='FK 末端位置损失权重（0 表示禁用）。')
     p.add_argument('--w_rot_local', type=float, default=0.0,
                    help='父子关节局部 geodesic 约束权重（0=关闭）。')
+    p.add_argument('--w_limb_geo', type=float, default=0.0,
+                   help='Limb-focused geodesic 辅助损失权重（top-k hinge）。')
+    p.add_argument('--limb_geo_margin_deg', type=float, default=5.0,
+                   help='Limb geodesic hinge 的角度阈值（度）。')
+    p.add_argument('--limb_geo_topk', type=int, default=16,
+                   help='Limb geodesic hinge 取的 Top-K 样本数（0 表示全部平均）。')
     p.add_argument('--w_latent_consistency', type=float, default=0.0,
                    help='Latent consistency loss 权重，用于约束 free-run / lookahead 隐状态落在预训练流形内。')
     p.add_argument('--cond_yaw_min_speed', type=float, default=0.1,
@@ -6517,6 +6821,9 @@ def train_entry():
     cond_yaw_min_speed = max(0.0, float(_arg('cond_yaw_min_speed', 0.1)))
     w_fk_pos = float(_arg('w_fk_pos', 0.0) or 0.0)
     w_rot_local = float(_arg('w_rot_local', 0.0) or 0.0)
+    w_limb_geo = float(_arg('w_limb_geo', 0.0) or 0.0)
+    limb_geo_margin_deg = float(_arg('limb_geo_margin_deg', 5.0) or 5.0)
+    limb_geo_topk = int(_arg('limb_geo_topk', 16) or 16)
     loss_fn = MotionJointLoss(
         output_layout=ds_train.output_layout,
         fps=fps_data,
@@ -6529,6 +6836,9 @@ def train_entry():
         meta=None,
         w_fk_pos=w_fk_pos,
         w_rot_local=w_rot_local,
+        w_limb_geo=w_limb_geo,
+        limb_geo_margin_deg=limb_geo_margin_deg,
+        limb_geo_topk=limb_geo_topk,
     )
     if getattr(ds_train, 'bone_names', None):
         try:
@@ -6552,7 +6862,8 @@ def train_entry():
         f"w_rot_ortho={loss_fn.w_rot_ortho} "
         f"w_cond_yaw={loss_fn.w_cond_yaw} "
         f"w_fk_pos={loss_fn.w_fk_pos} "
-        f"w_rot_local={loss_fn.w_rot_local}"
+        f"w_rot_local={loss_fn.w_rot_local} "
+        f"w_limb_geo={loss_fn.w_limb_geo}"
     )
 
     loss_fn.dt_traj = 1.0 / max(1e-6, fps_data)
