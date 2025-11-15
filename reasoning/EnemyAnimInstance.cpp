@@ -2153,6 +2153,11 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 	{
 		PredictedLocal_UE.SetNum(NBlocks);
 	}
+
+	// ===== [坐标系修复] 将X轴向前的模型输出转换为Y轴向前的UE标准 =====
+	// 定义 +90度 Yaw旋转 (仅对根骨骼应用)
+	const FQuat RootFixQuat = FRotator(0.f, 90.f, 0.f).Quaternion();
+
 	for (int32 b = 0; b < NBlocks; ++b)
 	{
 		FQuat Qsrc = PredictedLocal_Src[b].GetRotation();
@@ -2160,7 +2165,27 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 		{
 			Qsrc.Normalize();
 		}
-		FQuat Que = bConjugateS2U ? SafeQ(CachedQ_SrcToUE * Qsrc * CachedQ_UEToSrc) : Qsrc;
+
+		// 对根骨骼（Pelvis, b=0）应用坐标系转换
+		FQuat Que;
+		if (b == 0)
+		{
+			// 根骨骼：应用 +90度 Yaw 转换 (X-Fwd -> Y-Fwd)
+			Que = RootFixQuat * Qsrc;
+
+			static int32 DebugRootFixLogs = 0;
+			if (DebugRootFixLogs < 3)
+			{
+				UE_LOG(LogTemp, Display, TEXT("[StepModel-CoordFix] Applied +90deg Yaw to Pelvis bone in model inference path"));
+				++DebugRootFixLogs;
+			}
+		}
+		else
+		{
+			// 其他骨骼：保持不变（相对于根骨骼的局部旋转）
+			Que = bConjugateS2U ? SafeQ(CachedQ_SrcToUE * Qsrc * CachedQ_UEToSrc) : Qsrc;
+		}
+
 		PredictedLocal_UE[b].SetRotation(Que);
 		PredictedLocal_UE[b].SetTranslation(PredictedLocal_Src[b].GetTranslation());
 	}
