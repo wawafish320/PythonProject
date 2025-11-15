@@ -2079,46 +2079,12 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 			DecodeRot6DToMatrix(&Prev_X_raw[PrevIdx], PrevM);
 			DecodeRot6DToMatrix(DeltaRaw, DeltaM);
 
-			// ===== [DEBUG] 可选的矩阵乘法顺序 =====
-			const FMatrix NextM = bDebugReverseDeltaOrder ? (PrevM * DeltaM) : (DeltaM * PrevM);
-
+			const FMatrix NextM = DeltaM * PrevM;
 			EncodeMatrixToRot6D(NextM, &MotionDenorm[DeltaIdx]);
-
-			if (b == 0)
-			{
-				static int32 DebugComposeLogs = 0;
-				if (DebugComposeLogs < 4)
-				{
-					const FVector NewX = NextM.GetScaledAxis(EAxis::X).GetSafeNormal();
-					const FVector NewZ = NextM.GetScaledAxis(EAxis::Z).GetSafeNormal();
-					UE_LOG(LogTemp, Warning, TEXT("[DeltaCompose] Order=%s frame=%u prevX=(%.3f,%.3f,%.3f) prevZ=(%.3f,%.3f,%.3f) delta+identity: X=(%.3f,%.3f,%.3f) Z=(%.3f,%.3f,%.3f) nextX=(%.3f,%.3f,%.3f) nextZ=(%.3f,%.3f,%.3f)"),
-						bDebugReverseDeltaOrder ? TEXT("Prev*Delta[Local]") : TEXT("Delta*Prev[Global]"),
-						GFrameNumber,
-						Prev_X_raw[PrevIdx + 0], Prev_X_raw[PrevIdx + 1], Prev_X_raw[PrevIdx + 2],
-						Prev_X_raw[PrevIdx + 3], Prev_X_raw[PrevIdx + 4], Prev_X_raw[PrevIdx + 5],
-						DeltaRaw[0], DeltaRaw[1], DeltaRaw[2],
-						DeltaRaw[3], DeltaRaw[4], DeltaRaw[5],
-						NewX.X, NewX.Y, NewX.Z, NewZ.X, NewZ.Y, NewZ.Z);
-					++DebugComposeLogs;
-				}
-			}
 		}
 	};
 
-	// ===== [DEBUG] 可选的Delta Composition =====
-	if (!bDebugSkipDeltaComposition)
-	{
-		ComposeDeltaWithPrev();
-	}
-	else
-	{
-		static int32 DebugSkipDeltaLogs = 0;
-		if (DebugSkipDeltaLogs < 3)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("[DEBUG] Delta composition SKIPPED - using model output as absolute rotation"));
-			++DebugSkipDeltaLogs;
-		}
-	}
+	ComposeDeltaWithPrev();
 
 	TArray<float> MotionReprojected;
 	Reproject6D(MotionDenorm, MotionReprojected);
@@ -2196,32 +2162,16 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 		FVector Yv = FVector::CrossProduct(Zv, Xv).GetSafeNormal();
 		if (FVector::DotProduct(Xv, FVector::CrossProduct(Yv, Zv)) < 0.f) Yv *= -1.f;
 		Zv = FVector::CrossProduct(Xv, Yv).GetSafeNormal();
-
-		// ===== [DEBUG] 可选的Y/Z轴交换 =====
 		FMatrix M = FMatrix::Identity;
 		M.SetAxis(0, Xv);
-		M.SetAxis(1, bDebugSwapYZ ? Zv : Yv);
-		M.SetAxis(2, bDebugSwapYZ ? Yv : Zv);
-
+		M.SetAxis(1, Yv);
+		M.SetAxis(2, Zv);
 		FQuat Q(M); Q.Normalize();
 		PredictedLocal_Src[b].SetRotation(Q);
 		PredictedLocal_Src[b].SetTranslation(FVector::ZeroVector);
 		AngVelPrevQ[b] = Q;
 
-		// ===== [DEBUG对比] 输出Model解码的轴向量 =====
-		if (bShouldDebugCompare && b < 3)
-		{
-			const FVector FinalY = M.GetScaledAxis(EAxis::Y).GetSafeNormal();
-			const FVector FinalZ = M.GetScaledAxis(EAxis::Z).GetSafeNormal();
-			UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Model 解码轴%s: Xv=(%.3f,%.3f,%.3f) Yv=(%.3f,%.3f,%.3f) Zv=(%.3f,%.3f,%.3f)"),
-				b,
-				bDebugSwapYZ ? TEXT("[SwapYZ]") : TEXT(""),
-				Xv.X, Xv.Y, Xv.Z,
-				FinalY.X, FinalY.Y, FinalY.Z,
-				FinalZ.X, FinalZ.Y, FinalZ.Z);
-		}
-
-		// ===== [DEBUG对比] 对比解码后的四元数和轴向 =====
+		// ===== [DEBUG对比] 对比Model vs Teacher四元数 =====
 		if (bShouldDebugCompare && b < 3)
 		{
 			const FTeacherFrame& TeacherFrame = TeacherFrames[TeacherFrameCursor];
@@ -2230,49 +2180,12 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 				const FQuat TeacherQ = TeacherFrame.PoseSrc[b].GetRotation();
 				const FQuat ModelQ = Q;
 
-				// 从Teacher四元数反推轴向量
-				const FVector TeacherXv = TeacherQ.RotateVector(FVector(1, 0, 0));
-				const FVector TeacherYv = TeacherQ.RotateVector(FVector(0, 1, 0));
-				const FVector TeacherZv = TeacherQ.RotateVector(FVector(0, 0, 1));
-				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Teacher 轴: Xv=(%.3f,%.3f,%.3f) Yv=(%.3f,%.3f,%.3f) Zv=(%.3f,%.3f,%.3f)"),
-					b, TeacherXv.X, TeacherXv.Y, TeacherXv.Z, TeacherYv.X, TeacherYv.Y, TeacherYv.Z, TeacherZv.X, TeacherZv.Y, TeacherZv.Z);
-
 				// 计算四元数差异（geodesic distance）
 				float Dot = FMath::Abs(FQuat::DotProduct(ModelQ, TeacherQ));
 				Dot = FMath::Clamp(Dot, 0.f, 1.f);
 				const float AngleDeg = FMath::RadiansToDegrees(2.f * FMath::Acos(Dot));
 
-				// 计算旋转差异的轴向
-				FQuat DiffQ = TeacherQ.Inverse() * ModelQ;
-				FVector DiffAxis;
-				float DiffAngle;
-				DiffQ.ToAxisAndAngle(DiffAxis, DiffAngle);
-				const float DiffAngleDeg = FMath::RadiansToDegrees(DiffAngle);
-
-				// 输出Teacher和Model的前向向量
-				const FVector TeacherFwd = TeacherQ.RotateVector(FVector::ForwardVector);
-				const FVector ModelFwd = ModelQ.RotateVector(FVector::ForwardVector);
-
-				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Quat Diff: %.2f deg"), b, AngleDeg);
-				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Rotation Diff: %.1f deg around axis (%.2f, %.2f, %.2f)"),
-					b, DiffAngleDeg, DiffAxis.X, DiffAxis.Y, DiffAxis.Z);
-				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Teacher Fwd: (%.3f, %.3f, %.3f)"),
-					b, TeacherFwd.X, TeacherFwd.Y, TeacherFwd.Z);
-				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Model   Fwd: (%.3f, %.3f, %.3f)"),
-					b, ModelFwd.X, ModelFwd.Y, ModelFwd.Z);
-
-				// 输出Euler角度，重点关注Pitch（绕Y轴）
-				const FRotator TeacherRot = TeacherQ.Rotator();
-				const FRotator ModelRot = ModelQ.Rotator();
-				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Teacher Euler: Roll=%.1f Pitch=%.1f Yaw=%.1f"),
-					b, TeacherRot.Roll, TeacherRot.Pitch, TeacherRot.Yaw);
-				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Model   Euler: Roll=%.1f Pitch=%.1f Yaw=%.1f"),
-					b, ModelRot.Roll, ModelRot.Pitch, ModelRot.Yaw);
-				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Euler Diff: dRoll=%.1f dPitch=%.1f dYaw=%.1f"),
-					b,
-					ModelRot.Roll - TeacherRot.Roll,
-					ModelRot.Pitch - TeacherRot.Pitch,
-					ModelRot.Yaw - TeacherRot.Yaw);
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Rotation Diff: %.2f deg (Model vs Teacher)"), b, AngleDeg);
 			}
 		}
 	}

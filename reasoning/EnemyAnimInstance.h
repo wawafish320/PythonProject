@@ -272,26 +272,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AI Motion|Teacher|Debug", meta=(EditCondition="bEnableTeacherPlayback"))
 	bool bUseTeacherForcingEval = true;
 
-	/** [DEBUG] 禁用Delta Composition（测试模型是否输出绝对旋转而非Delta）
-	 *  true: 跳过Delta composition，直接使用模型输出
-	 *  false: 正常执行Delta composition (Delta * Prev)
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AI Motion|Teacher|Debug")
-	bool bDebugSkipDeltaComposition = false;
-
-	/** [DEBUG] 反转Delta组合的矩阵乘法顺序（测试局部空间vs全局空间）
-	 *  false: NextM = DeltaM * PrevM  (全局空间，默认)
-	 *  true:  NextM = PrevM * DeltaM  (局部空间)
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AI Motion|Teacher|Debug")
-	bool bDebugReverseDeltaOrder = false;
-
-	/** [DEBUG] 交换6D解码时的Y/Z轴（测试Pitch=90度问题）
-	 *  false: 正常顺序 SetAxis(0,X) (1,Y) (2,Z) (默认)
-	 *  true:  交换Y/Z   SetAxis(0,X) (1,Z) (2,Y)
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AI Motion|Teacher|Debug")
-	bool bDebugSwapYZ = false;
 
 
 	float TrajHz = 60.f;
