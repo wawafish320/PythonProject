@@ -2071,7 +2071,10 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 			FMatrix PrevM, DeltaM;
 			DecodeRot6DToMatrix(&Prev_X_raw[PrevIdx], PrevM);
 			DecodeRot6DToMatrix(DeltaRaw, DeltaM);
-			const FMatrix NextM = DeltaM * PrevM;
+
+			// ===== [DEBUG] 可选的矩阵乘法顺序 =====
+			const FMatrix NextM = bDebugReverseDeltaOrder ? (PrevM * DeltaM) : (DeltaM * PrevM);
+
 			EncodeMatrixToRot6D(NextM, &MotionDenorm[DeltaIdx]);
 
 			if (b == 0)
@@ -2081,7 +2084,8 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 				{
 					const FVector NewX = NextM.GetScaledAxis(EAxis::X).GetSafeNormal();
 					const FVector NewZ = NextM.GetScaledAxis(EAxis::Z).GetSafeNormal();
-					UE_LOG(LogTemp, Warning, TEXT("[DeltaCompose] frame=%u prevX=(%.3f,%.3f,%.3f) prevZ=(%.3f,%.3f,%.3f) deltaX=(%.3f,%.3f,%.3f) deltaZ=(%.3f,%.3f,%.3f) nextX=(%.3f,%.3f,%.3f) nextZ=(%.3f,%.3f,%.3f)"),
+					UE_LOG(LogTemp, Warning, TEXT("[DeltaCompose] Order=%s frame=%u prevX=(%.3f,%.3f,%.3f) prevZ=(%.3f,%.3f,%.3f) deltaX=(%.3f,%.3f,%.3f) deltaZ=(%.3f,%.3f,%.3f) nextX=(%.3f,%.3f,%.3f) nextZ=(%.3f,%.3f,%.3f)"),
+						bDebugReverseDeltaOrder ? TEXT("Prev*Delta[Local]") : TEXT("Delta*Prev[Global]"),
 						GFrameNumber,
 						Prev_X_raw[PrevIdx + 0], Prev_X_raw[PrevIdx + 1], Prev_X_raw[PrevIdx + 2],
 						Prev_X_raw[PrevIdx + 3], Prev_X_raw[PrevIdx + 4], Prev_X_raw[PrevIdx + 5],
@@ -2185,7 +2189,13 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 		FVector Yv = FVector::CrossProduct(Zv, Xv).GetSafeNormal();
 		if (FVector::DotProduct(Xv, FVector::CrossProduct(Yv, Zv)) < 0.f) Yv *= -1.f;
 		Zv = FVector::CrossProduct(Xv, Yv).GetSafeNormal();
-		FMatrix M = FMatrix::Identity; M.SetAxis(0, Xv); M.SetAxis(1, Yv); M.SetAxis(2, Zv);
+
+		// ===== [DEBUG] 可选的Y/Z轴交换 =====
+		FMatrix M = FMatrix::Identity;
+		M.SetAxis(0, Xv);
+		M.SetAxis(1, bDebugSwapYZ ? Zv : Yv);
+		M.SetAxis(2, bDebugSwapYZ ? Yv : Zv);
+
 		FQuat Q(M); Q.Normalize();
 		PredictedLocal_Src[b].SetRotation(Q);
 		PredictedLocal_Src[b].SetTranslation(FVector::ZeroVector);
@@ -2194,8 +2204,14 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 		// ===== [DEBUG对比] 输出Model解码的轴向量 =====
 		if (bShouldDebugCompare && b < 3)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Model 解码轴: Xv=(%.3f,%.3f,%.3f) Yv=(%.3f,%.3f,%.3f) Zv=(%.3f,%.3f,%.3f)"),
-				b, Xv.X, Xv.Y, Xv.Z, Yv.X, Yv.Y, Yv.Z, Zv.X, Zv.Y, Zv.Z);
+			const FVector FinalY = M.GetScaledAxis(EAxis::Y).GetSafeNormal();
+			const FVector FinalZ = M.GetScaledAxis(EAxis::Z).GetSafeNormal();
+			UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Model 解码轴%s: Xv=(%.3f,%.3f,%.3f) Yv=(%.3f,%.3f,%.3f) Zv=(%.3f,%.3f,%.3f)"),
+				b,
+				bDebugSwapYZ ? TEXT("[SwapYZ]") : TEXT(""),
+				Xv.X, Xv.Y, Xv.Z,
+				FinalY.X, FinalY.Y, FinalY.Z,
+				FinalZ.X, FinalZ.Y, FinalZ.Z);
 		}
 
 		// ===== [DEBUG对比] 对比解码后的四元数和轴向 =====
