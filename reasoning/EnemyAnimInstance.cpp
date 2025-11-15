@@ -2094,13 +2094,74 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 		}
 	};
 
-	ComposeDeltaWithPrev();
+	// ===== [DEBUG] 可选的Delta Composition =====
+	if (!bDebugSkipDeltaComposition)
+	{
+		ComposeDeltaWithPrev();
+	}
+	else
+	{
+		static int32 DebugSkipDeltaLogs = 0;
+		if (DebugSkipDeltaLogs < 3)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[DEBUG] Delta composition SKIPPED - using model output as absolute rotation"));
+			++DebugSkipDeltaLogs;
+		}
+	}
+
 	TArray<float> MotionReprojected;
 	Reproject6D(MotionDenorm, MotionReprojected);
 
 	const int32 NBlocks = SY_rot->Size / 6;
 	PredictedLocal_Src.SetNum(NBlocks);
 	AngVelPrevQ.SetNum(NBlocks);
+
+	// ===== [DEBUG对比] 对比模型推理和Teacher数据的6D差异 =====
+	static int32 DebugCompareCount = 0;
+	const bool bShouldDebugCompare = (DebugCompareCount < 5 && bTeacherDriving && TeacherFrames.IsValidIndex(TeacherFrameCursor));
+
+	if (bShouldDebugCompare)
+	{
+		const FTeacherFrame& TeacherFrame = TeacherFrames[TeacherFrameCursor];
+		const FStateSlice* TeacherRotSlice = StateLayout.Find(TEXT("BoneRotations6D"));
+		if (TeacherRotSlice && TeacherFrame.RawState.Num() >= TeacherRotSlice->Start + TeacherRotSlice->Size)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("===== [DEBUG比较] Frame %d: 模型推理 vs Teacher数据 ====="), TeacherFrameCursor);
+
+			// 对比前3个骨骼的6D数据
+			for (int32 b = 0; b < FMath::Min(3, NBlocks); ++b)
+			{
+				const int yi = SY_rot->Start + b * 6;
+				const int ti = TeacherRotSlice->Start + b * 6;
+
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Model 6D: X=(%.3f,%.3f,%.3f) Z=(%.3f,%.3f,%.3f)"),
+					b,
+					MotionReprojected[yi+0], MotionReprojected[yi+1], MotionReprojected[yi+2],
+					MotionReprojected[yi+3], MotionReprojected[yi+4], MotionReprojected[yi+5]);
+
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Teacher 6D: X=(%.3f,%.3f,%.3f) Z=(%.3f,%.3f,%.3f)"),
+					b,
+					TeacherFrame.RawState[ti+0], TeacherFrame.RawState[ti+1], TeacherFrame.RawState[ti+2],
+					TeacherFrame.RawState[ti+3], TeacherFrame.RawState[ti+4], TeacherFrame.RawState[ti+5]);
+
+				// 计算差异
+				const float DiffX = FMath::Sqrt(
+					FMath::Square(MotionReprojected[yi+0] - TeacherFrame.RawState[ti+0]) +
+					FMath::Square(MotionReprojected[yi+1] - TeacherFrame.RawState[ti+1]) +
+					FMath::Square(MotionReprojected[yi+2] - TeacherFrame.RawState[ti+2])
+				);
+				const float DiffZ = FMath::Sqrt(
+					FMath::Square(MotionReprojected[yi+3] - TeacherFrame.RawState[ti+3]) +
+					FMath::Square(MotionReprojected[yi+4] - TeacherFrame.RawState[ti+4]) +
+					FMath::Square(MotionReprojected[yi+5] - TeacherFrame.RawState[ti+5])
+				);
+
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Diff: X_L2=%.4f Z_L2=%.4f"), b, DiffX, DiffZ);
+			}
+			++DebugCompareCount;
+		}
+	}
+
 	for (int32 b = 0; b < NBlocks; ++b)
 	{
 		const int yi = SY_rot->Start + b * 6;
@@ -2116,6 +2177,24 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 		PredictedLocal_Src[b].SetRotation(Q);
 		PredictedLocal_Src[b].SetTranslation(FVector::ZeroVector);
 		AngVelPrevQ[b] = Q;
+
+		// ===== [DEBUG对比] 对比解码后的四元数 =====
+		if (bShouldDebugCompare && b < 3)
+		{
+			const FTeacherFrame& TeacherFrame = TeacherFrames[TeacherFrameCursor];
+			if (TeacherFrame.PoseSrc.IsValidIndex(b))
+			{
+				const FQuat TeacherQ = TeacherFrame.PoseSrc[b].GetRotation();
+				const FQuat ModelQ = Q;
+
+				// 计算四元数差异（geodesic distance）
+				float Dot = FMath::Abs(FQuat::DotProduct(ModelQ, TeacherQ));
+				Dot = FMath::Clamp(Dot, 0.f, 1.f);
+				const float AngleDeg = FMath::RadiansToDegrees(2.f * FMath::Acos(Dot));
+
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Quat Diff: %.2f deg (Model vs Teacher)"), b, AngleDeg);
+			}
+		}
 	}
 
 	// 源坐标 -> UE 坐标（与 Seed/Teacher 路径一致）

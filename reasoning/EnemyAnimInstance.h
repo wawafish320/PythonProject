@@ -265,9 +265,19 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AI Motion|Teacher", meta=(EditCondition="bEnableTeacherPlayback"))
 	bool bLoopTeacherPlayback = true;
 
-	/** Teacher 播放但仍使用模型推理（Teacher forcing：喂真值 X/C，只看模型输出 Y） */
-	UPROPERTY()
+	/** Teacher 播放但仍使用模型推理（Teacher forcing：喂真值 X/C，只看模型输出 Y）
+	 *  true: 使用模型推理（可能骨骼错乱）
+	 *  false: 直接使用Teacher姿态（用于对比测试）
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AI Motion|Teacher|Debug", meta=(EditCondition="bEnableTeacherPlayback"))
 	bool bUseTeacherForcingEval = true;
+
+	/** [DEBUG] 禁用Delta Composition（测试模型是否输出绝对旋转而非Delta）
+	 *  true: 跳过Delta composition，直接使用模型输出
+	 *  false: 正常执行Delta composition (Delta * Prev)
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AI Motion|Teacher|Debug")
+	bool bDebugSkipDeltaComposition = false;
 
 
 	float TrajHz = 60.f;
