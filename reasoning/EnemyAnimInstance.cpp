@@ -2068,6 +2068,13 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 			{
 				DeltaRaw[k] = MotionDenorm.IsValidIndex(DeltaIdx + k) ? MotionDenorm[DeltaIdx + k] : 0.f;
 			}
+
+			// ===== [修复] 模型输出是残差，需要加上单位旋转 =====
+			// Python: delta_with_identity = residual + identity
+			// 对于 columns=("X", "Z")，identity = [1,0,0, 0,0,1]
+			DeltaRaw[0] += 1.0f;  // X列 x分量
+			DeltaRaw[5] += 1.0f;  // Z列 z分量
+
 			FMatrix PrevM, DeltaM;
 			DecodeRot6DToMatrix(&Prev_X_raw[PrevIdx], PrevM);
 			DecodeRot6DToMatrix(DeltaRaw, DeltaM);
@@ -2084,7 +2091,7 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 				{
 					const FVector NewX = NextM.GetScaledAxis(EAxis::X).GetSafeNormal();
 					const FVector NewZ = NextM.GetScaledAxis(EAxis::Z).GetSafeNormal();
-					UE_LOG(LogTemp, Warning, TEXT("[DeltaCompose] Order=%s frame=%u prevX=(%.3f,%.3f,%.3f) prevZ=(%.3f,%.3f,%.3f) deltaX=(%.3f,%.3f,%.3f) deltaZ=(%.3f,%.3f,%.3f) nextX=(%.3f,%.3f,%.3f) nextZ=(%.3f,%.3f,%.3f)"),
+					UE_LOG(LogTemp, Warning, TEXT("[DeltaCompose] Order=%s frame=%u prevX=(%.3f,%.3f,%.3f) prevZ=(%.3f,%.3f,%.3f) delta+identity: X=(%.3f,%.3f,%.3f) Z=(%.3f,%.3f,%.3f) nextX=(%.3f,%.3f,%.3f) nextZ=(%.3f,%.3f,%.3f)"),
 						bDebugReverseDeltaOrder ? TEXT("Prev*Delta[Local]") : TEXT("Delta*Prev[Global]"),
 						GFrameNumber,
 						Prev_X_raw[PrevIdx + 0], Prev_X_raw[PrevIdx + 1], Prev_X_raw[PrevIdx + 2],
