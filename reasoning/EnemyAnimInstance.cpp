@@ -2181,7 +2181,7 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 				const FQuat ModelQ = Q;
 
 				// 计算四元数差异（geodesic distance）
-				float Dot = FMath::Abs(FQuat::DotProduct(ModelQ, TeacherQ));
+				float Dot = FMath::Abs(ModelQ | TeacherQ);  // 使用 | 运算符计算点积
 				Dot = FMath::Clamp(Dot, 0.f, 1.f);
 				const float AngleDeg = FMath::RadiansToDegrees(2.f * FMath::Acos(Dot));
 
