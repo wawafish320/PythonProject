@@ -1495,13 +1495,27 @@ void UEnemyAnimInstance::DenormY_Z_To_Raw(const TArray<float>& Y_norm, TArray<fl
 {
     OutRaw.SetNum(OutputDim);
 
-    // 1) μ/σ 反变换
+    // 1) BoneRotations6D特殊处理：只乘std，不加mean
+    //    因为模型学习的是residual，需要在delta组合时加identity
+    //    Python做法：delta_raw = delta_norm * std，然后在compose_rot6d_delta中加identity
+    const FStateSlice* RotSlice = OutputLayout.Find(TEXT("BoneRotations6D"));
+
     for (int32 i=0; i<OutputDim; ++i)
     {
-        const float mu = MuY.IsValidIndex(i)  ? MuY[i]  : 0.f;
-        const float sd = StdY.IsValidIndex(i) ? StdY[i] : 1.f; // 模板已含稳健楼板；此处不再额外 floor
+        const float sd = StdY.IsValidIndex(i) ? StdY[i] : 1.f;
         const float zn = Y_norm.IsValidIndex(i) ? Y_norm[i] : 0.f;
-        OutRaw[i] = zn * sd + mu;
+
+        // BoneRotations6D: 只乘std (residual)，后续会在compose时加identity
+        if (RotSlice && i >= RotSlice->Start && i < RotSlice->Start + RotSlice->Size)
+        {
+            OutRaw[i] = zn * sd;
+        }
+        else
+        {
+            // 其他通道：标准反归一化 (乘std + 加mean)
+            const float mu = MuY.IsValidIndex(i) ? MuY[i] : 0.f;
+            OutRaw[i] = zn * sd + mu;
+        }
     }
 
     // 2) 若未来 Y 重新包含特殊通道，则做逆变换（当前 v4 通常不会命中）
@@ -2047,11 +2061,49 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 		}
 	};
 
-	// ===== [重要] 模型输出的是绝对6D，不是delta！=====
-	// Python训练时，Y标签 = 下一帧的绝对6D旋转（见 convert_json_to_npz.py:1036）
-	// 模型学习：X[t] → 绝对6D[t+1]
-	// 因此反归一化后的 MotionDenorm 已经是下一帧的绝对旋转，无需delta组合
-	// 直接使用即可（MotionDenorm 已经在 Reproject6D 中处理）
+	// ===== Delta组合：模型输出residual，反归一化后得到delta =====
+	// 训练标签：Y = 下一帧绝对6D，归一化后 Y_norm = (Y - mean) / std
+	// 因为 mean ≈ identity，所以 Y_norm ≈ residual / std
+	// 模型学习：X[t] → Y_norm (即residual的归一化版本)
+	// C++反归一化：MotionDenorm = Y_norm * std + mean ≈ residual + identity = delta
+	// 需要组合：Next = Delta @ Prev (对应Python的compose_rot6d_delta)
+	auto ComposeDeltaWithPrev = [&]() -> void
+	{
+		const FStateSlice* SX_rot = StateLayout.Find(TEXT("BoneRotations6D"));
+		if (!SX_rot || SX_rot->Size != SY_rot->Size || SX_rot->Size <= 0)
+		{
+			return;
+		}
+		if (Prev_X_raw.Num() < SX_rot->Start + SX_rot->Size)
+		{
+			return;
+		}
+		const int32 NBlocks = SY_rot->Size / 6;
+		for (int32 b = 0; b < NBlocks; ++b)
+		{
+			const int32 PrevIdx = SX_rot->Start + b * 6;
+			const int32 DeltaIdx = SY_rot->Start + b * 6;
+			float DeltaRaw[6];
+			for (int32 k = 0; k < 6; ++k)
+			{
+				DeltaRaw[k] = MotionDenorm.IsValidIndex(DeltaIdx + k) ? MotionDenorm[DeltaIdx + k] : 0.f;
+			}
+
+			// 加identity：delta = residual + identity (对应Python的normalize_rot6d_delta)
+			// identity 6D = [1,0,0, 0,0,1] for columns=(X,Z)
+			DeltaRaw[0] += 1.0f;  // X column: x component
+			DeltaRaw[5] += 1.0f;  // Z column: z component
+
+			FMatrix PrevM, DeltaM;
+			DecodeRot6DToMatrix(&Prev_X_raw[PrevIdx], PrevM);
+			DecodeRot6DToMatrix(DeltaRaw, DeltaM);
+
+			const FMatrix NextM = DeltaM * PrevM;
+			EncodeMatrixToRot6D(NextM, &MotionDenorm[DeltaIdx]);
+		}
+	};
+
+	ComposeDeltaWithPrev();
 
 	TArray<float> MotionReprojected;
 	Reproject6D(MotionDenorm, MotionReprojected);
