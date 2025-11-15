@@ -1,0 +1,113 @@
+{
+  "teacher_epochs_1_29": {
+    "GeoDeg": {
+      "mean": 0.2571116468188905,
+      "min": 0.1062020253051411,
+      "max": 1.4059753851457075,
+      "best_epoch": 29,
+      "worst_epoch": 1
+    },
+    "AngVelMAE": {
+      "mean": 0.013034182251795985,
+      "min": 0.0049436336213892155,
+      "max": 0.06027997149662538,
+      "best_epoch": 29,
+      "worst_epoch": 1
+    },
+    "MSEnormY": {
+      "mean": 0.006045222516471978,
+      "min": 0.00026265995058400387,
+      "max": 0.07606656781651756,
+      "best_epoch": 27,
+      "worst_epoch": 1
+    },
+    "tf_ratio": {
+      "mean": 0.3030852994555354,
+      "min": 0.0,
+      "max": 1.0,
+      "best_epoch": 20,
+      "worst_epoch": 1
+    },
+    "FootContact": {
+      "mean": 0.9791676084449673,
+      "min": 0.978365567597476,
+      "max": 0.9794039672071283,
+      "best_epoch": null,
+      "worst_epoch": null
+    }
+  },
+  "valfree_epochs_2_29": {
+    "YawAbsDeg": {
+      "mean": 18.44776943751744,
+      "min": 14.61591386795044,
+      "max": 22.63234233856201,
+      "best_epoch": 24,
+      "worst_epoch": 18
+    },
+    "RootVelMAE": {
+      "mean": 0.01781629626306572,
+      "min": 0.01387752965092659,
+      "max": 0.021260273642838,
+      "best_epoch": 18,
+      "worst_epoch": 25
+    },
+    "InputRotGeoDeg": {
+      "mean": 2.5632445492914746,
+      "min": 1.9199288487434387,
+      "max": 5.279670715332031,
+      "best_epoch": 26,
+      "worst_epoch": 2
+    },
+    "GeoDeg": {
+      "mean": 2.9934434571436475,
+      "min": 2.28019917011261,
+      "max": 5.6920740604400635,
+      "best_epoch": 26,
+      "worst_epoch": 2
+    },
+    "AngVelMAE": {
+      "mean": 0.2800823697554214,
+      "min": 0.22266148775815964,
+      "max": 0.5331791341304779,
+      "best_epoch": 26,
+      "worst_epoch": 2
+    },
+    "AngVelMagRel": {
+      "mean": 0.6446074529417923,
+      "min": 0.4365539848804474,
+      "max": 0.7549363374710083,
+      "best_epoch": null,
+      "worst_epoch": null
+    },
+    "FootContact": {
+      "mean": 0.9943118084754262,
+      "min": 0.912439614534378,
+      "max": 1.0,
+      "best_epoch": null,
+      "worst_epoch": null
+    }
+  },
+  "raw_data_stats": {
+    "root_vel_mag": {
+      "mean": 0.7564205562314779,
+      "median": 0.7346574525395609,
+      "p90": 0.921753382342409,
+      "max": 1.074353411005479
+    },
+    "yaw_step_deg": {
+      "mean": 0.48648645387427947,
+      "median": 0.0,
+      "p90": 1.3679781199910215,
+      "max": 1.8559826710931973
+    },
+    "bone_angvel_mag": {
+      "mean": 0.6079093002661893,
+      "median": 0.31004920133712777,
+      "p90": 1.5281338872964383,
+      "max": 12.351082391024287
+    },
+    "num_frames": 375,
+    "num_yaw_steps": 370,
+    "num_angvel_samples": 17250
+  }
+}
