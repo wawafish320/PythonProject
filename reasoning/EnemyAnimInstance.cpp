@@ -2178,7 +2178,7 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 		PredictedLocal_Src[b].SetTranslation(FVector::ZeroVector);
 		AngVelPrevQ[b] = Q;
 
-		// ===== [DEBUG对比] 对比解码后的四元数 =====
+		// ===== [DEBUG对比] 对比解码后的四元数和轴向 =====
 		if (bShouldDebugCompare && b < 3)
 		{
 			const FTeacherFrame& TeacherFrame = TeacherFrames[TeacherFrameCursor];
@@ -2192,7 +2192,24 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 				Dot = FMath::Clamp(Dot, 0.f, 1.f);
 				const float AngleDeg = FMath::RadiansToDegrees(2.f * FMath::Acos(Dot));
 
-				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Quat Diff: %.2f deg (Model vs Teacher)"), b, AngleDeg);
+				// 计算旋转差异的轴向
+				FQuat DiffQ = TeacherQ.Inverse() * ModelQ;
+				FVector DiffAxis;
+				float DiffAngle;
+				DiffQ.ToAxisAndAngle(DiffAxis, DiffAngle);
+				const float DiffAngleDeg = FMath::RadiansToDegrees(DiffAngle);
+
+				// 输出Teacher和Model的前向向量
+				const FVector TeacherFwd = TeacherQ.RotateVector(FVector::ForwardVector);
+				const FVector ModelFwd = ModelQ.RotateVector(FVector::ForwardVector);
+
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Quat Diff: %.2f deg"), b, AngleDeg);
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Rotation Diff: %.1f deg around axis (%.2f, %.2f, %.2f)"),
+					b, DiffAngleDeg, DiffAxis.X, DiffAxis.Y, DiffAxis.Z);
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Teacher Fwd: (%.3f, %.3f, %.3f)"),
+					b, TeacherFwd.X, TeacherFwd.Y, TeacherFwd.Z);
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Model   Fwd: (%.3f, %.3f, %.3f)"),
+					b, ModelFwd.X, ModelFwd.Y, ModelFwd.Z);
 			}
 		}
 	}
