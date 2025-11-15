@@ -2157,6 +2157,19 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 				);
 
 				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Diff: X_L2=%.4f Z_L2=%.4f"), b, DiffX, DiffZ);
+
+				// 分析各个分量的差异，重点关注Pitch（Y轴）旋转
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] X列分量差异: dX=%.3f dY=%.3f dZ=%.3f"),
+					b,
+					MotionReprojected[yi+0] - TeacherFrame.RawState[ti+0],
+					MotionReprojected[yi+1] - TeacherFrame.RawState[ti+1],
+					MotionReprojected[yi+2] - TeacherFrame.RawState[ti+2]);
+
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Z列分量差异: dX=%.3f dY=%.3f dZ=%.3f"),
+					b,
+					MotionReprojected[yi+3] - TeacherFrame.RawState[ti+3],
+					MotionReprojected[yi+4] - TeacherFrame.RawState[ti+4],
+					MotionReprojected[yi+5] - TeacherFrame.RawState[ti+5]);
 			}
 			++DebugCompareCount;
 		}
@@ -2178,6 +2191,13 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 		PredictedLocal_Src[b].SetTranslation(FVector::ZeroVector);
 		AngVelPrevQ[b] = Q;
 
+		// ===== [DEBUG对比] 输出Model解码的轴向量 =====
+		if (bShouldDebugCompare && b < 3)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Model 解码轴: Xv=(%.3f,%.3f,%.3f) Yv=(%.3f,%.3f,%.3f) Zv=(%.3f,%.3f,%.3f)"),
+				b, Xv.X, Xv.Y, Xv.Z, Yv.X, Yv.Y, Yv.Z, Zv.X, Zv.Y, Zv.Z);
+		}
+
 		// ===== [DEBUG对比] 对比解码后的四元数和轴向 =====
 		if (bShouldDebugCompare && b < 3)
 		{
@@ -2186,6 +2206,13 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 			{
 				const FQuat TeacherQ = TeacherFrame.PoseSrc[b].GetRotation();
 				const FQuat ModelQ = Q;
+
+				// 从Teacher四元数反推轴向量
+				const FVector TeacherXv = TeacherQ.RotateVector(FVector(1, 0, 0));
+				const FVector TeacherYv = TeacherQ.RotateVector(FVector(0, 1, 0));
+				const FVector TeacherZv = TeacherQ.RotateVector(FVector(0, 0, 1));
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Teacher 轴: Xv=(%.3f,%.3f,%.3f) Yv=(%.3f,%.3f,%.3f) Zv=(%.3f,%.3f,%.3f)"),
+					b, TeacherXv.X, TeacherXv.Y, TeacherXv.Z, TeacherYv.X, TeacherYv.Y, TeacherYv.Z, TeacherZv.X, TeacherZv.Y, TeacherZv.Z);
 
 				// 计算四元数差异（geodesic distance）
 				float Dot = FMath::Abs(FQuat::DotProduct(ModelQ, TeacherQ));
@@ -2210,6 +2237,19 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 					b, TeacherFwd.X, TeacherFwd.Y, TeacherFwd.Z);
 				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Model   Fwd: (%.3f, %.3f, %.3f)"),
 					b, ModelFwd.X, ModelFwd.Y, ModelFwd.Z);
+
+				// 输出Euler角度，重点关注Pitch（绕Y轴）
+				const FRotator TeacherRot = TeacherQ.Rotator();
+				const FRotator ModelRot = ModelQ.Rotator();
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Teacher Euler: Roll=%.1f Pitch=%.1f Yaw=%.1f"),
+					b, TeacherRot.Roll, TeacherRot.Pitch, TeacherRot.Yaw);
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Model   Euler: Roll=%.1f Pitch=%.1f Yaw=%.1f"),
+					b, ModelRot.Roll, ModelRot.Pitch, ModelRot.Yaw);
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d] Euler Diff: dRoll=%.1f dPitch=%.1f dYaw=%.1f"),
+					b,
+					ModelRot.Roll - TeacherRot.Roll,
+					ModelRot.Pitch - TeacherRot.Pitch,
+					ModelRot.Yaw - TeacherRot.Yaw);
 			}
 		}
 	}
