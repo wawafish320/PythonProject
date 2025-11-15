@@ -43,6 +43,7 @@ from train.training_MPL import (
     reproject_rot6d,
     geodesic_R,
 )
+from train.geometry import compose_rot6d_delta
 
 
 def parse_args() -> argparse.Namespace:
@@ -505,7 +506,7 @@ class TeacherRolloutRunner:
             teacher_block["target_norm"] = teacher_block["target_norm"][:usable_len]
 
         if self.use_onnx:
-            pred_norm = self._run_onnx_rollout(state_arr, cond_arr, contacts, angvel, pose_hist)
+            pred_norm = self._run_onnx_rollout(state_arr, cond_arr, contacts, angvel, pose_hist, gt_norm)
         else:
             state_t = torch.from_numpy(state_arr).unsqueeze(0).to(self.device)
             cond_t = torch.from_numpy(cond_arr).unsqueeze(0).to(self.device)
@@ -636,11 +637,42 @@ class TeacherRolloutRunner:
         contacts: np.ndarray,
         angvel: np.ndarray,
         pose_hist: np.ndarray,
+        gt_norm: Optional[np.ndarray],
     ) -> np.ndarray:
         if self.ort_session is None:
             raise SystemExit("[FATAL] ONNX session not initialized.")
+        if self.normalizer is None:
+            raise SystemExit("[FATAL] DataNormalizer missing for ONNX rollout.")
         T = state_arr.shape[0]
         outputs: List[np.ndarray] = []
+        import torch
+
+        def _span_to_slice(span_obj):
+            if span_obj is None:
+                return None
+            if isinstance(span_obj, (list, tuple)) and len(span_obj) == 2:
+                start = int(span_obj[0])
+                length = int(span_obj[1])
+                return slice(start, start + length)
+            if isinstance(span_obj, dict):
+                start = int(span_obj.get("start", 0))
+                size = int(span_obj.get("size", 0))
+                return slice(start, start + size) if size > 0 else None
+            return None
+
+        rot_x_slice = _span_to_slice(self.bundle.state_layout.get("BoneRotations6D") if self.bundle else None)
+        rot_y_slice = _span_to_slice(self.bundle.output_layout.get("BoneRotations6D") if self.bundle else None)
+        if not isinstance(rot_x_slice, slice) or not isinstance(rot_y_slice, slice):
+            raise SystemExit("[FATAL] BoneRotations6D slice missing in bundle layouts; cannot denorm ONNX outputs.")
+
+        state_t0 = torch.from_numpy(state_arr[:1]).to(torch.float32)
+        motion_raw = self.normalizer.denorm_x(state_t0)
+        y_raw_local = motion_raw[:, rot_x_slice].clone()
+
+        std_y = None
+        if getattr(self.normalizer, "std_y", None) is not None:
+            std_y = torch.as_tensor(self.normalizer.std_y, dtype=torch.float32).view(1, -1)
+
         for t in range(T):
             feeds = {
                 self.ort_input_map["state"]: state_arr[t : t + 1],
@@ -650,7 +682,20 @@ class TeacherRolloutRunner:
                 self.ort_input_map["pose_hist"]: pose_hist[t : t + 1],
             }
             y = self.ort_session.run([self.ort_output_name], feeds)[0]
-            outputs.append(np.asarray(y, dtype=np.float32)[0])
+            delta_norm = torch.as_tensor(np.asarray(y, dtype=np.float32), dtype=torch.float32)
+            if std_y is not None:
+                delta_raw = delta_norm * std_y
+            else:
+                delta_raw = delta_norm
+            y_raw = compose_rot6d_delta(y_raw_local, delta_raw[:, rot_y_slice])
+            y_norm = self.normalizer.norm_y(y_raw)
+            outputs.append(y_norm.squeeze(0).cpu().numpy())
+            if gt_norm is not None and (t + 1) < gt_norm.shape[0]:
+                gt_next = torch.from_numpy(gt_norm[t + 1 : t + 2]).to(torch.float32)
+                y_raw_local = self.normalizer.denorm(gt_next)
+            else:
+                y_raw_local = y_raw.detach()
+
         return np.stack(outputs, axis=0)
 
 
