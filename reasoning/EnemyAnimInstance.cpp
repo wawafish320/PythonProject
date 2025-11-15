@@ -2089,10 +2089,22 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 				DeltaRaw[k] = MotionDenorm.IsValidIndex(DeltaIdx + k) ? MotionDenorm[DeltaIdx + k] : 0.f;
 			}
 
-			// 加identity：delta = residual + identity (对应Python的normalize_rot6d_delta)
+			// 加identity：delta = residual + identity
 			// identity 6D = [1,0,0, 0,0,1] for columns=(X,Z)
 			DeltaRaw[0] += 1.0f;  // X column: x component
 			DeltaRaw[5] += 1.0f;  // Z column: z component
+
+			// 关键！在组合前reproject delta（对应Python geometry.py:139）
+			// 加identity后的数据不一定是有效的6D，需要投影到SO(3)流形
+			FVector X(DeltaRaw[0], DeltaRaw[1], DeltaRaw[2]);
+			FVector Z(DeltaRaw[3], DeltaRaw[4], DeltaRaw[5]);
+			X = X.GetSafeNormal(); if (X.IsNearlyZero()) X = FVector::ForwardVector;
+			Z = (Z - FVector::DotProduct(Z, X)*X).GetSafeNormal(); if (Z.IsNearlyZero()) Z = FVector::UpVector;
+			FVector Y = FVector::CrossProduct(Z, X).GetSafeNormal();
+			if (FVector::DotProduct(X, FVector::CrossProduct(Y, Z)) < 0.f) Y *= -1.f;
+			Z = FVector::CrossProduct(X, Y).GetSafeNormal();
+			DeltaRaw[0] = X.X; DeltaRaw[1] = X.Y; DeltaRaw[2] = X.Z;
+			DeltaRaw[3] = Z.X; DeltaRaw[4] = Z.Y; DeltaRaw[5] = Z.Z;
 
 			FMatrix PrevM, DeltaM;
 			DecodeRot6DToMatrix(&Prev_X_raw[PrevIdx], PrevM);
