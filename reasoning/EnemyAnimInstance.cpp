@@ -2047,38 +2047,11 @@ bool UEnemyAnimInstance::StepModelFused(float DeltaSeconds)
 		}
 	};
 
-	auto ComposeDeltaWithPrev = [&]() -> void
-	{
-		const FStateSlice* SX_rot = StateLayout.Find(TEXT("BoneRotations6D"));
-		if (!SX_rot || SX_rot->Size != SY_rot->Size || SX_rot->Size <= 0)
-		{
-			return;
-		}
-		if (Prev_X_raw.Num() < SX_rot->Start + SX_rot->Size)
-		{
-			return;
-		}
-		const int32 NBlocks = SY_rot->Size / 6;
-		for (int32 b = 0; b < NBlocks; ++b)
-		{
-			const int32 PrevIdx = SX_rot->Start + b * 6;
-			const int32 DeltaIdx = SY_rot->Start + b * 6;
-			float DeltaRaw[6];
-			for (int32 k = 0; k < 6; ++k)
-			{
-				DeltaRaw[k] = MotionDenorm.IsValidIndex(DeltaIdx + k) ? MotionDenorm[DeltaIdx + k] : 0.f;
-			}
-
-			FMatrix PrevM, DeltaM;
-			DecodeRot6DToMatrix(&Prev_X_raw[PrevIdx], PrevM);
-			DecodeRot6DToMatrix(DeltaRaw, DeltaM);
-
-			const FMatrix NextM = DeltaM * PrevM;
-			EncodeMatrixToRot6D(NextM, &MotionDenorm[DeltaIdx]);
-		}
-	};
-
-	ComposeDeltaWithPrev();
+	// ===== [重要] 模型输出的是绝对6D，不是delta！=====
+	// Python训练时，Y标签 = 下一帧的绝对6D旋转（见 convert_json_to_npz.py:1036）
+	// 模型学习：X[t] → 绝对6D[t+1]
+	// 因此反归一化后的 MotionDenorm 已经是下一帧的绝对旋转，无需delta组合
+	// 直接使用即可（MotionDenorm 已经在 Reproject6D 中处理）
 
 	TArray<float> MotionReprojected;
 	Reproject6D(MotionDenorm, MotionReprojected);
