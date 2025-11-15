@@ -1028,46 +1028,55 @@ void UEnemyAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 void UEnemyAnimInstance::NativePostEvaluateAnimation()
 {
 	Super::NativePostEvaluateAnimation();
-    
+
 	USkeletalMeshComponent* Skel = GetSkelMeshComponent();
 	const AActor* Owner = GetOwningActor();
 	if (!Skel || !Owner) return;
 
-	// 3.1 Mesh 组件的相对旋（仅观察）
+	// ===== [诊断工具] 仅用于验证坐标系对齐是否正确 =====
+	// 这段代码不再修改SkeletalMeshComponent的旋转，只做日志输出
+
+	#if !(UE_BUILD_SHIPPING)
+	static int32 DiagnosticLogCount = 0;
+	if (DiagnosticLogCount < 5) // 只打印前5帧
 	{
+		// 3.1 Mesh组件的相对旋转（应该是 -90度 Yaw）
 		const FRotator R = Skel->GetRelativeRotation();
-		UE_LOG(LogTemp, Warning, TEXT("[MeshRel] %s relRot=%s"),
+		UE_LOG(LogTemp, Log, TEXT("[DiagMeshRel] %s relRot=%s"),
 			*Skel->GetName(), *R.ToCompactString());
-		// 常见 Yaw = -90°；这个 -90° 不应再被算进 RootDelta/条件向量
-	}
 
-	// 3.2 角色前向 vs 骨盆前向（组件空间），直行应≈0°
-	const int32 PelvisIdx = Skel->GetBoneIndex(TEXT("pelvis"));   // 你的骨名里确有 "pelvis"
-	if (PelvisIdx != INDEX_NONE)
-	{
-		// 组件空间 Transform
-		const FTransform PelvisCS = Skel->GetBoneTransform(PelvisIdx);
-
-		const FVector fActor  = Owner->GetActorForwardVector().GetSafeNormal2D();
-		const FVector fPelvis = PelvisCS.GetRotation().RotateVector(FVector::ForwardVector).GetSafeNormal2D();
-
-		const float cosA = FVector::DotProduct(fPelvis, fActor);
-		const float deg  = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(cosA, -1.f, 1.f)));
-		float signedAngle = FMath::RadiansToDegrees(FMath::Atan2(fPelvis.X * fActor.Y - fPelvis.Y * fActor.X, cosA));
-		signedAngle = -90.f;
-
-		UE_LOG(LogTemp, Warning, TEXT("[FacingCheck] angle(ActorFwd, PelvisFwd)=%.1f deg  fActor=%s  fPelvis=%s"),
-			deg, *V2_2D(fActor), *V2_2D(fPelvis));
-
-		if (!bPelvisFacingAligned && FMath::Abs(signedAngle) > 1.f)
+		// 3.2 角色前向 vs 骨盆前向（组件空间）
+		// 如果坐标系修复正确，这个角度应该接近0度
+		const int32 PelvisIdx = Skel->GetBoneIndex(TEXT("pelvis"));
+		if (PelvisIdx != INDEX_NONE)
 		{
-			FRotator NewRel = Skel->GetRelativeRotation();
-			NewRel.Yaw += signedAngle;
-			Skel->SetRelativeRotation(NewRel);
-			bPelvisFacingAligned = true;
-			UE_LOG(LogTemp, Display, TEXT("[FacingCheck] Applied one-time mesh yaw correction %.1f deg to align pelvis."), signedAngle);
+			const FTransform PelvisCS = Skel->GetBoneTransform(PelvisIdx);
+			const FVector fActor  = Owner->GetActorForwardVector().GetSafeNormal2D();
+			const FVector fPelvis = PelvisCS.GetRotation().RotateVector(FVector::ForwardVector).GetSafeNormal2D();
+
+			const float cosA = FVector::DotProduct(fPelvis, fActor);
+			const float deg  = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(cosA, -1.f, 1.f)));
+
+			UE_LOG(LogTemp, Display, TEXT("[DiagPelvisAlign] angle(ActorFwd, PelvisFwd)=%.1f deg  fActor=%s  fPelvis=%s"),
+				deg, *V2_2D(fActor), *V2_2D(fPelvis));
+
+			if (deg < 5.f)
+			{
+				UE_LOG(LogTemp, Display, TEXT("[DiagPelvisAlign] ✓ Pelvis aligned correctly (angle < 5 deg)"));
+			}
+			else if (deg > 85.f && deg < 95.f)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("[DiagPelvisAlign] ✗ Pelvis is ~90deg off! Check BuildPoseFromRawState coordinate fix."));
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("[DiagPelvisAlign] ⚠ Unexpected pelvis angle: %.1f deg"), deg);
+			}
 		}
+
+		++DiagnosticLogCount;
 	}
+	#endif
 }
 
 bool UEnemyAnimInstance::LoadSchemaAndStats()
@@ -1560,6 +1569,48 @@ void UEnemyAnimInstance::BuildPoseFromRawState(const TArray<float>& RawState, TA
 		const FVector C1(C1X, C1Y, C1Z);
 		const FQuat Q = SixDToQuat_BySchema(C0, C1, bUseXZ);
 		OutPoseSrc[Bone] = FTransform(Q, FVector::ZeroVector, FVector::OneVector);
+	}
+
+	// ===== [坐标系修复] 将X轴向前的模型数据转换为Y轴向前的UE标准 =====
+	// 模型训练数据是 X-Fwd (见 Walk_F.json meta.axes.x="forward")
+	// UE的SkeletalMeshComponent 期望数据是 Y-Fwd (因为Mesh在蓝图中被Yaw -90度)
+	// 因此，我们需要将根骨骼（Pelvis）旋转 +90度Yaw
+	const int32 PelvisBoneIndex = 0; // kTrackedBones[0] = "pelvis"
+	if (OutPoseSrc.IsValidIndex(PelvisBoneIndex))
+	{
+		// 定义 +90度 Yaw旋转 (绕Z轴)
+		const FRotator RootFixRot(0.f, 90.f, 0.f);
+		const FQuat RootFixQuat = RootFixRot.Quaternion();
+
+		FTransform& PelvisTransform = OutPoseSrc[PelvisBoneIndex];
+
+		// 应用修复：左乘 (先应用模型旋转，再应用坐标系转换)
+		PelvisTransform.SetRotation(RootFixQuat * PelvisTransform.GetRotation());
+
+		// 如果RawState也包含RootPosition，也需要旋转位置向量
+		const FStateSlice* PosSlice = StateLayout.Find(TEXT("RootPosition"));
+		if (PosSlice && PosSlice->Size == 3)
+		{
+			const int32 PosBase = PosSlice->Start;
+			if (RawState.IsValidIndex(PosBase + 2))
+			{
+				FVector RootPos(
+					RawState[PosBase + 0],
+					RawState[PosBase + 1],
+					RawState[PosBase + 2]
+				);
+				// 旋转位置向量
+				RootPos = RootFixQuat.RotateVector(RootPos);
+				PelvisTransform.SetLocation(RootPos);
+			}
+		}
+
+		static int32 DebugCoordFixLogs = 0;
+		if (DebugCoordFixLogs < 3)
+		{
+			UE_LOG(LogTemp, Display, TEXT("[CoordFix] Applied +90deg Yaw to Pelvis. ModelQuat -> UEQuat"));
+			++DebugCoordFixLogs;
+		}
 	}
 }
 
