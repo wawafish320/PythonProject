@@ -47,6 +47,73 @@ from .io_utils import (
 
 # ===== MPL Expert (embedded) =====
 import torch.nn as nn
+
+def build_mlp(
+    input_dim: int,
+    output_dim: int,
+    hidden_dims: Optional[List[int]] = None,
+    *,
+    activation: str = 'relu',
+    use_layer_norm: bool = False,
+    dropout: float = 0.0,
+    final_activation: bool = False,
+) -> nn.Sequential:
+    """
+    通用 MLP 构建器，避免重复手写层定义。
+
+    Args:
+        input_dim: 输入维度
+        output_dim: 输出维度
+        hidden_dims: 中间层维度列表。如果为 None，则直接连接 input → output
+        activation: 激活函数类型 ('relu', 'gelu', 'tanh')
+        use_layer_norm: 是否在每层后使用 LayerNorm
+        dropout: Dropout 比例（0 表示不使用）
+        final_activation: 最后一层是否也添加激活函数
+
+    Returns:
+        nn.Sequential: 构建好的 MLP
+
+    Example:
+        # 简单两层：input → hidden → output
+        mlp = build_mlp(128, 64, [256], activation='relu', dropout=0.1)
+
+        # 三层：input → h1 → h2 → output
+        mlp = build_mlp(128, 64, [256, 256], activation='gelu')
+    """
+    act_fn_map = {
+        'relu': nn.ReLU,
+        'gelu': nn.GELU,
+        'tanh': nn.Tanh,
+    }
+
+    if activation.lower() not in act_fn_map:
+        raise ValueError(f"Unsupported activation: {activation}. Choose from {list(act_fn_map.keys())}")
+
+    act_fn = act_fn_map[activation.lower()]
+
+    # 构建维度序列
+    if hidden_dims is None or len(hidden_dims) == 0:
+        dims = [input_dim, output_dim]
+    else:
+        dims = [input_dim] + list(hidden_dims) + [output_dim]
+
+    layers: List[nn.Module] = []
+    for i in range(len(dims) - 1):
+        # 线性层
+        layers.append(nn.Linear(dims[i], dims[i + 1]))
+
+        # 最后一层可选激活
+        is_last_layer = (i == len(dims) - 2)
+        if not is_last_layer or final_activation:
+            if use_layer_norm:
+                layers.append(nn.LayerNorm(dims[i + 1]))
+            layers.append(act_fn())
+            if dropout > 0.0:
+                layers.append(nn.Dropout(dropout))
+
+    return nn.Sequential(*layers)
+
+
 class MotionEncoder(nn.Module):
     """
     Stateless per-frame encoder that mirrors the Plan-A pretraining MLP.
@@ -64,16 +131,17 @@ class MotionEncoder(nn.Module):
         self.hidden_dim = int(hidden_dim)
         self.z_dim = int(z_dim)
 
-        layers: list[nn.Module] = []
-        d_in = int(input_dim)
-        for i in range(max(1, int(num_layers))):
-            d_out = self.hidden_dim
-            layers.append(nn.Linear(d_in, d_out))
-            layers.append(nn.GELU())
-            if float(dropout) > 0.0:
-                layers.append(nn.Dropout(float(dropout)))
-            d_in = d_out
-        self.mlp = nn.Sequential(*layers)
+        # 使用 build_mlp 构建编码器
+        # num_layers 层，都输出 hidden_dim（最后一层也有激活）
+        num_layers = max(1, int(num_layers))
+        self.mlp = build_mlp(
+            input_dim=int(input_dim),
+            output_dim=self.hidden_dim,
+            hidden_dims=[self.hidden_dim] * (num_layers - 1) if num_layers > 1 else None,
+            activation='gelu',
+            dropout=float(dropout),
+            final_activation=True,  # 最后一层也添加 GELU + Dropout
+        )
         self.summary_head = nn.Linear(self.hidden_dim, self.z_dim) if self.z_dim > 0 else None
 
     def forward(self, x: torch.Tensor, return_summary: Optional[bool] = None):
@@ -1346,17 +1414,16 @@ class EventMotionModel(nn.Module):
         self.encoder_input_dim = self.contact_dim + self.angvel_dim + self.pose_hist_dim
 
         input_dim = self.in_state_dim + self.cond_dim
-        enc_layers: list[nn.Module] = [
-            nn.Linear(input_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim) if use_layer_norm else nn.Identity(),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim) if use_layer_norm else nn.Identity(),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-        ]
-        self.shared_encoder = nn.Sequential(*enc_layers)
+        # 使用 build_mlp 构建 shared_encoder（2 层 MLP，ReLU + LayerNorm）
+        self.shared_encoder = build_mlp(
+            input_dim=input_dim,
+            output_dim=hidden_dim,
+            hidden_dims=[hidden_dim],  # 1 个中间层
+            activation='relu',
+            use_layer_norm=use_layer_norm,
+            dropout=dropout,
+            final_activation=True,  # 最后一层也添加激活
+        )
         self.residual_proj = nn.Linear(input_dim, hidden_dim) if input_dim != hidden_dim else nn.Identity()
 
         self._pasa_heads = max(1, int(num_heads))
@@ -1372,11 +1439,14 @@ class EventMotionModel(nn.Module):
         self.coupling_norm = nn.LayerNorm(hidden_dim)
         self.input_clip = 16.0
 
-        self.motion_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, out_motion_dim),
+        # 使用 build_mlp 构建 motion_head（2 层 MLP，ReLU，最后一层无激活）
+        self.motion_head = build_mlp(
+            input_dim=hidden_dim,
+            output_dim=out_motion_dim,
+            hidden_dims=[hidden_dim],  # 1 个中间层
+            activation='relu',
+            dropout=dropout,
+            final_activation=False,  # 输出层不要激活函数
         )
         self.period_encoder = nn.Linear(self.period_dim, hidden_dim) if self.period_dim > 0 else None
 
@@ -1599,6 +1669,141 @@ class EventMotionModel(nn.Module):
 
         return meta
 
+
+class AdaptiveLossManager:
+    """
+    自适应损失管理器：分离损失追踪与自适应调度逻辑。
+
+    职责：
+    - 注册可自适应调整的损失分量
+    - 累积各损失分组的统计
+    - 提供自适应调度所需的 payload
+    """
+
+    def __init__(self, adaptive_terms: Tuple[str, ...], group_alias: Dict[str, str]):
+        """
+        Args:
+            adaptive_terms: 可自适应调整的损失项名称元组
+            group_alias: 损失项到分组的映射（'core', 'aux', 'long'）
+        """
+        self.adaptive_terms = adaptive_terms
+        self.group_alias = group_alias
+        self.reset()
+
+    def reset(self):
+        """重置追踪状态（每次 forward 开始时调用）"""
+        self.component_losses: Dict[str, torch.Tensor] = {}
+        self.component_weights: Dict[str, float] = {}
+        self.group_totals: Dict[str, float] = {key: 0.0 for key in ('core', 'aux', 'long')}
+        self.core_loss: Optional[torch.Tensor] = None
+        self.total_weight: float = 0.0
+
+    def register(self, name: str, loss: Optional[torch.Tensor], weight: float):
+        """
+        注册一个损失分量到自适应追踪。
+
+        Args:
+            name: 损失项名称
+            loss: 损失张量
+            weight: 损失权重
+        """
+        if loss is None or weight <= 0:
+            return
+        if name not in self.adaptive_terms:
+            return
+
+        self.component_losses[name] = loss
+        self.component_weights[name] = float(weight)
+
+    def accumulate_group(self, name: str, loss: Optional[torch.Tensor], weight: float):
+        """
+        累积损失到分组统计。
+
+        Args:
+            name: 损失项名称
+            loss: 损失张量
+            weight: 损失权重
+        """
+        if loss is None:
+            return
+
+        try:
+            w = float(weight)
+        except Exception:
+            w = float(weight.item()) if hasattr(weight, 'item') else 0.0
+
+        if not _math.isfinite(w) or abs(w) < 1e-9:
+            return
+
+        group = self.group_alias.get(name, 'core')
+        if group not in self.group_totals:
+            self.group_totals[group] = 0.0
+
+        try:
+            contrib = float((loss.detach().cpu()) * w)
+        except Exception:
+            contrib = 0.0
+
+        if _math.isfinite(contrib):
+            self.group_totals[group] += contrib
+
+    def finalize(self, total_loss: torch.Tensor):
+        """
+        计算核心损失（总损失减去自适应分量）。
+
+        Args:
+            total_loss: 总损失值
+        """
+        if not self.component_losses:
+            self.core_loss = total_loss
+            self.total_weight = 0.0
+            return
+
+        # 计算所有自适应分量的总贡献
+        contrib = None
+        for name, tensor in self.component_losses.items():
+            weight = self.component_weights.get(name, 0.0)
+            if weight <= 0:
+                continue
+            term = tensor * weight
+            contrib = term if contrib is None else contrib + term
+
+        if contrib is None:
+            self.core_loss = total_loss
+            self.total_weight = 0.0
+        else:
+            self.core_loss = total_loss - contrib
+            self.total_weight = float(
+                sum(w for w in self.component_weights.values() if w > 0.0)
+            )
+
+    def get_payload(self) -> Optional[Dict[str, Any]]:
+        """
+        获取自适应调度所需的 payload。
+
+        Returns:
+            包含损失分量、权重、核心损失的字典，若无自适应项则返回 None
+        """
+        if not self.component_losses:
+            return None
+
+        return {
+            'losses': dict(self.component_losses),
+            'weights': dict(self.component_weights),
+            'total_weight': self.total_weight,
+            'core_loss': self.core_loss,
+        }
+
+    def get_group_stats(self) -> Dict[str, float]:
+        """
+        获取分组统计。
+
+        Returns:
+            格式为 {'loss_group/core': 0.5, 'loss_group/aux': 0.1, ...} 的字典
+        """
+        return {f'loss_group/{k}': float(v) for k, v in self.group_totals.items()}
+
+
 class MotionJointLoss(nn.Module):
     def __init__(
         self,
@@ -1682,28 +1887,25 @@ class MotionJointLoss(nn.Module):
                 except Exception:
                     self.bone_offsets = None
         self.has_fk = bool(self.parents and self.bone_offsets is not None)
-        self._adaptive_loss_terms: Tuple[str, ...] = (
-            "fk_pos",
-            "rot_local",
-            "cond_yaw",
-            "rot_delta",
-            "rot_ortho",
+
+        # 创建自适应损失管理器（统一管理损失追踪与分组统计）
+        self.adaptive_mgr = AdaptiveLossManager(
+            adaptive_terms=("fk_pos", "rot_local", "cond_yaw", "rot_delta", "rot_ortho"),
+            group_alias={
+                'attn': 'aux',
+                'rot_geo': 'core',
+                'limb_geo': 'aux',
+                'rot_delta': 'core',
+                'rot_delta_root': 'aux',
+                'rot_log': 'aux',
+                'rot_ortho': 'core',
+                'cond_yaw': 'core',
+                'fk_pos': 'core',
+                'rot_local': 'core',
+            }
         )
-        self._reset_adaptive_tracking()
+
         self._last_geo_tensor: Optional[torch.Tensor] = None
-        self._loss_group_totals: Dict[str, float] = {}
-        self._loss_group_alias = {
-            'attn': 'aux',
-            'rot_geo': 'core',
-            'limb_geo': 'aux',
-            'rot_delta': 'core',
-            'rot_delta_root': 'aux',
-            'rot_log': 'aux',
-            'rot_ortho': 'core',
-            'cond_yaw': 'core',
-            'fk_pos': 'core',
-            'rot_local': 'core',
-        }
 
     def _format_template_hint(self, prefix: str) -> str:
         hints: list[str] = []
@@ -1909,8 +2111,8 @@ class MotionJointLoss(nn.Module):
         l_ortho = Z(0.0)
         loss = self.w_attn_reg * l_attn + self.w_rot_geo * l_geo
         self._last_geo_tensor = geo_details
-        self._accumulate_loss_contrib('attn', l_attn, self.w_attn_reg, group='aux')
-        self._accumulate_loss_contrib('rot_geo', l_geo, self.w_rot_geo, group='core')
+        self.adaptive_mgr.accumulate_group('attn', l_attn, self.w_attn_reg)
+        self.adaptive_mgr.accumulate_group('rot_geo', l_geo, self.w_rot_geo)
         stats = {
             'attn': float(l_attn.detach().cpu()),
             'rot_geo': float(l_geo.detach().cpu()),
@@ -2433,7 +2635,7 @@ class MotionJointLoss(nn.Module):
 
     def forward(self, pred_motion, gt_motion, attn_weights=None, batch=None):
         # 统一拿出模型输出（可能是 dict 或 tensor）
-        self._init_loss_group_tracker()
+        self.adaptive_mgr.reset()  # 重置自适应追踪状态
         self._last_geo_tensor = None
         delta_fallback = False
         if isinstance(pred_motion, dict):
@@ -2441,7 +2643,6 @@ class MotionJointLoss(nn.Module):
         pm = pred_motion.get('out') if isinstance(pred_motion, dict) else pred_motion
         gm = gt_motion
         delta_pm = pred_motion.get('delta') if isinstance(pred_motion, dict) else None
-        self._reset_adaptive_tracking()
 
         # _forward_base_inner 已包含核心动作损失与统计
         base_out = self._forward_base_inner(pm, gt_motion, attn_weights=attn_weights)  # type: ignore
@@ -2458,16 +2659,16 @@ class MotionJointLoss(nn.Module):
         if self.w_rot_delta > 0 and delta_pm is not None:
             l_delta = self.compute_rot6d_delta_loss(delta_pm, gt_motion)
             loss = loss + self.w_rot_delta * l_delta
-            self._accumulate_loss_contrib('rot_delta', l_delta, self.w_rot_delta, group='core')
+            self.adaptive_mgr.accumulate_group('rot_delta', l_delta, self.w_rot_delta)
             stats['rot_delta'] = float(l_delta.detach().cpu())
-            self._register_component_loss('rot_delta', l_delta, self.w_rot_delta)
+            self.adaptive_mgr.register('rot_delta', l_delta, self.w_rot_delta)
         else:
             stats.setdefault('rot_delta', 0.0)
 
         if self.w_rot_delta_root > 0 and delta_pm is not None:
             l_delta_root = self.compute_rot6d_delta_root_loss(delta_pm, gt_motion)
             loss = loss + self.w_rot_delta_root * l_delta_root
-            self._accumulate_loss_contrib('rot_delta_root', l_delta_root, self.w_rot_delta_root, group='aux')
+            self.adaptive_mgr.accumulate_group('rot_delta_root', l_delta_root, self.w_rot_delta_root)
             stats['rot_delta_root'] = float(l_delta_root.detach().cpu())
         else:
             stats.setdefault('rot_delta_root', 0.0)
@@ -2475,7 +2676,7 @@ class MotionJointLoss(nn.Module):
         if self.w_rot_log > 0 and delta_pm is not None and not delta_fallback:
             l_rot_log = self.compute_rot6d_log_loss(delta_pm, gt_motion)
             loss = loss + self.w_rot_log * l_rot_log
-            self._accumulate_loss_contrib('rot_log', l_rot_log, self.w_rot_log, group='aux')
+            self.adaptive_mgr.accumulate_group('rot_log', l_rot_log, self.w_rot_log)
             stats['rot_log'] = float(l_rot_log.detach().cpu())
         else:
             stats.setdefault('rot_log', 0.0)
@@ -2485,11 +2686,11 @@ class MotionJointLoss(nn.Module):
             l_ortho = self.compute_rot6d_ortho_loss(target_for_ortho)
             weighted_ortho = self.w_rot_ortho * l_ortho
             loss = loss + weighted_ortho
-            self._accumulate_loss_contrib('rot_ortho', l_ortho, self.w_rot_ortho, group='core')
+            self.adaptive_mgr.accumulate_group('rot_ortho', l_ortho, self.w_rot_ortho)
             stats['rot_ortho'] = float(l_ortho.detach().cpu())
             stats['rot_ortho_weighted'] = float(weighted_ortho.detach().cpu())
             stats['rot_ortho_raw'] = float(l_ortho.detach().cpu())
-            self._register_component_loss('rot_ortho', l_ortho, self.w_rot_ortho)
+            self.adaptive_mgr.register('rot_ortho', l_ortho, self.w_rot_ortho)
         else:
             stats.setdefault('rot_ortho', 0.0)
             stats.setdefault('rot_ortho_weighted', 0.0)
@@ -2507,16 +2708,16 @@ class MotionJointLoss(nn.Module):
         cond_yaw_loss = self._compute_cond_yaw_loss(pm, batch)
         if cond_yaw_loss is not None:
             loss = loss + self.w_cond_yaw * cond_yaw_loss
-            self._accumulate_loss_contrib('cond_yaw', cond_yaw_loss, self.w_cond_yaw, group='core')
+            self.adaptive_mgr.accumulate_group('cond_yaw', cond_yaw_loss, self.w_cond_yaw)
             stats['cond_yaw'] = float(cond_yaw_loss.detach().cpu())
-            self._register_component_loss('cond_yaw', cond_yaw_loss, self.w_cond_yaw)
+            self.adaptive_mgr.register('cond_yaw', cond_yaw_loss, self.w_cond_yaw)
         else:
             stats.setdefault('cond_yaw', 0.0)
 
         if self.w_limb_geo > 0.0:
             limb_geo_loss = self.compute_limb_geo_aux_loss(self._last_geo_tensor)
             loss = loss + self.w_limb_geo * limb_geo_loss
-            self._accumulate_loss_contrib('limb_geo', limb_geo_loss, self.w_limb_geo, group='aux')
+            self.adaptive_mgr.accumulate_group('limb_geo', limb_geo_loss, self.w_limb_geo)
             stats['limb_geo'] = float(limb_geo_loss.detach().cpu())
         else:
             stats.setdefault('limb_geo', 0.0)
@@ -2540,9 +2741,9 @@ class MotionJointLoss(nn.Module):
                     w = weights.view(1, 1, -1)
                     fk_loss = (fk_res * w).mean()
                     loss = loss + self.w_fk_pos * fk_loss
-                    self._accumulate_loss_contrib('fk_pos', fk_loss, self.w_fk_pos, group='core')
+                    self.adaptive_mgr.accumulate_group('fk_pos', fk_loss, self.w_fk_pos)
                     stats['fk_pos'] = float(fk_loss.detach().cpu())
-                    self._register_component_loss('fk_pos', fk_loss, self.w_fk_pos)
+                    self.adaptive_mgr.register('fk_pos', fk_loss, self.w_fk_pos)
         else:
             stats.setdefault('fk_pos', 0.0)
 
@@ -2555,48 +2756,15 @@ class MotionJointLoss(nn.Module):
                 w = weights.view(1, 1, -1)
                 local_loss = (geo_local * w).mean()
                 loss = loss + self.w_rot_local * local_loss
-                self._accumulate_loss_contrib('rot_local', local_loss, self.w_rot_local, group='core')
+                self.adaptive_mgr.accumulate_group('rot_local', local_loss, self.w_rot_local)
                 stats['rot_local_deg'] = float((local_loss * (180.0 / math.pi)).detach().cpu())
-                self._register_component_loss('rot_local', local_loss, self.w_rot_local)
+                self.adaptive_mgr.register('rot_local', local_loss, self.w_rot_local)
         else:
             stats.setdefault('rot_local_deg', 0.0)
 
-        self._finalize_adaptive_payload(loss)
-        stats.update(self._loss_group_stats())
+        self.adaptive_mgr.finalize(loss)
+        stats.update(self.adaptive_mgr.get_group_stats())
         return loss, stats
-
-    def _reset_adaptive_tracking(self):
-        self._last_component_losses: Dict[str, torch.Tensor] = {}
-        self._last_component_weights: Dict[str, float] = {}
-        self._last_component_total_weight: float = 0.0
-        self._last_core_loss: Optional[torch.Tensor] = None
-        self._last_geo_tensor = None
-
-    def _init_loss_group_tracker(self):
-        self._loss_group_totals = {key: 0.0 for key in ('core', 'aux', 'long')}
-
-    def _accumulate_loss_contrib(self, name: str, tensor: Optional[torch.Tensor], weight: float, group: Optional[str] = None):
-        if tensor is None:
-            return
-        try:
-            w = float(weight)
-        except Exception:
-            w = float(weight.item()) if hasattr(weight, 'item') else 0.0
-        if not _math.isfinite(w) or abs(w) < 1e-9:
-            return
-        if group is None:
-            group = self._loss_group_alias.get(name, 'core')
-        if group not in self._loss_group_totals:
-            self._loss_group_totals[group] = 0.0
-        try:
-            contrib = float((tensor.detach().cpu()) * w)
-        except Exception:
-            contrib = 0.0
-        if _math.isfinite(contrib):
-            self._loss_group_totals[group] += contrib
-
-    def _loss_group_stats(self) -> Dict[str, float]:
-        return {f'loss_group/{k}': float(v) for k, v in self._loss_group_totals.items()}
 
     def compute_limb_geo_aux_loss(self, geo_tensor: Optional[torch.Tensor]) -> torch.Tensor:
         Z = lambda v: geo_tensor.new_tensor(float(v)) if isinstance(geo_tensor, torch.Tensor) else torch.tensor(float(v))
@@ -2625,45 +2793,9 @@ class MotionJointLoss(nn.Module):
             loss = hinge.mean()
         return loss
 
-    def _register_component_loss(self, name: str, tensor: Optional[torch.Tensor], weight: float):
-        if tensor is None or weight <= 0:
-            return
-        if name not in self._adaptive_loss_terms:
-            return
-        self._last_component_losses[name] = tensor
-        self._last_component_weights[name] = float(weight)
-
-    def _finalize_adaptive_payload(self, total_loss: torch.Tensor):
-        if not self._last_component_losses:
-            self._last_core_loss = total_loss
-            self._last_component_total_weight = 0.0
-            return
-        contrib = None
-        for name, tensor in self._last_component_losses.items():
-            weight = self._last_component_weights.get(name, 0.0)
-            if weight <= 0:
-                continue
-            term = tensor * weight
-            contrib = term if contrib is None else contrib + term
-        if contrib is None:
-            self._last_core_loss = total_loss
-            self._last_component_total_weight = 0.0
-        else:
-            self._last_core_loss = total_loss - contrib
-            self._last_component_total_weight = float(
-                sum(w for w in self._last_component_weights.values() if w > 0.0)
-            )
-
     def adaptive_loss_payload(self) -> Optional[Dict[str, Any]]:
-        if not self._last_component_losses:
-            return None
-        payload = {
-            'losses': dict(self._last_component_losses),
-            'weights': dict(self._last_component_weights),
-            'total_weight': float(self._last_component_total_weight),
-            'core_loss': self._last_core_loss,
-        }
-        return payload
+        """获取自适应调度所需的 payload（委托给 AdaptiveLossManager）"""
+        return self.adaptive_mgr.get_payload()
 
 class DataNormalizer:
     """封装数据规格与(反)归一化逻辑。"""
