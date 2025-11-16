@@ -32,16 +32,15 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from train.training_MPL import (
-    EventMotionModel,
     MotionEventDataset,
-    MotionJointLoss,
     Trainer,
     validate_and_fix_model_,
     rot6d_to_matrix,
     reproject_rot6d,
     geodesic_R,
 )
-from train.layout_norm import LayoutCenter, DataNormalizer
+from train.models import EventMotionModel, MotionJointLoss
+from train.layout import LayoutCenter, DataNormalizer
 from train.geometry import compose_rot6d_delta
 
 

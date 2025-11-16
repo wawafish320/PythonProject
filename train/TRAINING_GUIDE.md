@@ -1147,7 +1147,6 @@ python train_configurator.py \
 | 数据集分析 | `train/configuration/profile.py` |
 | 几何运算 | `train/geometry.py` |
 | 评估工具 | `train/eval_utils.py` |
-| 数据加载 | `train/io_utils.py` |
+| 数据加载 | `train/io.py` |
 
 ---
-

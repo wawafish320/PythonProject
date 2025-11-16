@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional, Sequence
 
-from .io_utils import speed_from_X_layout as _speed_from_X_layout
+from .io import speed_from_X_layout as _speed_from_X_layout
 
 
 def _maybe_optimize_dataset_index(ds, args):
@@ -460,5 +460,4 @@ def _parse_stage_schedule(spec: Optional[Any]):
     for idx, stage in enumerate(stages):
         stage['index'] = idx
     return stages
-
 

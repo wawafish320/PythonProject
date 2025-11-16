@@ -21,7 +21,6 @@ norm_template.json 中与角速度、姿态历史相关的字段。
 """
 
 import os, glob, json, random, contextlib
-from dataclasses import dataclass
 from typing import Optional
 from collections import defaultdict
 
@@ -34,31 +33,16 @@ from torch.utils.data import Dataset, DataLoader
 # ---- exact imports from your project (no fallback) ----
 from train.geometry import reproject_rot6d, rot6d_to_matrix, angvel_vec_from_R_seq  # noqa: E402
 from train.utils import build_mlp  # noqa: E402
-from train.models_shared import MotionEncoder, PeriodHead  # noqa: E402
-from train.normalizers import VectorTanhNormalizer  # noqa: E402
-from train.io_utils import npz_scalar_to_str  # noqa: E402
+from train.models import MotionEncoder, PeriodHead  # noqa: E402
+from train.normalizers import (
+    VectorTanhNormalizer,
+    AngvelNormalizer,
+    _make_angnorm_from_spec,
+)  # noqa: E402
+from train.io import npz_scalar_to_str, load_soft_contacts_from_json as _load_soft_contacts_from_json  # noqa: E402
 
 
 # ----------------------------- small utils -----------------------------
-def _load_soft_contacts_from_json(json_path: str) -> np.ndarray:
-    """Read soft-contact scores from JSON: Frames[*].FootEvidence.(L|R).soft_contact_score"""
-    if not os.path.exists(json_path):
-        raise RuntimeError(f"JSON path not found: {json_path}")
-    with open(json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    frames = data.get("Frames")
-    if not isinstance(frames, list) or len(frames) == 0:
-        raise RuntimeError(f"JSON missing/empty Frames: {json_path}")
-    sc = []
-    for i, fr in enumerate(frames):
-        fe = (fr.get("FootEvidence") or {})
-        L = (fe.get("L") or {})
-        R = (fe.get("R") or {})
-        if "soft_contact_score" not in L or "soft_contact_score" not in R:
-            raise RuntimeError(f"Frame {i} missing soft_contact_score in {json_path}")
-        sc.append([float(L["soft_contact_score"]), float(R["soft_contact_score"])])
-    return np.asarray(sc, dtype=np.float32)  # [T, 2]
-
 def _get_fps_from_npz_or_json(z, json_path: Optional[str]) -> int:
     if "FPS" in z:
         fps = int(np.array(z["FPS"]).item())
@@ -71,63 +55,6 @@ def _get_fps_from_npz_or_json(z, json_path: Optional[str]) -> int:
         if fps > 0:
             return fps
     raise RuntimeError(f"FPS not found in npz nor JSON (json={json_path})")
-
-
-# ------------------------ Normalizer (angvel only) ---------------------
-
-@dataclass
-class AngvelNormCfg:
-    s_eff: np.ndarray  # [J*3]
-    mu:    Optional[np.ndarray]  # [J*3] or None
-    std:   Optional[np.ndarray]  # [J*3] or None
-
-class AngvelNormalizer:
-    """
-    Consume ONLY angvel-specific fields from norm_template.json placed beside the npz:
-      - REQUIRED: tanh_scales_angvel  (or s_eff_angvel)  -> used for tanh compression
-      - OPTIONAL: MuAngVel & StdAngVel -> if both present, perform z-score; otherwise skip
-    No X-slice (MuX/StdX) is read. If scales missing/mismatch -> raise.
-    """
-    def __init__(self, tpl_path: str, J_times_3: int, require_zscore: bool=False):
-        with open(tpl_path, "r", encoding="utf-8") as f:
-            TPL = json.load(f)
-
-        def _vec(name):
-            v = TPL.get(name, None)
-            return None if v is None else np.asarray(v, dtype=np.float32)
-
-        s = _vec("tanh_scales_angvel")
-        if s is None:
-            s = _vec("s_eff_angvel")
-        if s is None:
-            raise RuntimeError("norm_template.json missing 'tanh_scales_angvel' (or 's_eff_angvel').")
-        if s.size != J_times_3:
-            raise RuntimeError(f"tanh_scales_angvel length {s.size} != J*3 {J_times_3}")
-        self.s_eff = np.clip(s, 1e-6, None).astype(np.float32)
-        self.scales = self.s_eff  # alias for compatibility
-
-        muA, sdA = _vec("MuAngVel"), _vec("StdAngVel")
-        if (muA is not None) ^ (sdA is not None):
-            raise RuntimeError("Both MuAngVel and StdAngVel must exist together, or both be absent.")
-        if muA is not None:
-            if muA.size != J_times_3 or sdA.size != J_times_3:
-                raise RuntimeError("MuAngVel/StdAngVel size must equal J*3.")
-            self.mu  = muA.astype(np.float32)
-            self.std = np.clip(sdA.astype(np.float32), 1e-6, None)
-        else:
-            if require_zscore:
-                raise RuntimeError("require_zscore=True but MuAngVel/StdAngVel not found in template.")
-            self.mu, self.std = None, None
-
-        self.require_z = require_zscore
-
-    def transform(self, W_raw: np.ndarray) -> np.ndarray:
-        assert W_raw.ndim == 2 and W_raw.shape[1] == self.s_eff.size, \
-            f"W_raw shape {W_raw.shape} not compatible with J*3={self.s_eff.size}."
-        X = np.tanh(W_raw / self.s_eff)
-        if self.mu is not None and self.std is not None:
-            X = (X - self.mu) / self.std
-        return X.astype(np.float32)
 
 
 # --------------------------- Dataset ----------------------------
@@ -156,25 +83,6 @@ class AngvelNormalizer:
 
 
 
-# ---- Create AngvelNormalizer from in-memory spec (no JSON reading) ----
-def _make_angnorm_from_spec(spec: dict, J_times_3: int, require_zscore: bool):
-    s = np.asarray(spec.get("tanh_scales_angvel"), dtype=np.float32)
-    mu = np.asarray(spec.get("MuAngVel"), dtype=np.float32) if "MuAngVel" in spec else None
-    sd = np.asarray(spec.get("StdAngVel"), dtype=np.float32) if "StdAngVel" in spec else None
-    if s is None or s.size != J_times_3:
-        raise RuntimeError(f"angvel norm spec invalid: s_eff size {None if s is None else s.size} != {J_times_3}")
-    obj = AngvelNormalizer.__new__(AngvelNormalizer)  # bypass __init__ expecting a tpl path
-    obj.tpl_path = "<in-memory>"
-    obj.size = int(J_times_3)
-    obj.require_zscore = bool(require_zscore)
-    obj.s_eff = s.astype("float32")
-    obj.scales = obj.s_eff
-    obj.mu = mu.astype("float32") if mu is not None else None
-    obj.std = sd.astype("float32") if sd is not None else None
-    obj._fitted = True
-    return obj
-
-# ===== Minimal self-build (NO JSON read at train time): build ANGVEL-only norm spec in memory =====
 def _build_angvel_norm_spec(in_glob: str, save_path: str, pose_hist_len: int = 3) -> dict:
     """
     扫描 Rot6D -> 角速度 -> 在 tanh(w/s) 域统计 μ/σ；

@@ -17,14 +17,14 @@ from .geometry import (
     angvel_vec_from_R_seq,
     wrap_to_pi_np as _wrap_to_pi_np,
 )
-from .io_utils import (
+from .io import (
     load_soft_contacts_from_json as _load_soft_contacts_from_json,
     direction_yaw_from_array as _direction_yaw_from_array,
     velocity_yaw_from_array as _velocity_yaw_from_array,
     speed_from_X_layout as _speed_from_X_layout,
     npz_scalar_to_str,
 )
-from .layout_utils import normalize_layout as _normalize_layout
+from .layout import normalize_layout as _normalize_layout
 from .normalizers import VectorTanhNormalizer
 from torch.utils.data._utils.collate import default_collate as _default_collate
 

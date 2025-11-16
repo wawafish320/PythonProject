@@ -32,7 +32,7 @@
 | `Cond` | 条件输入 | 0 | `CondDim`（当前 7） | 4 × action one-hot + 2 × 平面方向 + 1 × 速度，支持 `ECondNormMode` |
 | `Output.BoneRotations6D` | 输出 | 0 | 276 | `DenormY_Z_To_Raw` → reproject → 写入 `PredictedLocal` |
 
-> 若未来增加/删除 slice，请同步修改 `train/layout_utils.py` 里的 key、重新生成 schema，并在本文档补充更新。
+> 若未来增加/删除 slice，请同步修改 `train/layout.py` 里的 key、重新生成 schema，并在本文档补充更新。
 
 ---
 

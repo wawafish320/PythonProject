@@ -68,7 +68,7 @@ def __getattr__(name):
             return values[name]
 
         if name in {"parse_layout_entry", "normalize_layout", "canonicalize_state_layout"}:
-            from .layout_utils import (
+            from .layout import (
                 parse_layout_entry,
                 normalize_layout,
                 canonicalize_state_layout,
@@ -86,7 +86,7 @@ def __getattr__(name):
             "direction_yaw_from_array",
             "velocity_yaw_from_array",
         }:
-            from .io_utils import (
+            from .io import (
                 load_soft_contacts_from_json,
                 direction_yaw_from_array,
                 velocity_yaw_from_array,
