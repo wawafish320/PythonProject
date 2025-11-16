@@ -28,11 +28,13 @@ from collections import defaultdict
 import numpy as np
 import torch
 import torch.nn as nn
+from .nn_utils import build_mlp
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 # ---- exact imports from your project (no fallback) ----
 from train.geometry import reproject_rot6d, rot6d_to_matrix, angvel_vec_from_R_seq  # noqa: E402
+from train.utils import build_mlp  # noqa: E402
 
 
 # ----------------------------- small utils -----------------------------
@@ -675,16 +677,13 @@ class MotionEncoder(nn.Module):
         self.hidden_dim = int(hidden_dim)
         self.z_dim = int(z_dim)
 
-        layers = []
-        d_in = input_dim
-        for i in range(max(1, int(num_layers))):
-            d_out = self.hidden_dim if i < num_layers - 1 else self.hidden_dim
-            layers.append(nn.Linear(d_in, d_out))
-            layers.append(nn.GELU())
-            if dropout > 0.0:
-                layers.append(nn.Dropout(dropout))
-            d_in = d_out
-        self.mlp = nn.Sequential(*layers)
+        self.mlp = build_mlp(
+            int(input_dim),
+            self.hidden_dim,
+            num_layers=max(1, int(num_layers)),
+            activation=nn.GELU,
+            dropout=float(dropout),
+        )
         self.summary_head = nn.Linear(self.hidden_dim, self.z_dim) if self.z_dim > 0 else None
 
     def forward(self, x: torch.Tensor, return_summary: Optional[bool]=None):
@@ -1933,12 +1932,12 @@ def main():
     dec_hidden = max(args.hidden_dim // 2, period_latent_dim)
 
     def _make_decoder(out_dim: int) -> nn.Sequential:
-        return nn.Sequential(
-            nn.Linear(period_latent_dim, dec_hidden),
-            nn.GELU(),
-            nn.Linear(dec_hidden, dec_hidden),
-            nn.GELU(),
-            nn.Linear(dec_hidden, out_dim),
+        return build_mlp(
+            period_latent_dim,
+            dec_hidden,
+            num_layers=2,
+            activation=nn.GELU,
+            final_dim=out_dim,
         ).to(device)
 
     decoder_pose = _make_decoder(pose_dim)

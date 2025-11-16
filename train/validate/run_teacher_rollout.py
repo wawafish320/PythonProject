@@ -34,8 +34,6 @@ if str(_PROJECT_ROOT) not in sys.path:
 from train.training_MPL import (
     EventMotionModel,
     MotionEventDataset,
-    LayoutCenter,
-    DataNormalizer,
     MotionJointLoss,
     Trainer,
     validate_and_fix_model_,
@@ -43,6 +41,7 @@ from train.training_MPL import (
     reproject_rot6d,
     geodesic_R,
 )
+from train.layout_norm import LayoutCenter, DataNormalizer
 from train.geometry import compose_rot6d_delta
 
 
