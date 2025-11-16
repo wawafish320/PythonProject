@@ -73,9 +73,9 @@ class StageMetricAdjuster:
         self.ref_values = ref_values or (config.get("strategy_meta") or {}).get("reference_targets") or {}
 
     def apply(self, val_metrics: Mapping[int, Metric]) -> Dict[str, float]:
-        schedule = self.config.get("lookahead_stage_schedule")
+        schedule = self.config.get("freerun_stage_schedule") or self.config.get("lookahead_stage_schedule")
         if not schedule:
-            raise ValueError("config missing lookahead_stage_schedule")
+            raise ValueError("config missing freerun_stage_schedule")
         summary = summarize_stage_metrics(schedule, val_metrics)
         changed: Dict[str, float] = {}
         for stage in schedule:
@@ -100,7 +100,6 @@ class StageMetricAdjuster:
         root_lo, root_hi = _resolve_bounds(stage, "root", self.ref_values)
         rot_lo, rot_hi = _resolve_bounds(stage, "rot", self.ref_values)
 
-        lookahead_w = float(trainer.get("lookahead_weight", 0.0) or 0.0)
         freerun_w = float(trainer.get("freerun_weight", 0.0) or 0.0)
         freerun_h = int(trainer.get("freerun_horizon", 0) or 0)
         latent_w = float(trainer.get("w_latent_consistency", 0.0) or 0.0)
@@ -109,22 +108,12 @@ class StageMetricAdjuster:
 
         if yaw is not None:
             if yaw > yaw_hi:
-                new = _scale(lookahead_w, 1.15, 0.0, 0.8)
-                if new != lookahead_w:
-                    trainer["lookahead_weight"] = round(new, 4)
-                    changed["lookahead_weight"] = trainer["lookahead_weight"]
-                    lookahead_w = new
                 new_h = _clamp(int(round(freerun_h * 1.1 or 1)), 4, 64)
                 if new_h != freerun_h:
                     trainer["freerun_horizon"] = new_h
                     changed["freerun_horizon"] = trainer["freerun_horizon"]
                     freerun_h = new_h
             elif yaw < yaw_lo:
-                new = _scale(lookahead_w, 0.9, 0.0, 0.8)
-                if new != lookahead_w:
-                    trainer["lookahead_weight"] = round(new, 4)
-                    changed["lookahead_weight"] = trainer["lookahead_weight"]
-                    lookahead_w = new
                 new_h = _clamp(int(round(freerun_h * 0.9 or 1)), 4, 64)
                 if new_h != freerun_h:
                     trainer["freerun_horizon"] = new_h

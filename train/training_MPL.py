@@ -761,72 +761,6 @@ class Trainer:
                 "考虑缩短 horizon 或引入 skip-connection/latent consistency。"
             )
 
-    def _compute_lookahead_loss(
-        self,
-        state_seq,
-        gt_seq,
-        cond_seq,
-        cond_raw_seq,
-        contacts_seq,
-        angvel_seq,
-        pose_hist_seq,
-        batch,
-    ):
-        weight = float(getattr(self, 'lookahead_weight', 0.0) or 0.0)
-        steps = int(getattr(self, 'lookahead_steps', 0) or 0)
-        if weight <= 0.0 or steps <= 1:
-            return None
-        steps = min(steps, state_seq.shape[1])
-        if steps <= 1:
-            return None
-        def _slice(tensor):
-            if tensor is None:
-                return None
-            if torch.is_tensor(tensor) and tensor.dim() == 3 and tensor.size(1) >= steps:
-                return tensor[:, :steps]
-            return tensor
-        state_sub = state_seq[:, :steps]
-        gt_sub = gt_seq[:, :steps]
-        cond_sub = _slice(cond_seq)
-        cond_raw_sub = _slice(cond_raw_seq)
-        contacts_sub = _slice(contacts_seq)
-        angvel_sub = _slice(angvel_seq)
-        pose_hist_sub = _slice(pose_hist_seq)
-        preds_la, attn_la = self._rollout_sequence(
-            state_sub,
-            cond_sub,
-            cond_raw_sub,
-            contacts_seq=contacts_sub,
-            angvel_seq=angvel_sub,
-            pose_hist_seq=pose_hist_sub,
-            gt_seq=gt_sub,
-            mode='train_free',
-            tf_ratio=0.0,
-        )
-        preds_la = self._ensure_rot6d_delta(preds_la)
-        with self._amp_context(self.use_amp):
-            out = self.loss_fn(preds_la, gt_sub, attn_weights=attn_la, batch=batch)
-        if isinstance(out, tuple):
-            la_loss, la_stats = out
-        else:
-            la_loss, la_stats = out, {}
-        latent_payload = self._latent_consistency_penalty(
-            preds_la,
-            contacts_sub,
-            angvel_sub,
-            pose_hist_sub,
-            step_index=-1,
-            tag='lookahead/',
-        )
-        if latent_payload is not None:
-            lat_loss, lat_stats = latent_payload
-            la_loss = la_loss + lat_loss
-            if isinstance(la_stats, dict):
-                la_stats.update(lat_stats)
-            else:
-                la_stats = dict(lat_stats)
-        return la_loss, la_stats or {}, steps
-
     def _history_drift_debug(
         self,
         state_seq,
@@ -1066,7 +1000,7 @@ class Trainer:
         }
 
     def _apply_stage_schedule(self, epoch: int):
-        schedule = getattr(self, 'lookahead_stage_schedule', None)
+        schedule = getattr(self, 'freerun_stage_schedule', None) or getattr(self, 'lookahead_stage_schedule', None)
         overrides: Dict[str, Any] = {}
         if not schedule:
             return overrides
@@ -1159,7 +1093,10 @@ class Trainer:
 
     # === Adaptive metric-driven tuning helpers ===
     def _get_current_stage(self, config: Mapping[str, Any]):
-        schedule = config.get("lookahead_stage_schedule", []) if isinstance(config, Mapping) else []
+        schedule = None
+        if isinstance(config, Mapping):
+            schedule = config.get("freerun_stage_schedule") or config.get("lookahead_stage_schedule")
+        schedule = schedule or []
         cur_ep = int(getattr(self, 'cur_epoch', -1))
         for stage in schedule:
             rng = stage.get("range")
@@ -1180,8 +1117,6 @@ class Trainer:
         trainer_cfg = stage.get("trainer", {})
         loss_cfg = stage.get("loss", {})
 
-        if "lookahead_weight" in trainer_cfg:
-            self.lookahead_weight = float(trainer_cfg["lookahead_weight"])
         if "freerun_weight" in trainer_cfg:
             self.freerun_weight = float(trainer_cfg["freerun_weight"])
         if "freerun_horizon" in trainer_cfg:
@@ -1208,7 +1143,7 @@ class Trainer:
             print(f"[AdaptiveTuning][WARN] failed to save adjusted config: {exc}")
 
     def _activate_stage(self, idx: int, epoch: int) -> None:
-        schedule = getattr(self, 'lookahead_stage_schedule', None)
+        schedule = getattr(self, 'freerun_stage_schedule', None) or getattr(self, 'lookahead_stage_schedule', None)
         if not schedule:
             return
         idx = max(0, min(idx, len(schedule) - 1))
@@ -1219,7 +1154,7 @@ class Trainer:
         stage.pop('_goal_state', None)
 
     def _advance_stage(self, epoch: int) -> None:
-        schedule = getattr(self, 'lookahead_stage_schedule', None)
+        schedule = getattr(self, 'freerun_stage_schedule', None) or getattr(self, 'lookahead_stage_schedule', None)
         if not schedule:
             self._stage_pending_advance = False
             return
@@ -1231,7 +1166,7 @@ class Trainer:
         self._stage_pending_advance = False
 
     def _current_stage(self) -> Optional[Dict[str, Any]]:
-        schedule = getattr(self, 'lookahead_stage_schedule', None)
+        schedule = getattr(self, 'freerun_stage_schedule', None) or getattr(self, 'lookahead_stage_schedule', None)
         idx = getattr(self, '_stage_active_idx', None)
         if schedule and idx is not None and 0 <= idx < len(schedule):
             return schedule[idx]
@@ -1533,8 +1468,6 @@ class Trainer:
             self.freerun_horizon = int(params['freerun_horizon'])
         if 'teacher_forcing_ratio' in params:
             self.teacher_forcing_ratio = float(params['teacher_forcing_ratio'])
-        if 'lookahead_weight' in params:
-            self.lookahead_weight = float(params['lookahead_weight'])
     def __init__(self, model, loss_fn, lr=0.0001, grad_clip=0.0, weight_decay=0.01, tf_warmup_steps=0, tf_total_steps=0, augmentor=None, use_amp=None, accum_steps=1, *, pin_memory=False, args=None):
         import torch
         self.model = model
@@ -1547,9 +1480,7 @@ class Trainer:
         # Autoreg tuning knobs
         self.use_freerun_state_sync = True
         self.history_debug_steps: int = 0
-        self.lookahead_steps: int = 0
-        self.lookahead_weight: float = 0.0
-        self.lookahead_stage_schedule = []
+        self.freerun_stage_schedule = []
         self._stage_active_idx: Optional[int] = None
         self._stage_epoch_entered: Optional[int] = None
         self._stage_goal_history: Dict[str, deque] = {}
@@ -1840,28 +1771,6 @@ class Trainer:
                         stats['freerun/grad_ratio'] = float(grad_monitor.get('ratio', float('nan')))
                         self._maybe_print_grad_monitor(grad_monitor, ep, bi)
                     self._log_freerun_vs_teacher_stats(ep, bi, free_stats)
-
-                lookahead_payload = self._compute_lookahead_loss(
-                    state_seq,
-                    gt_seq,
-                    cond_seq,
-                    cond_raw_seq,
-                    contacts_seq,
-                    angvel_seq,
-                    pose_hist_seq,
-                    batch,
-                )
-                if lookahead_payload is not None:
-                    la_loss, la_stats, la_steps = lookahead_payload
-                    la_weight = float(getattr(self, 'lookahead_weight', 0.0) or 0.0)
-                    if la_weight > 0.0:
-                        loss = loss + la_weight * la_loss
-                    stats['lookahead_loss'] = float(la_loss.detach().cpu())
-                    stats['lookahead/weight'] = float(la_weight)
-                    stats['lookahead/steps'] = float(la_steps)
-                    if isinstance(la_stats, dict):
-                        for fk, fv in la_stats.items():
-                            stats[f'lookahead/{fk}'] = fv
 
                 if getattr(self, 'history_debug_steps', 0) > 1 and bi == 1:
                     try:
@@ -3310,12 +3219,8 @@ def train_entry():
                    help='>0 时，在 freerun 评估中打印前 N 个自回归步的 yaw/速度诊断')
     p.add_argument('--history_debug_steps', type=int, default=0,
                    help='>1 时，在训练批次中额外运行 train_free rollout 诊断历史漂移步数')
-    p.add_argument('--lookahead_steps', type=int, default=0,
-                   help='>1 时，启用 train_free lookahead loss 的窗口长度')
-    p.add_argument('--lookahead_weight', type=float, default=0.0,
-                   help='train_free lookahead loss 的权重')
-    p.add_argument('--lookahead_stage_schedule', type=str, default=None,
-                   help='按阶段调整 lookahead/freerun/tf 的日程表，格式如 "1-3:lookahead_steps=3,lookahead_weight=0.3;4-6:lookahead_steps=6,lookahead_weight=0.4"')
+    p.add_argument('--freerun_stage_schedule', '--lookahead_stage_schedule', type=str, default=None,
+                   help='分阶段调度（freerun/tf/损失等）的 JSON/字符串配置，旧名 lookahead_stage_schedule 仍兼容。')
     p.add_argument('--adaptive_loss_method', type=str, default='none', choices=['none', 'gradnorm', 'uncertainty', 'dwa'],
                    help='在线损失权重策略（none/gradnorm/uncertainty/dwa）。')
     p.add_argument('--adaptive_loss_alpha', type=float, default=1.5,
@@ -3327,7 +3232,7 @@ def train_entry():
     p.add_argument('--adaptive_loss_tuning', action='store_true',
                    help='启用基于验证指标的自适应损失权重调整（StageMetricAdjuster）。')
     p.add_argument('--config_path', type=str, default=None,
-                   help='完整配置 JSON 路径（包含 lookahead_stage_schedule），用于自适应调整。')
+                   help='完整配置 JSON 路径（包含阶段调度配置），用于自适应调整。')
     p.add_argument('--adaptive_scheduler', action='store_true',
                    help='启用在线超参调度器（freerun horizon / tf 比例）。')
     p.add_argument('--adaptive_sched_loss_spike', type=float, default=1.5,
@@ -3360,7 +3265,7 @@ def train_entry():
     p.add_argument('--w_rot_local', type=float, default=0.0,
                    help='父子关节局部 geodesic 约束权重（0=关闭）。')
     p.add_argument('--w_latent_consistency', type=float, default=0.0,
-                   help='Latent consistency loss 权重，用于约束 free-run / lookahead 隐状态落在预训练流形内。')
+                   help='Latent consistency loss 权重，用于约束 freerun 隐状态落在预训练流形内。')
     p.add_argument('--cond_yaw_min_speed', type=float, default=0.1,
                    help='仅对速度大于该阈值 (m/s) 的帧应用 yaw 指令损失。')
     p.add_argument('--seq_len', type=int, default=120)
@@ -3670,9 +3575,10 @@ def train_entry():
     trainer.freerun_horizon_min = int(_arg('freerun_horizon_min', 6) or 6)
     trainer.freerun_debug_steps = int(_arg('freerun_debug_steps', 0) or 0)
     trainer.history_debug_steps = int(_arg('history_debug_steps', 0) or 0)
-    trainer.lookahead_steps = int(_arg('lookahead_steps', 0) or 0)
-    trainer.lookahead_weight = float(_arg('lookahead_weight', 0.0) or 0.0)
-    trainer.lookahead_stage_schedule = _parse_stage_schedule(_arg('lookahead_stage_schedule', None))
+    stage_spec = _arg('freerun_stage_schedule', None)
+    if stage_spec is None:
+        stage_spec = _arg('lookahead_stage_schedule', None)
+    trainer.freerun_stage_schedule = _parse_stage_schedule(stage_spec)
     trainer.w_latent_consistency = float(_arg('w_latent_consistency', 0.0) or 0.0)
     _init_h_arg = _arg('freerun_init_horizon', None)
     if _init_h_arg is None:
@@ -3741,7 +3647,6 @@ def train_entry():
             'freerun_min': int(trainer.freerun_horizon_min),
             'freerun_max': int(max(trainer.freerun_horizon, trainer.freerun_init_horizon, trainer.freerun_horizon_min)),
             'teacher_forcing_ratio': float(_arg('tf_max', 1.0)),
-            'lookahead_weight': float(trainer.lookahead_weight),
         }
         trainer.hyperparam_scheduler = AdaptiveHyperparamScheduler(
             scheduler_init,

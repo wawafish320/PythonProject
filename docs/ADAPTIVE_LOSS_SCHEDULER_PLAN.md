@@ -26,7 +26,7 @@ Implementation file: `train/adaptive_loss.py`
 
 ### Phase 3 – Adaptive Scheduler (micro adjustments)
 Implementation file: `train/adaptive_scheduler.py`
-- Inputs: stage schedule’s base parameters (`freerun_horizon`, `lookahead_weight`,
+- Inputs: stage schedule’s base parameters (`freerun_horizon`, `freerun_weight`,
   current TF ratio). Scheduler stores `base_values` per epoch and emits a small
   delta (e.g. ±30%).
 - Data sources:

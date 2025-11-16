@@ -24,6 +24,8 @@
 - **自适应优化**：支持贝叶斯超参优化和自适应损失权重
 - **多任务学习**：同时优化位置、旋转、速度等多个目标
 
+> **2025-11-16 更新**：原先用于“前瞻”约束的 lookahead loss 已从训练脚本中移除，阶段调度只会驱动 freerun 及相关超参。本文中仍出现的 `lookahead_*` 字段仅作为历史记录，可忽略或替换为 freerun 设置。
+
 ### 核心模型架构
 
 ```
@@ -175,7 +177,7 @@ python train_configurator.py \
   "w_latent_consistency": 0.03,   // 潜在一致性损失权重
 
   // 分阶段训练配置
-  "lookahead_stage_schedule": [
+  "freerun_stage_schedule": [
     {
       "range": [1, 9],
       "label": "stage1_teacher",
@@ -565,7 +567,7 @@ core : aux : long ≈ 65% : 5% : 30%
 **更细粒度的划分（例如5阶段）**：
 ```json
 {
-  "lookahead_stage_schedule": [
+  "freerun_stage_schedule": [
     {"range": [1, 5], "label": "warmup"},           // 热身阶段
     {"range": [6, 12], "label": "early_mixed"},     // 早期混合
     {"range": [13, 20], "label": "mid_mixed"},      // 中期混合
@@ -579,7 +581,7 @@ core : aux : long ≈ 65% : 5% : 30%
 **更粗粒度的划分（例如2阶段）**：
 ```json
 {
-  "lookahead_stage_schedule": [
+  "freerun_stage_schedule": [
     {"range": [1, 15], "label": "supervised"},      // 监督学习
     {"range": [16, 30], "label": "self_supervised"} // 自监督学习
   ]
@@ -852,11 +854,11 @@ Trainer 会在内部调用 `build_adaptive_loss` 并把统计写入 `adaptive_lo
 
 ### 4. 自定义训练阶段
 
-编辑配置文件中的 `lookahead_stage_schedule` 来自定义训练阶段：
+编辑配置文件中的 `freerun_stage_schedule` 来自定义训练阶段：
 
 ```json
 {
-  "lookahead_stage_schedule": [
+  "freerun_stage_schedule": [
     {
       "range": [1, 10],
       "label": "warmup",

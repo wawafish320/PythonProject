@@ -32,7 +32,7 @@
   "history_debug_steps": 8,
   "w_fk_pos": 0.07,
   "w_rot_local": 0.07,
-  "lookahead_stage_schedule": [
+  "freerun_stage_schedule": [
     {
       "range": [
         1,
@@ -40,8 +40,6 @@
       ],
       "label": "stage1_teacher",
       "trainer": {
-        "lookahead_steps": 2,
-        "lookahead_weight": 0.063,
         "freerun_weight": 0.0,
         "freerun_horizon": 8,
         "w_latent_consistency": 0.03
@@ -80,8 +78,6 @@
       ],
       "label": "stage2_mixed",
       "trainer": {
-        "lookahead_steps": 6,
-        "lookahead_weight": 0.21,
         "freerun_weight": 0.175,
         "freerun_horizon": 14,
         "w_latent_consistency": 0.12
@@ -123,8 +119,6 @@
       ],
       "label": "stage3_freerun",
       "trainer": {
-        "lookahead_steps": 10,
-        "lookahead_weight": 0.315,
         "freerun_weight": 0.325,
         "freerun_horizon": 18,
         "w_latent_consistency": 0.288
