@@ -197,11 +197,6 @@ class LayoutCenter:
         trainer._x_layout = dict(self.state_layout)
         trainer._y_layout = dict(self.output_layout)
         trainer.y_to_x_map = self.materialize_y_to_x_map()
-        # stats
-        trainer.mu_x  = torch.tensor(np.asarray(self.mu_x).reshape(1, -1), dtype=torch.float32)
-        trainer.std_x = torch.tensor(np.asarray(self.std_x).reshape(1, -1), dtype=torch.float32)
-        trainer.mu_y  = torch.tensor(np.asarray(self.mu_y).reshape(1, -1), dtype=torch.float32)
-        trainer.std_y = torch.tensor(np.asarray(self.std_y).reshape(1, -1), dtype=torch.float32)
         # tanh scales passthrough
         trainer.tanh_scales_rootvel = self.tanh_scales_rootvel
         trainer.tanh_scales_angvel  = self.tanh_scales_angvel
@@ -2059,21 +2054,22 @@ class MotionJointLoss(nn.Module):
         # 2) 训练端反归一化：在扁平 (…, D) 上做 raw = z*StdY + MuY
         try:
             sl_b = self.group_slices.get('BoneRotations6D', None)
-            if isinstance(sl_b, slice) and getattr(self, "mu_y", None) is not None and getattr(self, "std_y",
-                                                                                               None) is not None:
+            normalizer = getattr(self, 'normalizer', None)
+            if isinstance(sl_b, slice) and normalizer is not None:
                 st = int(sl_b.start);
                 ln = int(sl_b.stop - sl_b.start)
-                if ln == D:  # 只有当这段就是完整 rot6d 段时才生效
-                    mu = torch.as_tensor(self.mu_y, device=pr.device, dtype=pr.dtype)[..., st:st + ln]
-                    sd = torch.as_tensor(self.std_y, device=pr.device, dtype=pr.dtype)[..., st:st + ln].clamp(min=1e-6)
-                    while mu.dim() < pr.dim():
-                        mu = mu.unsqueeze(0);
-                        sd = sd.unsqueeze(0)
-                    pr = pr * sd + mu
-                    gr = gr * sd + mu
-                    if not hasattr(self, "_train_denorm_hit"):
-                        print("[GeoLoss] TRAIN denorm(Y.rot6d) applied on flat D.")
-                        self._train_denorm_hit = True
+                if ln == D and normalizer.mu_y is not None and normalizer.std_y is not None:  # 只有当这段就是完整 rot6d 段时才生效
+                    mu = normalizer._match_tensor('mu_y', normalizer.mu_y, pr)
+                    sd = normalizer._match_tensor('std_y', normalizer.std_y, pr)
+                    # 切片到需要的范围
+                    mu = mu[..., st:st + ln].clamp_min(1e-6) if mu is not None else None
+                    sd = sd[..., st:st + ln].clamp_min(1e-6) if sd is not None else None
+                    if mu is not None and sd is not None:
+                        pr = pr * sd + mu
+                        gr = gr * sd + mu
+                        if not hasattr(self, "_train_denorm_hit"):
+                            print("[GeoLoss] TRAIN denorm(Y.rot6d) applied via normalizer.")
+                            self._train_denorm_hit = True
 
         except Exception:
             pass
@@ -2132,18 +2128,20 @@ class MotionJointLoss(nn.Module):
 
         try:
             sl = self.group_slices.get('BoneRotations6D', None)
+            normalizer = getattr(self, 'normalizer', None)
             if (
                 isinstance(sl, slice)
-                and getattr(self, 'mu_y', None) is not None
-                and getattr(self, 'std_y', None) is not None
+                and normalizer is not None
+                and normalizer.mu_y is not None
+                and normalizer.std_y is not None
                 and (sl.stop - sl.start) == D
             ):
-                mu = torch.as_tensor(self.mu_y, device=rot6d.device, dtype=rot6d.dtype)[..., sl]
-                std = torch.as_tensor(self.std_y, device=rot6d.device, dtype=rot6d.dtype)[..., sl].clamp(min=1e-6)
-                while mu.dim() < rot6d.dim():
-                    mu = mu.unsqueeze(0)
-                    std = std.unsqueeze(0)
-                rot6d = rot6d * std + mu
+                mu = normalizer._match_tensor('mu_y', normalizer.mu_y, rot6d)
+                std = normalizer._match_tensor('std_y', normalizer.std_y, rot6d)
+                if mu is not None and std is not None:
+                    mu = mu[..., sl]
+                    std = std[..., sl].clamp(min=1e-6)
+                    rot6d = rot6d * std + mu
         except Exception:
             pass
 
@@ -4614,9 +4612,6 @@ class Trainer:
         import torch
         self.model = model
         self.loss_fn = loss_fn
-        # Make MuY/StdY available on Trainer for _denorm()
-        self.mu_y = getattr(loss_fn, 'mu_y', None)
-        self.std_y = getattr(loss_fn, 'std_y', None)
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
         print(f"[LR-DBG:init] arg_lr={lr:.2e} opt_pg0={self.optimizer.param_groups[0]['lr']:.2e}")
         # Autoreg tuning knobs
@@ -6889,8 +6884,8 @@ def train_entry():
         trainer.pose_hist_scales = None
         trainer.pose_hist_mu = None
         trainer.pose_hist_std = None
-    loss_fn.mu_y = getattr(trainer, "mu_y", None)
-    loss_fn.std_y = getattr(trainer, "std_y", None)
+    # 注入 normalizer，供 loss_fn 进行反归一化
+    loss_fn.normalizer = getattr(trainer, "normalizer", None)
     if getattr(trainer, '_bundle_meta', None):
         try:
             loss_fn.meta = dict(trainer._bundle_meta)
