@@ -8,16 +8,6 @@ from .metrics import (
     StageMetricAdjuster,
     summarize_stage_metrics,
 )
-from .bayes import (
-    DEFAULT_BAYES_SPECS,
-    DEFAULT_METRIC_WEIGHTS,
-    BayesHistory,
-    BayesianOptimizer,
-    ParamSpec,
-    apply_param_updates,
-    compute_history_score,
-    extract_param_vector,
-)
 
 __all__ = [
     "load_json",
@@ -33,12 +23,4 @@ __all__ = [
     "load_val_metrics",
     "StageMetricAdjuster",
     "summarize_stage_metrics",
-    "DEFAULT_BAYES_SPECS",
-    "DEFAULT_METRIC_WEIGHTS",
-    "BayesHistory",
-    "BayesianOptimizer",
-    "ParamSpec",
-    "apply_param_updates",
-    "compute_history_score",
-    "extract_param_vector",
 ]

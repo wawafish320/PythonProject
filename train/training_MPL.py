@@ -7,6 +7,7 @@ from __future__ import annotations
 import math as _math
 import sys
 from collections import deque
+from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -84,6 +85,11 @@ except ImportError:  # pragma: no cover - fallback for script execution
         get_global_arg,
     )
 from .normalizers import VectorTanhNormalizerTorch
+
+try:
+    from .configuration import StageMetricAdjuster, load_val_metrics
+except ImportError:  # pragma: no cover - fallback for script execution
+    from train.configuration import StageMetricAdjuster, load_val_metrics
 
 
 import torch.nn as nn
@@ -1151,6 +1157,56 @@ class Trainer:
         print(f"[StageSched][ep {epoch:03d}] stage={stage_tag} | {summary}")
         return overrides
 
+    # === Adaptive metric-driven tuning helpers ===
+    def _get_current_stage(self, config: Mapping[str, Any]):
+        schedule = config.get("lookahead_stage_schedule", []) if isinstance(config, Mapping) else []
+        cur_ep = int(getattr(self, 'cur_epoch', -1))
+        for stage in schedule:
+            rng = stage.get("range")
+            if rng:
+                start = int(rng[0])
+                end = int(rng[-1] if len(rng) > 1 else rng[0])
+            else:
+                start = int(stage.get("start", 1))
+                end = int(stage.get("end", start))
+            if start <= cur_ep <= end:
+                return stage
+        return None
+
+    def _apply_config_changes(self, config: Mapping[str, Any]):
+        stage = self._get_current_stage(config)
+        if not stage:
+            return
+        trainer_cfg = stage.get("trainer", {})
+        loss_cfg = stage.get("loss", {})
+
+        if "lookahead_weight" in trainer_cfg:
+            self.lookahead_weight = float(trainer_cfg["lookahead_weight"])
+        if "freerun_weight" in trainer_cfg:
+            self.freerun_weight = float(trainer_cfg["freerun_weight"])
+        if "freerun_horizon" in trainer_cfg:
+            self.freerun_horizon = int(trainer_cfg["freerun_horizon"])
+        if "w_latent_consistency" in trainer_cfg:
+            self.w_latent_consistency = float(trainer_cfg["w_latent_consistency"])
+
+        if hasattr(self, 'loss_fn') and self.loss_fn is not None:
+            if "w_fk_pos" in loss_cfg:
+                self.loss_fn.w_fk_pos = float(loss_cfg["w_fk_pos"])
+            if "w_rot_local" in loss_cfg:
+                self.loss_fn.w_rot_local = float(loss_cfg["w_rot_local"])
+
+    def _save_adjusted_config(self, epoch: int):
+        out_dir = getattr(self, 'out_dir', None)
+        cfg = getattr(self, 'full_config', None)
+        if not out_dir or cfg is None:
+            return
+        try:
+            out_path = Path(out_dir) / f"config_adjusted_ep{int(epoch):03d}.json"
+            with out_path.open('w', encoding='utf-8') as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            print(f"[AdaptiveTuning][WARN] failed to save adjusted config: {exc}")
+
     def _activate_stage(self, idx: int, epoch: int) -> None:
         schedule = getattr(self, 'lookahead_stage_schedule', None)
         if not schedule:
@@ -1479,7 +1535,7 @@ class Trainer:
             self.teacher_forcing_ratio = float(params['teacher_forcing_ratio'])
         if 'lookahead_weight' in params:
             self.lookahead_weight = float(params['lookahead_weight'])
-    def __init__(self, model, loss_fn, lr=0.0001, grad_clip=0.0, weight_decay=0.01, tf_warmup_steps=0, tf_total_steps=0, augmentor=None, use_amp=None, accum_steps=1, *, pin_memory=False):
+    def __init__(self, model, loss_fn, lr=0.0001, grad_clip=0.0, weight_decay=0.01, tf_warmup_steps=0, tf_total_steps=0, augmentor=None, use_amp=None, accum_steps=1, *, pin_memory=False, args=None):
         import torch
         self.model = model
         self.loss_fn = loss_fn
@@ -1498,6 +1554,28 @@ class Trainer:
         self._stage_epoch_entered: Optional[int] = None
         self._stage_goal_history: Dict[str, deque] = {}
         self._stage_pending_advance: bool = False
+        self.args = args
+        self.enable_adaptive = bool(getattr(args, 'adaptive_loss_tuning', False)) if args is not None else bool(_arg('adaptive_loss_tuning', False))
+        self.adjuster = None
+        self.full_config = None
+        self._adaptive_config_path: Optional[Path] = None
+        if self.enable_adaptive:
+            cfg_path = getattr(args, 'config_path', None) if args is not None else _arg('config_path', None) or _arg('config_json', None)
+            if cfg_path:
+                cfg_file = Path(cfg_path).expanduser()
+                self._adaptive_config_path = cfg_file
+                if cfg_file.is_file():
+                    try:
+                        with open(cfg_file, 'r', encoding='utf-8') as f:
+                            self.full_config = json.load(f)
+                        self.adjuster = StageMetricAdjuster(self.full_config)
+                        print(f"[AdaptiveTuning] loaded config from {cfg_file}")
+                    except Exception as exc:
+                        print(f"[AdaptiveTuning][WARN] failed to load config {cfg_file}: {exc}")
+                else:
+                    print(f"[AdaptiveTuning][WARN] config_path not found: {cfg_file}")
+            else:
+                print("[AdaptiveTuning][WARN] adaptive tuning enabled but config_path is missing; disable or provide path.")
 
         self.grad_clip = float(grad_clip)
         self.tf_warmup_steps = int(tf_warmup_steps)
@@ -1643,6 +1721,7 @@ class Trainer:
             # record epoch for schedulers
             try:
                 self.cur_epoch = int(ep)
+                self.current_epoch = int(ep)
                 self.total_epochs = int(epochs)
             except Exception:
                 pass
@@ -1981,7 +2060,10 @@ class Trainer:
 
             if metrics_for_json is not None and metrics_tag is not None:
                 self._record_epoch_metrics(metrics_for_json, tag=metrics_tag, epoch=ep)
-                self._dump_metrics_json(metrics_for_json, tag=metrics_tag, epoch=ep)
+                if metrics_tag == 'valfree':
+                    self._save_val_metrics(ep, metrics_for_json)
+                else:
+                    self._dump_metrics_json(metrics_for_json, tag=metrics_tag, epoch=ep)
                 self._maybe_finish_stage(ep, metrics_for_json, tag=str(metrics_tag))
             if (not is_teacher_phase) and teacher_metrics_cached is not None:
                 self._record_epoch_metrics(teacher_metrics_cached, tag='teacher', epoch=ep)
@@ -1997,6 +2079,21 @@ class Trainer:
                         os.makedirs(out_dir, exist_ok=True)
                         best_ckpt = os.path.join(out_dir, 'ckpt_best_' + str(run_name) + '.pth')
                         torch.save({'model': self.model.state_dict()}, best_ckpt)
+
+            # --- Adaptive metric-driven tuning (post-epoch) ---
+            if getattr(self, 'adjuster', None) is not None and ep >= 3:
+                try:
+                    metrics_dir = Path(getattr(self, 'out_dir', out_dir) or out_dir) / 'metrics'
+                    val_history = load_val_metrics(metrics_dir)
+                    changes = self.adjuster.apply(val_history)
+                    if changes:
+                        print(f"[AdaptiveTuning] Epoch {ep} adjustments:")
+                        for k, v in changes.items():
+                            print(f"  {k}: {v}")
+                        self._apply_config_changes(self.full_config)
+                        self._save_adjusted_config(ep)
+                except Exception as _adapt_e:
+                    print(f"[WARN] Adaptive tuning failed @ep{ep}: {_adapt_e}")
         if out_dir:
 
             import os, torch
@@ -2496,6 +2593,18 @@ class Trainer:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
         except Exception as exc:
             print(f"[MetricsWrite][WARN] failed to write {tag} metrics @ep{epoch}: {exc}")
+
+    def _save_val_metrics(self, epoch: int, metrics: Mapping[str, Any]) -> Optional[Path]:
+        out_dir = getattr(self, 'out_dir', None)
+        if not out_dir:
+            return None
+        try:
+            self._dump_metrics_json(dict(metrics), tag='valfree', epoch=epoch)
+        except Exception:
+            pass
+        metrics_dir = Path(out_dir) / 'metrics'
+        json_path = metrics_dir / f'valfree_ep{int(epoch):03d}.json'
+        return json_path if json_path.exists() else None
 
     @torch.no_grad()
     def _diagnose_free_run(
@@ -3215,6 +3324,10 @@ def train_entry():
                    help='DWA 策略温度，默认 2.0。')
     p.add_argument('--adaptive_loss_terms', type=str, default='fk_pos,rot_local,cond_yaw,rot_delta',
                    help='需要自适应权重的 loss 名称，逗号分隔。')
+    p.add_argument('--adaptive_loss_tuning', action='store_true',
+                   help='启用基于验证指标的自适应损失权重调整（StageMetricAdjuster）。')
+    p.add_argument('--config_path', type=str, default=None,
+                   help='完整配置 JSON 路径（包含 lookahead_stage_schedule），用于自适应调整。')
     p.add_argument('--adaptive_scheduler', action='store_true',
                    help='启用在线超参调度器（freerun horizon / tf 比例）。')
     p.add_argument('--adaptive_sched_loss_spike', type=float, default=1.5,
@@ -3482,7 +3595,7 @@ def train_entry():
     if hasattr(loss_fn, 'rot6d_eps'):
         loss_fn.rot6d_eps = 1e-6
     augmentor = MotionAugmentation(noise_std=_arg('aug_noise_std', 0.0), time_warp_prob=_arg('aug_time_warp_prob', 0.0))
-    trainer = Trainer(model=model, loss_fn=loss_fn, lr=_arg('lr', 0.0001), grad_clip=_arg('grad_clip', 0.0), weight_decay=_arg('weight_decay', 0.01), tf_warmup_steps=_arg('tf_warmup_steps', 5000), tf_total_steps=_arg('tf_total_steps', 200000), augmentor=augmentor, use_amp=_arg('amp', False), accum_steps=_arg('accum_steps', 1), pin_memory=pin)
+    trainer = Trainer(model=model, loss_fn=loss_fn, lr=_arg('lr', 0.0001), grad_clip=_arg('grad_clip', 0.0), weight_decay=_arg('weight_decay', 0.01), tf_warmup_steps=_arg('tf_warmup_steps', 5000), tf_total_steps=_arg('tf_total_steps', 200000), augmentor=augmentor, use_amp=_arg('amp', False), accum_steps=_arg('accum_steps', 1), pin_memory=pin, args=GLOBAL_ARGS)
     trainer._norm_template_path = str(norm_template_path) if norm_template_path else None
     trainer._bundle_json_path = bundle_json_path
     trainer.out_dir = str(out_dir)

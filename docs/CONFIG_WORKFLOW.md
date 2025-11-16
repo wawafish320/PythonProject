@@ -1,7 +1,7 @@
 ## Training Config Workflow
 
 This repository now treats `train/configuration/` as the single source of truth
-for config generation, metric-driven tuning, and Bayesian search. The CLI
+for config generation and metric-driven tuning. The CLI
 `python -m train.train_configurator` wires these building blocks together.
 
 ```
@@ -10,7 +10,6 @@ train/
     ├── profile.py        # dataset stats + heuristics
     ├── stages.py         # stage template + config builder
     ├── metrics.py        # schedule tuning utilities
-    ├── bayes.py          # history + TPE-style optimizer
     └── io.py             # small JSON helpers
 ```
 
