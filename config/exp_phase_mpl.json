@@ -22,10 +22,6 @@
   "freerun_grad_log": true,
   "freerun_grad_log_interval": 200,
   "w_cond_yaw": 0.1,
-  "w_rot_log": 0.2,
-  "w_limb_geo": 0.0,
-  "limb_geo_margin_deg": 5.0,
-  "limb_geo_topk": 16,
   "monitor_batches": 2,
   "eval_horizon": 10,
   "eval_warmup": 0,
@@ -54,9 +50,6 @@
         "core": {
           "w_fk_pos": 0.07,
           "w_rot_local": 0.07
-        },
-        "aux": {
-          "w_limb_geo": 0.0
         }
       },
       "tf": {
@@ -97,9 +90,6 @@
         "core": {
           "w_fk_pos": 0.2275,
           "w_rot_local": 0.2275
-        },
-        "aux": {
-          "w_limb_geo": 0.05
         }
       },
       "tf": {
@@ -143,9 +133,6 @@
         "core": {
           "w_fk_pos": 0.4025,
           "w_rot_local": 0.4025
-        },
-        "aux": {
-          "w_limb_geo": 0.08
         }
       },
       "tf": {

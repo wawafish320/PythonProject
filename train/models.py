@@ -426,36 +426,26 @@ class MotionJointLoss(nn.Module):
         output_layout: Dict[str, Any] = None,
         fps: float = 60.0,
         rot6d_spec: Dict[str, Any] = None,
-        w_rot_geo: float = 0.0,
         w_rot_ortho: float = 0.0,
         ignore_motion_groups: str = '',
         w_rot_delta: float = 1.0,
         w_rot_delta_root: float = 0.0,
-        w_rot_log: float = 0.0,
         w_cond_yaw: float = 0.0,
         cond_yaw_min_speed: float = 0.0,
         meta: Optional[Dict[str, Any]] = None,
         w_fk_pos: float = 0.0,
         w_rot_local: float = 0.0,
-        w_limb_geo: float = 0.0,
-        limb_geo_margin_deg: float = 5.0,
-        limb_geo_topk: int = 16,
     ):
         super().__init__()
         self.meta = dict(meta) if isinstance(meta, dict) else {}
         self.w_attn_reg = float(w_attn_reg)
-        self.w_rot_geo = float(w_rot_geo)
         self.w_rot_ortho = float(w_rot_ortho)
         self.w_rot_delta = float(w_rot_delta)
         self.w_rot_delta_root = float(w_rot_delta_root)
-        self.w_rot_log = float(w_rot_log)
         self.w_cond_yaw = float(w_cond_yaw)
         self.cond_yaw_min_speed = float(cond_yaw_min_speed)
         self.w_fk_pos = float(w_fk_pos)
         self.w_rot_local = float(w_rot_local)
-        self.w_limb_geo = float(w_limb_geo)
-        self.limb_geo_margin_deg = float(limb_geo_margin_deg)
-        self.limb_geo_topk = int(max(0, limb_geo_topk))
         self.angvel_eps = 1e-6
         self.fps = float(fps)
         self.output_layout = output_layout or {}
@@ -510,15 +500,12 @@ class MotionJointLoss(nn.Module):
             "rot_ortho",
         )
         self._reset_adaptive_tracking()
-        self._last_geo_tensor: Optional[torch.Tensor] = None
         self._loss_group_totals: Dict[str, float] = {}
         self._loss_group_alias = {
             'attn': 'aux',
             'rot_geo': 'core',
-            'limb_geo': 'aux',
             'rot_delta': 'core',
             'rot_delta_root': 'aux',
-            'rot_log': 'aux',
             'rot_ortho': 'core',
             'cond_yaw': 'core',
             'fk_pos': 'core',
@@ -592,6 +579,33 @@ class MotionJointLoss(nn.Module):
             if torso_mask.numel() == 0 or not torso_mask.any():
                 return None
         return limb_mask, torso_mask
+
+    def _collect_limb_geo_stats(self, geo_tensor: torch.Tensor) -> Dict[str, float]:
+        import torch, math
+        if geo_tensor is None or geo_tensor.numel() == 0:
+            return {}
+        J = geo_tensor.shape[-1]
+        masks = self._resolve_limb_masks(J, geo_tensor.device)
+        if not masks:
+            return {}
+        limb_mask, torso_mask = masks
+        flat = geo_tensor.reshape(-1, J)
+        joint_mean = torch.nanmean(flat, dim=0)
+        stats: Dict[str, float] = {}
+        deg = 180.0 / math.pi
+        limb_val = torso_val = None
+        if limb_mask.any():
+            limb_val = joint_mean[limb_mask].mean()
+            stats['rot_geo_limb_deg'] = float((limb_val * deg).detach().cpu())
+            stats['rot_geo_limb_count'] = int(limb_mask.sum().item())
+        if torso_mask.any():
+            torso_val = joint_mean[torso_mask].mean()
+            stats['rot_geo_torso_deg'] = float((torso_val * deg).detach().cpu())
+            stats['rot_geo_torso_count'] = int(torso_mask.sum().item())
+        if limb_val is not None and torso_val is not None:
+            ratio = limb_val / torso_val.clamp_min(1e-6)
+            stats['rot_geo_limb_over_torso'] = float(ratio.detach().cpu())
+        return stats
 
     def _parent_relative_matrices(self, R: torch.Tensor) -> torch.Tensor:
         import torch
@@ -672,32 +686,6 @@ class MotionJointLoss(nn.Module):
             world_pos[..., j, :] = parent_pos + delta
         return world_pos
 
-    def _collect_limb_geo_stats(self, geo_tensor: torch.Tensor) -> Dict[str, float]:
-        import torch, math
-        if geo_tensor is None or geo_tensor.numel() == 0:
-            return {}
-        J = geo_tensor.shape[-1]
-        masks = self._resolve_limb_masks(J, geo_tensor.device)
-        if not masks:
-            return {}
-        limb_mask, torso_mask = masks
-        flat = geo_tensor.reshape(-1, J)
-        joint_mean = torch.nanmean(flat, dim=0)
-        stats: Dict[str, float] = {}
-        deg = 180.0 / math.pi
-        limb_val = torso_val = None
-        if limb_mask.any():
-            limb_val = joint_mean[limb_mask].mean()
-            stats['rot_geo_limb_deg'] = float((limb_val * deg).detach().cpu())
-            stats['rot_geo_limb_count'] = int(limb_mask.sum().item())
-        if torso_mask.any():
-            torso_val = joint_mean[torso_mask].mean()
-            stats['rot_geo_torso_deg'] = float((torso_val * deg).detach().cpu())
-            stats['rot_geo_torso_count'] = int(torso_mask.sum().item())
-        if limb_val is not None and torso_val is not None:
-            ratio = limb_val / torso_val.clamp_min(1e-6)
-            stats['rot_geo_limb_over_torso'] = float(ratio.detach().cpu())
-        return stats
     def _forward_base_inner(self, pred_motion: torch.Tensor, gt_motion: torch.Tensor, attn_weights=None) -> tuple[torch.Tensor, dict[str, float]]:
         """
         参数:
@@ -707,31 +695,25 @@ class MotionJointLoss(nn.Module):
         返回:
             loss 标量, 分项 dict (float)
         """
-        Z = lambda v: gt_motion.new_tensor(float(v))
         pm, gm = (pred_motion, gt_motion)
         assert pm.shape == gm.shape, f'pred/gt shape mismatch: {pm.shape} vs {gm.shape}'
 
-        # === 其他辅助项 ===
         if attn_weights is not None:
             l_attn = self.compute_attention_regularization(attn_weights, geomask=None)
         else:
             l_attn = gm.new_zeros(())
-        geo_details = None
-        if self.w_rot_geo > 0:
-            geo_payload = self.compute_rot6d_geo_loss(pm, gm, return_per_joint=True)
-            if isinstance(geo_payload, tuple):
-                l_geo, geo_details = geo_payload
-            else:
-                l_geo = geo_payload
+
+        geo_payload = self.compute_rot6d_geo_loss(pm, gm, return_per_joint=True)
+        if isinstance(geo_payload, tuple):
+            l_geo, geo_details = geo_payload
         else:
-            l_geo = Z(0.0)
-        l_delta = Z(0.0)
-        l_ortho = Z(0.0)
-        loss = self.w_attn_reg * l_attn + self.w_rot_geo * l_geo
-        self._last_geo_tensor = geo_details
+            l_geo = geo_payload
+            geo_details = None
+
+        loss = self.w_attn_reg * l_attn
         self._accumulate_loss_contrib('attn', l_attn, self.w_attn_reg, group='aux')
-        self._accumulate_loss_contrib('rot_geo', l_geo, self.w_rot_geo, group='core')
-        stats = {
+
+        stats: Dict[str, float] = {
             'attn': float(l_attn.detach().cpu()),
             'rot_geo': float(l_geo.detach().cpu()),
             'rot_delta': 0.0,
@@ -1251,7 +1233,6 @@ class MotionJointLoss(nn.Module):
     def forward(self, pred_motion, gt_motion, attn_weights=None, batch=None):
         # 统一拿出模型输出（可能是 dict 或 tensor）
         self._init_loss_group_tracker()
-        self._last_geo_tensor = None
         delta_fallback = False
         if isinstance(pred_motion, dict):
             delta_fallback = bool(pred_motion.get('_delta_fallback', False))
@@ -1289,14 +1270,6 @@ class MotionJointLoss(nn.Module):
         else:
             stats.setdefault('rot_delta_root', 0.0)
 
-        if self.w_rot_log > 0 and delta_pm is not None and not delta_fallback:
-            l_rot_log = self.compute_rot6d_log_loss(delta_pm, gt_motion)
-            loss = loss + self.w_rot_log * l_rot_log
-            self._accumulate_loss_contrib('rot_log', l_rot_log, self.w_rot_log, group='aux')
-            stats['rot_log'] = float(l_rot_log.detach().cpu())
-        else:
-            stats.setdefault('rot_log', 0.0)
-
         if self.w_rot_ortho > 0 and not delta_fallback:
             target_for_ortho = delta_pm if delta_pm is not None else pm
             l_ortho = self.compute_rot6d_ortho_loss(target_for_ortho)
@@ -1329,14 +1302,6 @@ class MotionJointLoss(nn.Module):
             self._register_component_loss('cond_yaw', cond_yaw_loss, self.w_cond_yaw)
         else:
             stats.setdefault('cond_yaw', 0.0)
-
-        if self.w_limb_geo > 0.0:
-            limb_geo_loss = self.compute_limb_geo_aux_loss(self._last_geo_tensor)
-            loss = loss + self.w_limb_geo * limb_geo_loss
-            self._accumulate_loss_contrib('limb_geo', limb_geo_loss, self.w_limb_geo, group='aux')
-            stats['limb_geo'] = float(limb_geo_loss.detach().cpu())
-        else:
-            stats.setdefault('limb_geo', 0.0)
 
         Rp_world = Rg_world = None
         Rp_root = Rg_root = None
@@ -1387,7 +1352,6 @@ class MotionJointLoss(nn.Module):
         self._last_component_weights: Dict[str, float] = {}
         self._last_component_total_weight: float = 0.0
         self._last_core_loss: Optional[torch.Tensor] = None
-        self._last_geo_tensor = None
 
     def _init_loss_group_tracker(self):
         self._loss_group_totals = {key: 0.0 for key in ('core', 'aux', 'long')}
@@ -1414,33 +1378,6 @@ class MotionJointLoss(nn.Module):
 
     def _loss_group_stats(self) -> Dict[str, float]:
         return {f'loss_group/{k}': float(v) for k, v in self._loss_group_totals.items()}
-
-    def compute_limb_geo_aux_loss(self, geo_tensor: Optional[torch.Tensor]) -> torch.Tensor:
-        Z = lambda v: geo_tensor.new_tensor(float(v)) if isinstance(geo_tensor, torch.Tensor) else torch.tensor(float(v))
-        if geo_tensor is None or geo_tensor.numel() == 0:
-            return Z(0.0)
-        import torch
-        J = geo_tensor.shape[-1]
-        masks = self._resolve_limb_masks(J, geo_tensor.device)
-        if not masks:
-            return Z(0.0)
-        limb_mask, _ = masks
-        if not limb_mask.any():
-            return Z(0.0)
-        flat = geo_tensor.reshape(-1, J)
-        limb_vals = flat[:, limb_mask]
-        if limb_vals.numel() == 0:
-            return Z(0.0)
-        deg = limb_vals * (180.0 / _math.pi)
-        hinge = torch.relu(deg - self.limb_geo_margin_deg)
-        if hinge.numel() == 0:
-            return Z(0.0)
-        if self.limb_geo_topk > 0 and hinge.numel() > self.limb_geo_topk:
-            topk_vals, _ = torch.topk(hinge.view(-1), self.limb_geo_topk)
-            loss = topk_vals.mean()
-        else:
-            loss = hinge.mean()
-        return loss
 
     def _register_component_loss(self, name: str, tensor: Optional[torch.Tensor], weight: float):
         if tensor is None or weight <= 0:
@@ -1481,4 +1418,3 @@ class MotionJointLoss(nn.Module):
             'core_loss': self._last_core_loss,
         }
         return payload
-

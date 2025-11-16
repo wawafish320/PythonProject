@@ -3238,22 +3238,14 @@ def train_entry():
     p.add_argument('--dropout', type=float, default=0.1)
     p.add_argument('--amp', action='store_true', help='启用自动混合精度 (torch.autocast)')
     p.add_argument('--w_rot_ortho', type=float, default=0.001)
-    p.add_argument('--w_rot_geo', type=float, default=0.01)
     p.add_argument('--w_rot_delta', type=float, default=1.0)
     p.add_argument('--w_rot_delta_root', type=float, default=0.0)
-    p.add_argument('--w_rot_log', type=float, default=0.0)
     p.add_argument('--w_cond_yaw', type=float, default=None,
                    help='yaw 指令对齐损失权重（默认 0.1 * w_rot_delta，<=0 关闭）。')
     p.add_argument('--w_fk_pos', type=float, default=0.0,
                    help='FK 末端位置损失权重（0 表示禁用）。')
     p.add_argument('--w_rot_local', type=float, default=0.0,
                    help='父子关节局部 geodesic 约束权重（0=关闭）。')
-    p.add_argument('--w_limb_geo', type=float, default=0.0,
-                   help='Limb-focused geodesic 辅助损失权重（top-k hinge）。')
-    p.add_argument('--limb_geo_margin_deg', type=float, default=5.0,
-                   help='Limb geodesic hinge 的角度阈值（度）。')
-    p.add_argument('--limb_geo_topk', type=int, default=16,
-                   help='Limb geodesic hinge 取的 Top-K 样本数（0 表示全部平均）。')
     p.add_argument('--w_latent_consistency', type=float, default=0.0,
                    help='Latent consistency loss 权重，用于约束 free-run / lookahead 隐状态落在预训练流形内。')
     p.add_argument('--cond_yaw_min_speed', type=float, default=0.1,
@@ -3444,24 +3436,19 @@ def train_entry():
     cond_yaw_min_speed = max(0.0, float(_arg('cond_yaw_min_speed', 0.1)))
     w_fk_pos = float(_arg('w_fk_pos', 0.0) or 0.0)
     w_rot_local = float(_arg('w_rot_local', 0.0) or 0.0)
-    w_limb_geo = float(_arg('w_limb_geo', 0.0) or 0.0)
-    limb_geo_margin_deg = float(_arg('limb_geo_margin_deg', 5.0) or 5.0)
-    limb_geo_topk = int(_arg('limb_geo_topk', 16) or 16)
+
     loss_fn = MotionJointLoss(
         output_layout=ds_train.output_layout,
         fps=fps_data,
         rot6d_spec=getattr(ds_train, 'rot6d_spec', {}),
-        w_rot_geo=_arg('w_rot_geo', 0.01),
         w_rot_delta=w_rot_delta,
+        w_rot_delta_root=_arg('w_rot_delta_root', 0.0),
         w_rot_ortho=_arg('w_rot_ortho', 0.001),
         w_cond_yaw=w_cond_yaw,
         cond_yaw_min_speed=cond_yaw_min_speed,
         meta=None,
         w_fk_pos=w_fk_pos,
         w_rot_local=w_rot_local,
-        w_limb_geo=w_limb_geo,
-        limb_geo_margin_deg=limb_geo_margin_deg,
-        limb_geo_topk=limb_geo_topk,
     )
     if getattr(ds_train, 'bone_names', None):
         try:
@@ -3480,13 +3467,12 @@ def train_entry():
 
     print(
         f"[LossWeights] "
-        f"w_rot_geo={loss_fn.w_rot_geo} "
         f"w_rot_delta={loss_fn.w_rot_delta} "
+        f"w_rot_delta_root={loss_fn.w_rot_delta_root} "
         f"w_rot_ortho={loss_fn.w_rot_ortho} "
         f"w_cond_yaw={loss_fn.w_cond_yaw} "
         f"w_fk_pos={loss_fn.w_fk_pos} "
-        f"w_rot_local={loss_fn.w_rot_local} "
-        f"w_limb_geo={loss_fn.w_limb_geo}"
+        f"w_rot_local={loss_fn.w_rot_local}"
     )
 
     loss_fn.dt_traj = 1.0 / max(1e-6, fps_data)
