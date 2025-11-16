@@ -22,8 +22,10 @@ from .io_utils import (
     direction_yaw_from_array as _direction_yaw_from_array,
     velocity_yaw_from_array as _velocity_yaw_from_array,
     speed_from_X_layout as _speed_from_X_layout,
+    npz_scalar_to_str,
 )
 from .layout_utils import normalize_layout as _normalize_layout
+from .normalizers import VectorTanhNormalizer
 from torch.utils.data._utils.collate import default_collate as _default_collate
 
 
@@ -137,16 +139,6 @@ class ClipData:
     bone_rot6d: Optional[np.ndarray] = None
 
 
-def _npz_scalar_to_str(v) -> Optional[str]:
-    if v is None:
-        return None
-    if hasattr(v, "item"):
-        v = v.item()
-    if isinstance(v, (bytes, bytearray)):
-        v = v.decode("utf-8", "ignore")
-    return v if isinstance(v, str) and v else None
-
-
 def _infer_forward_axis_from_clip(
     clip: Mapping[str, Any],
     *,
@@ -244,31 +236,6 @@ def _infer_forward_axis_from_clip(
     if best_axis is not None:
         return best_axis, best_score, best_offset
     return None
-
-
-class VectorTanhNormalizer:
-    def __init__(self, scales: np.ndarray, mu: Optional[np.ndarray]=None, std: Optional[np.ndarray]=None):
-        scales = np.asarray(scales, dtype=np.float32)
-        if scales.ndim != 1:
-            raise ValueError(f"scales must be 1-D, got {scales.shape}")
-        self.scales = np.clip(scales, 1e-6, None)
-        if mu is not None:
-            mu = np.asarray(mu, dtype=np.float32)
-            std = np.asarray(std, dtype=np.float32)
-            if mu.shape != self.scales.shape or std.shape != self.scales.shape:
-                raise ValueError("mu/std shape mismatch with scales.")
-            self.mu = mu
-            self.std = np.clip(std, 1e-6, None)
-        else:
-            self.mu, self.std = None, None
-
-    def transform(self, arr: np.ndarray) -> np.ndarray:
-        if arr.size == 0:
-            return arr.astype(np.float32, copy=False)
-        X = np.tanh(arr / self.scales)
-        if self.mu is not None and self.std is not None:
-            X = (X - self.mu) / self.std
-        return X.astype(np.float32, copy=False)
 
 
 class MotionEventDataset(Dataset):
@@ -439,7 +406,8 @@ class MotionEventDataset(Dataset):
                         bone_rot6d_raw = np.concatenate([bone_rot6d_raw, pad], axis=0)
                     if bone_rot6d_raw.shape[0] > T:
                         bone_rot6d_raw = bone_rot6d_raw[:T]
-                src_json = _npz_scalar_to_str(clip.get('source_json'))
+                src = clip.get('source_json')
+                src_json = npz_scalar_to_str(src) if src is not None else None
                 if src_json:
                     if not os.path.isabs(src_json):
                         src_json = os.path.join(os.path.dirname(p), src_json)

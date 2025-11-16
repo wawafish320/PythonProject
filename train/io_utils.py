@@ -56,21 +56,22 @@ def load_soft_contacts_from_json(json_path: str) -> np.ndarray:
     return np.asarray(sc, dtype=np.float32)
 
 
+def npz_scalar_to_str(v) -> str:
+    """Unwrap numpy scalar/bytes to Python str for paths stored in npz."""
+    if hasattr(v, "item"):
+        v = v.item()
+    if isinstance(v, (bytes, bytearray)):
+        v = v.decode("utf-8", "ignore")
+    if not isinstance(v, str):
+        raise ValueError(f"Expected string, got {type(v)}: {repr(v)}")
+    return v
+
+
 # ============================================
 # 角度与方向处理
 # ============================================
 
-def wrap_to_pi_np(x: np.ndarray) -> np.ndarray:
-    """
-    将角度包裹到 [-π, π) 范围
-
-    Args:
-        x: 角度数组 (弧度)
-
-    Returns:
-        包裹后的角度数组
-    """
-    return (x + np.pi) % (2.0 * np.pi) - np.pi
+from train.geometry import wrap_to_pi_np  # noqa: E402
 
 
 def direction_yaw_from_array(arr: Optional[np.ndarray]) -> Optional[np.ndarray]:

@@ -28,27 +28,18 @@ from collections import defaultdict
 import numpy as np
 import torch
 import torch.nn as nn
-from .nn_utils import build_mlp
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 # ---- exact imports from your project (no fallback) ----
 from train.geometry import reproject_rot6d, rot6d_to_matrix, angvel_vec_from_R_seq  # noqa: E402
 from train.utils import build_mlp  # noqa: E402
+from train.models_shared import MotionEncoder, PeriodHead  # noqa: E402
+from train.normalizers import VectorTanhNormalizer  # noqa: E402
+from train.io_utils import npz_scalar_to_str  # noqa: E402
 
 
 # ----------------------------- small utils -----------------------------
-
-def _npz_scalar_to_str(v) -> str:
-    """Unwrap numpy scalar/bytes to Python str for paths stored in npz."""
-    if hasattr(v, "item"):
-        v = v.item()
-    if isinstance(v, (bytes, bytearray)):
-        v = v.decode("utf-8", "ignore")
-    if not isinstance(v, str):
-        raise RuntimeError(f"Expected string path, got {type(v)}: {repr(v)}")
-    return v
-
 def _load_soft_contacts_from_json(json_path: str) -> np.ndarray:
     """Read soft-contact scores from JSON: Frames[*].FootEvidence.(L|R).soft_contact_score"""
     if not os.path.exists(json_path):
@@ -183,45 +174,6 @@ def _make_angnorm_from_spec(spec: dict, J_times_3: int, require_zscore: bool):
     obj._fitted = True
     return obj
 
-# ---- Generic tanh normalizer for vector features -----
-class VectorTanhNormalizer:
-    def __init__(self, scales: np.ndarray, mu: Optional[np.ndarray]=None, std: Optional[np.ndarray]=None):
-        if scales is None:
-            raise RuntimeError("VectorTanhNormalizer requires scales array.")
-        scales = np.asarray(scales, dtype=np.float32)
-        if scales.ndim != 1:
-            raise RuntimeError(f"VectorTanhNormalizer scales must be 1-D, got {scales.shape}.")
-        self.scales = np.clip(scales, 1e-6, None)
-        if mu is not None:
-            mu = np.asarray(mu, dtype=np.float32)
-            if mu.shape != self.scales.shape:
-                raise RuntimeError(f"mu shape {mu.shape} mismatch scales {self.scales.shape}.")
-            std = np.asarray(std, dtype=np.float32)
-            if std.shape != self.scales.shape:
-                raise RuntimeError(f"std shape {std.shape} mismatch scales {self.scales.shape}.")
-            self.mu = mu
-            self.std = np.clip(std, 1e-6, None)
-        else:
-            self.mu = None
-            self.std = None
-
-    def transform(self, arr: np.ndarray) -> np.ndarray:
-        if arr.size == 0:
-            return arr.astype(np.float32, copy=False)
-        X = np.tanh(arr / self.scales)
-        if self.mu is not None and self.std is not None:
-            X = (X - self.mu) / self.std
-        return X.astype(np.float32, copy=False)
-
-    def inverse_transform(self, arr: np.ndarray) -> np.ndarray:
-        if arr.size == 0:
-            return arr.astype(np.float32, copy=False)
-        Y = arr.astype(np.float32, copy=False)
-        if self.mu is not None and self.std is not None:
-            Y = Y * self.std + self.mu
-        Y = np.clip(Y, -0.999999, 0.999999)
-        return np.arctanh(Y) * self.scales
-
 # ===== Minimal self-build (NO JSON read at train time): build ANGVEL-only norm spec in memory =====
 def _build_angvel_norm_spec(in_glob: str, save_path: str, pose_hist_len: int = 3) -> dict:
     """
@@ -253,7 +205,7 @@ def _build_angvel_norm_spec(in_glob: str, save_path: str, pose_hist_len: int = 3
             if "y_out_features" not in z:
                 raise RuntimeError(f"{os.path.basename(p)} missing y_out_features")
             Y = np.asarray(z["y_out_features"], dtype=np.float32)
-            json_path = _npz_scalar_to_str(z["source_json"]) if "source_json" in z else None
+            json_path = npz_scalar_to_str(z["source_json"]) if "source_json" in z else None
             fps = _get_fps_from_npz_or_json(z, json_path)
         T = int(Y.shape[0])
         if T < 2:
@@ -507,7 +459,7 @@ class YAngvelContactsDataset(Dataset):
                     if "source_json" not in z:
                         self._skipped.append((os.path.basename(p), -1))
                         continue
-                    json_path = _npz_scalar_to_str(z["source_json"])
+                    json_path = npz_scalar_to_str(z["source_json"])
 
                     # 为了严格对齐，使用 npz 和 json 的最短长度
                     if json_path not in self._soft_contact_cache:
@@ -546,7 +498,7 @@ class YAngvelContactsDataset(Dataset):
 
             if "source_json" not in z:
                 raise RuntimeError(f"{os.path.basename(p)} missing source_json")
-            json_path = _npz_scalar_to_str(z["source_json"])
+            json_path = npz_scalar_to_str(z["source_json"])
 
             # 统一从 npz/json 获取 fps（影响角速度单位，非窗口长度判定）
             fps = float(_get_fps_from_npz_or_json(z, json_path))
@@ -664,44 +616,6 @@ def _split_sample(sample):
 
 
 # ---------------------------- Model ----------------------------
-
-# 逐帧共享编码器
-class MotionEncoder(nn.Module):
-    """
-    无显式记忆的逐帧编码器：
-      - 通过共享 MLP 对每帧输入进行编码，输出 [B,T,H]
-      - 可选 summary（默认取全局平均）保持兼容旧探针
-    """
-    def __init__(self, input_dim, hidden_dim=256, z_dim=0, num_layers=3, dropout=0.1, bidirectional: bool=False):
-        super().__init__()
-        self.hidden_dim = int(hidden_dim)
-        self.z_dim = int(z_dim)
-
-        self.mlp = build_mlp(
-            int(input_dim),
-            self.hidden_dim,
-            num_layers=max(1, int(num_layers)),
-            activation=nn.GELU,
-            dropout=float(dropout),
-        )
-        self.summary_head = nn.Linear(self.hidden_dim, self.z_dim) if self.z_dim > 0 else None
-
-    def forward(self, x: torch.Tensor, return_summary: Optional[bool]=None):
-        if x.dim() == 2:
-            x = x.unsqueeze(1)
-        B, T, D = x.shape
-        flat = x.reshape(B * T, D)
-        enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-
-        need_summary = return_summary if return_summary is not None else (self.summary_head is not None)
-        if not need_summary:
-            return enc
-
-        summary_vec = enc.mean(dim=1)
-        if self.summary_head is not None:
-            summary_vec = self.summary_head(summary_vec)
-        return summary_vec, enc
-
 class StepHead(nn.Module):
     def __init__(self, hidden_dim, K, bidirectional=False):
         super().__init__()

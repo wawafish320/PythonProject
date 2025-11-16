@@ -46,9 +46,7 @@ from .dataset import (
     MotionAugmentation,
     MotionEventDataset,
     ClipData,
-    VectorTanhNormalizer,
     make_fixedlen_collate,
-    _npz_scalar_to_str,
     _infer_forward_axis_from_clip,
 )
 from .diagnostics import _maybe_optimize_dataset_index, _norm_debug_once, _parse_stage_schedule
@@ -57,70 +55,14 @@ from .io_utils import (
     direction_yaw_from_array as _direction_yaw_from_array,
     velocity_yaw_from_array as _velocity_yaw_from_array,
     speed_from_X_layout as _speed_from_X_layout,
+    npz_scalar_to_str as _npz_scalar_to_str,
 )
 from .utils import build_mlp, safe_set_slice
+from .models_shared import MotionEncoder, PeriodHead
+from .normalizers import VectorTanhNormalizerTorch
 
 
-# ===== MPL Expert (embedded) =====
 import torch.nn as nn
-class MotionEncoder(nn.Module):
-    """
-    Stateless per-frame encoder that mirrors the Plan-A pretraining MLP.
-    """
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int = 256,
-        z_dim: int = 0,
-        num_layers: int = 3,
-        dropout: float = 0.1,
-        bidirectional: bool = False,
-    ):
-        super().__init__()
-        self.hidden_dim = int(hidden_dim)
-        self.z_dim = int(z_dim)
-
-        self.mlp = build_mlp(
-            input_dim,
-            self.hidden_dim,
-            num_layers=max(1, int(num_layers)),
-            activation=nn.GELU,
-            dropout=float(dropout),
-        )
-        self.summary_head = nn.Linear(self.hidden_dim, self.z_dim) if self.z_dim > 0 else None
-
-    def forward(self, x: torch.Tensor, return_summary: Optional[bool] = None):
-        """
-        x: [B,T,D] or [T,D]; returns per-frame hidden states [B,T,H].
-        When return_summary=True (or summary_head exists) also returns a pooled summary.
-        """
-        if x.dim() == 2:
-            x = x.unsqueeze(1)
-        B, T, D = x.shape
-        flat = x.reshape(B * T, D)
-        enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-
-        need_summary = return_summary if return_summary is not None else (self.summary_head is not None)
-        if not need_summary:
-            return enc
-
-        summary_vec = enc.mean(dim=1)
-        if self.summary_head is not None:
-            summary_vec = self.summary_head(summary_vec)
-        return summary_vec, enc
-
-
-class PeriodHead(nn.Module):
-    """
-    Lightweight linear head used during pretraining to predict soft period hints.
-    """
-    def __init__(self, hidden_dim: int, out_dim: int, bidirectional: bool = False):
-        super().__init__()
-        self.fc = nn.Linear(int(hidden_dim), int(out_dim))
-
-    def forward(self, h: torch.Tensor) -> torch.Tensor:
-        return self.fc(h)
-# ===== /MPL Expert =====
 
 
 def validate_and_fix_model_(m: nn.Module, Dx: int | None = None, Dc: int | None = None, *, reinit_on_nonfinite: bool = True) -> None:
@@ -3749,13 +3691,14 @@ class Trainer:
     def _pose_hist_transform_vec(raw_flat: torch.Tensor, scales: Optional[torch.Tensor], mu: Optional[torch.Tensor], std: Optional[torch.Tensor]) -> torch.Tensor:
         """
         Apply VectorTanhNormalizer-style transform on flattened pose-history raw values.
+        Reuses shared torch normalizer to keep behavior aligned with pretrain.
         """
         if scales is None or raw_flat.numel() == 0:
             return raw_flat
-        z = torch.tanh(raw_flat / scales.clamp_min(1e-6))
-        if mu is not None and std is not None:
-            z = (z - mu) / std.clamp_min(1e-6)
-        return z
+        norm = VectorTanhNormalizerTorch(scales, mu, std)
+        # ensure buffers on same device/dtype as input
+        norm = norm.to(device=raw_flat.device, dtype=raw_flat.dtype)
+        return norm(raw_flat)
 
     @staticmethod
     def _pose_hist_inverse_vec(norm_flat: torch.Tensor, scales: Optional[torch.Tensor], mu: Optional[torch.Tensor], std: Optional[torch.Tensor]) -> torch.Tensor:
@@ -3764,16 +3707,9 @@ class Trainer:
         """
         if scales is None or norm_flat.numel() == 0:
             return norm_flat
-        z = norm_flat
-        if mu is not None and std is not None:
-            z = z * std.clamp_min(1e-6) + mu
-        eps = 1.0 - 1e-6
-        z = z.clamp(min=-eps, max=eps)
-        if hasattr(torch, "atanh"):
-            raw = torch.atanh(z) * scales
-        else:
-            raw = 0.5 * (torch.log1p(z) - torch.log1p(-z)) * scales
-        return raw
+        norm = VectorTanhNormalizerTorch(scales, mu, std)
+        norm = norm.to(device=norm_flat.device, dtype=norm_flat.dtype)
+        return norm.inverse(norm_flat)
 
     def _infer_root_yaw_from_rot6d(self, y_denorm: "torch.Tensor"):
         import torch
