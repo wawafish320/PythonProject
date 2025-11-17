@@ -24,7 +24,7 @@
 - **自适应优化**：支持贝叶斯超参优化和自适应损失权重
 - **多任务学习**：同时优化位置、旋转、速度等多个目标
 
-> **2025-11-16 更新**：原先用于“前瞻”约束的 lookahead loss 已从训练脚本中移除，阶段调度只会驱动 freerun 及相关超参。本文中仍出现的 `lookahead_*` 字段仅作为历史记录，可忽略或替换为 freerun 设置。
+> **2025-11-16 更新**：原先用于“前瞻”约束的 lookahead loss 已彻底移除，阶段调度仅围绕 freerun 及相关超参展开。下文的示例和配置都已改为 `freerun_*` 命名。
 
 ### 核心模型架构
 
@@ -182,8 +182,6 @@ python train_configurator.py \
       "range": [1, 9],
       "label": "stage1_teacher",
       "trainer": {
-        "lookahead_steps": 2,
-        "lookahead_weight": 0.063,
         "freerun_weight": 0.0,
         "freerun_horizon": 8,
         "w_latent_consistency": 0.03
@@ -197,8 +195,6 @@ python train_configurator.py \
       "range": [10, 21],
       "label": "stage2_mixed",
       "trainer": {
-        "lookahead_steps": 6,
-        "lookahead_weight": 0.21,
         "freerun_weight": 0.175,
         "freerun_horizon": 14,
         "w_latent_consistency": 0.12
@@ -212,8 +208,6 @@ python train_configurator.py \
       "range": [22, 30],
       "label": "stage3_freerun",
       "trainer": {
-        "lookahead_steps": 10,
-        "lookahead_weight": 0.315,
         "freerun_weight": 0.325,
         "freerun_horizon": 18,
         "w_latent_consistency": 0.288
@@ -256,18 +250,18 @@ Teacher Forcing是一种训练策略，在训练初期使用真实数据作为�
 
 **Stage 1: Teacher Forcing (Epoch 1-9)**
 - 主要使用真实数据监督
-- 短期预测 (lookahead_steps=2)
-- 不使用自由运行损失
+- 仅保留极短 horizon（8 帧）用于 freerun 状态同步
+- `freerun_weight=0`，即不计入自由运行损失
 
 **Stage 2: Mixed (Epoch 10-21)**
 - 混合使用真实数据和模型预测
-- 中期预测 (lookahead_steps=6)
-- 引入自由运行损失 (freerun_weight=0.175)
+- 开始启用 freerun 损失（horizon≈14 帧，对应自由滚动 ~0.23 秒）
+- `freerun_weight=0.175`
 
 **Stage 3: Free Run (Epoch 22-30)**
 - 主要使用模型自身预测
-- 长期预测 (lookahead_steps=10)
-- 增加自由运行损失 (freerun_weight=0.325)
+- 进一步拉长 freerun horizon（≈18 帧）并提高权重
+- `freerun_weight=0.325`
 
 ---
 
@@ -336,7 +330,6 @@ period_signal = extract_soft_period(soft_contacts)  # 从接触模式中推断
        w_rot_delta * loss_rot_delta +     # 增量平滑
        w_cond_yaw * loss_cond_yaw +       # 朝向约束
        w_latent_consistency * loss_latent_consistency +  # 编码器一致性
-       lookahead_weight * loss_lookahead +
        freerun_weight * loss_freerun
    )
    # 问题：过多的foot相关损失会压制其他重要损失的学习
@@ -362,7 +355,6 @@ loss = (
     w_rot_delta * loss_rot_delta +        # 平滑性
     w_cond_yaw * loss_cond_yaw +          # 条件朝向
     w_latent_consistency * loss_latent_consistency +  # 潜在一致性
-    lookahead_weight * loss_lookahead +   # 长期预测
     freerun_weight * loss_freerun         # 自由运行稳定性
 )
 
@@ -446,8 +438,7 @@ total_loss = (
 
     # === 训练策略损失 ===
     w_latent * loss_latent_consistency + # 编码器一致性
-    w_freerun * loss_freerun +          # 自由运行损失
-    w_lookahead * loss_lookahead        # 前瞻预测损失
+    w_freerun * loss_freerun            # 自由运行损失
 )
 ```
 
@@ -458,7 +449,7 @@ total_loss = (
 2. **物理约束**：FK位置一致性 (fk_pos)、朝向控制 (cond_yaw)
 3. **平滑性约束**：旋转增量 (rot_delta)、四肢平滑 (limb_geo)
 4. **一致性约束**：编码器特征 (latent_consistency)、注意力 (attn_reg)
-5. **策略约束**：自由运行稳定性 (freerun)、长期预测 (lookahead)
+5. **策略约束**：自由运行稳定性 (freerun)
 
 **每个损失项都有明确的职责**，移除任何一项都会导致某方面的性能下降。
 
@@ -470,7 +461,7 @@ total_loss = (
 |------|--------|------|----------|
 | **core** | rot_geo, rot_delta, rot_ortho<br>cond_yaw, fk_pos, rot_local | 直接决定运动质量 | 0.01 ~ 0.2 |
 | **aux** | attn, rot_delta_root<br>rot_log, limb_geo | 辅助优化、正则化 | 0.001 ~ 0.05 |
-| **long** | latent_consistency<br>freerun, lookahead | 长期稳定性、泛化性 | 0.01 ~ 0.3 |
+| **long** | latent_consistency<br>freerun | 长期稳定性、泛化性 | 0.01 ~ 0.3 |
 
 **这种分组的意义**：
 - **Core损失**：调优的重点，直接影响输出质量
@@ -498,7 +489,6 @@ w_rot_ortho = 0.001    # 正交性约束
 # 第二优先级：Long组 (占总权重的20-30%)
 w_latent_consistency = 0.03  # 编码器一致性
 freerun_weight = 0.0 → 0.325  # 逐步增加
-lookahead_weight = 0.063 → 0.315  # 逐步增加
 
 # 第三优先级：Aux组 (占总权重的<10%)
 w_attn_reg = 0.01      # 注意力正则
@@ -524,7 +514,7 @@ core : aux : long ≈ 65% : 5% : 30%
 **如果比例失衡**：
 - Core组占比过高（>80%）→ 增加Long组权重，提高泛化性
 - Aux组占比过高（>15%）→ 减小Aux权重，避免过拟合正则化
-- Long组占比过低（<15%）→ 增加freerun/lookahead权重
+- Long组占比过低（<15%）→ 增加freerun权重
 
 ---
 
@@ -538,19 +528,19 @@ core : aux : long ≈ 65% : 5% : 30%
 
 #### 示例阶段1：训练初期（Epoch 1-9, Teacher Forcing主导）
 
-- Trainer：`lookahead_steps=2`、`lookahead_weight=0.063`、`freerun_weight=0`、`w_latent_consistency=0.03`，且 `freerun_horizon` 仅 8 帧。
+- Trainer：`freerun_weight=0`、`freerun_horizon=8`、`w_latent_consistency=0.03`。
 - Loss 组：`core` 以 `w_fk_pos=0.07`、`w_rot_local=0.07` 为主，`aux` 中 `w_limb_geo` 关闭；全局 `w_cond_yaw=0.1` 不变。
-- 目的：让模型通过高 teacher forcing 比例稳定学习基本姿态，不引入自由运行损失。
+- 目的：让模型通过高 teacher forcing 比例稳定学习基本姿态，仅做最小化的 freerun 状态同步。
 
 #### 示例阶段2：训练中期（Epoch 10-21, Mixed模式）
 
-- Trainer：`lookahead_steps=6`、`lookahead_weight=0.21`、`freerun_weight=0.175`、`freerun_horizon=14`，`w_latent_consistency` 提升到 0.12。
+- Trainer：`freerun_weight=0.175`、`freerun_horizon=14`，`w_latent_consistency` 提升到 0.12。
 - Loss 组：`core` 动态放大至 `w_fk_pos=0.2275`、`w_rot_local=0.2275`，`aux` 打开 `w_limb_geo=0.05`，让四肢姿态更平滑。
-- 目的：开始在 teacher/free 混合模式下训练，逐渐降低 teacher forcing（`tf_max` 变为 0.75），同时提升长期预测损失权重。
+- 目的：在 teacher/free 混合模式下训练，逐渐降低 teacher forcing（`tf_max` 变为 0.75），同时让 freerun 损失开始发挥作用。
 
 #### 示例阶段3：训练后期（Epoch 22-30, Free Run主导）
 
-- Trainer：`lookahead_steps=10`、`lookahead_weight=0.315`、`freerun_weight=0.325`、`freerun_horizon=18`，并将 `w_latent_consistency` 增加到 0.288。
+- Trainer：`freerun_weight=0.325`、`freerun_horizon=18`，并将 `w_latent_consistency` 增加到 0.288。
 - Loss 组：`core` 提升至 `w_fk_pos=0.4025`、`w_rot_local=0.4025`，`aux` 中 `w_limb_geo=0.08` 维持稳定正则；teacher forcing 最终衰减到 0。
 - 目的：完全聚焦自由运行表现，确保长序列稳定性成为主要训练信号。
 
@@ -597,7 +587,7 @@ core : aux : long ≈ 65% : 5% : 30%
 5. **快速迭代实验**：使用较少阶段（2-3个），加快调试速度
 
 **核心不变的原则**：
-- ✅ **渐进式过渡**：freerun和lookahead权重应该单调递增
+- ✅ **渐进式过渡**：freerun 权重应该单调递增
 - ✅ **平滑变化**：相邻阶段的权重变化不宜过大（建议<0.15）
 - ✅ **后期强化freerun**：最终阶段的freerun权重应该>0.3
 - ❌ **避免突变**：不要在某个阶段突然大幅调整权重
@@ -622,14 +612,13 @@ core : aux : long ≈ 65% : 5% : 30%
 
 - [ ] **软周期**：是否从软接触中提取周期信息，而非显式标注？
 - [ ] **Freerun权重**：后期freerun权重是否达到0.3以上？
-- [ ] **Lookahead策略**：是否按阶段逐步增加lookahead步数（2→6→10）？
 - [ ] **Teacher Forcing衰减**：是否有明确的衰减计划（1.0→0.5→0.0）？
 - [ ] **监控指标**：是否同时监控Teacher和Free-Run模式？两者差距是否<2x？
 
 #### 训练策略检查
 
 - [ ] **分阶段训练**：是否定义了明确的训练阶段（渐进式从Teacher到FreeRun）？
-- [ ] **权重渐进**：freerun/lookahead权重是否单调递增、平滑变化？
+- [ ] **权重渐进**：freerun 权重是否单调递增、平滑变化？
 - [ ] **阶段合理性**：阶段数量是否与数据集规模和任务复杂度匹配？
 - [ ] **数据多样性**：训练数据是否包含多种运动模式（走、跑、转向等）？
 - [ ] **超参优化**：是否使用了贝叶斯优化或自适应调整（可选但推荐）？
@@ -652,8 +641,7 @@ core : aux : long ≈ 65% : 5% : 30%
 ```json
 {
   "freerun_weight": 0.05,     // ❌ 太低！应该>0.3
-  "lookahead_weight": 0.02,   // ❌ 太低！应该>0.2
-  "lookahead_steps": 2        // ❌ 全程只有2步，无法学习长期依赖
+  "freerun_horizon": 6        // ❌ 全程只有短窗口，无法学习长期依赖
 }
 // 问题：模型只学会拟合训练集，泛化能力差
 ```
@@ -677,13 +665,12 @@ core : aux : long ≈ 65% : 5% : 30%
 ✅ 零显式foot约束，完全依赖动力学学习
 ✅ 渐进式多阶段训练（当前采用3阶段，可根据需求调整）
 ✅ Freerun权重从0.0逐步增加到0.325（单调递增）
-✅ Lookahead步数从2步增加到10步（逐步提升）
 ✅ 重点监控Free-Run vs Teacher的差距
 ✅ Teacher Forcing从1.0衰减到0.0（平滑衰减）
 ```
 
 **如果遇到问题**：
-1. **Teacher模式好，Free-Run差**：增加freerun_weight和lookahead_weight
+1. **Teacher模式好，Free-Run差**：增加freerun_weight（必要时同时拉长 freerun_horizon）
 2. **整体损失不降**：检查Core组权重平衡，尝试贝叶斯优化
 3. **运动不平滑**：检查`w_rot_delta`是否足够高（推荐1.0）
 4. **脚滑动严重**：❌ 不要添加foot约束！→ ✅ 增加训练时间，检查soft_contacts标注质量
@@ -809,7 +796,7 @@ python train_configurator.py \
 优化的参数包括：
 - 学习率 (lr)
 - 损失权重 (w_fk_pos, w_rot_local等)
-- 训练策略 (lookahead_weight, freerun_weight)
+- 训练策略 (freerun_weight、freerun_horizon)
 - Teacher forcing参数
 
 优化历史保存在 `train/bayes_history.json`
@@ -828,7 +815,7 @@ python train_configurator.py \
 ```
 
 调整逻辑：
-- `YawAbsDeg` 偏高 → 自动提高 `lookahead_weight`、`freerun_horizon`
+- `YawAbsDeg` 偏高 → 自动提高 `freerun_weight`、`freerun_horizon`
 - `RootVelMAE` 偏高 → 增加 `freerun_weight`
 - `InputRotGeoDeg` 偏高 → 升高 `w_latent_consistency`、`w_fk_pos`、`w_rot_local`
 
@@ -863,18 +850,16 @@ Trainer 会在内部调用 `build_adaptive_loss` 并把统计写入 `adaptive_lo
       "range": [1, 10],
       "label": "warmup",
       "trainer": {
-        "lookahead_steps": 1,
-        "lookahead_weight": 0.05,
-        "freerun_weight": 0.0
+        "freerun_weight": 0.0,
+        "freerun_horizon": 8
       }
     },
     {
       "range": [11, 30],
       "label": "main_training",
       "trainer": {
-        "lookahead_steps": 8,
-        "lookahead_weight": 0.25,
-        "freerun_weight": 0.3
+        "freerun_weight": 0.3,
+        "freerun_horizon": 20
       }
     }
   ]

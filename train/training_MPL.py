@@ -1000,7 +1000,7 @@ class Trainer:
         }
 
     def _apply_stage_schedule(self, epoch: int):
-        schedule = getattr(self, 'freerun_stage_schedule', None) or getattr(self, 'lookahead_stage_schedule', None)
+        schedule = getattr(self, 'freerun_stage_schedule', None)
         overrides: Dict[str, Any] = {}
         if not schedule:
             return overrides
@@ -1093,10 +1093,7 @@ class Trainer:
 
     # === Adaptive metric-driven tuning helpers ===
     def _get_current_stage(self, config: Mapping[str, Any]):
-        schedule = None
-        if isinstance(config, Mapping):
-            schedule = config.get("freerun_stage_schedule") or config.get("lookahead_stage_schedule")
-        schedule = schedule or []
+        schedule = config.get("freerun_stage_schedule", []) if isinstance(config, Mapping) else []
         cur_ep = int(getattr(self, 'cur_epoch', -1))
         for stage in schedule:
             rng = stage.get("range")
@@ -1143,7 +1140,7 @@ class Trainer:
             print(f"[AdaptiveTuning][WARN] failed to save adjusted config: {exc}")
 
     def _activate_stage(self, idx: int, epoch: int) -> None:
-        schedule = getattr(self, 'freerun_stage_schedule', None) or getattr(self, 'lookahead_stage_schedule', None)
+        schedule = getattr(self, 'freerun_stage_schedule', None)
         if not schedule:
             return
         idx = max(0, min(idx, len(schedule) - 1))
@@ -1154,7 +1151,7 @@ class Trainer:
         stage.pop('_goal_state', None)
 
     def _advance_stage(self, epoch: int) -> None:
-        schedule = getattr(self, 'freerun_stage_schedule', None) or getattr(self, 'lookahead_stage_schedule', None)
+        schedule = getattr(self, 'freerun_stage_schedule', None)
         if not schedule:
             self._stage_pending_advance = False
             return
@@ -1166,7 +1163,7 @@ class Trainer:
         self._stage_pending_advance = False
 
     def _current_stage(self) -> Optional[Dict[str, Any]]:
-        schedule = getattr(self, 'freerun_stage_schedule', None) or getattr(self, 'lookahead_stage_schedule', None)
+        schedule = getattr(self, 'freerun_stage_schedule', None)
         idx = getattr(self, '_stage_active_idx', None)
         if schedule and idx is not None and 0 <= idx < len(schedule):
             return schedule[idx]
@@ -3219,8 +3216,18 @@ def train_entry():
                    help='>0 时，在 freerun 评估中打印前 N 个自回归步的 yaw/速度诊断')
     p.add_argument('--history_debug_steps', type=int, default=0,
                    help='>1 时，在训练批次中额外运行 train_free rollout 诊断历史漂移步数')
-    p.add_argument('--freerun_stage_schedule', '--lookahead_stage_schedule', type=str, default=None,
-                   help='分阶段调度（freerun/tf/损失等）的 JSON/字符串配置，旧名 lookahead_stage_schedule 仍兼容。')
+    p.add_argument('--history_adaptive_export_frames', type=int, default=0,
+                   help='>0 时启用 adaptive history 模块，并指定推理期固定历史帧数')
+    p.add_argument('--history_adaptive_max_frames', type=int, default=None,
+                   help='训练期允许的最大历史帧数（默认使用 norm_template 中的 pose_hist_len）')
+    p.add_argument('--history_adaptive_hidden', type=int, default=256,
+                   help='adaptive history 内部隐藏维度')
+    p.add_argument('--history_adaptive_heads', type=int, default=2,
+                   help='adaptive history 注意力头数')
+    p.add_argument('--history_adaptive_train_variable', action='store_true',
+                   help='训练时随机截断历史长度，提升部署鲁棒性')
+    p.add_argument('--freerun_stage_schedule', type=str, default=None,
+                   help='分阶段调度（freerun/tf/损失等）的 JSON/字符串配置。')
     p.add_argument('--adaptive_loss_method', type=str, default='none', choices=['none', 'gradnorm', 'uncertainty', 'dwa'],
                    help='在线损失权重策略（none/gradnorm/uncertainty/dwa）。')
     p.add_argument('--adaptive_loss_alpha', type=float, default=1.5,
@@ -3380,6 +3387,18 @@ def train_entry():
     K = int(_arg('context_len', 16))
     print(f'[Export][Dims] Dx={Dx}, Dy={Dy}, Dc={Dc} | L={L}, H={H}, K={K}')
 
+    pose_hist_dim_raw = int(getattr(ds_train, 'pose_hist_dim', 0) or 0)
+    pose_hist_len_raw = int(getattr(ds_train, 'pose_hist_len', 0) or 0)
+    history_export_frames = int(_arg('history_adaptive_export_frames', 0) or 0)
+    history_frame_dim = (
+        pose_hist_dim_raw // pose_hist_len_raw
+        if pose_hist_len_raw > 0 and pose_hist_dim_raw % pose_hist_len_raw == 0
+        else 0
+    )
+    pose_hist_dim_model = pose_hist_dim_raw
+    if history_export_frames > 0 and history_frame_dim > 0:
+        pose_hist_dim_model = history_export_frames * history_frame_dim
+
     model = EventMotionModel(
         in_state_dim=ds_train.Dx,
         out_motion_dim=ds_train.Dy,
@@ -3392,8 +3411,34 @@ def train_entry():
         context_len=_arg('context_len', 16),
         contact_dim=getattr(ds_train, 'contact_dim', 0),
         angvel_dim=getattr(ds_train, 'angvel_dim', 0),
-        pose_hist_dim=getattr(ds_train, 'pose_hist_dim', 0),
+        pose_hist_dim=pose_hist_dim_model,
     ).to(device)
+    if history_export_frames > 0:
+        if pose_hist_dim_raw <= 0 or pose_hist_len_raw <= 0:
+            print("[AdaptiveHistory][WARN] pose history not available; adaptive history disabled.")
+        elif pose_hist_dim_raw % pose_hist_len_raw != 0:
+            print("[AdaptiveHistory][WARN] pose history dim不整除帧数，跳过 adaptive history。")
+        else:
+            max_frames = _arg('history_adaptive_max_frames', None)
+            if max_frames is None:
+                max_frames = pose_hist_len_raw
+            try:
+                from .history import AdaptiveHistoryModule
+            except ImportError:  # pragma: no cover
+                from history import AdaptiveHistoryModule
+
+            module_device = torch.device('cpu') if device.type == 'mps' else device
+            history_module = AdaptiveHistoryModule(
+                pose_dim=history_frame_dim,
+                hidden_dim=int(_arg('history_adaptive_hidden', H)),
+                num_history_frames=history_export_frames,
+                max_history_frames=int(max_frames),
+                cond_dim=0,
+                num_heads=int(_arg('history_adaptive_heads', 2) or 2),
+                train_variable_history=bool(_arg('history_adaptive_train_variable', False)),
+            ).to(module_device)
+            model.enable_adaptive_history(history_module, pose_hist_len=pose_hist_len_raw)
+
     validate_and_fix_model_(model, Dx, Dc)
     validate_and_fix_model_(model)
     encoder_path_cfg = _arg('encoder_path', '')
@@ -3575,10 +3620,7 @@ def train_entry():
     trainer.freerun_horizon_min = int(_arg('freerun_horizon_min', 6) or 6)
     trainer.freerun_debug_steps = int(_arg('freerun_debug_steps', 0) or 0)
     trainer.history_debug_steps = int(_arg('history_debug_steps', 0) or 0)
-    stage_spec = _arg('freerun_stage_schedule', None)
-    if stage_spec is None:
-        stage_spec = _arg('lookahead_stage_schedule', None)
-    trainer.freerun_stage_schedule = _parse_stage_schedule(stage_spec)
+    trainer.freerun_stage_schedule = _parse_stage_schedule(_arg('freerun_stage_schedule', None))
     trainer.w_latent_consistency = float(_arg('w_latent_consistency', 0.0) or 0.0)
     _init_h_arg = _arg('freerun_init_horizon', None)
     if _init_h_arg is None:

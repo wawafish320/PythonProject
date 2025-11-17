@@ -32,7 +32,27 @@
   "history_debug_steps": 8,
   "w_fk_pos": 0.07,
   "w_rot_local": 0.07,
-  "lookahead_stage_schedule": [
+  "dataset_profile": {
+    "n_clips": 5,
+    "total_frames": 375,
+    "avg_seq_len": 75,
+    "median_seq_len": 87,
+    "yaw_mean_deg": 21.960117048813697,
+    "yaw_std_deg": 19.507139252993206,
+    "speed_mean": 0.7564205562314779,
+    "speed_std": 0.12590480883983501,
+    "bone_angle_mean_deg": 49.91174236268155,
+    "bone_angle_std_deg": 52.584285248060155,
+    "complexity": 0.5349603356162784
+  },
+  "strategy_meta": {
+    "reference_targets": {
+      "yaw": 21.960117048813697,
+      "root": 0.7564205562314779,
+      "rot": 1.996469694507262
+    }
+  },
+  "freerun_stage_schedule": [
     {
       "range": [
         1,
@@ -40,8 +60,6 @@
       ],
       "label": "stage1_teacher",
       "trainer": {
-        "lookahead_steps": 2,
-        "lookahead_weight": 0.1103,
         "freerun_weight": 0.0,
         "freerun_horizon": 12,
         "w_latent_consistency": 0.0622
@@ -84,8 +102,6 @@
       ],
       "label": "stage2_mixed",
       "trainer": {
-        "lookahead_steps": 6,
-        "lookahead_weight": 0.21,
         "freerun_weight": 0.175,
         "freerun_horizon": 14,
         "w_latent_consistency": 0.12
@@ -127,8 +143,6 @@
       ],
       "label": "stage3_freerun",
       "trainer": {
-        "lookahead_steps": 10,
-        "lookahead_weight": 0.315,
         "freerun_weight": 0.325,
         "freerun_horizon": 18,
         "w_latent_consistency": 0.288
@@ -163,25 +177,5 @@
         }
       }
     }
-  ],
-  "dataset_profile": {
-    "n_clips": 5,
-    "total_frames": 375,
-    "avg_seq_len": 75,
-    "median_seq_len": 87,
-    "yaw_mean_deg": 21.960117048813697,
-    "yaw_std_deg": 19.507139252993206,
-    "speed_mean": 0.7564205562314779,
-    "speed_std": 0.12590480883983501,
-    "bone_angle_mean_deg": 49.91174236268155,
-    "bone_angle_std_deg": 52.584285248060155,
-    "complexity": 0.5349603356162784
-  },
-  "strategy_meta": {
-    "reference_targets": {
-      "yaw": 21.960117048813697,
-      "root": 0.7564205562314779,
-      "rot": 1.996469694507262
-    }
-  }
+  ]
 }

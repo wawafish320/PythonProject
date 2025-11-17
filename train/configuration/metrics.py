@@ -73,7 +73,7 @@ class StageMetricAdjuster:
         self.ref_values = ref_values or (config.get("strategy_meta") or {}).get("reference_targets") or {}
 
     def apply(self, val_metrics: Mapping[int, Metric]) -> Dict[str, float]:
-        schedule = self.config.get("freerun_stage_schedule") or self.config.get("lookahead_stage_schedule")
+        schedule = self.config.get("freerun_stage_schedule")
         if not schedule:
             raise ValueError("config missing freerun_stage_schedule")
         summary = summarize_stage_metrics(schedule, val_metrics)

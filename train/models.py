@@ -13,6 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .utils import build_mlp
+from .history import AdaptiveHistoryModule
 from .geometry import (
     rot6d_to_matrix,
     matrix_to_rot6d,
@@ -164,6 +165,10 @@ class EventMotionModel(nn.Module):
         self.angvel_dim = max(0, int(angvel_dim))
         self.pose_hist_dim = max(0, int(pose_hist_dim))
         self.encoder_input_dim = self.contact_dim + self.angvel_dim + self.pose_hist_dim
+        self.adaptive_history_module: Optional[AdaptiveHistoryModule] = None
+        self._adaptive_history_diag: Optional[dict[str, torch.Tensor | float]] = None
+        self.pose_hist_len: int = 0
+        self._adaptive_history_device: Optional[torch.device] = None
 
         input_dim = self.in_state_dim + self.cond_dim
         self.shared_encoder = build_mlp(
@@ -211,6 +216,15 @@ class EventMotionModel(nn.Module):
         except StopIteration:
             return torch.device('cpu')
 
+    def enable_adaptive_history(self, module: AdaptiveHistoryModule, *, pose_hist_len: Optional[int] = None) -> None:
+        self.adaptive_history_module = module
+        try:
+            self._adaptive_history_device = next(module.parameters()).device
+        except StopIteration:
+            self._adaptive_history_device = torch.device('cpu')
+        if pose_hist_len is not None:
+            self.pose_hist_len = int(pose_hist_len)
+
     def forward(
         self,
         state: torch.Tensor,
@@ -251,6 +265,19 @@ class EventMotionModel(nn.Module):
         if angvel is not None and angvel.size(-1) > 0:
             encoder_feats.append(angvel)
         if pose_history is not None and pose_history.size(-1) > 0:
+            pose_hist_for_module = pose_history
+            if pose_hist_for_module.dim() == 3 and pose_hist_for_module.size(1) == 1:
+                pose_hist_for_module = pose_hist_for_module[:, 0]
+            if self.adaptive_history_module is not None:
+                hist_device = self._adaptive_history_device or pose_hist_for_module.device
+                context_feat = state.mean(dim=1).to(hist_device)
+                pose_hist_for_module = pose_hist_for_module.to(hist_device)
+                pose_hist_flat, diag = self.adaptive_history_module(
+                    pose_hist_for_module,
+                    context=context_feat,
+                )
+                pose_history = pose_hist_flat.to(device).unsqueeze(1)
+                self._adaptive_history_diag = diag
             encoder_feats.append(pose_history)
         encoder_input = torch.cat(encoder_feats, dim=-1) if encoder_feats else None
 
