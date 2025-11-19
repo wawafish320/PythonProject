@@ -457,8 +457,6 @@ class MotionJointLoss(nn.Module):
         ignore_motion_groups: str = '',
         w_rot_delta: float = 1.0,
         w_rot_delta_root: float = 0.0,
-        w_cond_yaw: float = 0.0,
-        cond_yaw_min_speed: float = 0.0,
         meta: Optional[Dict[str, Any]] = None,
         w_fk_pos: float = 0.0,
         w_rot_local: float = 0.0,
@@ -469,8 +467,6 @@ class MotionJointLoss(nn.Module):
         self.w_rot_ortho = float(w_rot_ortho)
         self.w_rot_delta = float(w_rot_delta)
         self.w_rot_delta_root = float(w_rot_delta_root)
-        self.w_cond_yaw = float(w_cond_yaw)
-        self.cond_yaw_min_speed = float(cond_yaw_min_speed)
         self.w_fk_pos = float(w_fk_pos)
         self.w_rot_local = float(w_rot_local)
         self.angvel_eps = 1e-6
@@ -522,7 +518,6 @@ class MotionJointLoss(nn.Module):
         self._adaptive_loss_terms: Tuple[str, ...] = (
             "fk_pos",
             "rot_local",
-            "cond_yaw",
             "rot_delta",
             "rot_ortho",
         )
@@ -534,7 +529,6 @@ class MotionJointLoss(nn.Module):
             'rot_delta': 'core',
             'rot_delta_root': 'aux',
             'rot_ortho': 'core',
-            'cond_yaw': 'core',
             'fk_pos': 'core',
             'rot_local': 'core',
         }
@@ -1071,84 +1065,6 @@ class MotionJointLoss(nn.Module):
         view_shape = [1] * (ref_tensor.dim() - 1) + [width]
         return sliced.reshape(*view_shape)
 
-    def _denorm_yaw_slice(self, yaw_norm: torch.Tensor, sl: slice) -> Optional[torch.Tensor]:
-        mu = self._broadcast_param_slice(getattr(self, 'mu_y', None), sl, yaw_norm)
-        std = self._broadcast_param_slice(getattr(self, 'std_y', None), sl, yaw_norm)
-        if mu is None or std is None:
-            return None
-        return yaw_norm * std + mu
-
-    def _compute_cond_yaw_loss(self, pred_motion: torch.Tensor, batch: Optional[dict]) -> Optional[torch.Tensor]:
-        if self.w_cond_yaw <= 0:
-            return None
-        if batch is None or not isinstance(batch, dict):
-            return None
-        if pred_motion.dim() < 3:
-            return None
-        yaw_sl = self.group_slices.get('RootYaw') or self.group_slices.get('Yaw')
-        if not isinstance(yaw_sl, slice):
-            return None
-        cond_raw = batch.get('cond_tgt_raw')
-        if cond_raw is None:
-            cond_raw = batch.get('cond_in')
-        if cond_raw is None:
-            return None
-        if not torch.is_tensor(cond_raw):
-            cond_raw = torch.as_tensor(cond_raw)
-        cond_raw = cond_raw.to(device=pred_motion.device, dtype=pred_motion.dtype)
-        if cond_raw.dim() == 2:
-            cond_raw = cond_raw.unsqueeze(0)
-        if cond_raw.dim() != 3:
-            return None
-        yaw_norm = pred_motion[..., yaw_sl]
-        if yaw_norm.numel() == 0:
-            return None
-        Bp = yaw_norm.shape[0]
-        if cond_raw.shape[0] != Bp:
-            if cond_raw.shape[0] == 1:
-                cond_raw = cond_raw.expand(Bp, -1, -1)
-            else:
-                return None
-        Tp = yaw_norm.shape[1]
-        Tc = cond_raw.shape[1]
-        L = min(Tp, Tc)
-        if L <= 0:
-            return None
-        yaw_norm = yaw_norm[:, :L]
-        cond_slice = cond_raw[:, :L]
-        cond_dim = cond_slice.shape[-1]
-        if cond_dim < 2:
-            return None
-        if cond_dim >= 3:
-            dir_slice = cond_slice[..., cond_dim - 3:cond_dim - 1]
-            speed_slice = cond_slice[..., -1]
-        else:
-            dir_slice = cond_slice[..., -2:]
-            speed_slice = dir_slice.norm(dim=-1)
-        dir_norm = dir_slice.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-        dir_unit = dir_slice / dir_norm
-        yaw_cmd = torch.atan2(dir_unit[..., 1], dir_unit[..., 0])
-        yaw_pred_raw = self._denorm_yaw_slice(yaw_norm, yaw_sl)
-        if yaw_pred_raw is None:
-            return None
-        yaw_cmd = yaw_cmd.unsqueeze(-1)
-        yaw_diff = torch.atan2(
-            torch.sin(yaw_pred_raw - yaw_cmd),
-            torch.cos(yaw_pred_raw - yaw_cmd),
-        ).abs()
-        yaw_diff = yaw_diff.mean(dim=-1)
-        speed_abs = speed_slice.abs()
-        min_speed = max(0.0, float(getattr(self, 'cond_yaw_min_speed', 0.0) or 0.0))
-        if min_speed > 0.0:
-            mask = speed_abs >= min_speed
-        else:
-            mask = None
-        if mask is not None and mask.any():
-            loss = yaw_diff[mask].mean()
-        else:
-            loss = yaw_diff.mean()
-        return loss
-
     def _prepare_angvel_payload(
         self,
         pred_motion: torch.Tensor,
@@ -1215,7 +1131,7 @@ class MotionJointLoss(nn.Module):
         theta = torch.nan_to_num(theta, nan=0.0, posinf=_math.pi, neginf=0.0)
         return theta.mean()
 
-    def compute_rot6d_delta_root_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    def compute_root_geodesic_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
         Z = lambda v: pred.new_tensor(float(v))
         Rp = self._rot6d_matrices(pred)
         Rg = self._rot6d_matrices(gt)
@@ -1223,18 +1139,19 @@ class MotionJointLoss(nn.Module):
             return Z(0.0)
         if Rp.dim() < 4:
             return Z(0.0)
-        root_idx = int(getattr(self, 'root_idx', 0))
-        Bp = Rp.shape[:-3]
-        Bg = Rg.shape[:-3]
-        T = Rp.shape[-3]
-        J = Rp.shape[-2]
+        if Rp.dim() < 5:
+            return Z(0.0)
+        T = int(Rp.shape[-4])
+        J = int(Rp.shape[-3])
+        if T <= 0 or J <= 0:
+            return Z(0.0)
         Rp = Rp.reshape(-1, T, J, 3, 3)
         Rg = Rg.reshape(-1, T, J, 3, 3)
-        Rp = _root_relative_matrices(Rp, root_idx)
-        Rg = _root_relative_matrices(Rg, root_idx)
-        dRp = torch.matmul(Rp[:, 1:], Rp[:, :-1].transpose(-1, -2))
-        dRg = torch.matmul(Rg[:, 1:], Rg[:, :-1].transpose(-1, -2))
-        theta = geodesic_R(dRp, dRg)
+        root_idx = int(getattr(self, 'root_idx', 0))
+        root_idx = max(0, min(J - 1, root_idx))
+        Rp_root = Rp[:, :, root_idx]
+        Rg_root = Rg[:, :, root_idx]
+        theta = geodesic_R(Rp_root, Rg_root)
         theta = torch.nan_to_num(theta, nan=0.0, posinf=_math.pi, neginf=0.0)
         return theta.mean()
 
@@ -1289,11 +1206,11 @@ class MotionJointLoss(nn.Module):
         else:
             stats.setdefault('rot_delta', 0.0)
 
-        if self.w_rot_delta_root > 0 and delta_pm is not None:
-            l_delta_root = self.compute_rot6d_delta_root_loss(delta_pm, gt_motion)
-            loss = loss + self.w_rot_delta_root * l_delta_root
-            self._accumulate_loss_contrib('rot_delta_root', l_delta_root, self.w_rot_delta_root, group='aux')
-            stats['rot_delta_root'] = float(l_delta_root.detach().cpu())
+        if self.w_rot_delta_root > 0:
+            l_root_geo = self.compute_root_geodesic_loss(pm, gt_motion)
+            loss = loss + self.w_rot_delta_root * l_root_geo
+            self._accumulate_loss_contrib('rot_delta_root', l_root_geo, self.w_rot_delta_root, group='aux')
+            stats['rot_delta_root'] = float(l_root_geo.detach().cpu())
         else:
             stats.setdefault('rot_delta_root', 0.0)
 
@@ -1320,15 +1237,6 @@ class MotionJointLoss(nn.Module):
             except Exception:
                 stats['rot_ortho_fallback'] = float('nan')
 
-
-        cond_yaw_loss = self._compute_cond_yaw_loss(pm, batch)
-        if cond_yaw_loss is not None:
-            loss = loss + self.w_cond_yaw * cond_yaw_loss
-            self._accumulate_loss_contrib('cond_yaw', cond_yaw_loss, self.w_cond_yaw, group='core')
-            stats['cond_yaw'] = float(cond_yaw_loss.detach().cpu())
-            self._register_component_loss('cond_yaw', cond_yaw_loss, self.w_cond_yaw)
-        else:
-            stats.setdefault('cond_yaw', 0.0)
 
         Rp_world = Rg_world = None
         Rp_root = Rg_root = None

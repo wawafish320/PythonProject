@@ -1127,6 +1127,24 @@ class Trainer:
             if "w_rot_local" in loss_cfg:
                 self.loss_fn.w_rot_local = float(loss_cfg["w_rot_local"])
 
+        # 同步在线调度器的边界/当前值，避免后续被旧参数拉回去
+        if hasattr(self, 'hyperparam_scheduler') and self.hyperparam_scheduler is not None:
+            sched_params = self.hyperparam_scheduler.params
+            if "freerun_horizon" in trainer_cfg:
+                sched_params["freerun_horizon"] = int(trainer_cfg["freerun_horizon"])
+            if hasattr(self, 'freerun_horizon_min'):
+                sched_params["freerun_min"] = int(getattr(self, 'freerun_horizon_min'))
+            if "freerun_horizon" in trainer_cfg:
+                sched_params["freerun_max"] = int(
+                    max(
+                        trainer_cfg.get("freerun_horizon", 0),
+                        sched_params.get("freerun_max", 0),
+                        getattr(self, 'freerun_horizon_min', 0),
+                    )
+                )
+            if hasattr(self, 'teacher_forcing_ratio'):
+                sched_params["teacher_forcing_ratio"] = float(getattr(self, 'teacher_forcing_ratio'))
+
     def _save_adjusted_config(self, epoch: int):
         out_dir = getattr(self, 'out_dir', None)
         cfg = getattr(self, 'full_config', None)
@@ -1668,8 +1686,10 @@ class Trainer:
             tf_min_epoch = float(stage_overrides.get('tf_min', tf_min_base))
 
             if tf_mode == 'epoch_linear' and tf_end > tf_start:
-                if ep <= tf_start: tf_ratio = tf_max_epoch
-                elif ep >= tf_end: tf_ratio = tf_min_epoch
+                if ep <= tf_start:
+                    tf_ratio = tf_max_epoch
+                elif ep >= tf_end:
+                    tf_ratio = tf_min_epoch
                 else:
                     r = (ep - tf_start) / max(1, (tf_end - tf_start))
                     tf_ratio = tf_max_epoch + (tf_min_epoch - tf_max_epoch) * r
@@ -1677,6 +1697,19 @@ class Trainer:
                 tf_ratio = tf_max_epoch
             self.teacher_forcing_ratio = float(tf_ratio)
             self._last_tf_ratio = float(tf_ratio)
+            sched = getattr(self, 'hyperparam_scheduler', None)
+            if sched is not None:
+                sched.params['teacher_forcing_ratio'] = float(tf_ratio)
+                if 'freerun_horizon' in sched.params:
+                    sched.params['freerun_horizon'] = int(getattr(self, 'freerun_horizon', sched.params['freerun_horizon']))
+                if 'freerun_min' in sched.params and hasattr(self, 'freerun_horizon_min'):
+                    sched.params['freerun_min'] = int(getattr(self, 'freerun_horizon_min'))
+                if 'freerun_max' in sched.params:
+                    sched.params['freerun_max'] = int(max(
+                        sched.params.get('freerun_max', 0),
+                        getattr(self, 'freerun_horizon', 0),
+                        getattr(self, 'freerun_horizon_min', 0),
+                    ))
             running, cnt = 0.0, 0
             self.model.train()
             self.optimizer.zero_grad(set_to_none=True)
@@ -1883,6 +1916,39 @@ class Trainer:
             teacher_metrics_cached = None
             try:
                 import math as _math
+
+                def _run_valfree_eval(log_prefix: str = "ValFree"):
+                    if getattr(self, 'val_mode', 'none') != 'online' or bool(getattr(self, 'no_monitor', False)):
+                        return None
+                    vloader = self.train_loader
+                    _mon_batches = int(getattr(self, 'monitor_batches', 8) or 8)
+                    free_metrics = dict(self.validate_autoreg_online(vloader, max_batches=_mon_batches))
+                    free_metrics.setdefault('phase', 'freerun')
+                    free_metrics['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
+                    _extra = ""
+                    _kgeo = free_metrics.get('KeyBone/GeoDegMean', float('nan'))
+                    _klocal = free_metrics.get('KeyBone/GeoLocalDegMean', float('nan'))
+                    yaw_cmd = free_metrics.get('CondYawVsPredDeg', float('nan'))
+                    free_ang_dir = free_metrics.get('AngVelDirDeg', float('nan'))
+                    if _math.isfinite(_kgeo):
+                        _extra += f" | LimbGeoDeg={_kgeo:.3f}°"
+                    if _math.isfinite(_klocal):
+                        _extra += f" | LimbGeoLocalDeg={_klocal:.3f}°"
+                    if _math.isfinite(yaw_cmd):
+                        _extra += f" | YawCmdDiff={yaw_cmd:.2f}°"
+                    if _math.isfinite(free_ang_dir):
+                        _extra += f" | AngVelDirDeg={free_ang_dir:.2f}"
+                    print(
+                        f"[{log_prefix}@ep {ep:03d}] "
+                        f"MSEnormY={free_metrics.get('MSEnormY', float('nan')):.6f} | "
+                        f"GeoDeg={free_metrics.get('GeoDeg', float('nan')):.3f}° | "
+                        f"YawAbsDeg={free_metrics.get('YawAbsDeg', float('nan')):.3f} | "
+                        f"RootVelMAE={free_metrics.get('RootVelMAE', float('nan')):.5f} | "
+                        f"AngVelMAE={free_metrics.get('AngVelMAE', float('nan')):.5f} rad/s | "
+                        f"AngMagRel={free_metrics.get('AngVelMagRel', float('nan')):.3f}" + _extra
+                    )
+                    return free_metrics
+
                 if is_teacher_phase:
                     teacher_metrics = dict(self.eval_epoch(self.train_loader, mode='teacher') or {})
                     teacher_metrics.setdefault('phase', 'teacher')
@@ -1903,37 +1969,11 @@ class Trainer:
                         f"AngMagRel={ang_rel:.3f}"
                     )
                 else:
-                    if getattr(self, 'val_mode', 'none') == 'online' and not bool(getattr(self, 'no_monitor', False)):
-                        vloader = self.train_loader
-                        _mon_batches = int(getattr(self, 'monitor_batches', 8) or 8)
-                        free_metrics = dict(self.validate_autoreg_online(vloader, max_batches=_mon_batches))
-                        free_metrics.setdefault('phase', 'freerun')
-                        free_metrics['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
+                    free_metrics = _run_valfree_eval()
+                    if free_metrics is not None:
                         metrics_for_json = free_metrics
                         metrics_tag = 'valfree'
                         _metrics = free_metrics
-                        _extra = ""
-                        _kgeo = free_metrics.get('KeyBone/GeoDegMean', float('nan'))
-                        _klocal = free_metrics.get('KeyBone/GeoLocalDegMean', float('nan'))
-                        yaw_cmd = free_metrics.get('CondYawVsPredDeg', float('nan'))
-                        free_ang_dir = free_metrics.get('AngVelDirDeg', float('nan'))
-                        if _math.isfinite(_kgeo):
-                            _extra += f" | LimbGeoDeg={_kgeo:.3f}°"
-                        if _math.isfinite(_klocal):
-                            _extra += f" | LimbGeoLocalDeg={_klocal:.3f}°"
-                        if _math.isfinite(yaw_cmd):
-                            _extra += f" | YawCmdDiff={yaw_cmd:.2f}°"
-                        if _math.isfinite(free_ang_dir):
-                            _extra += f" | AngVelDirDeg={free_ang_dir:.2f}"
-                        print(
-                            f"[ValFree@ep {ep:03d}] "
-                            f"MSEnormY={free_metrics.get('MSEnormY', float('nan')):.6f} | "
-                            f"GeoDeg={free_metrics.get('GeoDeg', float('nan')):.3f}° | "
-                            f"YawAbsDeg={free_metrics.get('YawAbsDeg', float('nan')):.3f} | "
-                            f"RootVelMAE={free_metrics.get('RootVelMAE', float('nan')):.5f} | "
-                            f"AngVelMAE={free_metrics.get('AngVelMAE', float('nan')):.5f} rad/s | "
-                            f"AngMagRel={free_metrics.get('AngVelMagRel', float('nan')):.3f}" + _extra
-                        )
                     teacher_metrics_cached = dict(self.eval_epoch(self.train_loader, mode='teacher') or {})
                     teacher_metrics_cached.setdefault('phase', 'teacher')
                     teacher_metrics_cached['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
@@ -1958,6 +1998,14 @@ class Trainer:
                             f"AngVelMAE={metrics_for_json.get('AngVelMAE', float('nan')):.5f} | "
                             f"MSEnormY={metrics_for_json.get('MSEnormY', float('nan')):.6f}" + _gap_extra
                         )
+
+                forced_valfree_metrics = None
+                if getattr(self, 'force_valfree_eval', False):
+                    need_force = metrics_tag != 'valfree'
+                    if need_force:
+                        forced_valfree_metrics = _run_valfree_eval("ValFreeForced")
+                        if forced_valfree_metrics is not None:
+                            _metrics = forced_valfree_metrics
             except Exception as _e:
                 phase_label = 'ValTeacher' if is_teacher_phase else 'ValFree'
                 import traceback
@@ -1971,6 +2019,11 @@ class Trainer:
                 else:
                     self._dump_metrics_json(metrics_for_json, tag=metrics_tag, epoch=ep)
                 self._maybe_finish_stage(ep, metrics_for_json, tag=str(metrics_tag))
+            if forced_valfree_metrics is not None:
+                self._record_epoch_metrics(forced_valfree_metrics, tag='valfree', epoch=ep)
+                self._save_val_metrics(ep, forced_valfree_metrics)
+                self._dump_metrics_json(forced_valfree_metrics, tag='valfree', epoch=ep)
+                self._maybe_finish_stage(ep, forced_valfree_metrics, tag='valfree')
             if (not is_teacher_phase) and teacher_metrics_cached is not None:
                 self._record_epoch_metrics(teacher_metrics_cached, tag='teacher', epoch=ep)
                 self._maybe_finish_stage(ep, teacher_metrics_cached, tag='teacher')
@@ -3234,7 +3287,7 @@ def train_entry():
                    help='GradNorm 等策略的调节超参。')
     p.add_argument('--adaptive_loss_temperature', type=float, default=2.0,
                    help='DWA 策略温度，默认 2.0。')
-    p.add_argument('--adaptive_loss_terms', type=str, default='fk_pos,rot_local,cond_yaw,rot_delta',
+    p.add_argument('--adaptive_loss_terms', type=str, default='fk_pos,rot_local,rot_delta',
                    help='需要自适应权重的 loss 名称，逗号分隔。')
     p.add_argument('--adaptive_loss_tuning', action='store_true',
                    help='启用基于验证指标的自适应损失权重调整（StageMetricAdjuster）。')
@@ -3265,16 +3318,12 @@ def train_entry():
     p.add_argument('--w_rot_ortho', type=float, default=0.001)
     p.add_argument('--w_rot_delta', type=float, default=1.0)
     p.add_argument('--w_rot_delta_root', type=float, default=0.0)
-    p.add_argument('--w_cond_yaw', type=float, default=None,
-                   help='yaw 指令对齐损失权重（默认 0.1 * w_rot_delta，<=0 关闭）。')
     p.add_argument('--w_fk_pos', type=float, default=0.0,
                    help='FK 末端位置损失权重（0 表示禁用）。')
     p.add_argument('--w_rot_local', type=float, default=0.0,
                    help='父子关节局部 geodesic 约束权重（0=关闭）。')
     p.add_argument('--w_latent_consistency', type=float, default=0.0,
                    help='Latent consistency loss 权重，用于约束 freerun 隐状态落在预训练流形内。')
-    p.add_argument('--cond_yaw_min_speed', type=float, default=0.1,
-                   help='仅对速度大于该阈值 (m/s) 的帧应用 yaw 指令损失。')
     p.add_argument('--seq_len', type=int, default=120)
     p.add_argument('--yaw_aug_deg', type=float, default=0.0)
     p.add_argument('--normalize_c', action='store_true')
@@ -3284,6 +3333,8 @@ def train_entry():
     p.add_argument('--log_every', type=int, default=50)
     p.add_argument('--foot_contact_threshold', type=float, default=1.5, help='角速度阈值（rad/s），低于该值视为脚接触')
     p.add_argument('--monitor_batches', type=int, default=2, help='每个 epoch 在线指标采样的批次数')
+    p.add_argument('--force_valfree_eval', action='store_true', default=False,
+                   help='即使当前为纯 teacher 阶段，也强制执行一次 freerun 验证并写出 valfree 指标')
     p.add_argument('--eval_horizon', type=int, default=None,
                    help='在线 freerun 验证时的 horizon（帧数）；未指定则遍历整段序列')
     p.add_argument('--eval_warmup', type=int, default=0,
@@ -3493,10 +3544,6 @@ def train_entry():
         pass
     fps_data = float(getattr(ds_train, 'fps', 60.0) or 60.0)
     w_rot_delta = float(_arg('w_rot_delta', 1.0))
-    w_cond_yaw = _arg('w_cond_yaw', None)
-    if w_cond_yaw is None:
-        w_cond_yaw = max(0.0, 0.1 * w_rot_delta)
-    cond_yaw_min_speed = max(0.0, float(_arg('cond_yaw_min_speed', 0.1)))
     w_fk_pos = float(_arg('w_fk_pos', 0.0) or 0.0)
     w_rot_local = float(_arg('w_rot_local', 0.0) or 0.0)
 
@@ -3507,8 +3554,6 @@ def train_entry():
         w_rot_delta=w_rot_delta,
         w_rot_delta_root=_arg('w_rot_delta_root', 0.0),
         w_rot_ortho=_arg('w_rot_ortho', 0.001),
-        w_cond_yaw=w_cond_yaw,
-        cond_yaw_min_speed=cond_yaw_min_speed,
         meta=None,
         w_fk_pos=w_fk_pos,
         w_rot_local=w_rot_local,
@@ -3533,7 +3578,6 @@ def train_entry():
         f"w_rot_delta={loss_fn.w_rot_delta} "
         f"w_rot_delta_root={loss_fn.w_rot_delta_root} "
         f"w_rot_ortho={loss_fn.w_rot_ortho} "
-        f"w_cond_yaw={loss_fn.w_cond_yaw} "
         f"w_fk_pos={loss_fn.w_fk_pos} "
         f"w_rot_local={loss_fn.w_rot_local}"
     )
@@ -3602,6 +3646,7 @@ def train_entry():
     trainer.val_mode = _arg('val_mode', 'online')
     trainer.no_monitor = bool(_arg('no_monitor', False))
     trainer.monitor_batches = int(_arg('monitor_batches', 8) or 8)
+    trainer.force_valfree_eval = bool(_arg('force_valfree_eval', False))
     trainer.eval_settings = FreeRunSettings(
         warmup_steps=int(_arg('eval_warmup', 0) or 0),
         horizon=_arg('eval_horizon', None),
@@ -3657,9 +3702,11 @@ def train_entry():
     adaptive_loss_method = str(_arg('adaptive_loss_method', 'none') or 'none').lower()
     adaptive_loss_terms = [
         term.strip()
-        for term in str(_arg('adaptive_loss_terms', 'fk_pos,rot_local,cond_yaw,rot_delta') or '').split(',')
+        for term in str(_arg('adaptive_loss_terms', 'fk_pos,rot_local,rot_delta') or '').split(',')
         if term.strip()
     ]
+    if not adaptive_loss_terms:
+        adaptive_loss_terms = None  # 运行时自动根据 loss payload 决定
     sched_params = None
     if _arg('adaptive_scheduler', False):
         sched_params = dict(

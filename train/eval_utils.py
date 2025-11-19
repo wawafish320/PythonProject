@@ -472,23 +472,6 @@ def evaluate_freerun(
         for key, value in batch_stats.items():
             stats_accum.setdefault(key, []).append(value)
 
-        debug_steps = int(getattr(trainer, "freerun_debug_steps", 0) or 0)
-        if debug_steps > 0 and diag_records:
-            limit = min(debug_steps, len(diag_records))
-            print(f"[FreeRunDiag][preview] batch#{batches_processed} showing {limit} steps:")
-            for rec in diag_records[:limit]:
-                step = rec.get("step", -1)
-                yaw_pred = float(rec.get("yaw_cmd_vs_pred_deg", float("nan")))
-                yaw_gt = float(rec.get("yaw_cmd_vs_gt_deg", float("nan")))
-                yaw_abs = float(rec.get("yaw_abs_deg", float("nan")))
-                root_mae = float(rec.get("root_vel_mae", float("nan")))
-                delta_abs = float(rec.get("delta_norm_abs", float("nan")))
-                print(
-                    f"  step={int(step):02d} yaw_cmd_vs_pred={yaw_pred:.2f}° "
-                    f"yaw_cmd_vs_gt={yaw_gt:.2f}° yaw_abs={yaw_abs:.2f}° "
-                    f"root_vel_mae={root_mae:.4f} delta_norm_abs={delta_abs:.4f}"
-                )
-
         if diag_records and base_debug_path:
             epoch = int(getattr(trainer, "cur_epoch", 0) or 0)
             run_name = getattr(trainer, "_current_run_name", None)

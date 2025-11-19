@@ -171,7 +171,7 @@ python train_configurator.py \
   // 损失权重
   "w_fk_pos": 0.07,               // FK位置损失权重
   "w_rot_local": 0.07,            // 局部旋转损失权重
-  "w_cond_yaw": 0.1,              // 条件朝向损失权重
+  "w_cond_yaw": 0,                // 已弃用：cond yaw 损失关闭
   "w_rot_log": 0.2,               // 旋转增量对数域损失
   "w_limb_geo": 0.0,              // 四肢辅助损失
   "w_latent_consistency": 0.03,   // 潜在一致性损失权重
@@ -328,7 +328,7 @@ period_signal = extract_soft_period(soft_contacts)  # 从接触模式中推断
        w_rot_local * loss_rot_local +     # 旋转损失
        w_rot_geo * loss_rot_geo +         # 测地线约束
        w_rot_delta * loss_rot_delta +     # 增量平滑
-       w_cond_yaw * loss_cond_yaw +       # 朝向约束
+       # cond_yaw 已移除
        w_latent_consistency * loss_latent_consistency +  # 编码器一致性
        freerun_weight * loss_freerun
    )
@@ -353,7 +353,7 @@ loss = (
     w_rot_local * loss_rot_local +        # 局部旋转
     w_rot_geo * loss_rot_geo +            # 测地线误差
     w_rot_delta * loss_rot_delta +        # 平滑性
-    w_cond_yaw * loss_cond_yaw +          # 条件朝向
+    # cond_yaw 已移除
     w_latent_consistency * loss_latent_consistency +  # 潜在一致性
     freerun_weight * loss_freerun         # 自由运行稳定性
 )
@@ -426,7 +426,7 @@ total_loss = (
     w_rot_geo * loss_rot_geo +          # 旋转测地线误差
     w_rot_delta * loss_rot_delta +      # 旋转增量损失
     w_rot_ortho * loss_rot_ortho +      # 旋转正交性
-    w_cond_yaw * loss_cond_yaw +        # 条件朝向
+    # cond_yaw 已移除
     w_fk_pos * loss_fk_pos +            # FK位置误差
     w_rot_local * loss_rot_local +      # 父子相对旋转
 
@@ -459,7 +459,7 @@ total_loss = (
 
 | 组别 | 损失项 | 作用 | 权重范围 |
 |------|--------|------|----------|
-| **core** | rot_geo, rot_delta, rot_ortho<br>cond_yaw, fk_pos, rot_local | 直接决定运动质量 | 0.01 ~ 0.2 |
+| **core** | rot_geo, rot_delta, rot_ortho<br>fk_pos, rot_local | 直接决定运动质量 | 0.01 ~ 0.2 |
 | **aux** | attn, rot_delta_root<br>rot_log, limb_geo | 辅助优化、正则化 | 0.001 ~ 0.05 |
 | **long** | latent_consistency<br>freerun | 长期稳定性、泛化性 | 0.01 ~ 0.3 |
 
@@ -545,7 +545,7 @@ core : aux : long ≈ 65% : 5% : 30%
 - 目的：完全聚焦自由运行表现，确保长序列稳定性成为主要训练信号。
 
 **关键提示**
-- 不同阶段的 `loss_groups` 只会覆盖显式声明的权重，其他如 `w_cond_yaw=0.1`、`w_rot_log=0.2` 仍按全局配置执行。
+- 不同阶段的 `loss_groups` 只会覆盖显式声明的权重，其他如 `w_rot_log=0.2` 仍按全局配置执行（`w_cond_yaw` 已弃用）。
 - 如果需要关闭某个损失（例如探索无 `cond_yaw` 的 ablation），必须在相应阶段的 `loss_groups` 中显式写入该权重，而不是假设脚本会自动切换。
 
 ---
@@ -827,7 +827,7 @@ python train_configurator.py \
 python training_MPL.py \
   --config_json ../config/exp_phase_mpl.json \
   --adaptive_loss_method gradnorm \
-  --adaptive_loss_terms fk_pos,rot_local,cond_yaw,rot_delta \
+  --adaptive_loss_terms fk_pos,rot_local,rot_delta \
   --adaptive_loss_alpha 1.5 \
   --adaptive_loss_temperature 2.0
 ```

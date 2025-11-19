@@ -15,13 +15,14 @@ class AdaptiveLossWeighting(nn.Module):
 
     def __init__(
         self,
-        loss_names: List[str],
+        loss_names: List[str] | None,
         method: str = "gradnorm",
         alpha: float = 1.5,
         dwa_temperature: float = 2.0,
     ):
         super().__init__()
-        self.loss_names = list(loss_names)
+        # allow loss_names为空，运行时自动使用 payload 中的所有 loss
+        self.loss_names = list(loss_names or [])
         self.method = (method or "gradnorm").lower()
         self.alpha = float(alpha)
         self.T = float(dwa_temperature)
@@ -50,7 +51,7 @@ class AdaptiveLossWeighting(nn.Module):
         filtered: Dict[str, torch.Tensor] = {
             name: loss
             for name, loss in losses.items()
-            if name in self.loss_names and loss is not None
+            if (not self.loss_names or name in self.loss_names) and loss is not None
         }
         if not filtered:
             raise ValueError("提供的 losses 中不包含需要自适应的项目")
@@ -127,6 +128,10 @@ class AdaptiveLossWeighting(nn.Module):
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         for name, loss in losses.items():
             if name in self.loss_history:
+                self.loss_history[name].append(float(loss.detach().cpu().item()))
+            elif not self.loss_names:
+                # 如果运行时发现新的 loss 且未指定名单，则动态跟踪
+                self.loss_history[name] = deque(maxlen=2)
                 self.loss_history[name].append(float(loss.detach().cpu().item()))
 
         ready = all(len(h) == 2 for h in self.loss_history.values())
