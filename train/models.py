@@ -5,6 +5,7 @@ Unified model definitions for training and inference.
 """
 
 import math as _math
+import os
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
@@ -204,11 +205,11 @@ class EventMotionModel(nn.Module):
         )
         self.period_encoder = nn.Linear(self.period_dim, hidden_dim) if self.period_dim > 0 else None
 
-        self.frozen_encoder: Optional[MotionEncoder] = None
-        self.frozen_period_head: Optional[PeriodHead] = None
+        # Optional frozen encoder from预训练，用于提供 soft period 提示
+        self.frozen_encoder: Optional['MotionEncoder'] = None
+        self.frozen_period_head: Optional['PeriodHead'] = None
         self._encoder_meta: dict[str, Any] = {}
         self._frozen_hidden_dim: Optional[int] = None
-        self.latent_bridge: Optional[nn.Module] = None
 
     def _target_device(self) -> torch.device:
         try:
@@ -315,7 +316,9 @@ class EventMotionModel(nn.Module):
         z0 = lin0(x)
         y1 = act1(z0)
 
+        # Inject soft period embedding from frozen encoder (if available)
         enc_hidden = None
+        soft_period = None
         if (
             encoder_input is not None
             and self.frozen_encoder is not None
@@ -324,8 +327,6 @@ class EventMotionModel(nn.Module):
             enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
             if isinstance(enc_hidden, tuple):
                 enc_hidden = enc_hidden[-1]
-
-        soft_period = None
         if enc_hidden is not None and self.frozen_period_head is not None:
             soft_period = torch.tanh(self.frozen_period_head(enc_hidden))
         if self.period_dim > 0 and self.period_encoder is not None and soft_period is not None:
@@ -376,7 +377,7 @@ class EventMotionModel(nn.Module):
 
     def attach_motion_encoder(self, bundle, *, map_location: str | torch.device = 'cpu'):
         """
-        加载并冻结预训练的 MotionEncoder + PeriodHead。
+        加载并冻结预训练的 MotionEncoder + PeriodHead，用于提供 soft period 提示。
         """
         if isinstance(bundle, (str, os.PathLike)):
             payload = torch.load(bundle, map_location=map_location)
@@ -385,11 +386,12 @@ class EventMotionModel(nn.Module):
         if not isinstance(payload, dict):
             raise TypeError("MotionEncoder bundle must be a dict or path to a dict.")
 
-        encoder_state = payload.get('encoder', None)
-        if encoder_state is None:
-            raise KeyError("Bundle missing 'encoder' state_dict.")
-        meta = dict(payload.get('meta', {}))
+        encoder_state = payload.get('encoder')
+        period_state = payload.get('period_head')
+        if encoder_state is None or period_state is None:
+            raise KeyError("Bundle missing 'encoder' or 'period_head' state_dict.")
 
+        meta = dict(payload.get('meta', {}))
         weight0 = encoder_state.get('mlp.0.weight')
         if weight0 is None:
             for key, val in encoder_state.items():
@@ -398,11 +400,13 @@ class EventMotionModel(nn.Module):
                     break
         if weight0 is None:
             raise ValueError("Unable to infer MotionEncoder dimensions from state_dict.")
+
         input_dim = int(meta.get('input_dim', weight0.shape[1]))
         hidden_dim = int(meta.get('hidden_dim', weight0.shape[0]))
         z_dim = int(meta.get('z_dim', 0))
         num_layers = int(meta.get('mlp_layers', 3))
         dropout = float(meta.get('mlp_dropout', 0.0))
+
         encoder = MotionEncoder(
             input_dim=input_dim,
             hidden_dim=hidden_dim,
@@ -412,17 +416,12 @@ class EventMotionModel(nn.Module):
             bidirectional=bool(meta.get('bidirectional', False)),
         )
         encoder.load_state_dict(encoder_state)
-        encoder.eval()
-        encoder.requires_grad_(False)
+        encoder.eval().requires_grad_(False)
 
-        period_state = payload.get('period_head', None)
-        if period_state is None:
-            raise KeyError("Bundle missing 'period_head' state_dict.")
         period_dim = int(period_state['fc.weight'].shape[0])
         period_head = PeriodHead(hidden_dim, period_dim, bidirectional=bool(meta.get('bidirectional', False)))
         period_head.load_state_dict(period_state)
-        period_head.eval()
-        period_head.requires_grad_(False)
+        period_head.eval().requires_grad_(False)
 
         if self.encoder_input_dim and self.encoder_input_dim != input_dim:
             raise ValueError(f"Encoder input dim mismatch: dataset={self.encoder_input_dim} vs bundle={input_dim}")
@@ -438,13 +437,7 @@ class EventMotionModel(nn.Module):
             self.period_dim = period_dim
             self.period_encoder = nn.Linear(self.period_dim, self.hidden_dim).to(device)
 
-        if self.hidden_dim != hidden_dim:
-            self.latent_bridge = nn.Linear(self.hidden_dim, hidden_dim).to(device)
-        else:
-            self.latent_bridge = nn.Identity()
-
         return meta
-
 
 class MotionJointLoss(nn.Module):
     def __init__(

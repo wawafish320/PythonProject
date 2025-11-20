@@ -69,7 +69,6 @@ class TrainingConfigBuilder:
         cfg["lr"] = float(round(lr, 6))
         cfg["freerun_stage_schedule"] = stages
         cfg["freerun_weight"] = stages[0]["trainer"]["freerun_weight"]
-        cfg["w_latent_consistency"] = stages[0]["trainer"]["w_latent_consistency"]
         cfg["w_fk_pos"] = stages[0]["loss"]["w_fk_pos"]
         cfg["w_rot_local"] = stages[0]["loss"]["w_rot_local"]
         cfg.setdefault("tf_mode", "epoch_linear")
@@ -105,7 +104,6 @@ class TrainingConfigBuilder:
 
             freerun_horizon = max(4, int(round(base_horizon * motion["freerun_horizon_scale"])))
             freerun_weight = min(0.8, max(0.0, motion["freerun_weight_scale"] * 0.5))
-            latent = min(0.6, max(0.0, motion["latent_scale"] * 0.3))
             posture_weight = min(0.8, max(0.01, posture["scale"] * 0.35))
 
             yaw_lo_ratio, yaw_hi_ratio = template["yaw_ratio"]
@@ -119,7 +117,6 @@ class TrainingConfigBuilder:
                     "trainer": {
                         "freerun_weight": round(freerun_weight, 4),
                         "freerun_horizon": freerun_horizon,
-                        "w_latent_consistency": round(latent, 4),
                     },
                     "loss": {
                         "w_fk_pos": round(posture_weight, 4),

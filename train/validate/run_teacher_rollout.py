@@ -83,7 +83,7 @@ def parse_args() -> argparse.Namespace:
         "--encoder-bundle",
         type=str,
         default="models/motion_encoder_equiv.pt",
-        help="Frozen motion encoder bundle (.pt) used during training (needed when checkpoint expects it).",
+        help="Frozen motion encoder bundle (.pt) if your checkpoint expects it.",
     )
     parser.add_argument(
         "--npz-root",
@@ -247,7 +247,7 @@ class TeacherRolloutRunner:
             self.state_dict = self.ckpt["model"] if isinstance(self.ckpt, dict) and "model" in self.ckpt else self.ckpt
         self.width = self._infer_width() if not self.use_onnx else None
         self.period_dim = self._infer_period_dim() if not self.use_onnx else 0
-        self.encoder_bundle_path = Path(args.encoder_bundle).expanduser()
+        self.encoder_bundle_path = Path(args.encoder_bundle).expanduser() if args.encoder_bundle else None
         self.model: Optional[EventMotionModel] = None
         self.loss_fn: Optional[MotionJointLoss] = None
         self.trainer: Optional[Trainer] = None
@@ -349,11 +349,13 @@ class TeacherRolloutRunner:
             angvel_dim=self.angvel_dim,
             pose_hist_dim=self.pose_hist_dim,
         ).to(self.device)
-        self._attach_encoder_if_available(model)
         validate_and_fix_model_(model, Dx, Dc)
         missing, unexpected = model.load_state_dict(self.state_dict, strict=False)
         if missing or unexpected:
             raise RuntimeError(f"State dict mismatch (missing={missing}, unexpected={unexpected})")
+        # Attach frozen motion encoder bundle if提供
+        if self.encoder_bundle_path and self.encoder_bundle_path.is_file():
+            model.attach_motion_encoder(torch.load(str(self.encoder_bundle_path), map_location="cpu"))
         model.eval()
         loss_fn = MotionJointLoss(
             output_layout=self.bundle.output_layout,
@@ -422,17 +424,6 @@ class TeacherRolloutRunner:
         self.trainer = trainer
         self.normalizer = trainer.normalizer
 
-    def _attach_encoder_if_available(self, model: EventMotionModel) -> None:
-        bundle_path = getattr(self, "encoder_bundle_path", None)
-        if not bundle_path or not bundle_path.is_file():
-            return
-        try:
-            payload = torch.load(str(bundle_path), map_location="cpu")
-            model.attach_motion_encoder(payload)
-            if not self.args.quiet:
-                print(f"[Spec] Attached motion encoder bundle: {bundle_path}")
-        except Exception as exc:
-            raise RuntimeError(f"Failed to attach motion encoder bundle {bundle_path}: {exc}") from exc
 
     def _init_onnx_session(self) -> None:
         if self.onnx_path is None:

@@ -479,137 +479,9 @@ class Trainer:
             free_loss, stats = out
         else:
             free_loss, stats = out, {}
-        latent_payload = self._latent_consistency_penalty(
-            preds_free,
-            contacts_sub,
-            angvel_sub,
-            pose_hist_sub,
-            step_index=-1,
-            tag='freerun/',
-        )
-        if latent_payload is not None:
-            lat_loss, lat_stats = latent_payload
-            free_loss = free_loss + lat_loss
-            if isinstance(stats, dict):
-                stats.update(lat_stats)
-            else:
-                stats = dict(lat_stats)
         if return_preds:
             return free_loss, stats or {}, preds_free, gt_sub
         return free_loss, stats or {}, None, None
-
-    def _latent_encoder_features(
-        self,
-        contacts_seq,
-        angvel_seq,
-        pose_hist_seq,
-        *,
-        step_index: int = -1,
-    ):
-        import torch
-
-        def _pick_feature(tensor):
-            if tensor is None or not torch.is_tensor(tensor):
-                return None
-            if tensor.dim() == 3 and tensor.size(1) > 0:
-                idx = step_index
-                if idx < 0:
-                    idx = tensor.size(1) + idx
-                idx = max(0, min(tensor.size(1) - 1, idx))
-                return tensor[:, idx]
-            if tensor.dim() == 2:
-                return tensor
-            return None
-
-        feats = []
-        for candidate in (_pick_feature(contacts_seq), _pick_feature(angvel_seq), _pick_feature(pose_hist_seq)):
-            if candidate is not None:
-                feats.append(candidate)
-        if not feats:
-            return None
-        encoder_dim = int(getattr(self.model, 'encoder_input_dim', 0) or 0)
-        cat = torch.cat(feats, dim=-1)
-        if encoder_dim <= 0 or cat.size(-1) != encoder_dim:
-            if not self._latent_encoder_warned:
-                print(
-                    "[LatentCons][warn] encoder input dim mismatch或未启用，"
-                    f"expected={encoder_dim} got={cat.size(-1)}；跳过 latent consistency。"
-                )
-                self._latent_encoder_warned = True
-            return None
-        return cat
-
-    def _latent_consistency_penalty(
-        self,
-        preds_dict,
-        contacts_seq,
-        angvel_seq,
-        pose_hist_seq,
-        *,
-        step_index: int = -1,
-        tag: str = '',
-    ):
-        import torch
-        weight = float(getattr(self, 'w_latent_consistency', 0.0) or 0.0)
-        if weight <= 0.0:
-            return None
-        model = getattr(self, 'model', None)
-        encoder = getattr(model, 'frozen_encoder', None) if model is not None else None
-        period_head = getattr(model, 'frozen_period_head', None) if model is not None else None
-        if encoder is None or period_head is None:
-            return None
-        if not isinstance(preds_dict, dict):
-            return None
-        hidden_seq = preds_dict.get('hidden_seq')
-        if hidden_seq is None:
-            return None
-        if hidden_seq.dim() == 2:
-            hidden_seq = hidden_seq.unsqueeze(1)
-        if hidden_seq.size(1) == 0:
-            return None
-        idx = step_index
-        if idx < 0:
-            idx = hidden_seq.size(1) + idx
-        idx = max(0, min(hidden_seq.size(1) - 1, idx))
-        hidden_final = hidden_seq[:, idx]
-        bridge = getattr(model, 'latent_bridge', None)
-        if bridge is not None:
-            hidden_final = bridge(hidden_final)
-        head_fc = getattr(period_head, 'fc', None)
-        expected_dim = getattr(head_fc, 'in_features', hidden_final.size(-1))
-        if hidden_final.size(-1) != expected_dim:
-            if not self._latent_consistency_dim_warned:
-                print(
-                    "[LatentCons][warn] 模型 hidden_dim 映射后仍与 period head 输入不一致；"
-                    "跳过 latent consistency (hidden_dim=%d, period_in=%d)."
-                    % (hidden_final.size(-1), int(expected_dim))
-                )
-                self._latent_consistency_dim_warned = True
-            return None
-        encoder_input = self._latent_encoder_features(
-            contacts_seq,
-            angvel_seq,
-            pose_hist_seq,
-            step_index=idx,
-        )
-        if encoder_input is None:
-            return None
-        with torch.no_grad():
-            gt_hidden = encoder(encoder_input, return_summary=False)
-            if isinstance(gt_hidden, tuple):
-                gt_hidden = gt_hidden[-1]
-            if gt_hidden.dim() == 3:
-                gt_hidden = gt_hidden[:, -1]
-            soft_gt = torch.tanh(period_head(gt_hidden)).detach()
-        soft_pred = torch.tanh(period_head(hidden_final))
-        loss_raw = F.l1_loss(soft_pred, soft_gt)
-        loss = weight * loss_raw
-        prefix = f"{tag}latent_consistency" if tag else "latent_consistency"
-        stats = {
-            f"{prefix}/raw": float(loss_raw.detach().cpu()),
-            f"{prefix}/weight": float(weight),
-        }
-        return loss, stats
 
     def _short_freerun_loss(self, state_seq, gt_seq, cond_seq, cond_raw_seq, contacts_seq,
                              angvel_seq, pose_hist_seq, batch):
@@ -1118,14 +990,24 @@ class Trainer:
             self.freerun_weight = float(trainer_cfg["freerun_weight"])
         if "freerun_horizon" in trainer_cfg:
             self.freerun_horizon = int(trainer_cfg["freerun_horizon"])
-        if "w_latent_consistency" in trainer_cfg:
-            self.w_latent_consistency = float(trainer_cfg["w_latent_consistency"])
+        if "eval_horizon" in trainer_cfg:
+            if hasattr(self, 'eval_settings'):
+                self.eval_settings.horizon = int(trainer_cfg["eval_horizon"])
 
         if hasattr(self, 'loss_fn') and self.loss_fn is not None:
             if "w_fk_pos" in loss_cfg:
                 self.loss_fn.w_fk_pos = float(loss_cfg["w_fk_pos"])
             if "w_rot_local" in loss_cfg:
                 self.loss_fn.w_rot_local = float(loss_cfg["w_rot_local"])
+
+        # Handle loss_groups (e.g., "core" group with w_rot_delta_root)
+        loss_groups = stage.get("loss_groups", {})
+        if hasattr(self, 'loss_fn') and self.loss_fn is not None:
+            for group_name, group_weights in loss_groups.items():
+                if isinstance(group_weights, dict):
+                    for weight_name, weight_value in group_weights.items():
+                        if hasattr(self.loss_fn, weight_name):
+                            setattr(self.loss_fn, weight_name, float(weight_value))
 
         # 同步在线调度器的边界/当前值，避免后续被旧参数拉回去
         if hasattr(self, 'hyperparam_scheduler') and self.hyperparam_scheduler is not None:
@@ -1586,9 +1468,6 @@ class Trainer:
         self.grad_conn_window: int = 8
         self.grad_conn_detect_anomaly: bool = True
         self._carry_debug_buffer: list[dict[str, float]] = []
-        self.w_latent_consistency: float = 0.0
-        self._latent_consistency_dim_warned: bool = False
-        self._latent_encoder_warned: bool = False
         self.adaptive_loss_module = None
         self.hyperparam_scheduler: Optional[AdaptiveHyperparamScheduler] = None
         self.teacher_forcing_ratio: float = 1.0
@@ -3322,8 +3201,6 @@ def train_entry():
                    help='FK 末端位置损失权重（0 表示禁用）。')
     p.add_argument('--w_rot_local', type=float, default=0.0,
                    help='父子关节局部 geodesic 约束权重（0=关闭）。')
-    p.add_argument('--w_latent_consistency', type=float, default=0.0,
-                   help='Latent consistency loss 权重，用于约束 freerun 隐状态落在预训练流形内。')
     p.add_argument('--seq_len', type=int, default=120)
     p.add_argument('--yaw_aug_deg', type=float, default=0.0)
     p.add_argument('--normalize_c', action='store_true')
@@ -3492,6 +3369,8 @@ def train_entry():
 
     validate_and_fix_model_(model, Dx, Dc)
     validate_and_fix_model_(model)
+
+    # Attach frozen MotionEncoder (optional, used for soft period hints)
     encoder_path_cfg = _arg('encoder_path', '')
     resolved_bundle = None
     if encoder_path_cfg:
@@ -3522,8 +3401,6 @@ def train_entry():
             except Exception as err:
                 resolved_bundle = None
                 print(f"[MPL][WARN] failed to attach MotionEncoder bundle: {err}")
-    else:
-        print("[MPL][WARN] encoder_path not provided; proceeding without frozen encoder.")
 
     with torch.no_grad():
         _l0 = model.shared_encoder[0]
@@ -3666,7 +3543,6 @@ def train_entry():
     trainer.freerun_debug_steps = int(_arg('freerun_debug_steps', 0) or 0)
     trainer.history_debug_steps = int(_arg('history_debug_steps', 0) or 0)
     trainer.freerun_stage_schedule = _parse_stage_schedule(_arg('freerun_stage_schedule', None))
-    trainer.w_latent_consistency = float(_arg('w_latent_consistency', 0.0) or 0.0)
     _init_h_arg = _arg('freerun_init_horizon', None)
     if _init_h_arg is None:
         if trainer.freerun_horizon > 0:

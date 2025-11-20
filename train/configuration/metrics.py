@@ -111,7 +111,6 @@ class StageMetricAdjuster:
 
         freerun_w = float(trainer.get("freerun_weight", 0.0) or 0.0)
         freerun_h = int(trainer.get("freerun_horizon", 0) or 0)
-        latent_w = float(trainer.get("w_latent_consistency", 0.0) or 0.0)
         w_fk = float(loss_cfg.get("w_fk_pos", 0.0) or 0.0)
         w_rot_local = float(loss_cfg.get("w_rot_local", 0.0) or 0.0)
 
@@ -137,11 +136,6 @@ class StageMetricAdjuster:
 
         if rot_geo is not None and self._should_adjust("rot", stage, rot_geo, rot_lo, rot_hi, rot_ref):
             if rot_geo > rot_hi:
-                new = _scale(latent_w, 1.2, 0.0, 0.6)
-                if new != latent_w:
-                    trainer["w_latent_consistency"] = round(new, 4)
-                    changed["w_latent_consistency"] = trainer["w_latent_consistency"]
-                    latent_w = new
                 new_fk = _scale(w_fk, 1.15, 0.01, 0.8)
                 if new_fk != w_fk:
                     loss_cfg["w_fk_pos"] = round(new_fk, 4)
@@ -153,11 +147,6 @@ class StageMetricAdjuster:
                     changed["loss.w_rot_local"] = loss_cfg["w_rot_local"]
                     w_rot_local = new_rot_local
             else:
-                new = _scale(latent_w, 0.9, 0.0, 0.6)
-                if new != latent_w:
-                    trainer["w_latent_consistency"] = round(new, 4)
-                    changed["w_latent_consistency"] = trainer["w_latent_consistency"]
-                    latent_w = new
                 new_fk = _scale(w_fk, 0.9, 0.01, 0.8)
                 if new_fk != w_fk:
                     loss_cfg["w_fk_pos"] = round(new_fk, 4)

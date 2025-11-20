@@ -21,6 +21,7 @@ norm_template.json 中与角速度、姿态历史相关的字段。
 """
 
 import os, glob, json, random, contextlib
+from dataclasses import dataclass
 from typing import Optional
 from collections import defaultdict
 
@@ -1478,9 +1479,16 @@ class InputProjectors:
 
         if angnorm is not None:
             # Cache tensors for fast denorm/norm toggling; move to device lazily in forward.
-            self._ang_s_eff = torch.tensor(angnorm.scales, dtype=torch.float32)
-            self._ang_mu = None if angnorm.mu is None else torch.tensor(angnorm.mu, dtype=torch.float32)
-            self._ang_std = None if angnorm.std is None else torch.tensor(angnorm.std, dtype=torch.float32)
+            s_eff = getattr(angnorm, "scales", None)
+            if s_eff is None:
+                s_eff = getattr(angnorm, "s_eff", None)
+            if s_eff is None:
+                raise AttributeError("AngvelNormalizer/AngvelNormCfg missing scales/s_eff.")
+            self._ang_s_eff = torch.tensor(s_eff, dtype=torch.float32)
+            mu = getattr(angnorm, "mu", None)
+            std = getattr(angnorm, "std", None)
+            self._ang_mu = None if mu is None else torch.tensor(mu, dtype=torch.float32)
+            self._ang_std = None if std is None else torch.tensor(std, dtype=torch.float32)
         else:
             self._ang_s_eff = None
             self._ang_mu = None

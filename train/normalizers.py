@@ -102,6 +102,26 @@ class AngvelNormCfg:
     mu: Optional[np.ndarray]  # [J*3] or None
     std: Optional[np.ndarray]  # [J*3] or None
 
+    def transform(self, W_raw: np.ndarray) -> np.ndarray:
+        """tanh-squash (and optional z-score) angular velocity."""
+        X = np.tanh(W_raw / self.s_eff)
+        if self.mu is not None and self.std is not None:
+            X = (X - self.mu) / self.std
+        return X.astype(np.float32)
+
+    def inverse(self, X_norm: np.ndarray) -> np.ndarray:
+        """Inverse of transform for angular velocity."""
+        X = X_norm
+        if self.mu is not None and self.std is not None:
+            X = X * self.std + self.mu
+        X = np.clip(X, -0.999999, 0.999999)
+        W_raw = np.arctanh(X) * self.s_eff
+        return W_raw.astype(np.float32)
+
+    # Backwards compatibility for call sites using inverse_transform
+    def inverse_transform(self, X_norm: np.ndarray) -> np.ndarray:
+        return self.inverse(X_norm)
+
 
 class AngvelNormalizer:
     """

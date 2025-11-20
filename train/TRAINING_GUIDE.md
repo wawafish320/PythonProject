@@ -174,7 +174,6 @@ python train_configurator.py \
   "w_cond_yaw": 0,                // 已弃用：cond yaw 损失关闭
   "w_rot_log": 0.2,               // 旋转增量对数域损失
   "w_limb_geo": 0.0,              // 四肢辅助损失
-  "w_latent_consistency": 0.03,   // 潜在一致性损失权重
 
   // 分阶段训练配置
   "freerun_stage_schedule": [
@@ -183,8 +182,7 @@ python train_configurator.py \
       "label": "stage1_teacher",
       "trainer": {
         "freerun_weight": 0.0,
-        "freerun_horizon": 8,
-        "w_latent_consistency": 0.03
+        "freerun_horizon": 8
       },
       "loss_groups": {
         "core": {"w_fk_pos": 0.07, "w_rot_local": 0.07},
@@ -196,8 +194,7 @@ python train_configurator.py \
       "label": "stage2_mixed",
       "trainer": {
         "freerun_weight": 0.175,
-        "freerun_horizon": 14,
-        "w_latent_consistency": 0.12
+        "freerun_horizon": 14
       },
       "loss_groups": {
         "core": {"w_fk_pos": 0.2275, "w_rot_local": 0.2275},
@@ -209,8 +206,7 @@ python train_configurator.py \
       "label": "stage3_freerun",
       "trainer": {
         "freerun_weight": 0.325,
-        "freerun_horizon": 18,
-        "w_latent_consistency": 0.288
+        "freerun_horizon": 18
       },
       "loss_groups": {
         "core": {"w_fk_pos": 0.4025, "w_rot_local": 0.4025},
@@ -329,7 +325,6 @@ period_signal = extract_soft_period(soft_contacts)  # 从接触模式中推断
        w_rot_geo * loss_rot_geo +         # 测地线约束
        w_rot_delta * loss_rot_delta +     # 增量平滑
        # cond_yaw 已移除
-       w_latent_consistency * loss_latent_consistency +  # 编码器一致性
        freerun_weight * loss_freerun
    )
    # 问题：过多的foot相关损失会压制其他重要损失的学习
@@ -354,7 +349,6 @@ loss = (
     w_rot_geo * loss_rot_geo +            # 测地线误差
     w_rot_delta * loss_rot_delta +        # 平滑性
     # cond_yaw 已移除
-    w_latent_consistency * loss_latent_consistency +  # 潜在一致性
     freerun_weight * loss_freerun         # 自由运行稳定性
 )
 
@@ -437,7 +431,6 @@ total_loss = (
     w_limb_geo * loss_limb_geo +        # 四肢旋转hinge损失
 
     # === 训练策略损失 ===
-    w_latent * loss_latent_consistency + # 编码器一致性
     w_freerun * loss_freerun            # 自由运行损失
 )
 ```
@@ -448,7 +441,7 @@ total_loss = (
 1. **几何约束**：旋转矩阵正交性 (rot_ortho)、父子关节关系 (rot_local)
 2. **物理约束**：FK位置一致性 (fk_pos)、朝向控制 (cond_yaw)
 3. **平滑性约束**：旋转增量 (rot_delta)、四肢平滑 (limb_geo)
-4. **一致性约束**：编码器特征 (latent_consistency)、注意力 (attn_reg)
+4. **一致性约束**：注意力 (attn_reg)
 5. **策略约束**：自由运行稳定性 (freerun)
 
 **每个损失项都有明确的职责**，移除任何一项都会导致某方面的性能下降。
@@ -461,7 +454,7 @@ total_loss = (
 |------|--------|------|----------|
 | **core** | rot_geo, rot_delta, rot_ortho<br>fk_pos, rot_local | 直接决定运动质量 | 0.01 ~ 0.2 |
 | **aux** | attn, rot_delta_root<br>rot_log, limb_geo | 辅助优化、正则化 | 0.001 ~ 0.05 |
-| **long** | latent_consistency<br>freerun | 长期稳定性、泛化性 | 0.01 ~ 0.3 |
+| **long** | freerun | 长期稳定性、泛化性 | 0.01 ~ 0.3 |
 
 **这种分组的意义**：
 - **Core损失**：调优的重点，直接影响输出质量
@@ -487,7 +480,6 @@ w_rot_delta = 1.0      # 增量平滑性
 w_rot_ortho = 0.001    # 正交性约束
 
 # 第二优先级：Long组 (占总权重的20-30%)
-w_latent_consistency = 0.03  # 编码器一致性
 freerun_weight = 0.0 → 0.325  # 逐步增加
 
 # 第三优先级：Aux组 (占总权重的<10%)
@@ -528,19 +520,19 @@ core : aux : long ≈ 65% : 5% : 30%
 
 #### 示例阶段1：训练初期（Epoch 1-9, Teacher Forcing主导）
 
-- Trainer：`freerun_weight=0`、`freerun_horizon=8`、`w_latent_consistency=0.03`。
+- Trainer：`freerun_weight=0`、`freerun_horizon=8`。
 - Loss 组：`core` 以 `w_fk_pos=0.07`、`w_rot_local=0.07` 为主，`aux` 中 `w_limb_geo` 关闭；全局 `w_cond_yaw=0.1` 不变。
 - 目的：让模型通过高 teacher forcing 比例稳定学习基本姿态，仅做最小化的 freerun 状态同步。
 
 #### 示例阶段2：训练中期（Epoch 10-21, Mixed模式）
 
-- Trainer：`freerun_weight=0.175`、`freerun_horizon=14`，`w_latent_consistency` 提升到 0.12。
+- Trainer：`freerun_weight=0.175`、`freerun_horizon=14`。
 - Loss 组：`core` 动态放大至 `w_fk_pos=0.2275`、`w_rot_local=0.2275`，`aux` 打开 `w_limb_geo=0.05`，让四肢姿态更平滑。
 - 目的：在 teacher/free 混合模式下训练，逐渐降低 teacher forcing（`tf_max` 变为 0.75），同时让 freerun 损失开始发挥作用。
 
 #### 示例阶段3：训练后期（Epoch 22-30, Free Run主导）
 
-- Trainer：`freerun_weight=0.325`、`freerun_horizon=18`，并将 `w_latent_consistency` 增加到 0.288。
+- Trainer：`freerun_weight=0.325`、`freerun_horizon=18`。
 - Loss 组：`core` 提升至 `w_fk_pos=0.4025`、`w_rot_local=0.4025`，`aux` 中 `w_limb_geo=0.08` 维持稳定正则；teacher forcing 最终衰减到 0。
 - 目的：完全聚焦自由运行表现，确保长序列稳定性成为主要训练信号。
 
@@ -817,7 +809,7 @@ python train_configurator.py \
 调整逻辑：
 - `YawAbsDeg` 偏高 → 自动提高 `freerun_weight`、`freerun_horizon`
 - `RootVelMAE` 偏高 → 增加 `freerun_weight`
-- `InputRotGeoDeg` 偏高 → 升高 `w_latent_consistency`、`w_fk_pos`、`w_rot_local`
+- `InputRotGeoDeg` 偏高 → 主要升高 `w_fk_pos`、`w_rot_local`（latent consistency 已移除）
 
 ### 3. 自适应损失权重
 

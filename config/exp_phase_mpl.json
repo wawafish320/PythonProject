@@ -25,7 +25,6 @@
   "eval_horizon": 10,
   "eval_warmup": 0,
   "width": 512,
-  "w_latent_consistency": 0.03,
   "freerun_debug_steps": 10,
   "yaw_forward_offset": 0,
   "history_debug_steps": 8,
@@ -41,7 +40,7 @@
       "trainer": {
         "freerun_weight": 0.0,
         "freerun_horizon": 8,
-        "w_latent_consistency": 0.03
+        "eval_horizon": 8
       },
       "loss_groups": {
         "core": {
@@ -80,13 +79,13 @@
       "trainer": {
         "freerun_weight": 0.15,
         "freerun_horizon": 14,
-        "w_latent_consistency": 0.12
+        "eval_horizon": 14
       },
       "loss_groups": {
         "core": {
           "w_fk_pos": 0.2275,
           "w_rot_local": 0.2275,
-          "w_rot_delta_root": 0.05
+          "w_rot_delta_root": 0.20
         }
       },
       "tf": {
@@ -123,13 +122,13 @@
       "trainer": {
         "freerun_weight": 0.325,
         "freerun_horizon": 18,
-        "w_latent_consistency": 0.288
+        "eval_horizon": 18
       },
       "loss_groups": {
         "core": {
           "w_fk_pos": 0.4025,
           "w_rot_local": 0.4025,
-          "w_rot_delta_root": 0.08
+          "w_rot_delta_root": 0.25
         }
       },
       "tf": {
