@@ -512,6 +512,7 @@ class MotionJointLoss(nn.Module):
             "fk_pos",
             "rot_local",
             "rot_delta",
+            "rot_delta_root",
             "rot_ortho",
         )
         self._reset_adaptive_tracking()
@@ -1204,6 +1205,7 @@ class MotionJointLoss(nn.Module):
             loss = loss + self.w_rot_delta_root * l_root_geo
             self._accumulate_loss_contrib('rot_delta_root', l_root_geo, self.w_rot_delta_root, group='aux')
             stats['rot_delta_root'] = float(l_root_geo.detach().cpu())
+            self._register_component_loss('rot_delta_root', l_root_geo, self.w_rot_delta_root)
         else:
             stats.setdefault('rot_delta_root', 0.0)
 

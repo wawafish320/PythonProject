@@ -19,6 +19,10 @@ class AdaptiveLossWeighting(nn.Module):
         method: str = "gradnorm",
         alpha: float = 1.5,
         dwa_temperature: float = 2.0,
+        *,
+        scales: Optional[Dict[str, float]] = None,
+        weight_ema_beta: float = 0.0,
+        logvar_clip: float = 4.0,
     ):
         super().__init__()
         # allow loss_names为空，运行时自动使用 payload 中的所有 loss
@@ -26,11 +30,19 @@ class AdaptiveLossWeighting(nn.Module):
         self.method = (method or "gradnorm").lower()
         self.alpha = float(alpha)
         self.T = float(dwa_temperature)
+        self.scales = {
+            k: float(v) for k, v in (scales.items() if isinstance(scales, dict) else [])
+        }
+        self.weight_ema_beta = float(max(0.0, min(0.999, weight_ema_beta)))
+        self.logvar_clip = float(max(0.0, logvar_clip))
 
         if self.method == "uncertainty":
             self.log_vars = nn.Parameter(torch.zeros(len(self.loss_names)))
         else:
             self.log_vars = None
+
+        # 供权重可视化平滑用
+        self._ema_weights: Dict[str, float] = {}
 
         if self.method == "dwa":
             self.loss_history: Dict[str, deque] = {
@@ -67,6 +79,12 @@ class AdaptiveLossWeighting(nn.Module):
         total = sum(weight * filtered[name] for name in filtered)
         return total, weights
 
+    def _maybe_scale(self, name: str, loss: torch.Tensor) -> torch.Tensor:
+        scale = float(self.scales.get(name, 1.0)) if hasattr(self, "scales") else 1.0
+        if scale <= 0 or not math.isfinite(scale):
+            return loss
+        return loss / scale
+
     def _gradnorm_weighting(
         self, losses: Dict[str, torch.Tensor], model: Optional[nn.Module]
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
@@ -80,8 +98,9 @@ class AdaptiveLossWeighting(nn.Module):
 
         grad_norms: Dict[str, float] = {}
         for name, loss in losses.items():
+            loss_scaled = self._maybe_scale(name, loss)
             grad = autograd.grad(
-                loss,
+                loss_scaled,
                 last_layer,
                 retain_graph=True,
                 create_graph=False,
@@ -111,15 +130,26 @@ class AdaptiveLossWeighting(nn.Module):
 
         weighted_terms = []
         weights_display: Dict[str, float] = {}
+        log_vars = torch.clamp(self.log_vars, -self.logvar_clip, self.logvar_clip)
         for idx, name in enumerate(valid_names):
-            precision = torch.exp(-self.log_vars[idx])
-            term = precision * losses[name] + self.log_vars[idx]
+            precision = torch.exp(-log_vars[idx])
+            loss_scaled = self._maybe_scale(name, losses[name])
+            term = precision * loss_scaled + log_vars[idx]
             weighted_terms.append(term)
             weights_display[name] = float(precision.detach().cpu().item())
 
         sum_w = sum(max(v, 1e-8) for v in weights_display.values())
         if sum_w > 0:
             weights_display = {k: v / sum_w for k, v in weights_display.items()}
+
+        if self.weight_ema_beta > 0.0:
+            ema = {}
+            for k, v in weights_display.items():
+                prev = self._ema_weights.get(k, v)
+                cur = self.weight_ema_beta * prev + (1.0 - self.weight_ema_beta) * v
+                ema[k] = cur
+            self._ema_weights.update(ema)
+            weights_display = ema
 
         return sum(weighted_terms), weights_display
 

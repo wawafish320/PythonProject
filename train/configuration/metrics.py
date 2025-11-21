@@ -100,6 +100,7 @@ class StageMetricAdjuster:
         trainer = stage.setdefault("trainer", {})
         loss_cfg = stage.setdefault("loss", {})
         changed: Dict[str, float] = {}
+        targets = stage.get("targets") or {}
 
         yaw = metrics.get("YawAbsDeg")
         root_mae = metrics.get("RootVelMAE")
@@ -109,13 +110,21 @@ class StageMetricAdjuster:
         root_lo, root_hi, root_ref = _resolve_bounds(stage, "root", self.ref_values, self.std_values)
         rot_lo, rot_hi, rot_ref = _resolve_bounds(stage, "rot", self.ref_values, self.std_values)
 
+        # 归一化 + 影响力系数 k
+        yaw_k = _get_k(targets, "yaw")
+        root_k = _get_k(targets, "root")
+        rot_k = _get_k(targets, "rot")
+        yaw_norm = (yaw / yaw_ref) * yaw_k if yaw is not None and yaw_ref else None
+        root_norm = (root_mae / root_ref) * root_k if root_mae is not None and root_ref else None
+        rot_norm = (rot_geo / rot_ref) * rot_k if rot_geo is not None and rot_ref else None
+
         freerun_w = float(trainer.get("freerun_weight", 0.0) or 0.0)
         freerun_h = int(trainer.get("freerun_horizon", 0) or 0)
         w_fk = float(loss_cfg.get("w_fk_pos", 0.0) or 0.0)
         w_rot_local = float(loss_cfg.get("w_rot_local", 0.0) or 0.0)
 
-        if yaw is not None and self._should_adjust("yaw", stage, yaw, yaw_lo, yaw_hi, yaw_ref):
-            if yaw > yaw_hi:
+        if yaw_norm is not None and self._should_adjust("yaw", stage, yaw_norm, yaw_lo / max(yaw_ref, 1e-8) * yaw_k, yaw_hi / max(yaw_ref, 1e-8) * yaw_k, yaw_k):
+            if yaw_norm > (yaw_hi / max(yaw_ref, 1e-8) * yaw_k):
                 new_h = _clamp(int(round(freerun_h * 1.1 or 1)), 4, 64)
             else:
                 new_h = _clamp(int(round(freerun_h * 0.9 or 1)), 4, 64)
@@ -124,8 +133,8 @@ class StageMetricAdjuster:
                 changed["freerun_horizon"] = trainer["freerun_horizon"]
                 freerun_h = new_h
 
-        if root_mae is not None and self._should_adjust("root", stage, root_mae, root_lo, root_hi, root_ref):
-            if root_mae > root_hi:
+        if root_norm is not None and self._should_adjust("root", stage, root_norm, root_lo / max(root_ref, 1e-8) * root_k, root_hi / max(root_ref, 1e-8) * root_k, root_k):
+            if root_norm > (root_hi / max(root_ref, 1e-8) * root_k):
                 new = _scale(freerun_w, 1.2, 0.0, 0.8)
             else:
                 new = _scale(freerun_w, 0.9, 0.0, 0.8)
@@ -134,8 +143,8 @@ class StageMetricAdjuster:
                 changed["freerun_weight"] = trainer["freerun_weight"]
                 freerun_w = new
 
-        if rot_geo is not None and self._should_adjust("rot", stage, rot_geo, rot_lo, rot_hi, rot_ref):
-            if rot_geo > rot_hi:
+        if rot_norm is not None and self._should_adjust("rot", stage, rot_norm, rot_lo / max(rot_ref, 1e-8) * rot_k, rot_hi / max(rot_ref, 1e-8) * rot_k, rot_k):
+            if rot_norm > (rot_hi / max(rot_ref, 1e-8) * rot_k):
                 new_fk = _scale(w_fk, 1.15, 0.01, 0.8)
                 if new_fk != w_fk:
                     loss_cfg["w_fk_pos"] = round(new_fk, 4)
@@ -174,7 +183,7 @@ class StageMetricAdjuster:
 
     def _should_adjust(self, key: str, stage: Mapping[str, Any], value: float, lo: float, hi: float, ref: float) -> bool:
         if ref != 0:
-            if abs(value - ref) < abs(ref) * self.min_delta_ratio:
+            if abs(value - ref) < max(abs(ref) * self.min_delta_ratio, 1e-8):
                 return False
         label = stage.get("label", "stage")
         hits = self._hits.setdefault(label, {})
@@ -192,6 +201,14 @@ def _maybe_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _get_k(targets: Mapping[str, Any], key: str) -> float:
+    spec = targets.get(key) or {}
+    k = _maybe_float(spec.get("k"))
+    if k is None or k <= 0:
+        return 1.0
+    return float(k)
 
 
 def _resolve_bounds(

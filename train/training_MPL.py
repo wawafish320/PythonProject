@@ -3166,7 +3166,7 @@ def train_entry():
                    help='GradNorm 等策略的调节超参。')
     p.add_argument('--adaptive_loss_temperature', type=float, default=2.0,
                    help='DWA 策略温度，默认 2.0。')
-    p.add_argument('--adaptive_loss_terms', type=str, default='fk_pos,rot_local,rot_delta',
+    p.add_argument('--adaptive_loss_terms', type=str, default='fk_pos,rot_local,rot_delta,rot_delta_root,rot_ortho',
                    help='需要自适应权重的 loss 名称，逗号分隔。')
     p.add_argument('--adaptive_loss_tuning', action='store_true',
                    help='启用基于验证指标的自适应损失权重调整（StageMetricAdjuster）。')
@@ -3578,7 +3578,7 @@ def train_entry():
     adaptive_loss_method = str(_arg('adaptive_loss_method', 'none') or 'none').lower()
     adaptive_loss_terms = [
         term.strip()
-        for term in str(_arg('adaptive_loss_terms', 'fk_pos,rot_local,rot_delta') or '').split(',')
+        for term in str(_arg('adaptive_loss_terms', 'fk_pos,rot_local,rot_delta,rot_delta_root,rot_ortho') or '').split(',')
         if term.strip()
     ]
     if not adaptive_loss_terms:
