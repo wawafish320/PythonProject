@@ -149,7 +149,7 @@ class Trainer:
         import torch
         return torch.ones(joint_count, device=ref_tensor.device, dtype=ref_tensor.dtype)
 
-    def _rollout_sequence(self, state_seq, cond_seq=None, cond_raw_seq=None, contacts_seq=None, angvel_seq=None, pose_hist_seq=None, *, gt_seq=None, mode='mixed', tf_ratio=1.0):
+    def _rollout_sequence(self, state_seq, cond_seq=None, cond_raw_seq=None, contacts_seq=None, angvel_seq=None, pose_hist_seq=None, *, gt_seq=None, cond_norm_mu=None, cond_norm_std=None, mode='mixed', tf_ratio=1.0):
         self._require_normalizer("Trainer._rollout_sequence")
         import torch
         assert state_seq.dim() == 3, "state_seq expects [B,T,Dx]"
@@ -246,13 +246,16 @@ class Trainer:
                         )
                         pose_hist_buffer_norm = self._pose_hist_transform_vec(pose_hist_buffer_raw, scales, mu, std)
 
+        cond_norm_mu = self._prepare_cond_stat(cond_norm_mu, state_seq) if cond_norm_mu is not None else None
+        cond_norm_std = self._prepare_cond_stat(cond_norm_std, state_seq) if cond_norm_std is not None else None
+
         # 相对化重投影配置
         enable_reprojection = bool(getattr(self, 'enable_cond_reprojection', True))
         reprojection_applied_count = 0
 
         for t in range(T):
             self._diag_roll_step = int(t)
-            cond_t = cond_seq[:, t] if has_time_dim['cond'] else cond_seq
+            cond_input = cond_seq[:, t] if has_time_dim['cond'] else cond_seq
             contacts_t = contacts_seq[:, t] if has_time_dim['contacts'] else contacts_seq
             angvel_t = angvel_seq[:, t] if has_time_dim['angvel'] else angvel_seq
             if pose_hist_enabled:
@@ -268,6 +271,9 @@ class Trainer:
                     cond_raw_t = cond_raw_seq
                 else:
                     cond_raw_t = cond_raw_seq
+
+            cond_raw_for_env = cond_raw_t
+            cond_raw_for_model = cond_raw_t
 
             # === 相对化重投影：当使用模型预测时，将目标方向转换到模型的局部坐标系 ===
             if enable_reprojection and t > 0 and mode in ('free', 'train_free', 'mixed') and cond_raw_t is not None:
@@ -294,7 +300,7 @@ class Trainer:
                             cond_raw_t, gt_yaw, pred_yaw
                         )
                         if cond_raw_t_reprojected is not None:
-                            cond_raw_t = cond_raw_t_reprojected
+                            cond_raw_for_model = cond_raw_t_reprojected
                             reprojection_applied_count += 1
                 except Exception as e:
                     # 重投影失败时，回退到原始 cond（静默失败，不中断训练）
@@ -302,10 +308,18 @@ class Trainer:
                         print(f"[Warning] Cond reprojection failed at step {t}: {e}")
                         self._reprojection_warn_once = False
 
+            if cond_raw_for_model is not None:
+                cond_override = self._normalize_cond_from_raw(cond_raw_for_model, cond_norm_mu, cond_norm_std)
+                if cond_override is not None:
+                    cond_input = cond_override
+
+            if cond_input is None and cond_seq is not None:
+                cond_input = cond_seq[:, t] if has_time_dim['cond'] else cond_seq
+
             with self._amp_context(amp_enabled):
                 ret = self.model(
                     motion,
-                    cond_t,
+                    cond_input,
                     contacts=contacts_t,
                     angvel=angvel_t,
                     pose_history=pose_hist_t,
@@ -388,7 +402,7 @@ class Trainer:
                 elif mode in ('free', 'train_free'):
                     if motion_raw_local is None:
                         self._raise_norm_error("free-run 模式需要 DataNormalizer 提供 RAW 状态写回。")
-                    next_raw = self._apply_free_carry(motion_raw_local, y_raw, cond_next_raw=cond_raw_t)
+                    next_raw = self._apply_free_carry(motion_raw_local, y_raw, cond_next_raw=cond_raw_for_env)
                     if mode == 'free':
                         next_raw = next_raw.detach()
                     else:
@@ -403,7 +417,7 @@ class Trainer:
                 elif mode == 'mixed':  # scheduled sampling (rot6d-only legacy vs full-state)
                     if motion_raw_local is None:
                         self._raise_norm_error("mixed 模式需要 DataNormalizer 提供 RAW 状态写回。")
-                    free_raw = self._apply_free_carry(motion_raw_local, y_raw, cond_next_raw=cond_raw_t).detach()
+                    free_raw = self._apply_free_carry(motion_raw_local, y_raw, cond_next_raw=cond_raw_for_env).detach()
                     free_z = self._diag_norm_x(free_raw)
                     gt_next   = state_seq[:, t + 1]
                     sel = (torch.rand(B, device=self.device) < float(tf_ratio)).float().unsqueeze(-1)
@@ -484,7 +498,9 @@ class Trainer:
 
     def _freerun_loss_window(self, state_seq, gt_seq, cond_seq, cond_raw_seq, contacts_seq,
                              angvel_seq, pose_hist_seq, batch, *, start: int, length: int,
-                             train_mode: bool = False, return_preds: bool = False):
+                             train_mode: bool = False, return_preds: bool = False,
+                             cond_norm_mu: Optional[torch.Tensor] = None,
+                             cond_norm_std: Optional[torch.Tensor] = None):
         if state_seq is None or gt_seq is None:
             return None
         T = state_seq.shape[1]
@@ -519,6 +535,8 @@ class Trainer:
             gt_seq=gt_sub,
             mode=mode,
             tf_ratio=0.0,
+            cond_norm_mu=cond_norm_mu,
+            cond_norm_std=cond_norm_std,
         )
         preds_free = self._ensure_rot6d_delta(preds_free)
         with self._amp_context(self.use_amp):
@@ -532,7 +550,7 @@ class Trainer:
         return free_loss, stats or {}, None, None
 
     def _short_freerun_loss(self, state_seq, gt_seq, cond_seq, cond_raw_seq, contacts_seq,
-                             angvel_seq, pose_hist_seq, batch):
+                             angvel_seq, pose_hist_seq, batch, cond_norm_mu=None, cond_norm_std=None):
         horizon = int(getattr(self, 'freerun_horizon', 0) or 0)
         weight = float(getattr(self, 'freerun_weight', 0.0))
         if horizon <= 0 or weight <= 0.0:
@@ -548,7 +566,8 @@ class Trainer:
             start = 0
         payload = self._freerun_loss_window(
             state_seq, gt_seq, cond_seq, cond_raw_seq, contacts_seq, angvel_seq, pose_hist_seq,
-            batch, start=start, length=window, train_mode=True
+            batch, start=start, length=window, train_mode=True,
+            cond_norm_mu=cond_norm_mu, cond_norm_std=cond_norm_std,
         )
         if payload is None:
             return None
@@ -693,6 +712,8 @@ class Trainer:
         *,
         epoch: int,
         batch_idx: int,
+        cond_norm_mu=None,
+        cond_norm_std=None,
     ) -> None:
         steps = int(getattr(self, 'history_debug_steps', 0) or 0)
         if steps <= 1:
@@ -711,6 +732,8 @@ class Trainer:
                 gt_seq=gt_seq[:, :steps],
                 mode='train_free',
                 tf_ratio=0.0,
+                cond_norm_mu=cond_norm_mu,
+                cond_norm_std=cond_norm_std,
             )
         pred_out = preds_free.get('out') if isinstance(preds_free, dict) else None
         if pred_out is None:
@@ -1223,6 +1246,8 @@ class Trainer:
         angvel_seq,
         pose_hist_seq,
         batch,
+        cond_norm_mu=None,
+        cond_norm_std=None,
         *,
         batch_idx: int,
         log_grad: bool = False,
@@ -1269,6 +1294,8 @@ class Trainer:
             length=window,
             train_mode=True,
             return_preds=log_grad,
+            cond_norm_mu=cond_norm_mu,
+            cond_norm_std=cond_norm_std,
         )
         if payload is None:
             return None
@@ -1324,6 +1351,12 @@ class Trainer:
         contacts_seq = _slice_optional('contacts')
         angvel_seq = _slice_optional('angvel')
         pose_hist_seq = _slice_optional('pose_hist')
+        cond_norm_mu = sample_batch.get('cond_norm_mu') if isinstance(sample_batch, dict) else None
+        cond_norm_std = sample_batch.get('cond_norm_std') if isinstance(sample_batch, dict) else None
+        if cond_norm_mu is not None:
+            cond_norm_mu = cond_norm_mu.to(self.device).float()
+        if cond_norm_std is not None:
+            cond_norm_std = cond_norm_std.to(self.device).float()
 
         use_anomaly = bool(getattr(self, 'grad_conn_detect_anomaly', True))
         import contextlib
@@ -1337,6 +1370,8 @@ class Trainer:
                 angvel_seq=angvel_seq,
                 pose_hist_seq=pose_hist_seq,
                 gt_seq=gt_seq,
+                cond_norm_mu=cond_norm_mu,
+                cond_norm_std=cond_norm_std,
                 mode='train_free',
                 tf_ratio=0.0,
             )
@@ -1669,6 +1704,8 @@ class Trainer:
                 angvel_seq = _to_device(batch.get('angvel')) if isinstance(batch, dict) else None
                 angvel_raw_seq = _to_device(batch.get('angvel_raw')) if isinstance(batch, dict) else None
                 pose_hist_seq = _to_device(batch.get('pose_hist')) if isinstance(batch, dict) else None
+                cond_norm_mu = _to_device(batch.get('cond_norm_mu')) if isinstance(batch, dict) else None
+                cond_norm_std = _to_device(batch.get('cond_norm_std')) if isinstance(batch, dict) else None
 
                 # === 插入开始：一次性打印训练端 X(z) 的 RMS，验证不是 0 ===
                 current_tf_ratio = float(getattr(self, 'teacher_forcing_ratio', tf_ratio))
@@ -1681,6 +1718,8 @@ class Trainer:
                     angvel_seq=angvel_seq,
                     pose_hist_seq=pose_hist_seq,
                     gt_seq=gt_seq,
+                    cond_norm_mu=cond_norm_mu,
+                    cond_norm_std=cond_norm_std,
                     mode='mixed',
                     tf_ratio=current_tf_ratio,
                 )
@@ -1707,6 +1746,8 @@ class Trainer:
                     angvel_seq,
                     pose_hist_seq,
                     batch,
+                    cond_norm_mu=cond_norm_mu,
+                    cond_norm_std=cond_norm_std,
                     batch_idx=bi,
                     log_grad=log_grad,
                 )
@@ -1741,6 +1782,8 @@ class Trainer:
                             pose_hist_seq,
                             epoch=ep,
                             batch_idx=bi,
+                            cond_norm_mu=cond_norm_mu,
+                            cond_norm_std=cond_norm_std,
                         )
                     except Exception as exc:
                         print(f"[HistDrift][warn] debug failed: {exc}")
@@ -2319,6 +2362,48 @@ class Trainer:
                     )
 
         return x_next
+
+    def _prepare_cond_stat(self, stat: Optional[torch.Tensor], ref_tensor: torch.Tensor) -> Optional[torch.Tensor]:
+        if stat is None:
+            return None
+        import torch
+        if not torch.is_tensor(stat):
+            stat_t = torch.as_tensor(stat, device=ref_tensor.device, dtype=ref_tensor.dtype)
+        else:
+            stat_t = stat.to(device=ref_tensor.device, dtype=ref_tensor.dtype)
+        if stat_t.dim() >= 3:
+            stat_t = stat_t.view(stat_t.shape[0], -1)
+        if stat_t.dim() == 1:
+            stat_t = stat_t.unsqueeze(0)
+        if stat_t.size(0) == 1 and ref_tensor.size(0) > 1:
+            stat_t = stat_t.expand(ref_tensor.size(0), -1).contiguous()
+        return stat_t
+
+    def _normalize_cond_from_raw(
+        self,
+        cond_raw: Optional[torch.Tensor],
+        cond_mu: Optional[torch.Tensor],
+        cond_std: Optional[torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        import torch
+        if cond_raw is None or cond_mu is None or cond_std is None:
+            return None
+        if cond_mu.dim() == 3:
+            cond_mu = cond_mu.squeeze(1)
+        if cond_std.dim() == 3:
+            cond_std = cond_std.squeeze(1)
+        if cond_mu.shape != cond_raw.shape:
+            # broadcast along batch if mu/std have single row
+            if cond_mu.size(0) == 1 and cond_raw.size(0) > 1:
+                cond_mu = cond_mu.expand(cond_raw.size(0), -1)
+            if cond_std.size(0) == 1 and cond_raw.size(0) > 1:
+                cond_std = cond_std.expand(cond_raw.size(0), -1)
+        std = cond_std.clamp_min(1e-6)
+        cond_norm = (cond_raw - cond_mu) / std
+        clamp_val = float(getattr(self, 'cond_norm_clip', 6.0) or 0.0)
+        if clamp_val > 0:
+            cond_norm = cond_norm.clamp(-clamp_val, clamp_val)
+        return cond_norm
 
     def _pose_hist_params(self, ref: torch.Tensor) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         """

@@ -836,6 +836,8 @@ class MotionEventDataset(Dataset):
                 n2 = np.linalg.norm(xy2, axis=-1, keepdims=True) + 1e-08
                 C_tgt[:, -2:] = xy2 / n2
 
+        cond_norm_mu = None
+        cond_norm_std = None
         if self.normalize_c and (C_in.shape[1] > 0):
             # 窗口后归一：对“当前窗口、且已完成全部确定性变换后的 C”做鲁棒均/方
             mu, std = self._robust_mean_std(C_in)
@@ -850,6 +852,8 @@ class MotionEventDataset(Dataset):
                 std = np.nan_to_num(self.C_std, nan=1e-6, posinf=1e-6, neginf=1e-6) if (
                             self.C_std is not None) else 1e-6
                 std = np.clip(std, 1e-6, None)
+            cond_norm_mu = mu.astype(np.float32, copy=False).reshape(-1)
+            cond_norm_std = std.astype(np.float32, copy=False).reshape(-1)
             C_in = (C_in - mu) / std
             C_tgt = (C_tgt - mu) / std
             np.nan_to_num(C_in, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
@@ -870,6 +874,9 @@ class MotionEventDataset(Dataset):
             sample['cond_in'] = torch.from_numpy(C_in.astype(np.float32, copy=False)).float()
             sample['cond_tgt'] = torch.from_numpy(C_tgt.astype(np.float32, copy=False)).float()
             sample['cond_tgt_raw'] = torch.from_numpy(C_tgt_raw.astype(np.float32, copy=False)).float()
+            if cond_norm_mu is not None and cond_norm_mu.size == C_in.shape[1]:
+                sample['cond_norm_mu'] = torch.from_numpy(cond_norm_mu).float()
+                sample['cond_norm_std'] = torch.from_numpy(cond_norm_std).float()
         if clip.contacts is not None:
             sample['contacts'] = torch.from_numpy(clip.contacts[s:e].astype(np.float32, copy=False)).float()
         else:

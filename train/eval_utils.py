@@ -65,6 +65,12 @@ def evaluate_teacher(
             pose_hist_seq = batch.get("pose_hist")
             if pose_hist_seq is not None:
                 pose_hist_seq = pose_hist_seq.to(device).float()
+            cond_norm_mu = batch.get("cond_norm_mu")
+            if cond_norm_mu is not None:
+                cond_norm_mu = cond_norm_mu.to(device).float()
+            cond_norm_std = batch.get("cond_norm_std")
+            if cond_norm_std is not None:
+                cond_norm_std = cond_norm_std.to(device).float()
 
             preds_dict, last_attn = trainer._rollout_sequence(
                 state_seq,
@@ -74,6 +80,8 @@ def evaluate_teacher(
                 angvel_seq=angvel_seq,
                 pose_hist_seq=pose_hist_seq,
                 gt_seq=gt_seq,
+                cond_norm_mu=cond_norm_mu,
+                cond_norm_std=cond_norm_std,
                 mode=mode,
                 tf_ratio=1.0,
             )
@@ -227,6 +235,12 @@ def evaluate_freerun(
         angvel_seq = angvel_seq.to(device).float() if angvel_seq is not None else None
         pose_hist_seq = batch.get("pose_hist")
         pose_hist_seq = pose_hist_seq.to(device).float() if pose_hist_seq is not None else None
+        cond_norm_mu = batch.get("cond_norm_mu")
+        cond_norm_mu = cond_norm_mu.to(device).float() if cond_norm_mu is not None else None
+        cond_norm_std = batch.get("cond_norm_std")
+        cond_norm_std = cond_norm_std.to(device).float() if cond_norm_std is not None else None
+        cond_norm_mu = trainer._prepare_cond_stat(cond_norm_mu, state_seq) if cond_norm_mu is not None else None
+        cond_norm_std = trainer._prepare_cond_stat(cond_norm_std, state_seq) if cond_norm_std is not None else None
 
         B, T, Dx = state_seq.shape
         if T < 2:
@@ -249,6 +263,7 @@ def evaluate_freerun(
         end_t = min(T - 1, warmup + horizon)
         if end_t <= start_t:
             continue
+        enable_reprojection = bool(getattr(trainer, "enable_cond_reprojection", True))
 
         motion = state_seq[:, start_t]
         motion_raw = None
@@ -296,7 +311,7 @@ def evaluate_freerun(
                 pass
 
         for t in range(start_t, end_t):
-            cond_t = cond_seq[:, t] if (cond_seq is not None and cond_seq.dim() == 3) else cond_seq
+            cond_input = cond_seq[:, t] if (cond_seq is not None and cond_seq.dim() == 3) else cond_seq
             contacts_t = contacts_seq[:, t] if (contacts_seq is not None and contacts_seq.dim() == 3) else contacts_seq
             if getattr(trainer, 'use_freerun_state_sync', False) and isinstance(getattr(trainer, 'angvel_x_slice', None), slice):
                 angvel_t = motion[..., trainer.angvel_x_slice].detach()
@@ -309,6 +324,48 @@ def evaluate_freerun(
                     gt_motion_raw = trainer.normalizer.denorm_x(gt_motion_next, prev_raw=gt_motion_raw)
                 except Exception:
                     gt_motion_raw = None
+            cond_raw_step = None
+            if cond_seq_raw is not None:
+                if cond_seq_raw.dim() == 3:
+                    idx = min(cond_seq_raw.shape[1] - 1, t + 1)
+                    cond_raw_step = cond_seq_raw[:, idx]
+                else:
+                    cond_raw_step = cond_seq_raw
+
+            cond_raw_for_model = cond_raw_step
+            if enable_reprojection and t > 0 and cond_raw_step is not None:
+                gt_yaw = None
+                try:
+                    gt_idx = min(gt_seq.shape[1] - 1, t) if gt_seq is not None else None
+                    if gt_idx is not None:
+                        gt_raw_frame = trainer._denorm(gt_seq[:, gt_idx])
+                        gt_yaw = trainer._infer_root_yaw_from_rot6d(gt_raw_frame)
+                except Exception:
+                    gt_yaw = None
+                if gt_yaw is None and state_seq is not None:
+                    try:
+                        state_raw = trainer.normalizer.denorm_x(state_seq[:, t], prev_raw=motion_raw)
+                        gt_yaw = trainer._infer_root_yaw_from_rot6d(state_raw)
+                    except Exception:
+                        gt_yaw = None
+                pred_yaw = None
+                if y_raw_prev is not None:
+                    try:
+                        pred_yaw = trainer._infer_root_yaw_from_rot6d(y_raw_prev)
+                    except Exception:
+                        pred_yaw = None
+                if gt_yaw is not None and pred_yaw is not None:
+                    try:
+                        cond_proj = trainer._reproject_cond_to_local_frame(cond_raw_step, gt_yaw, pred_yaw)
+                    except Exception:
+                        cond_proj = None
+                    if cond_proj is not None:
+                        cond_raw_for_model = cond_proj
+
+            if cond_raw_for_model is not None:
+                cond_override = trainer._normalize_cond_from_raw(cond_raw_for_model, cond_norm_mu, cond_norm_std)
+                if cond_override is not None:
+                    cond_input = cond_override
 
             _devt = getattr(device, "type", "cpu")
             if _devt == "mps":
@@ -322,7 +379,7 @@ def evaluate_freerun(
             with amp_ctx:
                 ret = model(
                     motion,
-                    cond_t,
+                    cond_input,
                     contacts=contacts_t,
                     angvel=angvel_t,
                     pose_history=pose_hist_t,
@@ -355,15 +412,8 @@ def evaluate_freerun(
             if period_pred is not None:
                 period_seq_pred.append(period_pred)
 
-            cond_next_raw = None
-            if cond_seq_raw is not None:
-                if cond_seq_raw.dim() == 3:
-                    idx = min(cond_seq_raw.shape[1] - 1, t + 1)
-                    cond_next_raw = cond_seq_raw[:, idx]
-                else:
-                    cond_next_raw = cond_seq_raw
             if motion_raw is not None:
-                motion_raw = trainer._apply_free_carry(motion_raw, y_raw, cond_next_raw=cond_next_raw).detach()
+                motion_raw = trainer._apply_free_carry(motion_raw, y_raw, cond_next_raw=cond_raw_step).detach()
                 motion = trainer._diag_norm_x(motion_raw)
             else:
                 motion = trainer._apply_free_carry(motion, y_raw, cond_next_raw=None).detach()
@@ -397,8 +447,8 @@ def evaluate_freerun(
                     if gt_motion_raw.shape[0] > 0:
                         rec["root_vel_gt_s0"] = gt_motion_raw[0, rootvel_sl].detach().cpu().tolist()
                 yaw_cmd_scalar: Optional[torch.Tensor] = None
-                if cond_next_raw is not None and torch.is_tensor(cond_next_raw) and cond_next_raw.shape[0] > 0:
-                    cond0 = cond_next_raw[0].detach()
+                if cond_raw_step is not None and torch.is_tensor(cond_raw_step) and cond_raw_step.shape[0] > 0:
+                    cond0 = cond_raw_step[0].detach()
                     rec["cond_next_raw_s0"] = cond0.cpu().tolist()
                     cond_dim = cond0.shape[0]
                     dir_vec = None
