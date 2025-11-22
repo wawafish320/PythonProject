@@ -32,6 +32,7 @@
   "teacher_rot_noise_prob": 0.08,
   "w_fk_pos": 0.07,
   "w_rot_local": 0.07,
+  "w_yaw": 1.0,
   "freerun_stage_schedule": [
     {
       "range": [
@@ -47,7 +48,8 @@
       "loss_groups": {
         "core": {
           "w_fk_pos": 0.07,
-          "w_rot_local": 0.07
+          "w_rot_local": 0.07,
+          "w_yaw": 1.0
         }
       },
       "tf": {
@@ -89,7 +91,8 @@
         "core": {
           "w_fk_pos": 0.2275,
           "w_rot_local": 0.2275,
-          "w_rot_delta_root": 0.20
+          "w_rot_delta_root": 0.20,
+          "w_yaw": 1.5
         }
       },
       "tf": {
@@ -108,8 +111,8 @@
             "hi_ratio": 1.05
           },
           "YawAbsDeg": {
-            "ref": 24.0,
-            "hi_ratio": 0.95
+            "ref": 18.0,
+            "hi_ratio": 0.90
           },
           "RootVelMAE": {
             "hi": 0.2
@@ -134,7 +137,8 @@
         "core": {
           "w_fk_pos": 0.2275,
           "w_rot_local": 0.2275,
-          "w_rot_delta_root": 0.20
+          "w_rot_delta_root": 0.20,
+          "w_yaw": 2.0
         }
       },
       "tf": {
@@ -153,8 +157,8 @@
             "hi_ratio": 1.04
           },
           "YawAbsDeg": {
-            "ref": 22.0,
-            "hi_ratio": 0.92
+            "ref": 12.0,
+            "hi_ratio": 0.88
           },
           "RootVelMAE": {
             "hi": 0.19
@@ -179,7 +183,8 @@
         "core": {
           "w_fk_pos": 0.4025,
           "w_rot_local": 0.4025,
-          "w_rot_delta_root": 0.25
+          "w_rot_delta_root": 0.25,
+          "w_yaw": 1.5
         }
       },
       "tf": {
@@ -197,8 +202,8 @@
             "hi_ratio": 1.02
           },
           "YawAbsDeg": {
-            "ref": 22.0,
-            "hi_ratio": 0.95
+            "ref": 10.0,
+            "hi_ratio": 0.90
           },
           "FreeRun/RootVelMAE": {
             "hi": 0.02

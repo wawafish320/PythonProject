@@ -453,6 +453,7 @@ class MotionJointLoss(nn.Module):
         meta: Optional[Dict[str, Any]] = None,
         w_fk_pos: float = 0.0,
         w_rot_local: float = 0.0,
+        w_yaw: float = 0.0,
     ):
         super().__init__()
         self.meta = dict(meta) if isinstance(meta, dict) else {}
@@ -462,6 +463,7 @@ class MotionJointLoss(nn.Module):
         self.w_rot_delta_root = float(w_rot_delta_root)
         self.w_fk_pos = float(w_fk_pos)
         self.w_rot_local = float(w_rot_local)
+        self.w_yaw = float(w_yaw)
         self.angvel_eps = 1e-6
         self.fps = float(fps)
         self.output_layout = output_layout or {}
@@ -514,6 +516,7 @@ class MotionJointLoss(nn.Module):
             "rot_delta",
             "rot_delta_root",
             "rot_ortho",
+            "yaw",
         )
         self._reset_adaptive_tracking()
         self._loss_group_totals: Dict[str, float] = {}
@@ -1149,6 +1152,64 @@ class MotionJointLoss(nn.Module):
         theta = torch.nan_to_num(theta, nan=0.0, posinf=_math.pi, neginf=0.0)
         return theta.mean()
 
+    def compute_yaw_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+        """
+        计算root yaw（朝向）的测地线误差。
+        Yaw是forward向量在水平面上的投影角度，即使在上坡也只关注水平朝向。
+        """
+        Z = lambda v: pred.new_tensor(float(v))
+
+        # 获取旋转矩阵
+        Rp = self._rot6d_matrices(pred)
+        Rg = self._rot6d_matrices(gt)
+        if Rp is None or Rg is None:
+            return Z(0.0)
+        if Rp.dim() < 5:
+            return Z(0.0)
+
+        # 重塑为 [B, T, J, 3, 3]
+        T = int(Rp.shape[-4])
+        J = int(Rp.shape[-3])
+        if T <= 0 or J <= 0:
+            return Z(0.0)
+        Rp = Rp.reshape(-1, T, J, 3, 3)
+        Rg = Rg.reshape(-1, T, J, 3, 3)
+
+        # 提取root旋转矩阵
+        root_idx = int(getattr(self, 'root_idx', 0))
+        root_idx = max(0, min(J - 1, root_idx))
+        Rp_root = Rp[:, :, root_idx]  # [B, T, 3, 3]
+        Rg_root = Rg[:, :, root_idx]
+
+        # 获取坐标系配置（默认：forward=X轴, up=Z轴）
+        forward_axis = int(getattr(self, 'yaw_forward_axis', 0))
+        up_axis = int(getattr(self, 'yaw_up_axis', 2))
+        forward_axis = max(0, min(2, forward_axis))
+        up_axis = max(0, min(2, up_axis))
+
+        # 确定水平面的两个轴（排除up轴）
+        planar_axes = [ax for ax in (0, 1, 2) if ax != up_axis]
+        if len(planar_axes) != 2:
+            planar_axes = [0, 1]  # 后备方案：使用XY平面
+        ax0, ax1 = planar_axes
+
+        # 提取forward向量（旋转矩阵的某一列）
+        forward_p = Rp_root[:, :, :, forward_axis]  # [B, T, 3]
+        forward_g = Rg_root[:, :, :, forward_axis]
+
+        # 计算yaw（只用水平面的两个分量，自动投影到水平面）
+        yaw_p = torch.atan2(forward_p[:, :, ax1], forward_p[:, :, ax0])  # [B, T]
+        yaw_g = torch.atan2(forward_g[:, :, ax1], forward_g[:, :, ax0])
+
+        # 计算测地距离（wrap to [-π, π]，处理角度周期性）
+        dyaw = torch.atan2(
+            torch.sin(yaw_p - yaw_g),
+            torch.cos(yaw_p - yaw_g)
+        )
+
+        # 返回绝对值的平均（转换为rad）
+        return dyaw.abs().mean()
+
     def compute_rot6d_log_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
         Z = lambda v: pred.new_tensor(float(v))
         Rp = self._rot6d_matrices(pred)
@@ -1272,6 +1333,15 @@ class MotionJointLoss(nn.Module):
                 self._register_component_loss('rot_local', local_loss, self.w_rot_local)
         else:
             stats.setdefault('rot_local_deg', 0.0)
+
+        if self.w_yaw > 0.0:
+            l_yaw = self.compute_yaw_loss(pm, gt_motion)
+            loss = loss + self.w_yaw * l_yaw
+            self._accumulate_loss_contrib('yaw', l_yaw, self.w_yaw, group='core')
+            stats['yaw_deg'] = float((l_yaw * (180.0 / math.pi)).detach().cpu())
+            self._register_component_loss('yaw', l_yaw, self.w_yaw)
+        else:
+            stats.setdefault('yaw_deg', 0.0)
 
         self._finalize_adaptive_payload(loss)
         stats.update(self._loss_group_stats())

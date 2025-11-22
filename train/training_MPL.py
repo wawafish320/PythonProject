@@ -1072,6 +1072,8 @@ class Trainer:
                 self.loss_fn.w_fk_pos = float(loss_cfg["w_fk_pos"])
             if "w_rot_local" in loss_cfg:
                 self.loss_fn.w_rot_local = float(loss_cfg["w_rot_local"])
+            if "w_yaw" in loss_cfg:
+                self.loss_fn.w_yaw = float(loss_cfg["w_yaw"])
 
         # Handle loss_groups (e.g., "core" group with w_rot_delta_root)
         loss_groups = stage.get("loss_groups", {})
@@ -3392,6 +3394,8 @@ def train_entry():
                    help='FK 末端位置损失权重（0 表示禁用）。')
     p.add_argument('--w_rot_local', type=float, default=0.0,
                    help='父子关节局部 geodesic 约束权重（0=关闭）。')
+    p.add_argument('--w_yaw', type=float, default=0.0,
+                   help='Root yaw (水平朝向) geodesic 损失权重（0=关闭）。')
     p.add_argument('--seq_len', type=int, default=120)
     p.add_argument('--yaw_aug_deg', type=float, default=0.0)
     p.add_argument('--normalize_c', action='store_true')
@@ -3614,6 +3618,7 @@ def train_entry():
     w_rot_delta = float(_arg('w_rot_delta', 1.0))
     w_fk_pos = float(_arg('w_fk_pos', 0.0) or 0.0)
     w_rot_local = float(_arg('w_rot_local', 0.0) or 0.0)
+    w_yaw = float(_arg('w_yaw', 0.0) or 0.0)
 
     loss_fn = MotionJointLoss(
         output_layout=ds_train.output_layout,
@@ -3625,6 +3630,7 @@ def train_entry():
         meta=None,
         w_fk_pos=w_fk_pos,
         w_rot_local=w_rot_local,
+        w_yaw=w_yaw,
     )
     if getattr(ds_train, 'bone_names', None):
         try:
@@ -3647,7 +3653,8 @@ def train_entry():
         f"w_rot_delta_root={loss_fn.w_rot_delta_root} "
         f"w_rot_ortho={loss_fn.w_rot_ortho} "
         f"w_fk_pos={loss_fn.w_fk_pos} "
-        f"w_rot_local={loss_fn.w_rot_local}"
+        f"w_rot_local={loss_fn.w_rot_local} "
+        f"w_yaw={loss_fn.w_yaw}"
     )
 
     loss_fn.dt_traj = 1.0 / max(1e-6, fps_data)
