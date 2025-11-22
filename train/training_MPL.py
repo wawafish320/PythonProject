@@ -246,6 +246,10 @@ class Trainer:
                         )
                         pose_hist_buffer_norm = self._pose_hist_transform_vec(pose_hist_buffer_raw, scales, mu, std)
 
+        # 相对化重投影配置
+        enable_reprojection = bool(getattr(self, 'enable_cond_reprojection', True))
+        reprojection_applied_count = 0
+
         for t in range(T):
             self._diag_roll_step = int(t)
             cond_t = cond_seq[:, t] if has_time_dim['cond'] else cond_seq
@@ -264,6 +268,39 @@ class Trainer:
                     cond_raw_t = cond_raw_seq
                 else:
                     cond_raw_t = cond_raw_seq
+
+            # === 相对化重投影：当使用模型预测时，将目标方向转换到模型的局部坐标系 ===
+            if enable_reprojection and t > 0 and mode in ('free', 'train_free', 'mixed') and cond_raw_t is not None:
+                try:
+                    # 获取 GT 的根骨朝向
+                    gt_yaw = None
+                    if gt_seq is not None and has_time_dim.get('cond_raw'):
+                        gt_idx = min(gt_seq.shape[1] - 1, t)
+                        gt_raw = self._denorm(gt_seq[:, gt_idx])
+                        gt_yaw = self._infer_root_yaw_from_rot6d(gt_raw)
+                    elif state_seq is not None:
+                        # 从当前输入状态推断
+                        state_raw = self.normalizer.denorm_x(state_seq[:, t], prev_raw=motion_raw_local)
+                        gt_yaw = self._infer_root_yaw_from_rot6d(state_raw)
+
+                    # 获取模型预测的根骨朝向
+                    pred_yaw = None
+                    if y_raw_local is not None:
+                        pred_yaw = self._infer_root_yaw_from_rot6d(y_raw_local)
+
+                    # 执行重投影
+                    if gt_yaw is not None and pred_yaw is not None:
+                        cond_raw_t_reprojected = self._reproject_cond_to_local_frame(
+                            cond_raw_t, gt_yaw, pred_yaw
+                        )
+                        if cond_raw_t_reprojected is not None:
+                            cond_raw_t = cond_raw_t_reprojected
+                            reprojection_applied_count += 1
+                except Exception as e:
+                    # 重投影失败时，回退到原始 cond（静默失败，不中断训练）
+                    if getattr(self, '_reprojection_warn_once', True):
+                        print(f"[Warning] Cond reprojection failed at step {t}: {e}")
+                        self._reprojection_warn_once = False
 
             with self._amp_context(amp_enabled):
                 ret = self.model(
@@ -399,6 +436,17 @@ class Trainer:
             preds['period_pred'] = torch.stack(
                 [p if p.dim() == 2 else p.squeeze(1) for p in period_preds], dim=1
             )
+
+        # 诊断：报告重投影应用情况
+        if enable_reprojection and reprojection_applied_count > 0:
+            diag_limit = int(getattr(self, '_reprojection_diag_limit', 3))
+            if not hasattr(self, '_reprojection_diag_count'):
+                self._reprojection_diag_count = 0
+            if self._reprojection_diag_count < diag_limit:
+                epoch = getattr(self, 'cur_epoch', -1)
+                print(f"[CondReprojection] Epoch {epoch}, Mode '{mode}': Applied reprojection to {reprojection_applied_count}/{T} steps")
+                self._reprojection_diag_count += 1
+
         self._diag_roll_mode = None
         self._diag_roll_step = -1
         return preds, last_attn
@@ -2021,6 +2069,62 @@ class Trainer:
             return compose_rot6d_delta(y_prev_raw, delta_raw)
         except Exception as e:
             self._raise_norm_error("compose_rot6d_delta 失败", e)
+
+    def _reproject_cond_to_local_frame(self, cond_raw, yaw_gt, yaw_pred):
+        """
+        将条件信息（目标方向/速度）重投影到模型预测的局部坐标系。
+
+        参数:
+            cond_raw: [B, cond_dim] 原始条件，格式: [..., dir_x, dir_y, speed]
+            yaw_gt: [B] 或 [B, 1] GT的根骨朝向（世界坐标系）
+            yaw_pred: [B] 或 [B, 1] 模型预测的根骨朝向（世界坐标系）
+
+        返回:
+            重投影后的 cond_raw，方向分量旋转到模型的局部坐标系
+        """
+        if cond_raw is None:
+            return None
+
+        import torch
+        device = cond_raw.device
+        dtype = cond_raw.dtype
+
+        # 确保 yaw 是 [B] 形状
+        if yaw_gt.dim() > 1:
+            yaw_gt = yaw_gt.squeeze(-1)
+        if yaw_pred.dim() > 1:
+            yaw_pred = yaw_pred.squeeze(-1)
+
+        # 计算朝向偏差：Δyaw = yaw_pred - yaw_gt
+        delta_yaw = yaw_pred - yaw_gt
+        delta_yaw = torch.atan2(torch.sin(delta_yaw), torch.cos(delta_yaw))  # 归一化到 [-π, π]
+
+        # 解析 cond_raw: [...action_dims, dir_x, dir_y, speed]
+        cond_dim = cond_raw.shape[-1]
+        if cond_dim < 3:
+            return cond_raw  # 无法重投影，返回原值
+
+        action_dim = cond_dim - 3
+        cond_reprojected = cond_raw.clone()
+
+        # 提取方向分量
+        dir_world = cond_raw[..., action_dim:action_dim + 2]  # [B, 2]
+
+        # 将方向旋转 -Δyaw，转换到模型的局部坐标系
+        # 旋转矩阵: [[cos(-θ), -sin(-θ)], [sin(-θ), cos(-θ)]]
+        cos_delta = torch.cos(-delta_yaw)
+        sin_delta = torch.sin(-delta_yaw)
+
+        dir_local_x = dir_world[..., 0] * cos_delta - dir_world[..., 1] * sin_delta
+        dir_local_y = dir_world[..., 0] * sin_delta + dir_world[..., 1] * cos_delta
+
+        # 写回重投影后的方向
+        cond_reprojected[..., action_dim] = dir_local_x
+        cond_reprojected[..., action_dim + 1] = dir_local_y
+
+        # 速度保持不变（标量，与朝向无关）
+
+        return cond_reprojected
 
     def _apply_free_carry(self, x_prev, y_denorm, cond_next_raw=None):
         """
