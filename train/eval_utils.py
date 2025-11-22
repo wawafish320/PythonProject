@@ -522,6 +522,36 @@ def evaluate_freerun(
         for key, value in batch_stats.items():
             stats_accum.setdefault(key, []).append(value)
 
+        if diag_records:
+            yaw_slope = None
+            delta_energy = None
+            slope_vals = []
+            delta_vals = []
+            for rec in diag_records:
+                y = rec.get("yaw_abs_deg")
+                if y is not None:
+                    slope_vals.append(y)
+                delta = rec.get("delta_norm_abs")
+                if delta is not None:
+                    delta_vals.append(delta)
+            if len(slope_vals) >= 2:
+                slope_seq = [
+                    slope_vals[i + 1] - slope_vals[i] for i in range(len(slope_vals) - 1)
+                ]
+                yaw_slope = float(sum(slope_seq) / max(1, len(slope_seq)))
+            if delta_vals:
+                delta_mean = sum(delta_vals) / len(delta_vals)
+                if len(delta_vals) > 1:
+                    mu = delta_mean
+                    delta_var = sum((d - mu) ** 2 for d in delta_vals) / (len(delta_vals) - 1)
+                else:
+                    delta_var = 0.0
+                delta_energy = dict(mean=float(delta_mean), var=float(delta_var))
+            if yaw_slope is not None:
+                batch_stats["Diag/YawSlope"] = yaw_slope
+            if delta_energy is not None:
+                batch_stats["Diag/DeltaEnergyMean"] = delta_energy["mean"]
+                batch_stats["Diag/DeltaEnergyVar"] = delta_energy["var"]
         if diag_records and base_debug_path:
             epoch = int(getattr(trainer, "cur_epoch", 0) or 0)
             run_name = getattr(trainer, "_current_run_name", None)

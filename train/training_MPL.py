@@ -479,11 +479,13 @@ class Trainer:
             return state_seq
         J = D // 6
         device = state_seq.device
-        mask = (torch.rand(B, T, J, 1, device=device) < float(noise_prob))
-        if not mask.any():
-            return state_seq
         rotJ = rot_chunk.view(B, T, J, 6)
         R = rot6d_to_matrix(rotJ)
+        B, T, J = R.shape[:3]
+        mask_shape = R.shape[:-2]
+        mask = (torch.rand(mask_shape, device=device) < float(noise_prob))
+        if not mask.any():
+            return state_seq
         max_rad = float(noise_deg) * (_math.pi / 180.0)
         angles = torch.empty(B, T, J, device=device, dtype=state_seq.dtype).uniform_(-max_rad, max_rad)
         axes = torch.randn(B, T, J, 3, device=device, dtype=state_seq.dtype)

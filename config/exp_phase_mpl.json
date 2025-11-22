@@ -16,7 +16,7 @@
   "foot_contact_threshold": 2.0,
   "diag_input_stats": true,
   "freerun_debug_path": "debug_output/freerun_diag_ep002.pt",
-  "freerun_horizon": 13,
+  "freerun_horizon": 8,
   "freerun_horizon_ramp_epochs": 8,
   "freerun_weight": 0.0,
   "freerun_grad_log": true,
@@ -28,6 +28,8 @@
   "freerun_debug_steps": 10,
   "yaw_forward_offset": 0,
   "history_debug_steps": 8,
+  "teacher_rot_noise_deg": 1.5,
+  "teacher_rot_noise_prob": 0.08,
   "w_fk_pos": 0.07,
   "w_rot_local": 0.07,
   "freerun_stage_schedule": [
@@ -73,13 +75,15 @@
     {
       "range": [
         10,
-        21
+        14
       ],
-      "label": "stage2_mixed",
+      "label": "stage2_mixed_warmup",
       "trainer": {
-        "freerun_weight": 0.15,
-        "freerun_horizon": 14,
-        "eval_horizon": 14
+        "freerun_weight": 0.05,
+        "freerun_horizon": 3,
+        "eval_horizon": 6,
+        "teacher_rot_noise_deg": 2.0,
+        "teacher_rot_noise_prob": 0.12
       },
       "loss_groups": {
         "core": {
@@ -90,10 +94,55 @@
       },
       "tf": {
         "max": 0.8,
-        "min": 0.6
+        "min": 0.65
       },
       "goal": {
-        "min_epochs": 4,
+        "min_epochs": 3,
+        "window": 2,
+        "tags": [
+          "valfree"
+        ],
+        "metrics": {
+          "GeoDeg": {
+            "ref": 2.3,
+            "hi_ratio": 1.05
+          },
+          "YawAbsDeg": {
+            "ref": 24.0,
+            "hi_ratio": 0.95
+          },
+          "RootVelMAE": {
+            "hi": 0.2
+          }
+        }
+      }
+    },
+    {
+      "range": [
+        15,
+        21
+      ],
+      "label": "stage2_mixed_ramp",
+      "trainer": {
+        "freerun_weight": 0.1,
+        "freerun_horizon": 8,
+        "eval_horizon": 8,
+        "teacher_rot_noise_deg": 2.5,
+        "teacher_rot_noise_prob": 0.15
+      },
+      "loss_groups": {
+        "core": {
+          "w_fk_pos": 0.2275,
+          "w_rot_local": 0.2275,
+          "w_rot_delta_root": 0.20
+        }
+      },
+      "tf": {
+        "max": 0.7,
+        "min": 0.5
+      },
+      "goal": {
+        "min_epochs": 3,
         "window": 3,
         "tags": [
           "valfree"
@@ -101,14 +150,14 @@
         "metrics": {
           "GeoDeg": {
             "ref": 2.0,
-            "hi_ratio": 1.05
+            "hi_ratio": 1.04
           },
           "YawAbsDeg": {
             "ref": 22.0,
-            "hi_ratio": 0.9
+            "hi_ratio": 0.92
           },
           "RootVelMAE": {
-            "hi": 0.2
+            "hi": 0.19
           }
         }
       }
@@ -120,9 +169,11 @@
       ],
       "label": "stage3_freerun",
       "trainer": {
-        "freerun_weight": 0.325,
-        "freerun_horizon": 18,
-        "eval_horizon": 18
+        "freerun_weight": 0.2,
+        "freerun_horizon": 12,
+        "eval_horizon": 12,
+        "teacher_rot_noise_deg": 0.0,
+        "teacher_rot_noise_prob": 0.0
       },
       "loss_groups": {
         "core": {
