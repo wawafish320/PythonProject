@@ -1,0 +1,232 @@
+{
+  "data": "./raw_data/processed_data",
+  "bundle_json": "./raw_data/processed_data/norm_template.json",
+  "out": "./models/exp_phase_e2e_sc",
+  "run_name": "exp_phase_MLP",
+  "epochs": 30,
+  "batch": 8,
+  "lr": 0.00031732900585132803,
+  "seq_len": 60,
+  "tf_mode": "epoch_linear",
+  "tf_start_epoch": 1,
+  "tf_end_epoch": 19,
+  "tf_max": 1.0,
+  "tf_min": 0.0,
+  "encoder_path": "./models/motion_encoder_equiv.pt",
+  "foot_contact_threshold": 2.0,
+  "diag_input_stats": true,
+  "freerun_debug_path": "debug_output/freerun_diag_ep002.pt",
+  "freerun_horizon": 8,
+  "freerun_horizon_ramp_epochs": 8,
+  "freerun_weight": 0.0,
+  "freerun_grad_log": true,
+  "freerun_grad_log_interval": 200,
+  "monitor_batches": 2,
+  "eval_horizon": 10,
+  "eval_warmup": 0,
+  "width": 512,
+  "freerun_debug_steps": 10,
+  "yaw_forward_offset": 0,
+  "history_debug_steps": 8,
+  "teacher_rot_noise_deg": 1.5,
+  "teacher_rot_noise_prob": 0.08,
+  "w_fk_pos": 0.07,
+  "w_rot_local": 0.07,
+  "freerun_stage_schedule": [
+    {
+      "range": [
+        1,
+        9
+      ],
+      "label": "stage1_teacher",
+      "trainer": {
+        "freerun_weight": 0.0,
+        "freerun_horizon": 8,
+        "eval_horizon": 8
+      },
+      "loss_groups": {
+        "core": {
+          "w_fk_pos": 0.07,
+          "w_rot_local": 0.07
+        }
+      },
+      "tf": {
+        "max": 1.0
+      },
+      "goal": {
+        "min_epochs": 3,
+        "window": 2,
+        "tags": [
+          "teacher"
+        ],
+        "metrics": {
+          "loss": {
+            "hi": 0.12
+          },
+          "GeoDeg": {
+            "hi": 2.5
+          },
+          "MSEnormY": {
+            "hi": 0.12
+          }
+        }
+      },
+      "loss": {}
+    },
+    {
+      "range": [
+        10,
+        14
+      ],
+      "label": "stage2_mixed_warmup",
+      "trainer": {
+        "freerun_weight": 0.0239,
+        "freerun_horizon": 3,
+        "eval_horizon": 6,
+        "teacher_rot_noise_deg": 2.0,
+        "teacher_rot_noise_prob": 0.12
+      },
+      "loss_groups": {
+        "core": {
+          "w_fk_pos": 0.2275,
+          "w_rot_local": 0.2275,
+          "w_rot_delta_root": 0.2
+        }
+      },
+      "tf": {
+        "max": 0.8,
+        "min": 0.65
+      },
+      "goal": {
+        "min_epochs": 3,
+        "window": 2,
+        "tags": [
+          "valfree"
+        ],
+        "metrics": {
+          "GeoDeg": {
+            "ref": 2.3,
+            "hi_ratio": 1.05
+          },
+          "YawAbsDeg": {
+            "ref": 24.0,
+            "hi_ratio": 0.95
+          },
+          "RootVelMAE": {
+            "hi": 0.2
+          }
+        }
+      },
+      "loss": {}
+    },
+    {
+      "range": [
+        15,
+        21
+      ],
+      "label": "stage2_mixed_ramp",
+      "trainer": {
+        "freerun_weight": 0.1,
+        "freerun_horizon": 8,
+        "eval_horizon": 8,
+        "teacher_rot_noise_deg": 2.5,
+        "teacher_rot_noise_prob": 0.15
+      },
+      "loss_groups": {
+        "core": {
+          "w_fk_pos": 0.2275,
+          "w_rot_local": 0.2275,
+          "w_rot_delta_root": 0.2
+        }
+      },
+      "tf": {
+        "max": 0.7,
+        "min": 0.5
+      },
+      "goal": {
+        "min_epochs": 3,
+        "window": 3,
+        "tags": [
+          "valfree"
+        ],
+        "metrics": {
+          "GeoDeg": {
+            "ref": 2.0,
+            "hi_ratio": 1.04
+          },
+          "YawAbsDeg": {
+            "ref": 22.0,
+            "hi_ratio": 0.92
+          },
+          "RootVelMAE": {
+            "hi": 0.19
+          }
+        }
+      }
+    },
+    {
+      "range": [
+        22,
+        30
+      ],
+      "label": "stage3_freerun",
+      "trainer": {
+        "freerun_weight": 0.2,
+        "freerun_horizon": 12,
+        "eval_horizon": 12,
+        "teacher_rot_noise_deg": 0.0,
+        "teacher_rot_noise_prob": 0.0
+      },
+      "loss_groups": {
+        "core": {
+          "w_fk_pos": 0.4025,
+          "w_rot_local": 0.4025,
+          "w_rot_delta_root": 0.25
+        }
+      },
+      "tf": {
+        "max": 0.0
+      },
+      "goal": {
+        "min_epochs": 4,
+        "window": 3,
+        "tags": [
+          "valfree"
+        ],
+        "metrics": {
+          "GeoDeg": {
+            "ref": 2.0,
+            "hi_ratio": 1.02
+          },
+          "YawAbsDeg": {
+            "ref": 22.0,
+            "hi_ratio": 0.95
+          },
+          "FreeRun/RootVelMAE": {
+            "hi": 0.02
+          }
+        }
+      }
+    }
+  ],
+  "dataset_profile": {
+    "n_clips": 5,
+    "total_frames": 375,
+    "avg_seq_len": 75,
+    "median_seq_len": 87,
+    "yaw_mean_deg": 21.960117048813697,
+    "yaw_std_deg": 19.507139252993206,
+    "speed_mean": 0.7564205562314779,
+    "speed_std": 0.12590480883983501,
+    "bone_angle_mean_deg": 49.91174236268155,
+    "bone_angle_std_deg": 52.584285248060155,
+    "complexity": 0.5349603356162784
+  },
+  "strategy_meta": {
+    "reference_targets": {
+      "yaw": 21.960117048813697,
+      "root": 0.7564205562314779,
+      "rot": 1.996469694507262
+    }
+  }
+}
