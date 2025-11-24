@@ -58,6 +58,25 @@ def _get_fps_from_npz_or_json(z, json_path: Optional[str]) -> int:
     raise RuntimeError(f"FPS not found in npz nor JSON (json={json_path})")
 
 
+def _extract_meta_from_npz(z) -> dict:
+    meta_raw = z.get("meta_json")
+    if meta_raw is None:
+        return {}
+    if hasattr(meta_raw, "item"):
+        meta_raw = meta_raw.item()
+    if isinstance(meta_raw, (bytes, bytearray)):
+        meta_raw = meta_raw.decode("utf-8", errors="ignore")
+    if not isinstance(meta_raw, str):
+        return {}
+    try:
+        meta = json.loads(meta_raw)
+    except Exception:
+        return {}
+    if not isinstance(meta, dict):
+        return {}
+    return meta.copy()
+
+
 # --------------------------- Dataset ----------------------------
 
 
@@ -313,6 +332,9 @@ class YAngvelContactsDataset(Dataset):
             if Dy % 6 != 0:
                 raise RuntimeError(f"y_out_features length {Dy} is not multiple of 6")
             self.J = Dy // 6
+            self.dataset_meta = _extract_meta_from_npz(z0)
+        if not hasattr(self, "dataset_meta"):
+            self.dataset_meta = {}
 
         # angvel 专用归一化（读取 tanh_scales_angvel 或 s_eff_angvel；可选 zscore）
         self.norm = _make_angnorm_from_spec(norm_spec, J_times_3=self.J * 3, require_zscore=require_zscore)
@@ -1849,15 +1871,7 @@ def main():
     scale_max = float(args.amp_scale_max)
 
     def _gather_state() -> dict:
-        return {
-            "encoder": enc.state_dict(),
-            "encoder_amp": enc.state_dict() if enc_amp is enc else enc_amp.state_dict(),
-            "period_head": period_head.state_dict(),
-            "contact_head": contact_head.state_dict(),
-            "amp_head": amp_head.state_dict(),
-            "decoder_pose": decoder_pose.state_dict(),
-            "decoder_ang": decoder_ang.state_dict(),
-            "meta": {
+        meta_payload = {
                 "input_dim": in_dim,
                 "pose_dim": pose_dim,
                 "ang_dim": ang_dim,
@@ -1869,7 +1883,22 @@ def main():
                 "mlp_dropout": args.encoder_dropout,
                 "amp_share_encoder": bool(args.amp_share_encoder),
                 "amp_linear_equiv": bool(args.amp_linear_equiv),
-            },
+        }
+        extra_meta = getattr(train_ds, "dataset_meta", None)
+        if isinstance(extra_meta, dict) and extra_meta:
+            for key in ("trajectory", "axes", "handedness", "asset_to_ue", "root_motion", "skeleton"):
+                if key in extra_meta and key not in meta_payload:
+                    meta_payload[key] = extra_meta[key]
+            meta_payload["dataset_meta"] = extra_meta
+        return {
+            "encoder": enc.state_dict(),
+            "encoder_amp": enc.state_dict() if enc_amp is enc else enc_amp.state_dict(),
+            "period_head": period_head.state_dict(),
+            "contact_head": contact_head.state_dict(),
+            "amp_head": amp_head.state_dict(),
+            "decoder_pose": decoder_pose.state_dict(),
+            "decoder_ang": decoder_ang.state_dict(),
+            "meta": meta_payload,
         }
 
     def _save_checkpoint(path: Optional[str]) -> None:

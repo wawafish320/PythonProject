@@ -519,21 +519,40 @@ class MotionEventDataset(Dataset):
         self.angvel_dim = int(first.angvel_norm.shape[1]) if first.angvel_norm is not None else 0
         self.pose_hist_dim = int(first.pose_hist_norm.shape[1]) if first.pose_hist_norm is not None else 0
         self.encoder_input_dim = self.contact_dim + self.angvel_dim + self.pose_hist_dim
+        self._forward_axis_scores = None
         forward_axis = None
         forward_axis_offset = 0.0
-        if axis_score_cnt.sum() > 0:
+        forward_axis_source = None
+        traj_meta = first.meta.get('trajectory', {}) or {}
+        meta_axis = traj_meta.get('pelvis_forward_axis')
+        meta_offset = traj_meta.get('pelvis_forward_offset_rad', 0.0)
+        try:
+            axis_candidate = int(meta_axis)
+            if 0 <= axis_candidate < 3:
+                forward_axis = axis_candidate
+                forward_axis_source = 'meta'
+                if isinstance(meta_offset, (int, float)):
+                    forward_axis_offset = float(meta_offset)
+        except Exception:
+            forward_axis = None
+        if forward_axis is None and axis_score_cnt.sum() > 0:
             avg = np.full(3, np.inf, dtype=np.float64)
             valid = axis_score_cnt > 0
             avg[valid] = axis_score_sum[valid] / np.maximum(axis_score_cnt[valid], 1)
             forward_axis = int(np.argmin(avg))
+            forward_axis_source = 'infer'
             self._forward_axis_scores = avg
             if axis_offset_cnt[forward_axis] > 0:
                 forward_axis_offset = axis_offset_sum[forward_axis] / max(1, axis_offset_cnt[forward_axis])
         self.forward_axis = forward_axis
         self.forward_axis_offset = float(forward_axis_offset)
         if forward_axis is not None:
-            score_deg = float(np.degrees(self._forward_axis_scores[forward_axis]))
-            print(f'[ForwardAxis] inferred axis={forward_axis} (median Δyaw={score_deg:.2f}° offset={np.degrees(forward_axis_offset):.2f}°)')
+            if self._forward_axis_scores is not None and 0 <= forward_axis < len(self._forward_axis_scores):
+                score_deg = float(np.degrees(self._forward_axis_scores[forward_axis]))
+            else:
+                score_deg = float(abs(np.degrees(forward_axis_offset)))
+            source = forward_axis_source or 'infer'
+            print(f'[ForwardAxis] source={source} axis={forward_axis} (median Δyaw={score_deg:.2f}° offset={np.degrees(forward_axis_offset):.2f}°)')
         else:
             print('[ForwardAxis][WARN] unable to infer forward axis; fallback to default later.')
 

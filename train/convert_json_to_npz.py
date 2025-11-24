@@ -11,7 +11,7 @@ UE JSON → NPZ 转换工具（v4）
 - TrajectoryPos 缺失时自动补零（与 TrajectoryDir 使用相同的 K）
 - Phase 缺失时默认不写入，可通过 --use-phase 强制写入 0
 - X 特征按实际存在的通道动态打包，state_layout_json 会与之完全对齐
-- 可选写入 RootYaw（弧度，单通道）
+- 可选写入 `RootYaw`：这里写入的是 **由骨盆 6D 旋转推回并与 TrajectoryDir 对齐的 pelvis yaw**；原始 JSON 的 `RootYaw`（通常是轨迹/命令朝向）会保存在 meta.trajectory.traj_yaw_raw 仅供诊断
 - 保持旧版 CLI 兼容，同时新增若干控制开关
 
 依赖：Python 3.8+，仅依赖标准库与 numpy
@@ -128,6 +128,7 @@ class GroupedNormalizer:
         self.cfg = cfg
         self.template = _TemplateGN()
         self._source_meta = None
+        self._first_npz_meta = None
         self._first_npz = None
         self._fitted = False
         self._spans: _Spans | None = None
@@ -170,6 +171,17 @@ class GroupedNormalizer:
                                 self._source_meta = None
                     except Exception:
                         pass
+                    meta_npz = d.get('meta_json')
+                    if meta_npz is not None:
+                        try:
+                            if hasattr(meta_npz, 'item'):
+                                meta_npz = meta_npz.item()
+                            if isinstance(meta_npz, (bytes, bytearray)):
+                                meta_npz = meta_npz.decode('utf-8', errors='ignore')
+                            if isinstance(meta_npz, str):
+                                self._first_npz_meta = json.loads(meta_npz)
+                        except Exception:
+                            self._first_npz_meta = None
                 X = d['X_flat'].astype(_np.float32)
                 Y = d['y_out_features'].astype(_np.float32)
                 if not out_layout:
@@ -262,18 +274,26 @@ class GroupedNormalizer:
                 angvel_floor=self.cfg.angvel_floor,
             )
         )
-        # 若存在源 JSON 的 meta，做一次“补齐式合并”：保留我们这里计算出的键，补齐缺失键。
-        if self._source_meta:
-            for _k, _v in self._source_meta.items():
+        def _merge_meta(src: dict):
+            if not isinstance(src, dict):
+                return
+            for _k, _v in src.items():
                 if _k not in self.template.meta:
                     self.template.meta[_k] = _v
-                else:
-                    # 对 dict 做浅合并（仅补充缺失子键），避免覆盖我们刚计算的值
-                    if isinstance(self.template.meta.get(_k), dict) and isinstance(_v, dict):
-                        for _sk, _sv in _v.items():
-                            if _sk not in self.template.meta[_k]:
-                                self.template.meta[_k] = dict(self.template.meta[_k])  # ensure mutable
-                                self.template.meta[_k][_sk] = _sv
+                    continue
+                tv = self.template.meta.get(_k)
+                if isinstance(tv, dict) and isinstance(_v, dict):
+                    merged = dict(tv)
+                    for _sk, _sv in _v.items():
+                        if _sk not in merged:
+                            merged[_sk] = _sv
+                    self.template.meta[_k] = merged
+
+        if self._first_npz_meta:
+            _merge_meta(self._first_npz_meta)
+        # 若存在源 JSON 的 meta，做一次“补齐式合并”：保留我们这里计算出的键，补齐缺失键。
+        if self._source_meta:
+            _merge_meta(self._source_meta)
         self._fitted = True
 
     def normalize_X(self, X: _np.ndarray, meta: dict) -> _np.ndarray:
@@ -792,6 +812,143 @@ def _compute_planar_vel_dir_and_speed(clip: dict):
     vel_dir[speed[:, 0] < 1e-3] = 0.0
     return vel_dir, speed
 
+
+def _rotate_dir_deg(v2: np.ndarray, deg: float) -> np.ndarray:
+    """Rotate 2D vectors by given degrees about +Z."""
+    if v2 is None:
+        return None
+    rad = np.deg2rad(float(deg))
+    c, s = (np.cos(rad), np.sin(rad))
+    x, y = v2[..., 0], v2[..., 1]
+    rot = np.stack([c * x - s * y, s * x + c * y], axis=-1)
+    return rot
+
+def _infer_up_axis_from_meta(meta: dict | None) -> int:
+    axes = (meta or {}).get("axes", {}) or {}
+    for axis_name, idx in (("x", 0), ("y", 1), ("z", 2)):
+        if str(axes.get(axis_name, "")).lower() == "up":
+            return idx
+    return 2
+
+def _rot6d_to_matrix_np(rot6d: np.ndarray) -> np.ndarray:
+    """
+    将 (...,6) 的 6D 表达还原为 (...,3,3) 旋转矩阵（列向量形式）。
+    """
+    a = rot6d[..., 0:3]
+    b = rot6d[..., 3:6]
+    a = a / np.clip(np.linalg.norm(a, axis=-1, keepdims=True), 1e-8, None)
+    b = b - np.sum(a * b, axis=-1, keepdims=True) * a
+    b = b / np.clip(np.linalg.norm(b, axis=-1, keepdims=True), 1e-8, None)
+    c = np.cross(a, b, axis=-1)
+    return np.stack([a, b, c], axis=-1)
+
+def _wrap_to_pi_np(x: np.ndarray) -> np.ndarray:
+    return (x + np.pi) % (2.0 * np.pi) - np.pi
+
+def _nan_forward_fill(arr: np.ndarray) -> np.ndarray:
+    mask = np.isfinite(arr)
+    if not mask.any():
+        arr[...] = 0.0
+        return arr
+    last = float(arr[mask][0])
+    for idx in range(arr.shape[0]):
+        if mask[idx]:
+            last = float(arr[idx])
+        else:
+            arr[idx] = last
+    return arr
+
+def _compute_traj_cmd_dir_and_yaw(clip: Dict[str, Any]) -> Tuple[np.ndarray, np.ndarray, str]:
+    """
+    选取 TrajectoryDir 中央前瞻点（若缺失则退化为 root_vel）作为 cond 指令方向，
+    返回单位化后的 2D 向量以及平面 yaw（弧度）。
+    """
+    traj_dir = clip.get("traj_dir")
+    T = int(clip.get("T", 0))
+    source = "root_vel"
+    if traj_dir is not None and traj_dir.shape[1] >= 2:
+        K = traj_dir.shape[1] // 2
+        center = K // 2
+        dir_raw = traj_dir[:, center * 2:center * 2 + 2].astype(np.float32)
+        source = "traj_dir"
+    else:
+        dir_raw, _ = _compute_planar_vel_dir_and_speed(clip)
+    norm = np.linalg.norm(dir_raw, axis=1, keepdims=True)
+    dir_unit = np.zeros_like(dir_raw, dtype=np.float32)
+    valid = norm[:, 0] > 1e-6
+    if valid.any():
+        dir_unit[valid] = dir_raw[valid] / norm[valid]
+    yaw = np.full((T,), np.nan, dtype=np.float32)
+    yaw[valid] = np.arctan2(dir_unit[valid, 1], dir_unit[valid, 0])
+    return dir_unit, yaw, source
+
+def _align_pelvis_yaw(clip: Dict[str, Any], cmd_yaw: np.ndarray | None) -> Tuple[np.ndarray | None, Dict[str, float]]:
+    """
+    从根骨 6D 旋转推回骨盆朝向，并与 cond yaw 对齐，返回 (T,) yaw 序列以及诊断信息。
+    """
+    rot6d = clip.get("bone_rot6d")
+    if rot6d is None or rot6d.size == 0:
+        return None, {}
+    root_rot = rot6d[:, 0, :].reshape(-1, 6)
+    mats = _rot6d_to_matrix_np(root_rot).reshape(rot6d.shape[0], 3, 3)
+    up_axis = _infer_up_axis_from_meta(clip.get("meta"))
+    planar_axes = [ax for ax in (0, 1, 2) if ax != up_axis]
+    if len(planar_axes) != 2:
+        planar_axes = [0, 1]
+    targets = []
+    if cmd_yaw is not None:
+        targets.append(cmd_yaw)
+    traj_raw = clip.get("traj_yaw_raw")
+    if isinstance(traj_raw, np.ndarray) and traj_raw.shape[0] == mats.shape[0]:
+        targets.append(traj_raw.reshape(-1))
+
+    def _score_axis(axis_idx: int):
+        vec = mats[:, :, axis_idx]
+        planar = vec[:, planar_axes]
+        planar_norm = np.linalg.norm(planar, axis=1)
+        yaw_axis = np.full((planar.shape[0],), np.nan, dtype=np.float32)
+        mask = planar_norm > 1e-6
+        yaw_axis[mask] = np.arctan2(planar[mask, 1], planar[mask, 0])
+        errs = []
+        offsets = []
+        for tgt in targets:
+            tgt = np.asarray(tgt, dtype=np.float32)
+            valid = np.isfinite(tgt) & mask
+            if valid.sum() < max(8, int(0.1 * len(tgt))):
+                continue
+            diff = _wrap_to_pi_np(yaw_axis[valid] - tgt[valid])
+            errs.append(float(np.median(np.abs(diff))))
+            offsets.append(float(np.median(diff)))
+        if errs:
+            return yaw_axis, float(np.median(errs)), float(np.median(offsets))
+        return yaw_axis, None, None
+
+    best_axis = 0
+    best_offset = 0.0
+    best_err = None
+    best_series = None
+    for axis_idx in range(3):
+        yaw_axis, err, offset = _score_axis(axis_idx)
+        if err is None:
+            if best_series is None:
+                best_series = yaw_axis
+            continue
+        if best_err is None or err < best_err:
+            best_err = err
+            best_offset = 0.0 if offset is None else offset
+            best_axis = axis_idx
+            best_series = yaw_axis
+    if best_series is None:
+        return None, {}
+    yaw_aligned = _wrap_to_pi_np(best_series - best_offset)
+    yaw_aligned = _nan_forward_fill(yaw_aligned)
+    diag = {
+        "forward_axis": int(best_axis),
+        "yaw_offset_rad": float(best_offset),
+        "median_err_deg": None if best_err is None else float(np.degrees(best_err)),
+    }
+    return yaw_aligned, diag
+
 def _frame_get(fr: dict, key: str, default=None):
     return fr[key] if key in fr else default
 
@@ -803,7 +960,7 @@ def load_clip(json_path: str,
               root_yaw_as_feature: bool = True) -> Dict[str, Any]:
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    meta = data.get("meta", {})
+    meta = dict(data.get("meta", {}) or {})
 
     units = meta.get("units", "")
     if units != "meters":
@@ -983,12 +1140,16 @@ def convert_one(json_path: str,
                 include_lin_vel: Optional[bool] = None,
                 include_ang_vel: Optional[bool] = True) -> Dict[str, Any]:
     clip = load_clip(json_path, use_phase_if_missing, include_root_yaw)
+    if clip.get("root_yaw") is not None:
+        clip["traj_yaw_raw"] = clip["root_yaw"].copy()
+    else:
+        clip["traj_yaw_raw"] = None
 
     # 重采样
     if target_fps is not None and target_fps > 0 and target_fps != clip["FPS"]:
         ratio = target_fps / float(clip["FPS"])
         new_T = max(1, int(round(clip["T"] * ratio)))
-        for k in ["phase", "traj_pos", "traj_dir", "root_pos", "root_vel", "root_yaw"]:
+        for k in ["phase", "traj_pos", "traj_dir", "root_pos", "root_vel", "root_yaw", "traj_yaw_raw"]:
             if clip.get(k) is not None and isinstance(clip[k], np.ndarray) and clip[k].ndim >= 2:
                 clip[k] = resample_series(clip[k], new_T)
 # bones
@@ -1021,6 +1182,23 @@ def convert_one(json_path: str,
             bav = clip["bone_ang_vel"].reshape(T, -1)
             clip["bone_ang_vel"] = sg_smooth_series(bav).reshape(T, B, 3)
 
+    # 统一 cond 指令方向 + 骨盆 yaw
+    cmd_dir_unit, cmd_yaw, cmd_source = _compute_traj_cmd_dir_and_yaw(clip)
+    pelvis_yaw, yaw_diag = _align_pelvis_yaw(clip, cmd_yaw)
+    if pelvis_yaw is None:
+        pelvis_yaw = np.zeros((clip["T"],), dtype=np.float32)
+        yaw_diag = {}
+    clip["root_yaw"] = pelvis_yaw.reshape(clip["T"], 1)
+    clip["traj_cmd_yaw"] = cmd_yaw.reshape(clip["T"], 1) if cmd_yaw is not None else None
+    traj_meta = clip.setdefault("meta", {}).setdefault("trajectory", {})
+    traj_meta["cmd_source"] = cmd_source
+    if yaw_diag.get("forward_axis") is not None:
+        traj_meta["pelvis_forward_axis"] = yaw_diag["forward_axis"]
+    if yaw_diag.get("yaw_offset_rad") is not None:
+        traj_meta["pelvis_forward_offset_rad"] = yaw_diag["yaw_offset_rad"]
+    if yaw_diag.get("median_err_deg") is not None:
+        traj_meta["pelvis_forward_err_deg"] = yaw_diag["median_err_deg"]
+
     # 打平特征（动态）
     X_flat, layout = pack_flat_features(
         clip,
@@ -1037,18 +1215,55 @@ def convert_one(json_path: str,
     x_in_features = sanitize_f32(X_flat[:-1], "x_in_features")
     y_out_features = sanitize_f32(Y_flat[1:], "y_out_features")
 
-    # cond_in: onehot(action) + 方向(cos,sin) + 速度标量（7 维）
+    # cond_in: onehot(action) + 方向(cos,sin) + 速度标量（7 维），其中方向优先使用 TrajectoryDir（保证与骨架对齐）
     enum, act_size, clip_action = _load_action_meta_and_clip_action(json_path)
     act_name_norm = clip_action.split("::")[-1].strip().lower()
     act_idx = 0
     for i, name in enumerate(enum):
         if name.lower() == act_name_norm:
-            act_idx = i; break
+            act_idx = i
+            break
     act_oh = np.zeros((T - 1, act_size), dtype=np.float32)
     act_oh[:, act_idx] = 1.0
-    # 用 root_vel 计算朝向与速度
+
     vel_dir, speed = _compute_planar_vel_dir_and_speed(dict(FPS=clip["FPS"], root_vel=clip["root_vel"], root_pos=clip["root_pos"]))
-    cond_in = sanitize_f32(np.concatenate([act_oh, vel_dir[:-1], speed[:-1]], axis=-1), "cond_in")
+    # --- align command/velocity direction to UE 世界坐标系，并与根速度对齐 ---
+    rot_deg = 0.0
+    asset_meta = (clip.get("meta") or {}).get("asset_to_ue", {}) or {}
+    try:
+        rot_list = asset_meta.get("rotator_deg_RPY") or []
+        if len(rot_list) >= 3:
+            rot_deg = float(rot_list[2])  # yaw 分量
+    except Exception:
+        rot_deg = 0.0
+
+    forward_offset_deg = 0.0
+    traj_meta = (clip.get("meta") or {}).get("trajectory", {}) or {}
+    try:
+        forward_offset_deg = float(np.degrees(traj_meta.get("pelvis_forward_offset_rad", 0.0)))
+    except Exception:
+        forward_offset_deg = 0.0
+
+    cmd_world = _rotate_dir_deg(cmd_dir_unit, rot_deg + forward_offset_deg) if cmd_dir_unit is not None else None
+    # root_vel 已是 UE 世界系，不再旋转；仅用于余弦检查/回退
+    vel_world = vel_dir
+
+    cond_dir_world = cmd_world if cmd_world is not None else vel_world
+    if cmd_world is not None and vel_world is not None:
+        cos = np.sum(cmd_world * vel_world, axis=-1)
+        mask = cos < 0.95  # 与根速度夹角大于约18°则改用根速度方向
+        cond_dir_world = cmd_world.copy()
+        cond_dir_world[mask] = vel_world[mask]
+
+    cond_dir_world = np.asarray(cond_dir_world, dtype=np.float32)
+    norm = np.linalg.norm(cond_dir_world, axis=1, keepdims=True)
+    cond_dir_world[norm[:, 0] < 1e-6] = 0.0
+    cond_dir_world[norm[:, 0] >= 1e-6] /= np.clip(norm[norm[:, 0] >= 1e-6], 1e-6, None)
+
+    cond_dir = cond_dir_world[:-1]
+    cond_speed = speed[:-1]
+    cond_in = sanitize_f32(np.concatenate([act_oh, cond_dir, cond_speed], axis=-1), "cond_in")
+
 
     # 保存
     os.makedirs(out_dir, exist_ok=True)

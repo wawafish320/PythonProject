@@ -20,6 +20,7 @@ def evaluate_teacher(
     loader: Iterable[Dict[str, torch.Tensor]],
     *,
     mode: str = "teacher",
+    max_batches: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Teacher forcing评估：输出均值loss并复用自由评估的诊断统计。"""
     device = trainer.device
@@ -38,7 +39,9 @@ def evaluate_teacher(
 
     trainer._diag_scope = 'single_step'
     try:
-        for batch in loader:
+        for batch_idx, batch in enumerate(loader):
+            if max_batches is not None and batch_idx >= int(max_batches):
+                break
             x_cand = trainer._pick_first(batch, ("motion", "X", "x_in_features"))
             y_cand = trainer._pick_first(batch, ("gt_motion", "Y", "y_out_features", "y_out_seq"))
             if x_cand is None or y_cand is None:
@@ -205,7 +208,6 @@ def evaluate_freerun(
     base_debug_path = getattr(trainer, "freerun_debug_path", None)
     last_debug_path = None
     debug_path = base_debug_path  # used as a simple flag before we resolve epoch-specific suffix
-    debug_saved = False
     batches_processed = 0
 
     trainer._diag_scope = 'free_run'
@@ -420,7 +422,7 @@ def evaluate_freerun(
 
             predsX.append(motion)
 
-            if debug_path and (not debug_saved):
+            if debug_path:
                 yaw_sl = getattr(trainer, 'yaw_x_slice', None)
                 rootvel_sl = getattr(trainer, 'rootvel_x_slice', None)
                 rot6d_sl = getattr(trainer, 'rot6d_y_slice', None) or getattr(trainer, 'rot6d_slice', None)
@@ -446,41 +448,9 @@ def evaluate_freerun(
                         rec["root_vel_pred_s0"] = motion_raw[0, rootvel_sl].detach().cpu().tolist()
                     if gt_motion_raw.shape[0] > 0:
                         rec["root_vel_gt_s0"] = gt_motion_raw[0, rootvel_sl].detach().cpu().tolist()
-                yaw_cmd_scalar: Optional[torch.Tensor] = None
                 if cond_raw_step is not None and torch.is_tensor(cond_raw_step) and cond_raw_step.shape[0] > 0:
                     cond0 = cond_raw_step[0].detach()
                     rec["cond_next_raw_s0"] = cond0.cpu().tolist()
-                    cond_dim = cond0.shape[0]
-                    dir_vec = None
-                    speed_val: Optional[torch.Tensor] = None
-                    if cond_dim >= 3:
-                        action_dim = max(0, cond_dim - 3)
-                        dir_vec = cond0[action_dim:action_dim + 2]
-                        speed_val = cond0[action_dim + 2]
-                    elif cond_dim >= 2:
-                        dir_vec = cond0[-2:]
-                    if dir_vec is not None and dir_vec.numel() == 2:
-                        dir_norm = dir_vec.norm().clamp_min(1e-6)
-                        dir_unit = dir_vec / dir_norm
-                        yaw_cmd_scalar = torch.atan2(dir_unit[1], dir_unit[0])
-                        rec["yaw_cmd_s0"] = float(yaw_cmd_scalar.item())
-                        rec["yaw_cmd_deg"] = float(yaw_cmd_scalar.item() * (180.0 / torch.pi))
-                    if speed_val is not None:
-                        rec["yaw_cmd_speed"] = float(speed_val.item())
-                    elif dir_vec is not None:
-                        rec["yaw_cmd_speed"] = float(dir_vec.norm().item())
-                if yaw_cmd_scalar is not None and yaw_pred_scalar is not None:
-                    yaw_diff = torch.atan2(
-                        torch.sin(yaw_pred_scalar - yaw_cmd_scalar),
-                        torch.cos(yaw_pred_scalar - yaw_cmd_scalar),
-                    )
-                    rec["yaw_cmd_vs_pred_deg"] = float(yaw_diff.abs().item() * (180.0 / torch.pi))
-                if yaw_cmd_scalar is not None and yaw_gt_scalar is not None:
-                    yaw_diff_gt = torch.atan2(
-                        torch.sin(yaw_gt_scalar - yaw_cmd_scalar),
-                        torch.cos(yaw_gt_scalar - yaw_cmd_scalar),
-                    )
-                    rec["yaw_cmd_vs_gt_deg"] = float(yaw_diff_gt.abs().item() * (180.0 / torch.pi))
                 rec["delta_norm_abs"] = float(delta_norm.abs().mean().item())
                 if rec:
                     diag_records.append(rec)
@@ -560,24 +530,84 @@ def evaluate_freerun(
                 suffix = f"{run_name}_{suffix}"
             candidate = Path(base_debug_path)
             if candidate.is_dir() or str(base_debug_path).endswith("/"):
-                candidate = candidate / f"freerun_diag_{suffix}.pt"
+                candidate = candidate / f"freerun_diag_{suffix}_b{batches_processed:02d}.pt"
             else:
-                candidate = candidate.with_name(candidate.stem + f"_{suffix}" + candidate.suffix)
+                candidate = candidate.with_name(candidate.stem + f"_{suffix}_b{batches_processed:02d}" + candidate.suffix)
             debug_path = str(candidate)
             try:
+                def _summarize_records(records: list[dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+                    """
+                    Light‑weight per‑slice summary to make debug_output self‑describing.
+                    """
+                    import math
+                    focus_keys = (
+                        "yaw_abs_deg",
+                        "root_vel_mae",
+                        "delta_norm_abs",
+                        "carry/yaw_cmd_diff_deg",
+                        "carry/cond_speed",
+                        "carry/rot6d_geo_deg",
+                        "carry/rot6d_ortho_err",
+                        "carry/delta_norm_abs_mean",
+                        "carry/delta_raw_abs_mean",
+                    )
+                    summaries: Dict[str, Dict[str, float]] = {}
+                    for key in focus_keys:
+                        vals = [float(r[key]) for r in records if key in r and isinstance(r[key], (int, float))]
+                        if not vals:
+                            continue
+                        start_v, end_v = vals[0], vals[-1]
+                        n = len(vals)
+                        mean_v = float(math.fsum(vals) / n)
+                        var_v = float(math.fsum((v - mean_v) ** 2 for v in vals) / max(1, n - 1))
+                        summaries[key] = {
+                            "start": start_v,
+                            "end": end_v,
+                            "min": float(min(vals)),
+                            "max": float(max(vals)),
+                            "mean": mean_v,
+                            "std": float(math.sqrt(var_v)),
+                            "trend": float(end_v - start_v),
+                            "per_step": float((end_v - start_v) / max(1, n - 1)),
+                        }
+                    return summaries
+
+                slice_stats = _summarize_records(diag_records)
+                meta = {
+                    "epoch": epoch,
+                    "run_name": run_name,
+                    "warmup": warmup,
+                    "horizon": int(end_t - start_t),
+                    "tf_ratio": float(tf_ratio),
+                    "freerun_weight": float(getattr(trainer, "freerun_weight", 0.0) or 0.0),
+                    "diag_steps": len(diag_records),
+                    "batch_index": batches_processed,
+                }
                 candidate.parent.mkdir(parents=True, exist_ok=True)
                 payload = {
                     "clip_id": batch.get("clip_id"),
                     "start": batch.get("start"),
                     "records": diag_records,
                     "metrics": batch_stats,
+                    "slice_stats": slice_stats,
+                    "meta": meta,
                     "keybone_summary": batch_stats.get("KeyBoneSummary"),
                     "keybone_details": batch_stats.get("KeyBoneDetails"),
                 }
                 torch.save(payload, debug_path)
                 last_debug_path = debug_path
-                debug_saved = True
-                print(f"[FreeRunDiag] saved diagnostics to {debug_path}")
+                headline = []
+                if "yaw_abs_deg" in slice_stats:
+                    yaw = slice_stats["yaw_abs_deg"]
+                    headline.append(f"yaw {yaw['mean']:.2f}° (Δ {yaw['trend']:+.2f})")
+                if "root_vel_mae" in slice_stats:
+                    rv = slice_stats["root_vel_mae"]
+                    headline.append(f"root_vel {rv['mean']:.3f}")
+                if "delta_norm_abs" in slice_stats:
+                    dn = slice_stats["delta_norm_abs"]
+                    headline.append(f"|Δ| {dn['mean']:.3f}")
+                summary_line = " | ".join(headline) if headline else ""
+                print(f"[FreeRunDiag] saved diagnostics to {debug_path}" + (f" :: {summary_line}" if summary_line else ""))
             except Exception as exc:
                 print(f"[FreeRunDiag][WARN] failed to save diagnostics: {exc}")
 

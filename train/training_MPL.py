@@ -647,6 +647,40 @@ class Trainer:
         upper = init_h + int(round((max_h - init_h) * progress))
         return max(min_h, min(upper, max_h))
 
+    def _auto_tune_freerun(self, free_metrics: dict[str, float] | None, grad_info=None):
+        """
+        Feedback controller for freerun knobs, coupled to teacher noise.
+        - noise is the single knob; horizon/weight follow a quadratic of noise.
+        - uses only generic signals (yaw drift, GeoDeg, grad_ratio) to stay task-agnostic.
+        """
+        import math as _math
+        if not isinstance(free_metrics, dict) or not free_metrics:
+            return None
+        noise = float(getattr(self, "teacher_rot_noise_deg", 2.0) or 2.0)
+        yaw_mean = float(free_metrics.get("YawAbsDeg", float("nan")))
+        yaw_slope = float(free_metrics.get("Diag/YawSlope", 0.0))
+        geo = float(free_metrics.get("FreeRun/GeoDeg", free_metrics.get("GeoDeg", float("nan"))))
+        root_vel = float(free_metrics.get("RootVelMAE", float("nan")))
+        grad_ratio = float((grad_info or {}).get("ratio", 1.0))
+
+        plateau = (_math.isfinite(yaw_slope) and abs(yaw_slope) < 0.5) and (_math.isfinite(geo) and geo < 2.4)
+        unstable = (_math.isfinite(yaw_slope) and yaw_slope > 2.0) or (_math.isfinite(geo) and geo > 3.0) or (_math.isfinite(root_vel) and root_vel > 1.2)
+        vanishing = grad_ratio < 1e-2
+
+        if plateau and not unstable and not vanishing:
+            noise = min(3.0, noise + 0.1)     # gentle push
+        elif unstable or vanishing:
+            noise = max(1.0, noise - 0.2)     # pull back if drift or grad vanishes
+
+        k_h, k_w = 1.5, 0.04
+        new_h = int(max(6, min(18, round(6 + k_h * noise * noise))))
+        new_w = float(max(0.08, min(0.30, 0.08 + k_w * noise * noise)))
+
+        self.teacher_rot_noise_deg = noise
+        self.freerun_horizon = new_h
+        self.freerun_weight = new_w
+        return {"noise": noise, "horizon": new_h, "weight": new_w}
+
     def _should_log_freerun_gradients(self, batch_idx: int) -> bool:
         if not bool(getattr(self, 'freerun_grad_log', False)):
             return False
@@ -717,7 +751,8 @@ class Trainer:
         cond_norm_mu=None,
         cond_norm_std=None,
     ) -> None:
-        steps = int(getattr(self, 'history_debug_steps', 0) or 0)
+        # Disabled: no-op stub kept for compatibility.
+        return
         if steps <= 1:
             return
         steps = min(steps, state_seq.shape[1])
@@ -1021,7 +1056,29 @@ class Trainer:
             if selected is None:
                 return overrides
 
-        params = selected.get('params') or {}
+        params = dict(selected.get('params') or {})
+
+        # --- rampable teacher noise inside a stage ---
+        try:
+            st = int(selected.get('start', epoch))
+            ed = int(selected.get('end', st))
+            span = max(1, ed - st)
+            prog = min(1.0, max(0.0, (epoch - st) / span))
+            boost = float(getattr(self, 'teacher_noise_boost', 1.0) or 1.0)
+            def _ramp(stage, key_start, key_end, target):
+                v0 = stage.get(key_start, stage.get(target))
+                v1 = stage.get(key_end, v0)
+                if v0 is None or v1 is None:
+                    return
+                val = float(v0 + (v1 - v0) * prog)
+                val *= boost
+                if 'prob' in target:
+                    val = max(0.0, min(1.0, val))
+                params[target] = val
+            _ramp(selected, 'teacher_rot_noise_deg_start', 'teacher_rot_noise_deg_end', 'teacher_rot_noise_deg')
+            _ramp(selected, 'teacher_rot_noise_prob_start', 'teacher_rot_noise_prob_end', 'teacher_rot_noise_prob')
+        except Exception:
+            pass
         for key, value in params.items():
             _assign(key, value)
 
@@ -1528,6 +1585,7 @@ class Trainer:
         self.pose_hist_scales: Optional[torch.Tensor] = None
         self.pose_hist_mu: Optional[torch.Tensor] = None
         self.pose_hist_std: Optional[torch.Tensor] = None
+        self.teacher_noise_boost: float = 1.0
         self.nan_grad_reports: int = 0
         self.nan_grad_report_limit: int = 5
         self.diag_input_stats: bool = False
@@ -1602,9 +1660,9 @@ class Trainer:
         raise RuntimeError(msg) from exc
 
     @torch.no_grad()
-    def eval_epoch(self, loader, mode='teacher'):
+    def eval_epoch(self, loader, mode='teacher', max_batches=None):
         self.model.eval()
-        return evaluate_teacher(self, loader, mode=mode)
+        return evaluate_teacher(self, loader, mode=mode, max_batches=max_batches)
 
     def fit(self, train_loader, epochs=10, log_every=50, out_dir=None, patience=10, run_name='run'):
         import torch, os
@@ -1682,6 +1740,21 @@ class Trainer:
 
 
             for bi, batch in enumerate(train_loader, start=1):
+                # 缓存首个 batch 供快速 teacher 评估，避免额外遍历
+                if getattr(self, "_cached_train_batch", None) is None:
+                    def _cache_obj(obj):
+                        import torch
+                        if torch.is_tensor(obj):
+                            return obj.detach().cpu()
+                        if isinstance(obj, (list, tuple)):
+                            return type(obj)(_cache_obj(x) for x in obj)
+                        if isinstance(obj, dict):
+                            return {k: _cache_obj(v) for k, v in obj.items()}
+                        return obj
+                    try:
+                        self._cached_train_batch = _cache_obj(batch)
+                    except Exception:
+                        self._cached_train_batch = None
                 x_cand = self._pick_first(batch, ('motion','X','x_in_features'))
                 y_cand = self._pick_first(batch, ('gt_motion','Y','y_out_features','y_out_seq'))
                 if x_cand is None or y_cand is None:
@@ -1895,21 +1968,26 @@ class Trainer:
                     if getattr(self, 'val_mode', 'none') != 'online' or bool(getattr(self, 'no_monitor', False)):
                         return None
                     vloader = self.train_loader
-                    _mon_batches = int(getattr(self, 'monitor_batches', 8) or 8)
+                    _mon_batches = getattr(self, 'monitor_batches', None)
+                    if _mon_batches is None:
+                        _mon_batches = 8
+                    try:
+                        _mon_batches = int(_mon_batches)
+                    except Exception:
+                        _mon_batches = 8
+                    if _mon_batches <= 0:
+                        return None
                     free_metrics = dict(self.validate_autoreg_online(vloader, max_batches=_mon_batches))
                     free_metrics.setdefault('phase', 'freerun')
                     free_metrics['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
                     _extra = ""
                     _kgeo = free_metrics.get('KeyBone/GeoDegMean', float('nan'))
                     _klocal = free_metrics.get('KeyBone/GeoLocalDegMean', float('nan'))
-                    yaw_cmd = free_metrics.get('CondYawVsPredDeg', float('nan'))
                     free_ang_dir = free_metrics.get('AngVelDirDeg', float('nan'))
                     if _math.isfinite(_kgeo):
                         _extra += f" | LimbGeoDeg={_kgeo:.3f}°"
                     if _math.isfinite(_klocal):
                         _extra += f" | LimbGeoLocalDeg={_klocal:.3f}°"
-                    if _math.isfinite(yaw_cmd):
-                        _extra += f" | YawCmdDiff={yaw_cmd:.2f}°"
                     if _math.isfinite(free_ang_dir):
                         _extra += f" | AngVelDirDeg={free_ang_dir:.2f}"
                     print(
@@ -1921,12 +1999,67 @@ class Trainer:
                         f"AngVelMAE={free_metrics.get('AngVelMAE', float('nan')):.5f} rad/s | "
                         f"AngMagRel={free_metrics.get('AngVelMagRel', float('nan')):.3f}" + _extra
                     )
+                    # Stage1：仅在 yaw 爆炸时提示，减少解耦后的噪声
+                    if is_teacher_phase:
+                        yaw_mean = free_metrics.get('YawAbsDeg', float('nan'))
+                        yaw_slope = free_metrics.get('Diag/YawSlope', float('nan'))
+                        if (_math.isfinite(yaw_mean) and yaw_mean > 80.0) or (_math.isfinite(yaw_slope) and yaw_slope > 10.0):
+                            print(f"[{log_prefix}][ALERT] yaw drift high: YawAbsDeg={yaw_mean:.2f}, YawSlope={yaw_slope:.2f} (stage1, freerun_weight=0)")
                     return free_metrics
 
                 if is_teacher_phase:
-                    teacher_metrics = dict(self.eval_epoch(self.train_loader, mode='teacher') or {})
+                    max_t_batches = getattr(self, 'teacher_eval_max_batches', None)
+                    if max_t_batches is not None and int(max_t_batches) <= 0:
+                        cached_batch = getattr(self, "_cached_train_batch", None)
+                        if cached_batch is not None:
+                            teacher_metrics = dict(self.eval_epoch([cached_batch], mode='teacher', max_batches=1) or {})
+                            teacher_metrics.setdefault('phase', 'teacher')
+                            teacher_metrics['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
+                            print(f"[ValTeacher@ep {ep:03d}] cached-batch eval (no extra loader pass)")
+                        else:
+                            teacher_metrics = None
+                            print(f"[ValTeacher@ep {ep:03d}] skipped: no cached batch available (teacher_eval_max_batches<=0)")
+                    else:
+                        teacher_metrics = dict(self.eval_epoch(self.train_loader, mode='teacher', max_batches=max_t_batches) or {})
+                        teacher_metrics.setdefault('phase', 'teacher')
+                        teacher_metrics['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
+                    # 动态放大 teacher 噪声：若姿态已很优，则提前加大扰动以模拟 freerun
+                    try:
+                        geo_deg = float(teacher_metrics.get('GeoDeg', float('inf')))
+                        mse_y = float(teacher_metrics.get('MSEnormY', float('inf')))
+                        if geo_deg <= 1.2 and mse_y <= 0.12:
+                            self.teacher_noise_boost = 1.5
+                            print(f"[TeacherDiag] boosting teacher noise (x1.5) because GeoDeg={geo_deg:.3f}, MSEnormY={mse_y:.3f}")
+                        else:
+                            self.teacher_noise_boost = 1.0
+                    except Exception:
+                        self.teacher_noise_boost = 1.0
                     teacher_metrics.setdefault('phase', 'teacher')
-                    teacher_metrics['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
+                    # 在 stage1 仅保存 teacher 诊断快照（无 freerun）
+                    base_debug_path = getattr(self, "freerun_debug_path", None)
+                    if base_debug_path:
+                        from pathlib import Path
+                        ep_tag = f"ep{ep:03d}"
+                        candidate = Path(base_debug_path)
+                        if candidate.is_dir() or str(base_debug_path).endswith("/"):
+                            candidate = candidate / f"teacher_diag_{ep_tag}.json"
+                        else:
+                            candidate = candidate.with_name(candidate.stem + f"_teacher_{ep_tag}.json")
+                        try:
+                            payload = {
+                                "epoch": ep,
+                                "phase": "teacher",
+                                "tf_ratio": float(getattr(self, "_last_tf_ratio", 1.0)),
+                                "freerun_weight": float(getattr(self, "freerun_weight", 0.0) or 0.0),
+                                "metrics": teacher_metrics,
+                            }
+                            candidate.parent.mkdir(parents=True, exist_ok=True)
+                            import json
+                            with open(candidate, "w") as fw:
+                                json.dump(payload, fw, indent=2)
+                            print(f"[TeacherDiag] saved to {candidate}")
+                        except Exception as _td_exc:
+                            print(f"[TeacherDiag][WARN] failed to save: {_td_exc}")
                     metrics_for_json = teacher_metrics
                     metrics_tag = 'teacher'
                     loss_val = teacher_metrics.get('loss', float('nan'))
@@ -1948,6 +2081,13 @@ class Trainer:
                         metrics_for_json = free_metrics
                         metrics_tag = 'valfree'
                         _metrics = free_metrics
+                        try:
+                            grad_info = getattr(self, "_last_freerun_grad_info", None)
+                        except Exception:
+                            grad_info = None
+                        tuning = self._auto_tune_freerun(free_metrics, grad_info)
+                        if tuning:
+                            print(f"[AutoTune] ep{ep:03d} noise={tuning['noise']:.2f} hor={tuning['horizon']} w={tuning['weight']:.3f}")
                     teacher_metrics_cached = dict(self.eval_epoch(self.train_loader, mode='teacher') or {})
                     teacher_metrics_cached.setdefault('phase', 'teacher')
                     teacher_metrics_cached['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
@@ -1955,14 +2095,11 @@ class Trainer:
                         _gap_extra = ""
                         _kgeo = metrics_for_json.get('KeyBone/GeoDegMean', float('nan'))
                         _klocal = metrics_for_json.get('KeyBone/GeoLocalDegMean', float('nan'))
-                        yaw_cmd = metrics_for_json.get('CondYawVsPredDeg', float('nan'))
                         free_ang_dir = metrics_for_json.get('AngVelDirDeg', float('nan'))
                         if _math.isfinite(_kgeo):
                             _gap_extra += f" | LimbGeoDeg={_kgeo:.3f}°"
                         if _math.isfinite(_klocal):
                             _gap_extra += f" | LimbGeoLocalDeg={_klocal:.3f}°"
-                        if _math.isfinite(yaw_cmd):
-                            _gap_extra += f" | YawCmdDiff={yaw_cmd:.2f}°"
                         if _math.isfinite(free_ang_dir):
                             _gap_extra += f" | AngVelDirDeg={free_ang_dir:.2f}"
                         print(
@@ -2210,7 +2347,15 @@ class Trainer:
         if cond_dir.shape[-1] < 2:
             self._raise_norm_error("_apply_free_carry cond_next_raw 缺少二维方向")
 
-        cond_dir_world = cond_dir
+        # TrajectoryDir 提供的是角色局部坐标（前/左）；需要结合当前 RootYaw 旋回到世界坐标
+        yaw_prev = x_prev[..., yaw_sl]
+        cos_yaw = torch.cos(yaw_prev)
+        sin_yaw = torch.sin(yaw_prev)
+        dir_local_x = cond_dir[..., 0:1]
+        dir_local_y = cond_dir[..., 1:2]
+        dir_world_x = dir_local_x * cos_yaw - dir_local_y * sin_yaw
+        dir_world_y = dir_local_x * sin_yaw + dir_local_y * cos_yaw
+        cond_dir_world = torch.cat([dir_world_x, dir_world_y], dim=-1)
         offset = float(getattr(self, 'yaw_forward_axis_offset', 0.0) or 0.0)
         dir_norm = cond_dir_world.norm(dim=-1, keepdim=True).clamp_min(1e-6)
         dir_unit_world = cond_dir_world / dir_norm
@@ -2227,12 +2372,14 @@ class Trainer:
         if yaw_pred_rot6d.dim() == 1:
             yaw_pred_rot6d = yaw_pred_rot6d.unsqueeze(-1)
 
-        yaw_write = yaw_cmd_vals
+        # 将根部朝向写回为模型自身的 rot6d 预测，确保骨架朝向与骨盆姿态一致；
+        # cond_yaw 仅用于诊断（衡量轨迹指令与真实姿态的偏差）。
+        yaw_vals = yaw_pred_rot6d
+        yaw_write = yaw_vals
         if yaw_write.dim() == 1:
             yaw_write = yaw_write.unsqueeze(-1)
         yaw_write = yaw_write.to(device=device, dtype=dtype)
         x_next[..., yaw_sl] = yaw_write
-        yaw_vals = yaw_pred_rot6d  # 保留模型自身的 rot6d 朝向用于诊断
 
         # --- 3) 衍生角速度 ---
         av_sl = getattr(self, 'angvel_x_slice', None)
@@ -2267,39 +2414,6 @@ class Trainer:
         step = vel_world[..., :min(2, vel_world.shape[-1])] * dt
         pos[..., :step.shape[-1]] = pos[..., :step.shape[-1]] + step
         x_next[..., rootpos_sl] = pos
-
-        # ===== yaw 诊断：当预测朝向与指令差距过大时打印提示 =====
-        diag_limit = int(getattr(self, '_yaw_diag_limit', 0) or 0)
-        if diag_limit > 0 and getattr(self, '_yaw_diag_hits', 0) < diag_limit:
-            try:
-                yaw_pred = yaw_vals.squeeze(-1)
-                if torch.is_tensor(yaw_pred) and yaw_pred.numel() > 0:
-                    yaw_cmd = yaw_cmd_vals
-                    yaw_diff = torch.atan2(torch.sin(yaw_pred - yaw_cmd), torch.cos(yaw_pred - yaw_cmd))
-                    diff_deg = yaw_diff.abs() * (180.0 / math.pi)
-                    max_deg = float(diff_deg.max().detach().cpu())
-                    if max_deg >= float(getattr(self, 'yaw_diag_deg_threshold', 45.0) or 45.0):
-                        idx0 = 0
-                        yaw_pred_0 = float(yaw_pred.reshape(-1)[idx0].detach().cpu())
-                        yaw_cmd_0 = float(yaw_cmd.reshape(-1)[idx0].detach().cpu())
-                        speed_flat = cond_speed.reshape(-1) if torch.is_tensor(cond_speed) else None
-                        speed_0 = float(speed_flat[idx0].detach().cpu()) if speed_flat is not None and speed_flat.numel() > 0 else float('nan')
-                        mode = getattr(self, '_diag_roll_mode', '?')
-                        step_idx = getattr(self, '_diag_roll_step', -1)
-                        epoch = getattr(self, '_diag_roll_epoch', getattr(self, 'cur_epoch', -1))
-                        print(
-                            "[YawDiag]"
-                            f"[ep {int(epoch):03d}]"
-                            f"[{mode}]"
-                            f" step={int(step_idx):03d}"
-                            f" diff_max={max_deg:.1f}°"
-                            f" pred0={yaw_pred_0:.3f}rad"
-                            f" cmd0={yaw_cmd_0:.3f}rad"
-                            f" speed0={speed_0:.3f}"
-                        )
-                        self._yaw_diag_hits = int(getattr(self, '_yaw_diag_hits', 0)) + 1
-            except Exception:
-                pass
 
         debug_steps = int(getattr(self, 'freerun_debug_steps', 0) or 0)
         if debug_steps > 0:
@@ -2902,26 +3016,6 @@ def _diagnose_free_run_impl(
                             torch.sin(yaw_cmd_world - offset),
                             torch.cos(yaw_cmd_world - offset),
                         )
-                        if isinstance(yaw_x, slice):
-                            yaw_pred = predX_raw[:, :L, yaw_x].squeeze(-1)
-                            yaw_diff_pred = torch.atan2(torch.sin(yaw_pred - yaw_cmd), torch.cos(yaw_pred - yaw_cmd)).abs()
-                            yaw_diff_pred_deg = yaw_diff_pred * deg
-                            _record_metric('CondYawVsPredDeg', float(yaw_diff_pred_deg.mean().item()))
-                            result['FreeRun/CondYawVsPredDeg'] = result['CondYawVsPredDeg']
-                            try:
-                                result['CondYawVsPredCurveDeg'] = yaw_diff_pred_deg.mean(dim=0).detach().cpu().tolist()
-                            except Exception:
-                                pass
-                            if gtX_raw is not None and gtX_raw.shape[1] >= start_idx + L:
-                                yaw_gt = gtX_raw[:, start_idx:start_idx + L, yaw_x].squeeze(-1)
-                                yaw_diff_gt = torch.atan2(torch.sin(yaw_gt - yaw_cmd), torch.cos(yaw_gt - yaw_cmd)).abs()
-                                yaw_diff_gt_deg = yaw_diff_gt * deg
-                                _record_metric('CondYawVsGTDeg', float(yaw_diff_gt_deg.mean().item()))
-                                result['FreeRun/CondYawVsGTDeg'] = result['CondYawVsGTDeg']
-                                try:
-                                    result['CondYawVsGTCurveDeg'] = yaw_diff_gt_deg.mean(dim=0).detach().cpu().tolist()
-                                except Exception:
-                                    pass
                         if isinstance(rv_x, slice):
                             cond_vel = dir_unit * speed_slice.unsqueeze(-1)
                             vel_pred = predX_raw[:, :L, rv_x]
@@ -3407,6 +3501,8 @@ def train_entry():
     p.add_argument('--monitor_batches', type=int, default=2, help='每个 epoch 在线指标采样的批次数')
     p.add_argument('--force_valfree_eval', action='store_true', default=False,
                    help='即使当前为纯 teacher 阶段，也强制执行一次 freerun 验证并写出 valfree 指标')
+    p.add_argument('--teacher_eval_max_batches', type=int, default=None,
+                   help='Teacher 评估最多跑多少个 batch；<=0 则跳过评估，用训练均值loss代填')
     p.add_argument('--eval_horizon', type=int, default=None,
                    help='在线 freerun 验证时的 horizon（帧数）；未指定则遍历整段序列')
     p.add_argument('--eval_warmup', type=int, default=0,
@@ -3721,6 +3817,7 @@ def train_entry():
     trainer.val_mode = _arg('val_mode', 'online')
     trainer.no_monitor = bool(_arg('no_monitor', False))
     trainer.monitor_batches = int(_arg('monitor_batches', 8) or 8)
+    trainer.teacher_eval_max_batches = _arg('teacher_eval_max_batches', None)
     trainer.force_valfree_eval = bool(_arg('force_valfree_eval', False))
     trainer.eval_settings = FreeRunSettings(
         warmup_steps=int(_arg('eval_warmup', 0) or 0),

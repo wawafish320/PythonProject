@@ -1,7 +1,8 @@
 {
   "epoch": 2,
-  "tag": "teacher",
-  "timestamp": "2025-11-24T23:29:30",
+  "phase": "teacher",
+  "tf_ratio": 1.0,
+  "freerun_weight": 0.0,
   "metrics": {
     "period_abs_mean": 0.7981752157211304,
     "period_abs_std": 0.2657805383205414,

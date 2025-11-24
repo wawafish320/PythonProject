@@ -9,7 +9,7 @@
   "seq_len": 60,
   "tf_mode": "epoch_linear",
   "tf_start_epoch": 1,
-  "tf_end_epoch": 19,
+  "tf_end_epoch": 21,
   "tf_max": 1.0,
   "tf_min": 0.0,
   "encoder_path": "./models/motion_encoder_equiv.pt",
@@ -27,7 +27,7 @@
   "width": 512,
   "freerun_debug_steps": 10,
   "yaw_forward_offset": 0,
-  "history_debug_steps": 8,
+  "history_debug_steps": 0,
   "teacher_rot_noise_deg": 1.5,
   "teacher_rot_noise_prob": 0.08,
   "w_fk_pos": 0.07,
@@ -43,7 +43,17 @@
       "trainer": {
         "freerun_weight": 0.0,
         "freerun_horizon": 8,
-        "eval_horizon": 8
+        "eval_horizon": 8,
+        "monitor_batches": 0,
+        "teacher_eval_max_batches": 0,
+        "tf_max": 1.0,
+        "tf_min": 1.0,
+        "freerun_weight_init": 0.0,
+        "freerun_weight_ramp_epochs": 1,
+        "teacher_rot_noise_deg_start": 1.0,
+        "teacher_rot_noise_deg_end": 2.5,
+        "teacher_rot_noise_prob_start": 0.08,
+        "teacher_rot_noise_prob_end": 0.16
       },
       "loss_groups": {
         "core": {
@@ -81,11 +91,19 @@
       ],
       "label": "stage2_mixed_warmup",
       "trainer": {
-        "freerun_weight": 0.05,
-        "freerun_horizon": 3,
-        "eval_horizon": 6,
-        "teacher_rot_noise_deg": 2.0,
-        "teacher_rot_noise_prob": 0.12
+        "freerun_weight": 0.12,
+        "freerun_horizon": 8,
+        "eval_horizon": 8,
+        "teacher_rot_noise_deg_start": 1.5,
+        "teacher_rot_noise_deg_end": 2.5,
+        "teacher_rot_noise_prob_start": 0.10,
+        "teacher_rot_noise_prob_end": 0.15,
+        "monitor_batches": 3,
+        "teacher_eval_max_batches": 2,
+        "tf_max": 0.9,
+        "tf_min": 0.5,
+        "freerun_weight_init": 0.0,
+        "freerun_weight_ramp_epochs": 4
       },
       "loss_groups": {
         "core": {
@@ -130,8 +148,16 @@
         "freerun_weight": 0.1,
         "freerun_horizon": 8,
         "eval_horizon": 8,
-        "teacher_rot_noise_deg": 2.5,
-        "teacher_rot_noise_prob": 0.15
+        "teacher_rot_noise_deg_start": 2.0,
+        "teacher_rot_noise_deg_end": 2.7,
+        "teacher_rot_noise_prob_start": 0.12,
+        "teacher_rot_noise_prob_end": 0.18,
+        "monitor_batches": 4,
+        "teacher_eval_max_batches": 2,
+        "tf_max": 0.5,
+        "tf_min": 0.2,
+        "freerun_weight_init": 0.05,
+        "freerun_weight_ramp_epochs": 7
       },
       "loss_groups": {
         "core": {
@@ -173,11 +199,19 @@
       ],
       "label": "stage3_freerun",
       "trainer": {
-        "freerun_weight": 0.2,
-        "freerun_horizon": 12,
-        "eval_horizon": 12,
-        "teacher_rot_noise_deg": 0.0,
-        "teacher_rot_noise_prob": 0.0
+        "freerun_weight": 0.25,
+        "freerun_horizon": 16,
+        "eval_horizon": 14,
+        "teacher_rot_noise_deg_start": 2.3,
+        "teacher_rot_noise_deg_end": 3.0,
+        "teacher_rot_noise_prob_start": 0.12,
+        "teacher_rot_noise_prob_end": 0.20,
+        "monitor_batches": 6,
+        "teacher_eval_max_batches": 2,
+        "tf_max": 0.2,
+        "tf_min": 0.0,
+        "freerun_weight_init": 0.12,
+        "freerun_weight_ramp_epochs": 6
       },
       "loss_groups": {
         "core": {

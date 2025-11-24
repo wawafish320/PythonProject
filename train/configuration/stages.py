@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .profile import compute_total_epochs, compute_batch_size, compute_base_lr
@@ -61,23 +62,42 @@ class TrainingConfigBuilder:
             int(profile["total_frames"]), float(profile["complexity"]), batch_size
         )
 
-        stages, refs = self._build_stage_schedule(profile, total_epochs)
+        base_schedule = self.base_cfg.get("freerun_stage_schedule")
+        if base_schedule:
+            # 如果已有分阶段配置（含 goal/自定义权重），保留并避免被模板覆盖
+            stages = deepcopy(base_schedule)
+            refs = self._compute_reference_targets(profile)
+        else:
+            stages, refs = self._build_stage_schedule(profile, total_epochs)
         cfg = dict(self.base_cfg)
         cfg["dataset_profile"] = dict(profile)
         cfg["epochs"] = int(total_epochs)
         cfg["batch"] = int(batch_size)
         cfg["lr"] = float(round(lr, 6))
         cfg["freerun_stage_schedule"] = stages
-        cfg["freerun_weight"] = stages[0]["trainer"]["freerun_weight"]
-        cfg["w_fk_pos"] = stages[0]["loss"]["w_fk_pos"]
-        cfg["w_rot_local"] = stages[0]["loss"]["w_rot_local"]
+        # 从首个阶段回填顶层默认值，避免重建配置时丢失自定义调度
+        first_stage = stages[0] if stages else {}
+        trainer_cfg = (first_stage.get("trainer") or {}) if isinstance(first_stage, Mapping) else {}
+        loss_cfg = (first_stage.get("loss") or {}) if isinstance(first_stage, Mapping) else {}
+        loss_group_core = {}
+        if isinstance(first_stage, Mapping):
+            loss_groups = first_stage.get("loss_groups") or {}
+            if isinstance(loss_groups, Mapping):
+                loss_group_core = loss_groups.get("core", {}) if isinstance(loss_groups.get("core"), Mapping) else {}
+
+        cfg["freerun_weight"] = float(trainer_cfg.get("freerun_weight", cfg.get("freerun_weight", 0.0)))
+        cfg["freerun_horizon"] = int(trainer_cfg.get("freerun_horizon", cfg.get("freerun_horizon", 0)))
+        cfg["w_fk_pos"] = float(loss_cfg.get("w_fk_pos", loss_group_core.get("w_fk_pos", cfg.get("w_fk_pos", 0.0))))
+        cfg["w_rot_local"] = float(
+            loss_cfg.get("w_rot_local", loss_group_core.get("w_rot_local", cfg.get("w_rot_local", 0.0)))
+        )
         cfg.setdefault("tf_mode", "epoch_linear")
         cfg["tf_start_epoch"] = 1
         cfg["tf_end_epoch"] = max(2, int(total_epochs * 0.65))
-        cfg["tf_max"] = stages[0]["tf"]["max"]
-        cfg["tf_min"] = 0.0
+        tf_cfg = (first_stage.get("tf") or {}) if isinstance(first_stage, Mapping) else {}
+        cfg["tf_max"] = float(tf_cfg.get("max", cfg.get("tf_max", 1.0)))
+        cfg["tf_min"] = float(tf_cfg.get("min", cfg.get("tf_min", 0.0)))
         cfg.setdefault("seq_len", int(profile["avg_seq_len"]))
-        cfg.setdefault("freerun_horizon", stages[0]["trainer"]["freerun_horizon"])
         cfg.setdefault("freerun_horizon_ramp_epochs", max(4, int(total_epochs * 0.15)))
         cfg.setdefault("strategy_meta", {})["reference_targets"] = refs
         return cfg
@@ -85,12 +105,7 @@ class TrainingConfigBuilder:
     def _build_stage_schedule(self, profile: Mapping[str, Any], total_epochs: int) -> Tuple[List[Dict[str, Any]], Dict[str, float]]:
         avg_seq_len = float(profile["avg_seq_len"])
         base_horizon = max(6, int(round(avg_seq_len * 0.2)))
-        posture_ref = max(1.2, float(profile["bone_angle_mean_deg"]) * 0.04)
-        dataset_refs = {
-            "yaw": float(profile["yaw_mean_deg"]),
-            "root": float(profile["speed_mean"]),
-            "rot": posture_ref,
-        }
+        dataset_refs = self._compute_reference_targets(profile)
 
         stages: List[Dict[str, Any]] = []
         cursor = 1
@@ -133,3 +148,12 @@ class TrainingConfigBuilder:
 
         stages[-1]["range"][1] = total_epochs
         return stages, dataset_refs
+
+    @staticmethod
+    def _compute_reference_targets(profile: Mapping[str, Any]) -> Dict[str, float]:
+        posture_ref = max(1.2, float(profile["bone_angle_mean_deg"]) * 0.04)
+        return {
+            "yaw": float(profile["yaw_mean_deg"]),
+            "root": float(profile["speed_mean"]),
+            "rot": posture_ref,
+        }
