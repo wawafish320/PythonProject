@@ -1188,7 +1188,22 @@ def convert_one(json_path: str,
     if pelvis_yaw is None:
         pelvis_yaw = np.zeros((clip["T"],), dtype=np.float32)
         yaw_diag = {}
-    clip["root_yaw"] = pelvis_yaw.reshape(clip["T"], 1)
+    # 手性与整体方向校正：若骨盆朝向与根速度方向平均夹角反向，则整体加 π
+    yaw_corr = _wrap_to_pi_np(pelvis_yaw)
+    root_vel = clip.get("root_vel")
+    if root_vel is not None and root_vel.size > 0:
+        ref_dir = np.asarray(root_vel, dtype=np.float32)
+        ref_norm = np.linalg.norm(ref_dir, axis=1, keepdims=True)
+        ref_dir = np.where(ref_norm > 1e-6, ref_dir / np.clip(ref_norm, 1e-6, None), ref_dir)
+        ref_yaw = np.arctan2(ref_dir[:, 1], ref_dir[:, 0])
+        cos_mean = float(np.cos(yaw_corr[:-1] - ref_yaw[:-1]).mean())
+        if cos_mean < 0.0:  # 反向则整体翻转
+            yaw_corr = _wrap_to_pi_np(yaw_corr + np.pi)
+            yaw_diag["yaw_flip_applied"] = True
+            yaw_diag["yaw_flip_reason"] = "mean_cos_with_root_vel<0"
+        else:
+            yaw_diag["yaw_flip_applied"] = False
+    clip["root_yaw"] = yaw_corr.reshape(clip["T"], 1)
     clip["traj_cmd_yaw"] = cmd_yaw.reshape(clip["T"], 1) if cmd_yaw is not None else None
     traj_meta = clip.setdefault("meta", {}).setdefault("trajectory", {})
     traj_meta["cmd_source"] = cmd_source
@@ -1244,16 +1259,22 @@ def convert_one(json_path: str,
     except Exception:
         forward_offset_deg = 0.0
 
+    hand_sign = -1.0 if str((clip.get("meta") or {}).get("handedness", "right")).lower().startswith("left") else 1.0
     cmd_world = _rotate_dir_deg(cmd_dir_unit, rot_deg + forward_offset_deg) if cmd_dir_unit is not None else None
-    # root_vel 已是 UE 世界系，不再旋转；仅用于余弦检查/回退
+    if cmd_world is not None:
+        # 左手坐标资产在转换到 UE 右手时需要翻转平面 X，以保证与 rot6d/pose 同手性
+        cmd_world[..., 0] *= hand_sign
+    # root_vel 在 JSON 中已是 UE 世界系，不再旋转；仅用于余弦检查/回退
     vel_world = vel_dir
 
     cond_dir_world = cmd_world if cmd_world is not None else vel_world
     if cmd_world is not None and vel_world is not None:
         cos = np.sum(cmd_world * vel_world, axis=-1)
-        mask = cos < 0.95  # 与根速度夹角大于约18°则改用根速度方向
         cond_dir_world = cmd_world.copy()
-        cond_dir_world[mask] = vel_world[mask]
+        # 强制避免反向：若夹角>90°直接改用 root_vel；若 18°~90°则也回退
+        mask_back = cos < 0.0
+        mask_mis = (cos >= 0.0) & (cos < 0.95)
+        cond_dir_world[mask_back | mask_mis] = vel_world[mask_back | mask_mis]
 
     cond_dir_world = np.asarray(cond_dir_world, dtype=np.float32)
     norm = np.linalg.norm(cond_dir_world, axis=1, keepdims=True)

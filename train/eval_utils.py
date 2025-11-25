@@ -430,11 +430,21 @@ def evaluate_freerun(
                 yaw_pred_scalar: Optional[torch.Tensor] = None
                 yaw_gt_scalar: Optional[torch.Tensor] = None
                 if isinstance(yaw_sl, slice) and motion_raw is not None and gt_motion_raw is not None:
-                    dyaw = torch.atan2(
-                        torch.sin(motion_raw[..., yaw_sl] - gt_motion_raw[..., yaw_sl]),
-                        torch.cos(motion_raw[..., yaw_sl] - gt_motion_raw[..., yaw_sl])
-                    )
-                    rec["yaw_abs_deg"] = float(dyaw.abs().mean().item() * (180.0 / torch.pi))
+                    deg = 180.0 / torch.pi
+
+                    def _wrap_angle(a: torch.Tensor) -> torch.Tensor:
+                        return torch.atan2(torch.sin(a), torch.cos(a))
+
+                    yaw_pred = motion_raw[..., yaw_sl]
+                    yaw_gt = gt_motion_raw[..., yaw_sl]
+                    if yaw_pred.shape[-1] == 1:
+                        yaw_pred = yaw_pred.squeeze(-1)
+                    if yaw_gt.shape[-1] == 1:
+                        yaw_gt = yaw_gt.squeeze(-1)
+
+                    dyaw_world = _wrap_angle(yaw_pred - yaw_gt)
+                    rec["yaw_world_abs_deg"] = float(dyaw_world.abs().mean().item() * deg)
+                    rec["yaw_abs_deg"] = rec["yaw_world_abs_deg"]
                     if motion_raw.shape[0] > 0:
                         yaw_pred_scalar = motion_raw[0, yaw_sl].mean()
                         rec["yaw_pred_s0"] = float(yaw_pred_scalar.item())
@@ -542,6 +552,7 @@ def evaluate_freerun(
                     import math
                     focus_keys = (
                         "yaw_abs_deg",
+                        "yaw_world_abs_deg",
                         "root_vel_mae",
                         "delta_norm_abs",
                         "carry/yaw_cmd_diff_deg",

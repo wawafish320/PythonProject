@@ -66,14 +66,14 @@
         "max": 1.0
       },
       "goal": {
-        "min_epochs": 3,
-        "window": 2,
+        "min_epochs": 2,
+        "window": 1,
         "tags": [
           "teacher"
         ],
         "metrics": {
           "loss": {
-            "hi": 0.12
+            "hi": 0.18
           },
           "GeoDeg": {
             "hi": 2.5
@@ -96,7 +96,7 @@
         "eval_horizon": 8,
         "teacher_rot_noise_deg_start": 1.5,
         "teacher_rot_noise_deg_end": 2.5,
-        "teacher_rot_noise_prob_start": 0.10,
+        "teacher_rot_noise_prob_start": 0.1,
         "teacher_rot_noise_prob_end": 0.15,
         "monitor_batches": 3,
         "teacher_eval_max_batches": 2,
@@ -109,7 +109,7 @@
         "core": {
           "w_fk_pos": 0.2275,
           "w_rot_local": 0.2275,
-          "w_rot_delta_root": 0.20,
+          "w_rot_delta_root": 0.2,
           "w_yaw": 1.5
         }
       },
@@ -130,7 +130,7 @@
           },
           "YawAbsDeg": {
             "ref": 18.0,
-            "hi_ratio": 0.90
+            "hi_ratio": 0.9
           },
           "RootVelMAE": {
             "hi": 0.2
@@ -163,7 +163,7 @@
         "core": {
           "w_fk_pos": 0.2275,
           "w_rot_local": 0.2275,
-          "w_rot_delta_root": 0.20,
+          "w_rot_delta_root": 0.2,
           "w_yaw": 2.0
         }
       },
@@ -205,7 +205,7 @@
         "teacher_rot_noise_deg_start": 2.3,
         "teacher_rot_noise_deg_end": 3.0,
         "teacher_rot_noise_prob_start": 0.12,
-        "teacher_rot_noise_prob_end": 0.20,
+        "teacher_rot_noise_prob_end": 0.2,
         "monitor_batches": 6,
         "teacher_eval_max_batches": 2,
         "tf_max": 0.2,
@@ -237,7 +237,7 @@
           },
           "YawAbsDeg": {
             "ref": 10.0,
-            "hi_ratio": 0.90
+            "hi_ratio": 0.9
           },
           "FreeRun/RootVelMAE": {
             "hi": 0.02

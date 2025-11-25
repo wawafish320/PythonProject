@@ -2347,15 +2347,8 @@ class Trainer:
         if cond_dir.shape[-1] < 2:
             self._raise_norm_error("_apply_free_carry cond_next_raw 缺少二维方向")
 
-        # TrajectoryDir 提供的是角色局部坐标（前/左）；需要结合当前 RootYaw 旋回到世界坐标
-        yaw_prev = x_prev[..., yaw_sl]
-        cos_yaw = torch.cos(yaw_prev)
-        sin_yaw = torch.sin(yaw_prev)
-        dir_local_x = cond_dir[..., 0:1]
-        dir_local_y = cond_dir[..., 1:2]
-        dir_world_x = dir_local_x * cos_yaw - dir_local_y * sin_yaw
-        dir_world_y = dir_local_x * sin_yaw + dir_local_y * cos_yaw
-        cond_dir_world = torch.cat([dir_world_x, dir_world_y], dim=-1)
+        # cond_dir 已是世界系（转换脚本 convert_json_to_npz 已旋到 UE 世界坐标）
+        cond_dir_world = cond_dir
         offset = float(getattr(self, 'yaw_forward_axis_offset', 0.0) or 0.0)
         dir_norm = cond_dir_world.norm(dim=-1, keepdim=True).clamp_min(1e-6)
         dir_unit_world = cond_dir_world / dir_norm
@@ -2457,7 +2450,7 @@ class Trainer:
                             "yaw_cmd_deg": yaw_cmd_sample,
                             "yaw_after_carry_deg": yaw_after_carry_sample,
                             "yaw_rot6d_deg": yaw_pred_sample,
-                            "yaw_cmd_diff_deg": yaw_diff_deg,
+                            # 移除世界系 cmd 差的噪声项，保留局部诊断信号
                             "root_vel_pred": rootvel_slice,
                             "cond_speed": cond_speed_sample,
                             "rot6d_ortho_err": ortho_err,
@@ -2472,7 +2465,6 @@ class Trainer:
                             "yaw_cmd_deg": float('nan'),
                             "yaw_after_carry_deg": float('nan'),
                             "yaw_rot6d_deg": float('nan'),
-                            "yaw_cmd_diff_deg": float('nan'),
                             "root_vel_pred": [],
                             "cond_speed": float('nan'),
                             "rot6d_ortho_err": float('nan'),
@@ -2937,11 +2929,24 @@ def _diagnose_free_run_impl(
         gtX_raw = None
 
     if isinstance(yaw_x, slice) and predX_raw is not None and gtX_raw is not None:
-        dyaw = torch.atan2(
-            torch.sin(predX_raw[..., yaw_x] - gtX_raw[..., yaw_x]),
-            torch.cos(predX_raw[..., yaw_x] - gtX_raw[..., yaw_x]),
-        )
-        _record_metric('YawAbsDeg', float(dyaw.abs().mean() * (180.0 / math.pi)))
+        # 以世界系骨盆朝向差作为 YawAbsDeg 主指标；避免再引入根速度/指令的耦合。
+        deg = 180.0 / math.pi
+
+        def _wrap_angle(a: torch.Tensor) -> torch.Tensor:
+            return torch.atan2(torch.sin(a), torch.cos(a))
+
+        yaw_pred = predX_raw[..., yaw_x]
+        yaw_gt = gtX_raw[..., yaw_x]
+        if yaw_pred.shape[-1] == 1:
+            yaw_pred = yaw_pred.squeeze(-1)
+        if yaw_gt.shape[-1] == 1:
+            yaw_gt = yaw_gt.squeeze(-1)
+
+        dyaw_world = _wrap_angle(yaw_pred - yaw_gt)
+        yaw_world_abs_deg = float(dyaw_world.abs().mean() * deg)
+
+        _record_metric('YawAbsDeg', yaw_world_abs_deg)
+        result['YawAbsDegWorld'] = yaw_world_abs_deg
     if isinstance(rv_x, slice) and predX_raw is not None and gtX_raw is not None:
         _record_metric('RootVelMAE', float((predX_raw[..., rv_x] - gtX_raw[..., rv_x]).abs().mean().item()))
         if getattr(self, 'diag_input_stats', False):
