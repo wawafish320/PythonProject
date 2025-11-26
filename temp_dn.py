@@ -15,8 +15,8 @@ class DataNormalizer:
         self.mu_y = None if mu_y is None else np.asarray(mu_y, dtype=np.float32)
         self.std_y = None if std_y is None else np.asarray(std_y, dtype=np.float32)
         self.y_to_x_map = y_to_x_map or []
-        self.yaw_x_slice      = parse_layout_entry(yaw_x_slice,      'RootYaw')
-        self.yaw_y_slice      = parse_layout_entry(yaw_y_slice,      'RootYaw')
+        self.yaw_x_slice      = None
+        self.yaw_y_slice      = None
         self.rootvel_x_slice  = parse_layout_entry(rootvel_x_slice,  'RootVelocity')
         self.rootvel_y_slice  = parse_layout_entry(rootvel_y_slice,  'RootVelocity')
         self.angvel_x_slice   = parse_layout_entry(angvel_x_slice,   'BoneAngularVelocities')
@@ -341,8 +341,8 @@ class DataNormalizer:
             mu_x = get('MuX'), std_x = get('StdX'),
             mu_y = get('MuY'), std_y = get('StdY'),
             y_to_x_map = get('y_to_x_map', []),
-            yaw_x_slice     = key2slice(s_layout, 'RootYaw') or key2slice(s_layout, 'Yaw'),
-            yaw_y_slice     = key2slice(o_layout, 'RootYaw') or key2slice(o_layout, 'Yaw'),
+            yaw_x_slice     = None,
+            yaw_y_slice     = None,
             rootvel_x_slice = key2slice(s_layout, 'RootVelocity'),
             rootvel_y_slice = key2slice(o_layout, 'RootVelocity'),
             angvel_x_slice  = key2slice(s_layout, 'BoneAngularVelocities'),
@@ -574,5 +574,4 @@ def _parse_stage_schedule(spec: Optional[Any]):
     for idx, stage in enumerate(stages):
         stage['index'] = idx
     return stages
-
 

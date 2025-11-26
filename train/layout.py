@@ -144,13 +144,11 @@ def canonicalize_state_layout(layout_dict: dict) -> dict:
     mapping = {
         "root_pos": "RootPosition",
         "root_vel": "RootVelocity",
-        "root_yaw": "RootYaw",
-        "rot6d": "BoneRotations6D",
+                "rot6d": "BoneRotations6D",
         "angvel": "BoneAngularVelocities",
         "RootPosition": "RootPosition",
         "RootVelocity": "RootVelocity",
-        "RootYaw": "RootYaw",
-        "BoneRotations6D": "BoneRotations6D",
+                "BoneRotations6D": "BoneRotations6D",
         "BoneAngularVelocities": "BoneAngularVelocities",
     }
 
@@ -214,7 +212,7 @@ class LayoutCenter:
         )
         self.state_layout = normalize_layout(self.state_layout_raw, Dx)
         self.output_layout = normalize_layout(self.output_layout_raw, Dy)
-        need_x = ("RootYaw", "RootVelocity", "BoneRotations6D", "BoneAngularVelocities")
+        need_x = ("RootVelocity", "BoneRotations6D", "BoneAngularVelocities")
         need_y = ("BoneRotations6D",)
         for k in need_x:
             assert k in self.state_layout, f"[FATAL] meta.state_layout missing key: {k}"
@@ -266,12 +264,12 @@ class LayoutCenter:
         trainer.std_y = torch.tensor(np.asarray(self.std_y).reshape(1, -1), dtype=torch.float32)
         trainer.tanh_scales_rootvel = self.tanh_scales_rootvel
         trainer.tanh_scales_angvel = self.tanh_scales_angvel
-        trainer.yaw_slice = parse_layout_entry(trainer._y_layout.get("RootYaw"), "RootYaw")
+        trainer.yaw_slice = None
         trainer.rootvel_slice = parse_layout_entry(trainer._y_layout.get("RootVelocity"), "RootVelocity")
         trainer.angvel_slice = parse_layout_entry(
             trainer._y_layout.get("BoneAngularVelocities"), "BoneAngularVelocities"
         )
-        trainer.yaw_x_slice = parse_layout_entry(trainer._x_layout.get("RootYaw"), "RootYaw")
+        trainer.yaw_x_slice = None
         trainer.rootvel_x_slice = parse_layout_entry(trainer._x_layout.get("RootVelocity"), "RootVelocity")
         trainer.angvel_x_slice = parse_layout_entry(
             trainer._x_layout.get("BoneAngularVelocities"), "BoneAngularVelocities"
@@ -333,11 +331,11 @@ def apply_layout_center(ds_train, trainer, bundle_path: str):
     xlay = getattr(trainer, "_x_layout", getattr(ds_train, "state_layout", None))
     ylay = getattr(trainer, "_y_layout", getattr(ds_train, "output_layout", None))
 
-    yaw = parse_layout_entry(ylay.get("RootYaw"), "RootYaw")
+    yaw = None
     rootv = parse_layout_entry(ylay.get("RootVelocity"), "RootVelocity")
     angv = parse_layout_entry(ylay.get("BoneAngularVelocities"), "BoneAngularVelocities")
 
-    yaw_x = parse_layout_entry(xlay.get("RootYaw"), "RootYaw")
+    yaw_x = None
     rootv_x = parse_layout_entry(xlay.get("RootVelocity"), "RootVelocity")
     angv_x = parse_layout_entry(xlay.get("BoneAngularVelocities"), "BoneAngularVelocities")
 
@@ -383,8 +381,8 @@ class DataNormalizer:
         self.mu_y = None if mu_y is None else np.asarray(mu_y, dtype=np.float32)
         self.std_y = None if std_y is None else np.asarray(std_y, dtype=np.float32)
         self.y_to_x_map = y_to_x_map or []
-        self.yaw_x_slice = parse_layout_entry(yaw_x_slice, "RootYaw")
-        self.yaw_y_slice = parse_layout_entry(yaw_y_slice, "RootYaw")
+        self.yaw_x_slice = None
+        self.yaw_y_slice = None
         self.rootvel_x_slice = parse_layout_entry(rootvel_x_slice, "RootVelocity")
         self.rootvel_y_slice = parse_layout_entry(rootvel_y_slice, "RootVelocity")
         self.angvel_x_slice = parse_layout_entry(angvel_x_slice, "BoneAngularVelocities")
@@ -419,7 +417,31 @@ class DataNormalizer:
     def denorm_x(self, xz: torch.Tensor, prev_raw: Optional[torch.Tensor] = None, **_) -> torch.Tensor:
         if self.mu_x is None or self.std_x is None:
             raise RuntimeError("[FATAL] DataNormalizer.denorm_x 需要 mu_x/std_x。")
-        return xz * torch.as_tensor(self.std_x, device=xz.device) + torch.as_tensor(self.mu_x, device=xz.device)
+        x_raw = xz * torch.as_tensor(self.std_x, device=xz.device) + torch.as_tensor(self.mu_x, device=xz.device)
+
+        # NOTE: root_vel / angvel 在预处理阶段经过 tanh 压缩；这里需要做反压缩才能回到物理量。
+        # 之前缺少这步会导致 root_vel 评估单位不一致（模型看似速度偏低）。
+        def _atanh_safe(z: torch.Tensor) -> torch.Tensor:
+            eps = 1.0 - 1e-6
+            z = z.clamp(min=-eps, max=eps)
+            if hasattr(torch, "atanh"):
+                return torch.atanh(z)
+            # Fallback for older torch
+            return 0.5 * (torch.log1p(z) - torch.log1p(-z))
+
+        # RootVelocity inverse-tanh
+        if self.tanh_scales_rootvel is not None and isinstance(self.rootvel_x_slice, slice):
+            sl = self.rootvel_x_slice
+            scale = torch.as_tensor(self.tanh_scales_rootvel, device=x_raw.device, dtype=x_raw.dtype)
+            x_raw[..., sl] = _atanh_safe(x_raw[..., sl]) * scale
+
+        # BoneAngularVelocities inverse-tanh
+        if self.tanh_scales_angvel is not None and isinstance(self.angvel_x_slice, slice):
+            sl = self.angvel_x_slice
+            scale = torch.as_tensor(self.tanh_scales_angvel, device=x_raw.device, dtype=x_raw.dtype)
+            x_raw[..., sl] = _atanh_safe(x_raw[..., sl]) * scale
+
+        return x_raw
 
     def norm_y(self, y_raw: torch.Tensor) -> torch.Tensor:
         if self.mu_y is None or self.std_y is None:

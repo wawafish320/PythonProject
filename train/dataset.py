@@ -673,41 +673,8 @@ class MotionEventDataset(Dataset):
         return (mu.reshape(1, -1), std.reshape(1, -1))
 
     def _inject_root_yaw_from_rot6d(self):
-        if not self.clips:
-            return
-        if self.mu_x is None or self.std_x is None:
-            return
-        root_entry = self.clips[0].state_layout_norm.get('RootYaw')
-        if root_entry is None:
-            return
-        st, ln = int(root_entry[0]), int(root_entry[1])
-        if ln <= 0:
-            return
-        end = st + ln
-        if end > self.mu_x.shape[0] or end > self.std_x.shape[0]:
-            return
-        mu_slice = self.mu_x[st:end].reshape(1, -1)
-        std_slice = np.clip(self.std_x[st:end].reshape(1, -1), 1e-6, None)
-        forward_axis = int(self.forward_axis) if self.forward_axis is not None else 0
-        offset = float(getattr(self, 'forward_axis_offset', 0.0) or 0.0)
-        up_axis = int(getattr(self, '_up_axis', 2))
-        for clip in self.clips:
-            rot = clip.bone_rot6d
-            if rot is None or rot.size == 0:
-                continue
-            yaw_raw = self._compute_root_yaw_from_rot6d(rot, forward_axis, up_axis, offset)
-            if yaw_raw is None or yaw_raw.size == 0:
-                continue
-            T = clip.X.shape[0]
-            if yaw_raw.shape[0] != T:
-                if yaw_raw.shape[0] < T:
-                    pad = np.repeat(yaw_raw[-1:], T - yaw_raw.shape[0], axis=0)
-                    yaw_raw = np.concatenate([yaw_raw, pad], axis=0)
-                else:
-                    yaw_raw = yaw_raw[:T]
-            yaw_norm = (yaw_raw.reshape(-1, 1) - mu_slice) / std_slice
-            clip.X[:, st:end] = yaw_norm.astype(np.float32, copy=False)
-            clip.bone_rot6d = None
+        """RootYaw 已废弃，保持空实现以兼容旧调用。"""
+        return
 
     @staticmethod
     def _compute_root_yaw_from_rot6d(rot6d_arr: np.ndarray, forward_axis: int, up_axis: int, offset: float) -> Optional[np.ndarray]:

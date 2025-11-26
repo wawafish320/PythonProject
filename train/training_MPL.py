@@ -1129,8 +1129,27 @@ class Trainer:
                 self.loss_fn.w_fk_pos = float(loss_cfg["w_fk_pos"])
             if "w_rot_local" in loss_cfg:
                 self.loss_fn.w_rot_local = float(loss_cfg["w_rot_local"])
-            if "w_yaw" in loss_cfg:
-                self.loss_fn.w_yaw = float(loss_cfg["w_yaw"])
+            if "adaptive_bone_weights" in loss_cfg:
+                self.loss_fn.use_adaptive_weights = bool(loss_cfg["adaptive_bone_weights"])
+                self.loss_fn._invalidate_weight_cache()
+            if "use_hierarchy_weights" in loss_cfg:
+                self.loss_fn.use_hierarchy_weights = bool(loss_cfg["use_hierarchy_weights"])
+                self.loss_fn._invalidate_weight_cache()
+            if "hierarchy_mode" in loss_cfg:
+                self.loss_fn.hierarchy_mode = str(loss_cfg["hierarchy_mode"])
+                self.loss_fn._invalidate_weight_cache()
+            if "max_weight_ratio" in loss_cfg:
+                self.loss_fn.max_weight_ratio = float(loss_cfg["max_weight_ratio"])
+                self.loss_fn._invalidate_weight_cache()
+            if "weight_gamma" in loss_cfg:
+                self.loss_fn.weight_gamma = float(loss_cfg["weight_gamma"])
+                self.loss_fn._invalidate_weight_cache()
+            if "hierarchy_alpha" in loss_cfg:
+                self.loss_fn.hierarchy_alpha = float(loss_cfg["hierarchy_alpha"])
+                self.loss_fn._invalidate_weight_cache()
+            if "combine_space" in loss_cfg:
+                self.loss_fn.combine_space = str(loss_cfg["combine_space"])
+                self.loss_fn._invalidate_weight_cache()
 
         # Handle loss_groups (e.g., "core" group with w_rot_delta_root)
         loss_groups = stage.get("loss_groups", {})
@@ -1138,7 +1157,25 @@ class Trainer:
             for group_name, group_weights in loss_groups.items():
                 if isinstance(group_weights, dict):
                     for weight_name, weight_value in group_weights.items():
-                        if hasattr(self.loss_fn, weight_name):
+                        if weight_name in (
+                            'adaptive_bone_weights', 'use_hierarchy_weights', 'hierarchy_mode',
+                            'max_weight_ratio', 'weight_gamma', 'hierarchy_alpha', 'combine_space'
+                        ):
+                            # handle bool/str specially
+                            if weight_name == 'hierarchy_mode':
+                                self.loss_fn.hierarchy_mode = str(weight_value)
+                            elif weight_name == 'combine_space':
+                                self.loss_fn.combine_space = str(weight_value)
+                            elif weight_name == 'hierarchy_alpha':
+                                self.loss_fn.hierarchy_alpha = float(weight_value)
+                            elif weight_name == 'weight_gamma':
+                                self.loss_fn.weight_gamma = float(weight_value)
+                            elif weight_name == 'max_weight_ratio':
+                                self.loss_fn.max_weight_ratio = float(weight_value)
+                            else:
+                                setattr(self.loss_fn, 'use_adaptive_weights' if weight_name == 'adaptive_bone_weights' else 'use_hierarchy_weights', bool(weight_value))
+                            self.loss_fn._invalidate_weight_cache()
+                        elif hasattr(self.loss_fn, weight_name):
                             setattr(self.loss_fn, weight_name, float(weight_value))
 
         # 同步在线调度器的边界/当前值，避免后续被旧参数拉回去
@@ -2355,24 +2392,18 @@ class Trainer:
         yaw_cmd_world = torch.atan2(dir_unit_world[..., 1], dir_unit_world[..., 0])
         yaw_cmd_vals = torch.atan2(torch.sin(yaw_cmd_world - offset), torch.cos(yaw_cmd_world - offset))
 
-        # --- 2) 根部朝向（yaw） ---
-        if not isinstance(yaw_sl, slice):
-            self._raise_norm_error("_apply_free_carry 缺少 RootYaw 切片")
-        yaw_pred_rot6d = self._infer_root_yaw_from_rot6d(y_denorm)
-        if yaw_pred_rot6d is None:
-            self._raise_norm_error("_apply_free_carry 无法从 rot6d 推断 RootYaw")
-        yaw_pred_rot6d = torch.atan2(torch.sin(yaw_pred_rot6d), torch.cos(yaw_pred_rot6d))
-        if yaw_pred_rot6d.dim() == 1:
-            yaw_pred_rot6d = yaw_pred_rot6d.unsqueeze(-1)
-
-        # 将根部朝向写回为模型自身的 rot6d 预测，确保骨架朝向与骨盆姿态一致；
-        # cond_yaw 仅用于诊断（衡量轨迹指令与真实姿态的偏差）。
-        yaw_vals = yaw_pred_rot6d
-        yaw_write = yaw_vals
-        if yaw_write.dim() == 1:
-            yaw_write = yaw_write.unsqueeze(-1)
-        yaw_write = yaw_write.to(device=device, dtype=dtype)
-        x_next[..., yaw_sl] = yaw_write
+        # --- 2) 根部朝向（yaw） --- （若无 RootYaw 切片则跳过）
+        if isinstance(yaw_sl, slice):
+            yaw_pred_rot6d = self._infer_root_yaw_from_rot6d(y_denorm)
+            if yaw_pred_rot6d is not None:
+                yaw_pred_rot6d = torch.atan2(torch.sin(yaw_pred_rot6d), torch.cos(yaw_pred_rot6d))
+                if yaw_pred_rot6d.dim() == 1:
+                    yaw_pred_rot6d = yaw_pred_rot6d.unsqueeze(-1)
+                yaw_write = yaw_pred_rot6d.to(device=device, dtype=dtype)
+                x_next[..., yaw_sl] = yaw_write
+            elif not getattr(self, '_warned_no_yaw_slice', False):
+                self._warned_no_yaw_slice = True
+                print("[FreeCarry][WARN] yaw slice missing or cannot infer yaw; skip yaw write-back.")
 
         # --- 3) 衍生角速度 ---
         av_sl = getattr(self, 'angvel_x_slice', None)
@@ -2876,7 +2907,6 @@ def _diagnose_free_run_impl(
             result[f'SingleStep/{name}'] = value
 
     rot6d_y = self._sl_from_layout(getattr(self, '_y_layout', {}), 'BoneRotations6D')
-    yaw_x = self._sl_from_layout(getattr(self, '_x_layout', {}), 'RootYaw')
     rv_x = self._sl_from_layout(getattr(self, '_x_layout', {}), 'RootVelocity')
     rot6d_x = self._sl_from_layout(getattr(self, '_x_layout', {}), 'BoneRotations6D')
 
@@ -2928,58 +2958,45 @@ def _diagnose_free_run_impl(
         predX_raw = None
         gtX_raw = None
 
-    if isinstance(yaw_x, slice) and predX_raw is not None and gtX_raw is not None:
-        # 以世界系骨盆朝向差作为 YawAbsDeg 主指标；避免再引入根速度/指令的耦合。
-        deg = 180.0 / math.pi
+        if isinstance(rv_x, slice) and predX_raw is not None and gtX_raw is not None:
+            _record_metric('RootVelMAE', float((predX_raw[..., rv_x] - gtX_raw[..., rv_x]).abs().mean().item()))
+            if getattr(self, 'diag_input_stats', False):
+                diff = (predX_raw[..., rv_x] - gtX_raw[..., rv_x]).abs()
+                result['RootVelMAE_std'] = float(diff.std().item())
+            try:
+                # 末步根速度误差（观测累积轨迹漂移）
+                rv_end = (predX_raw[:, -1, rv_x] - gtX_raw[:, -1, rv_x]).abs().mean()
+                _record_metric('RootVelEndMAE', float(rv_end.item()))
+            except Exception:
+                pass
 
-        def _wrap_angle(a: torch.Tensor) -> torch.Tensor:
-            return torch.atan2(torch.sin(a), torch.cos(a))
-
-        yaw_pred = predX_raw[..., yaw_x]
-        yaw_gt = gtX_raw[..., yaw_x]
-        if yaw_pred.shape[-1] == 1:
-            yaw_pred = yaw_pred.squeeze(-1)
-        if yaw_gt.shape[-1] == 1:
-            yaw_gt = yaw_gt.squeeze(-1)
-
-        dyaw_world = _wrap_angle(yaw_pred - yaw_gt)
-        yaw_world_abs_deg = float(dyaw_world.abs().mean() * deg)
-
-        _record_metric('YawAbsDeg', yaw_world_abs_deg)
-        result['YawAbsDegWorld'] = yaw_world_abs_deg
-    if isinstance(rv_x, slice) and predX_raw is not None and gtX_raw is not None:
-        _record_metric('RootVelMAE', float((predX_raw[..., rv_x] - gtX_raw[..., rv_x]).abs().mean().item()))
-        if getattr(self, 'diag_input_stats', False):
-            diff = (predX_raw[..., rv_x] - gtX_raw[..., rv_x]).abs()
-            result['RootVelMAE_std'] = float(diff.std().item())
-
-    if isinstance(rot6d_x, slice) and predX_raw is not None and gtX_raw is not None:
-        try:
-            Bx, Tx, Dx = predX_raw.shape
-            px = predX_raw[..., rot6d_x]
-            gx = gtX_raw[..., rot6d_x]
-            if Dx > 0 and px.shape[-1] % 6 == 0:
-                Jx = px.shape[-1] // 6
-                px6 = reproject_rot6d(px.reshape(-1, px.shape[-1]))
-                gx6 = reproject_rot6d(gx.reshape(-1, gx.shape[-1]))
-                Rp = rot6d_to_matrix(px6.view(-1, Jx, 6)).view(Bx, Tx, Jx, 3, 3)
-                Rg = rot6d_to_matrix(gx6.view(-1, Jx, 6)).view(Bx, Tx, Jx, 3, 3)
-                geo_in = geodesic_R(Rp, Rg)
-                _record_metric('InputRotGeoDeg', float((geo_in.mean() * deg).item()))
-                result['FreeRun/InputRotGeoDeg'] = result['InputRotGeoDeg']
-                if getattr(self, 'diag_input_stats', False):
-                    result['InputRotGeoDeg_max'] = float((geo_in.max() * deg).item())
-                    result['InputRotGeoDeg_std'] = float((geo_in.std() * deg).item())
-                try:
-                    geo_in_deg = geo_in * deg
-                    mean_curve = _mean_curve(geo_in_deg.mean(dim=-1), reduce_dims=(0,))
-                    max_curve = geo_in_deg.max(dim=-1).values.max(dim=0).values
-                    result['InputRotGeoDegCurve'] = mean_curve.detach().cpu().tolist()
-                    result['InputRotGeoDegCurveMax'] = max_curve.detach().cpu().tolist()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        if isinstance(rot6d_x, slice) and predX_raw is not None and gtX_raw is not None:
+            try:
+                Bx, Tx, Dx = predX_raw.shape
+                px = predX_raw[..., rot6d_x]
+                gx = gtX_raw[..., rot6d_x]
+                if Dx > 0 and px.shape[-1] % 6 == 0:
+                    Jx = px.shape[-1] // 6
+                    px6 = reproject_rot6d(px.reshape(-1, px.shape[-1]))
+                    gx6 = reproject_rot6d(gx.reshape(-1, gx.shape[-1]))
+                    Rp = rot6d_to_matrix(px6.view(-1, Jx, 6)).view(Bx, Tx, Jx, 3, 3)
+                    Rg = rot6d_to_matrix(gx6.view(-1, Jx, 6)).view(Bx, Tx, Jx, 3, 3)
+                    geo_in = geodesic_R(Rp, Rg)
+                    _record_metric('InputRotGeoDeg', float((geo_in.mean() * deg).item()))
+                    result['FreeRun/InputRotGeoDeg'] = result['InputRotGeoDeg']
+                    if getattr(self, 'diag_input_stats', False):
+                        result['InputRotGeoDeg_max'] = float((geo_in.max() * deg).item())
+                        result['InputRotGeoDeg_std'] = float((geo_in.std() * deg).item())
+                    try:
+                        geo_in_deg = geo_in * deg
+                        mean_curve = _mean_curve(geo_in_deg.mean(dim=-1), reduce_dims=(0,))
+                        max_curve = geo_in_deg.max(dim=-1).values.max(dim=0).values
+                        result['InputRotGeoDegCurve'] = mean_curve.detach().cpu().tolist()
+                        result['InputRotGeoDegCurveMax'] = max_curve.detach().cpu().tolist()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     # Cond vs motion diagnostics
     cond_raw_seq = None
@@ -3066,36 +3083,59 @@ def _diagnose_free_run_impl(
                 Rgr0 = Rg[:, 0, root_idx]
                 R_align = Rgr0 @ Rpr0.transpose(-1, -2)
                 Rp = (R_align.view(Rp.shape[0], 1, 1, 3, 3).expand_as(Rp)) @ Rp
-            geo = geodesic_R(Rp, Rg)
-            _record_metric('GeoDeg', float((geo.mean() * deg).item()))
-            result['SingleStep/GeoDeg'] = result['GeoDeg']
-            try:
-                geo_deg = geo * deg
-                geo_curve = _mean_curve(geo_deg.mean(dim=-1), reduce_dims=(0,))
-                geo_curve_max = geo_deg.max(dim=-1).values.max(dim=0).values
-                result['GeoDegCurve'] = geo_curve.detach().cpu().tolist()
-                result['GeoDegCurveMax'] = geo_curve_max.detach().cpu().tolist()
-            except Exception:
-                pass
-            geo_local = None
-            try:
-                Rp_root = _root_relative_matrices(Rp, root_idx)
-                Rg_root = _root_relative_matrices(Rg, root_idx)
-                geo_local = geodesic_R(Rp_root, Rg_root) * deg
-                joint_weights = self._joint_weights(Rp_root, J)
-                weights_sum = joint_weights.sum().clamp_min(1e-6)
-                w = joint_weights.view(1, 1, -1)
-                geo_local_mean = (geo_local * w).sum() / (weights_sum * geo_local.shape[0] * geo_local.shape[1])
-                _record_metric('GeoLocalDeg', float(geo_local_mean.item()))
-                result['SingleStep/GeoLocalDeg'] = result['GeoLocalDeg']
-                step_vals = ((geo_local * w).sum(dim=-1) / weights_sum).mean(dim=0)
-                result['GeoLocalDegCurve'] = step_vals.detach().cpu().tolist()
-                max_vals = geo_local.max(dim=-1).values.max(dim=0).values
-                result['GeoLocalDegCurveMax'] = max_vals.detach().cpu().tolist()
-            except Exception as exc:
-                raise RuntimeError(
-                    "GeoLocalDeg diagnostics require valid skeleton FK; ensure bundle/meta provide parents & offsets."
-                ) from exc
+                geo = geodesic_R(Rp, Rg)
+                _record_metric('GeoDeg', float((geo.mean() * deg).item()))
+                result['SingleStep/GeoDeg'] = result['GeoDeg']
+                try:
+                    geo_deg = geo * deg
+                    geo_curve = _mean_curve(geo_deg.mean(dim=-1), reduce_dims=(0,))
+                    geo_curve_max = geo_deg.max(dim=-1).values.max(dim=0).values
+                    result['GeoDegCurve'] = geo_curve.detach().cpu().tolist()
+                    result['GeoDegCurveMax'] = geo_curve_max.detach().cpu().tolist()
+                    # 末步姿态误差（累积观察）
+                    _record_metric('GeoDegEnd', float(geo_curve[-1].item()))
+                    # 逐骨骼曲线（批均值），便于定位单骨骼误差
+                    try:
+                        if bone_names:
+                            geo_per_bone = {}
+                            geo_mean_bone = geo_deg.mean(dim=0)  # [T,J]
+                            for j, name in enumerate(bone_names[:geo_mean_bone.shape[1]]):
+                                geo_per_bone[name] = geo_mean_bone[:, j].detach().cpu().tolist()
+                            result['GeoDegCurveBones'] = geo_per_bone
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                geo_local = None
+                try:
+                    Rp_root = _root_relative_matrices(Rp, root_idx)
+                    Rg_root = _root_relative_matrices(Rg, root_idx)
+                    geo_local = geodesic_R(Rp_root, Rg_root) * deg
+                    joint_weights = self._joint_weights(Rp_root, J)
+                    weights_sum = joint_weights.sum().clamp_min(1e-6)
+                    w = joint_weights.view(1, 1, -1)
+                    geo_local_mean = (geo_local * w).sum() / (weights_sum * geo_local.shape[0] * geo_local.shape[1])
+                    _record_metric('GeoLocalDeg', float(geo_local_mean.item()))
+                    result['SingleStep/GeoLocalDeg'] = result['GeoLocalDeg']
+                    step_vals = ((geo_local * w).sum(dim=-1) / weights_sum).mean(dim=0)
+                    result['GeoLocalDegCurve'] = step_vals.detach().cpu().tolist()
+                    max_vals = geo_local.max(dim=-1).values.max(dim=0).values
+                    result['GeoLocalDegCurveMax'] = max_vals.detach().cpu().tolist()
+                    _record_metric('GeoLocalDegEnd', float(step_vals[-1].item()))
+                    try:
+                        if bone_names:
+                            geo_local_per_bone = {}
+                            # geo_local shape [B,T,J]; weights w shape [1,1,J]
+                            geo_local_mean = geo_local.mean(dim=0)  # [T,J]
+                            for j, name in enumerate(bone_names[:geo_local_mean.shape[1]]):
+                                geo_local_per_bone[name] = geo_local_mean[:, j].detach().cpu().tolist()
+                            result['GeoLocalDegCurveBones'] = geo_local_per_bone
+                    except Exception:
+                        pass
+                except Exception as exc:
+                    raise RuntimeError(
+                        "GeoLocalDeg diagnostics require valid skeleton FK; ensure bundle/meta provide parents & offsets."
+                    ) from exc
             try:
                 Rp_parent = self._parent_relative_matrices(Rp_root)
                 Rg_parent = self._parent_relative_matrices(Rg_root)
@@ -3121,6 +3161,8 @@ def _diagnose_free_run_impl(
                     ang_curve_max = ang_full_deg.max(dim=2).values.max(dim=0).values
                     result['AngVelDirDegCurve'] = ang_curve.detach().cpu().tolist()
                     result['AngVelDirDegCurveMax'] = ang_curve_max.detach().cpu().tolist()
+                    # 末步角速度方向误差
+                    _record_metric('AngVelDirDegEnd', float(ang_curve[-1].item()))
                     if diag_scope == 'single_step':
                         result['SingleStep/AngVelDirDegCurve'] = result['AngVelDirDegCurve']
                         result['SingleStep/AngVelDirDegCurveMax'] = result['AngVelDirDegCurveMax']
@@ -3493,8 +3535,24 @@ def train_entry():
                    help='FK 末端位置损失权重（0 表示禁用）。')
     p.add_argument('--w_rot_local', type=float, default=0.0,
                    help='父子关节局部 geodesic 约束权重（0=关闭）。')
-    p.add_argument('--w_yaw', type=float, default=0.0,
-                   help='Root yaw (水平朝向) geodesic 损失权重（0=关闭）。')
+    p.add_argument('--adaptive_bone_weights', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
+                   help='是否根据骨骼运动幅度自适应权重（默认开启）。')
+    p.add_argument('--use_hierarchy_weights', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
+                   help='是否使用骨骼层级（子孙数）权重（默认开启）。')
+    p.add_argument('--hierarchy_mode', type=str, default='multiply', choices=['multiply', 'add', 'none'],
+                   help='骨骼权重融合方式：multiply=相乘，add=加权求和，none=仅运动幅度。')
+    p.add_argument('--max_weight_ratio', type=float, default=25.0,
+                   help='权重相对均值的最大倍数（和倒数），防止极端权重。')
+    p.add_argument('--weight_gamma', type=float, default=0.7,
+                   help='权重平滑系数（0~1，越小压缩差异）。')
+    p.add_argument('--hierarchy_alpha', type=float, default=0.5,
+                   help='log 空间融合系数：1=只用 motion，0=只用 hierarchy。')
+    p.add_argument('--combine_space', type=str, default='log', choices=['log', 'linear'],
+                   help='权重组合空间：log=推荐，linear=旧的直接乘法。')
+    p.add_argument('--bone_prior_mode', type=str, default='geodesic', choices=['geodesic', 'mean6d'],
+                   help='prior_per_dim 转为运动尺度的方式：geodesic=MC测地距离（默认），mean6d=简单均值。')
+    p.add_argument('--bone_prior_samples', type=int, default=1024,
+                   help='bone_prior_mode=geodesic 时的采样数，数值越大越精确。')
     p.add_argument('--seq_len', type=int, default=120)
     p.add_argument('--yaw_aug_deg', type=float, default=0.0)
     p.add_argument('--normalize_c', action='store_true')
@@ -3569,6 +3627,57 @@ def train_entry():
         except Exception as err:
             print(f"[Spec][WARN] failed to read {label} {path}: {err}")
             return None
+
+    def _load_bone_prior_stds(path: Path, mode: str = 'geodesic', samples: int = 1024, rot6d_columns: Tuple[str, str] = ("X", "Z")):
+        """Load per-bone motion scale from norm_template.
+
+        Args:
+            path: norm_template path
+            mode: 'geodesic' (Monte Carlo in SO(3)) or 'mean6d' (simple mean of 6D stds)
+            samples: MC sample count when mode='geodesic'
+            rot6d_columns: column order for 6D -> matrix conversion
+        """
+        if path is None or not path.is_file():
+            print(f"[Loss][WARN] norm_template not found at {path}")
+            return None
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                tpl = json.load(f)
+        except Exception as err:
+            print(f"[Loss][WARN] failed to read norm_template {path}: {err}")
+            return None
+
+        priors = tpl.get('group_priors_rot6d', {}) if isinstance(tpl, dict) else {}
+        prior_per_dim = priors.get('prior_per_dim') if isinstance(priors, dict) else None
+        if not prior_per_dim:
+            print("[Loss][WARN] 'prior_per_dim' missing in norm_template; fallback to uniform weights")
+            return None
+
+        arr = np.asarray(prior_per_dim, dtype=np.float64)
+        if arr.size % 6 != 0:
+            print(f"[Loss][WARN] prior_per_dim length {arr.size} not divisible by 6")
+            return None
+        num_bones = arr.size // 6
+        arr = arr.reshape(num_bones, 6)
+
+        mode = (mode or 'geodesic').lower()
+        if mode == 'mean6d':
+            bone_stds = arr.mean(axis=1).tolist()
+        else:  # geodesic Monte Carlo (default)
+            S = max(16, int(samples) if samples is not None else 1024)
+            sigma = torch.as_tensor(arr, dtype=torch.float64)
+            noise = torch.randn(S, num_bones, 6, dtype=torch.float64) * sigma
+            R = rot6d_to_matrix(noise, columns=rot6d_columns)  # (S,J,3,3)
+            eye = torch.eye(3, dtype=torch.float64).view(1, 1, 3, 3).expand(1, num_bones, 3, 3)
+            geo = geodesic_R(R, eye)  # (S, J)
+            bone_stds = geo.mean(dim=0).cpu().tolist()
+
+        try:
+            lo, hi = float(min(bone_stds)), float(max(bone_stds))
+            print(f"[Loss] Loaded bone_prior_stds ({mode}) for {num_bones} bones: range [{lo:.4f}, {hi:.4f}]")
+        except Exception:
+            print(f"[Loss] Loaded bone_prior_stds ({mode}) for {num_bones} bones")
+        return bone_stds
 
     norm_template_arg = _arg('norm_template')
     norm_template_path = Path(norm_template_arg).expanduser() if norm_template_arg else None
@@ -3719,7 +3828,24 @@ def train_entry():
     w_rot_delta = float(_arg('w_rot_delta', 1.0))
     w_fk_pos = float(_arg('w_fk_pos', 0.0) or 0.0)
     w_rot_local = float(_arg('w_rot_local', 0.0) or 0.0)
-    w_yaw = float(_arg('w_yaw', 0.0) or 0.0)
+
+    bone_prior_mode = str(_arg('bone_prior_mode', 'geodesic') or 'geodesic')
+    bone_prior_samples = int(_arg('bone_prior_samples', 1024) or 1024)
+    rot6d_cols = tuple(getattr(ds_train, 'rot6d_spec', {}).get('columns', ("X", "Z")))
+    bone_prior_stds = _load_bone_prior_stds(
+        norm_template_path,
+        mode=bone_prior_mode,
+        samples=bone_prior_samples,
+        rot6d_columns=rot6d_cols if len(rot6d_cols) == 2 else ("X", "Z"),
+    )
+
+    adaptive_bone_weights = bool(_arg('adaptive_bone_weights', True))
+    use_hierarchy_weights = bool(_arg('use_hierarchy_weights', True))
+    hierarchy_mode = str(_arg('hierarchy_mode', 'multiply') or 'multiply')
+    max_weight_ratio = float(_arg('max_weight_ratio', 25.0))
+    weight_gamma = float(_arg('weight_gamma', 0.7))
+    hierarchy_alpha = float(_arg('hierarchy_alpha', 0.5))
+    combine_space = str(_arg('combine_space', 'log') or 'log')
 
     loss_fn = MotionJointLoss(
         output_layout=ds_train.output_layout,
@@ -3728,10 +3854,18 @@ def train_entry():
         w_rot_delta=w_rot_delta,
         w_rot_delta_root=_arg('w_rot_delta_root', 0.0),
         w_rot_ortho=_arg('w_rot_ortho', 0.001),
-        meta=None,
+        meta=getattr(ds_train, 'meta', None),
         w_fk_pos=w_fk_pos,
         w_rot_local=w_rot_local,
-        w_yaw=w_yaw,
+
+        adaptive_bone_weights=adaptive_bone_weights,
+        bone_prior_stds=bone_prior_stds,
+        use_hierarchy_weights=use_hierarchy_weights,
+        hierarchy_mode=hierarchy_mode,
+        hierarchy_alpha=hierarchy_alpha,
+        combine_space=combine_space,
+        max_weight_ratio=max_weight_ratio,
+        weight_gamma=weight_gamma,
     )
     if getattr(ds_train, 'bone_names', None):
         try:
@@ -3755,7 +3889,13 @@ def train_entry():
         f"w_rot_ortho={loss_fn.w_rot_ortho} "
         f"w_fk_pos={loss_fn.w_fk_pos} "
         f"w_rot_local={loss_fn.w_rot_local} "
-        f"w_yaw={loss_fn.w_yaw}"
+        f"adaptive_bone_weights={loss_fn.use_adaptive_weights} "
+        f"use_hierarchy_weights={loss_fn.use_hierarchy_weights} "
+        f"hier_mode={loss_fn.hierarchy_mode} "
+        f"combine_space={loss_fn.combine_space} "
+        f"hier_alpha={loss_fn.hierarchy_alpha} "
+        f"max_weight_ratio={loss_fn.max_weight_ratio} "
+        f"weight_gamma={loss_fn.weight_gamma}"
     )
 
     loss_fn.dt_traj = 1.0 / max(1e-6, fps_data)
@@ -3795,7 +3935,8 @@ def train_entry():
     trainer.bone_hz = fps_data
 
 
-    safe_set_slice(trainer, 'yaw_x_slice', parse_layout_entry(trainer._x_layout.get('RootYaw'), 'RootYaw'))
+    # RootYaw 不再参与训练/损失，默认跳过；仍保留字段以兼容旧模型，需时可显式设置
+    safe_set_slice(trainer, 'yaw_x_slice', None)
     safe_set_slice(trainer, 'rootvel_x_slice', parse_layout_entry(trainer._x_layout.get('RootVelocity'), 'RootVelocity'))
     safe_set_slice(trainer, 'angvel_x_slice', parse_layout_entry(trainer._x_layout.get('BoneAngularVelocities'), 'BoneAngularVelocities'))
 

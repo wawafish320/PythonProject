@@ -32,7 +32,6 @@
   "teacher_rot_noise_prob": 0.08,
   "w_fk_pos": 0.07,
   "w_rot_local": 0.07,
-  "w_yaw": 1.0,
   "freerun_stage_schedule": [
     {
       "range": [
@@ -58,8 +57,7 @@
       "loss_groups": {
         "core": {
           "w_fk_pos": 0.07,
-          "w_rot_local": 0.07,
-          "w_yaw": 1.0
+          "w_rot_local": 0.07
         }
       },
       "tf": {
@@ -109,8 +107,7 @@
         "core": {
           "w_fk_pos": 0.2275,
           "w_rot_local": 0.2275,
-          "w_rot_delta_root": 0.2,
-          "w_yaw": 1.5
+          "w_rot_delta_root": 0.2
         }
       },
       "tf": {
@@ -163,8 +160,7 @@
         "core": {
           "w_fk_pos": 0.2275,
           "w_rot_local": 0.2275,
-          "w_rot_delta_root": 0.2,
-          "w_yaw": 2.0
+          "w_rot_delta_root": 0.2
         }
       },
       "tf": {
@@ -217,8 +213,7 @@
         "core": {
           "w_fk_pos": 0.4025,
           "w_rot_local": 0.4025,
-          "w_rot_delta_root": 0.25,
-          "w_yaw": 1.5
+          "w_rot_delta_root": 0.25
         }
       },
       "tf": {

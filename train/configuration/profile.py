@@ -25,7 +25,6 @@ class DatasetProfiler:
             frames = data.get("Frames") or []
             seq_lengths.append(len(frames))
             for fr in frames:
-                yaw_vals.append(abs(fr.get("RootYaw", 0.0)) * (180.0 / math.pi))
                 rv = fr.get("RootVelocityXY") or [0.0, 0.0]
                 speed_vals.append(math.hypot(rv[0], rv[1]))
                 rotations = fr.get("BoneRotations")

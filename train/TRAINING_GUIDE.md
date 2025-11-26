@@ -23,7 +23,7 @@
 - **分阶段训练**：从Teacher Forcing逐步过渡到自由运行
 - **自适应优化**：支持贝叶斯超参优化和自适应损失权重
 - **多任务学习**：同时优化位置、旋转、速度等多个目标
-> 说明：原始 JSON 里的 `RootYaw` 更接近“轨迹指令/角色朝向”而不是骨盆自身朝向；转换时会用骨盆 6D 旋转推回 **pelvis yaw**，并与 `TrajectoryDir` 对齐写入 NPZ 的 `root_yaw`。原始 JSON 的 `RootYaw` 会保存在 meta.trajectory.traj_yaw_raw 供诊断，训练和推理都使用推回后的 pelvis yaw。
+> RootYaw 已废弃：训练/转换流程不再写入或使用 RootYaw，骨盆朝向直接通过 rot6d geodesic 学习；原始 JSON 中的 RootYaw 若存在会被忽略。
 
 > **2025-11-16 更新**：原先用于“前瞻”约束的 lookahead loss 已彻底移除，阶段调度仅围绕 freerun 及相关超参展开。下文的示例和配置都已改为 `freerun_*` 命名。
 > **2025-11-24 更新**：新增 AutoTune freerun 反馈控制。以 teacher 噪声为单一旋钮，按二次关系映射到 `freerun_weight` 与 `freerun_horizon`，并根据 freerun 指标（YawAbsDeg、Diag/YawSlope、GeoDeg、RootVelMAE）及梯度衰减自动加/减压，用于识别并突破平台期。
@@ -91,7 +91,7 @@ PythonProject/
  "FPS": 60,
   "Frames": [
     {
-      "RootYaw": 0.0,
+      // RootYaw 已移除
       "RootVelocityXY": [0.5, 0.0],
       "BoneRotations": [
         [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],  // 6D旋转表示
@@ -106,7 +106,7 @@ PythonProject/
 }
 ```
 
-> ⚠️ `RootYaw` 在原始 JSON 中记录的是 **骨盆朝向（PelvisYaw）**，并非轨迹/移动方向。轨迹指令仍由 `TrajectoryDir`/条件输入提供；转换到 NPZ 时会自动对齐到相同平面和 offset。后续若统一改名为 `PelvisYaw`，需同步更新提取脚本与 schema，但现有模型和推理流程无需修改。
+> ⚠️ RootYaw 已弃用：不再写入 NPZ 或参与训练/推理。如需诊断 yaw，请直接从 rot6d 还原。
 
 ### 数据转换
 
@@ -126,7 +126,7 @@ python convert_json_to_npz.py \
 - `root_vel`: 根节点速度 [T, 2]
 - `soft_contacts`: 脚接触分数 [T, 2]
 
-> 说明：`root_yaw`（写入 NPZ）是从骨盆 6D 旋转推回的 **pelvis yaw**，并与 `TrajectoryDir`/`cond_in` 的命令方向自动对齐；原始 JSON 的 `RootYaw`（通常是轨迹朝向）会保存在 meta.trajectory.traj_yaw_raw 作为参考，同时 `trajectory.pelvis_forward_axis` / `pelvis_forward_offset_rad` 记录了推断得到的轴与偏移，方便诊断。
+> 说明：RootYaw 不再写入 NPZ；若需要 yaw，可在评估时从 rot6d 直接推回。
 
 ### 数据集分析
 

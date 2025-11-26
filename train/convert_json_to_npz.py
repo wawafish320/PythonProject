@@ -6,13 +6,13 @@ UE JSON → NPZ 转换工具（v4）
 同时兼容旧版 JSON（RootVelocity、Contacts、BonePositions/BoneVelocities/BoneAngularVelocities/Phase 等）。
 
 主要改动：
-- RootVelocity 可自动读取 RootVelocityXY，仅提取 XY 两个分量
-- Contacts 已移除；训练侧需从 JSON 的 FootEvidence 重建软/硬接触
-- TrajectoryPos 缺失时自动补零（与 TrajectoryDir 使用相同的 K）
-- Phase 缺失时默认不写入，可通过 --use-phase 强制写入 0
-- X 特征按实际存在的通道动态打包，state_layout_json 会与之完全对齐
-- 可选写入 `RootYaw`：这里写入的是 **由骨盆 6D 旋转推回并与 TrajectoryDir 对齐的 pelvis yaw**；原始 JSON 的 `RootYaw`（通常是轨迹/命令朝向）会保存在 meta.trajectory.traj_yaw_raw 仅供诊断
-- 保持旧版 CLI 兼容，同时新增若干控制开关
+ - RootVelocity 可自动读取 RootVelocityXY，仅提取 XY 两个分量
+ - Contacts 已移除；训练侧需从 JSON 的 FootEvidence 重建软/硬接触
+ - TrajectoryPos 缺失时自动补零（与 TrajectoryDir 使用相同的 K）
+ - Phase 缺失时默认不写入，可通过 --use-phase 强制写入 0
+ - X 特征按实际存在的通道动态打包，state_layout_json 会与之完全对齐
+ - **RootYaw 已废弃**：不再写入特征，也不在模板/layout 中保留对应切片
+ - 保持旧版 CLI 兼容，同时新增若干控制开关
 
 依赖：Python 3.8+，仅依赖标准库与 numpy
 """
@@ -23,12 +23,10 @@ def _canon_state_layout(d: dict) -> dict:
     mapping = {
         "root_pos": "RootPosition",
         "root_vel": "RootVelocity",
-        "root_yaw": "RootYaw",
         "rot6d": "BoneRotations6D",
         "angvel": "BoneAngularVelocities",
         "RootPosition": "RootPosition",
         "RootVelocity": "RootVelocity",
-        "RootYaw": "RootYaw",
         "BoneRotations6D": "BoneRotations6D",
         "BoneAngularVelocities": "BoneAngularVelocities",
     }
@@ -87,7 +85,6 @@ def _regex_any(s: str, pats):
 class _Spans:
     root_pos: tuple[int,int] | None = None
     root_vel: tuple[int,int] | None = None
-    root_yaw: tuple[int,int] | None = None
     rot6d:    tuple[int,int] | None = None
     angvel:   tuple[int,int] | None = None
 
@@ -95,11 +92,9 @@ class _Spans:
 class _ConfigGN:
     rot6d_floor: float | None = None
     other_floor: float | None = None
-    rootyaw_floor: float | None = None
     angvel_floor: float | None = 0.02
     group_prior_alpha: float | None = None
     use_group_prior_median: bool = True
-    yaw_use_unit_pi: bool = True
     tanh_percentile_low: float = 2.5
     tanh_percentile_high: float = 97.5
     alpha_solver: str = 'kneedle'      # or 'quantile'
@@ -199,9 +194,9 @@ class GroupedNormalizer:
 
         # 兜底：若 spans 缺失，则按导出端默认顺序合成，保证模板可写
         if span0 is None or all(
-                getattr(span0, k) is None for k in ['root_pos', 'root_vel', 'root_yaw', 'rot6d', 'angvel']):
+                getattr(span0, k) is None for k in ['root_pos', 'root_vel', 'rot6d', 'angvel']):
             Xdim0 = int((Xs[0].shape[1]) if Xs else 0)
-            span0 = self._synthesize_spans(out_layout, Xdim0, include_yaw=True)
+            span0 = self._synthesize_spans(out_layout, Xdim0, include_yaw=False)
 
         self._spans = span0
         self._bone_names = bone_names or []
@@ -218,7 +213,8 @@ class GroupedNormalizer:
 
         # Rot6D：分组 prior + 自适应 α floor（仍在 pre-transform 域；Rot6D本身未做unit-π/tanh）
         if span0.rot6d is not None:
-            st, ln = span0.rot6d
+            st, ed = span0.rot6d
+            ln = ed - st
             B = ln // 6
             self._rot6d_groups = self._build_rot6d_groups(self._bone_names, B)
             prior = self._compute_group_prior(Xprep[:, st:st + ln], B)
@@ -270,7 +266,6 @@ class GroupedNormalizer:
                 resolved_alpha=float(self._resolved_alpha if self._resolved_alpha is not None else -1.0),
                 rot6d_floor=self.cfg.rot6d_floor,
                 other_floor=self.cfg.other_floor,
-                rootyaw_floor=self.cfg.rootyaw_floor,
                 angvel_floor=self.cfg.angvel_floor,
             )
         )
@@ -371,13 +366,6 @@ class GroupedNormalizer:
             meta2 = meta  # explicit {'start','size'}
             spans = meta2.get('state_layout', {})
             # yaw
-            if 'RootYaw' in spans or 'root_yaw' in spans:
-                st = (spans.get('RootYaw') or spans.get('root_yaw'))['start']
-                ln = (spans.get('RootYaw') or spans.get('root_yaw'))['size']
-                s_eff_x[st:st+ln] = s_eff_x[st:st+ln] * np.pi
-                yaw_pi = True
-            else:
-                yaw_pi = False
             # root vel tanh scales
             rv_sc = d.get('tanh_scales_rootvel', None)
             rv_ok = False
@@ -398,7 +386,6 @@ class GroupedNormalizer:
                     av_ok = True
             d['s_eff_X'] = s_eff_x.astype(np.float32).tolist()
             d['s_eff_Y'] = s_eff_y.astype(np.float32).tolist()
-            d['s_eff_meta'] = {'yaw_pi': bool(yaw_pi), 'rv_scales': bool(rv_ok), 'ang_scales': bool(av_ok)}
             # brief diagnostics
             if Dx > 0 and Dy > 0:
                 import numpy as _np
@@ -408,7 +395,6 @@ class GroupedNormalizer:
                 print(f"[s_eff][Y] min={mn:.3g} med={md:.5g} max={mx:.3g}")
                 mn, md, mx = _mm(s_eff_x)
                 print(f"[s_eff][X] min={mn:.3g} med={md:.5g} max={mx:.3g}")
-                print(f"[s_eff][CHK] yaw π={'{:.3f}'.format(np.pi) if yaw_pi else 'None'} | rv_scales={rv_ok} | ang_scales={av_ok}")
         except Exception as _e:
             print(f"[s_eff][WARN] failed to compute s_eff: {_e}")
 
@@ -450,7 +436,7 @@ class GroupedNormalizer:
 
     def _synthesize_spans(self, out_layout: dict, Xdim: int, include_yaw: bool = True) -> _Spans:
         """当 state_layout_json 缺失时，按导出端的默认顺序合成 spans。
-        默认顺序: RootPosition(3) → RootVelocity(2) → [RootYaw(1)] → BoneRotations6D(B*6) → BoneAngularVelocities(B*3)
+        默认顺序: RootPosition(3) → RootVelocity(2) → BoneRotations6D(B*6) → BoneAngularVelocities(B*3)
         其中 B 从 output_layout['BoneRotations6D'][1]//6 推断；若缺失则根据 Xdim 反解。
         """
         st = 0
@@ -479,8 +465,7 @@ class GroupedNormalizer:
         return _Spans(
             root_pos=to_span(root_pos),
             root_vel=to_span(root_vel),
-            root_yaw=to_span(root_yaw),
-            rot6d=to_span(rot6d),
+                        rot6d=to_span(rot6d),
             angvel=to_span(angvel)
         )
 
@@ -524,7 +509,7 @@ class GroupedNormalizer:
     @staticmethod
     def _build_y_to_x_map(x_layout: dict, y_layout: dict) -> list[dict]:
         """Produce a coarse name-based alignment map used for sanity checks/visualization."""
-        names = ["RootYaw","RootVelocity","BoneAngularVelocities","BoneRotations6D","RootPosition"]
+        names = ["RootVelocity","BoneAngularVelocities","BoneRotations6D","RootPosition"]
         y2x = []
         for n in names:
             if n in x_layout and n in y_layout:
@@ -541,7 +526,7 @@ class GroupedNormalizer:
         g = lambda k: tuple(j[k]) if (k in j and len(j[k])==2 and (j[k][1]>j[k][0])) else None
         return _Spans(
             root_pos=g('RootPosition'), root_vel=g('RootVelocity'),
-            root_yaw=g('RootYaw'), rot6d=g('BoneRotations6D'), angvel=g('BoneAngularVelocities')
+            rot6d=g('BoneRotations6D'), angvel=g('BoneAngularVelocities')
         )
 
     @staticmethod
@@ -550,7 +535,7 @@ class GroupedNormalizer:
         g = lambda k: tuple(j[k]) if (k in j and len(j[k])==2 and (j[k][1]>j[k][0])) else None
         return _Spans(
             root_pos=g('RootPosition'), root_vel=g('RootVelocity'),
-            root_yaw=g('RootYaw'), rot6d=g('BoneRotations6D'), angvel=g('BoneAngularVelocities')
+            rot6d=g('BoneRotations6D'), angvel=g('BoneAngularVelocities')
         )
 
     def _span_from_Y_like(self, Dy: int, s: _Spans) -> _Spans:
@@ -559,15 +544,6 @@ class GroupedNormalizer:
 
     def _pre_transform_X(self, X: _np.ndarray, s: _Spans):
         X = X.astype(_np.float32, copy=True); meta = {}
-        if s.root_yaw is not None:
-            st, ed = s.root_yaw; yaw = X[:, st:ed]
-            if self.cfg.yaw_use_unit_pi:
-                yaw_wrapped = _wrap_to_pi(yaw)
-                X[:, st:ed] = yaw_wrapped / _np.pi
-                meta['yaw_mode'] = 'unit_pi'
-            else:
-                X[:, st:ed] = _wrap_to_pi(yaw)
-                meta['yaw_mode'] = 'robust_mu_std'
         if s.root_vel is not None:
             st, ed = s.root_vel; rv = X[:, st:ed]
             if self._tanh_scales_rootvel is None:
@@ -597,8 +573,6 @@ class GroupedNormalizer:
             st, ed = s.angvel; X[:, st:ed] = _tanh_decompress(X[:, st:ed], self._tanh_scales_angvel)
         if s.root_vel is not None and self._tanh_scales_rootvel is not None:
             st, ed = s.root_vel; X[:, st:ed] = _tanh_decompress(X[:, st:ed], self._tanh_scales_rootvel)
-        if s.root_yaw is not None and self.cfg.yaw_use_unit_pi:
-            st, ed = s.root_yaw; X[:, st:ed] = X[:, st:ed] * _np.pi
         return X
 
     def _post_inverse_Y(self, Yprep: _np.ndarray) -> _np.ndarray:
@@ -652,8 +626,6 @@ class GroupedNormalizer:
 
     def _apply_other_floors(self, std: _np.ndarray, s: _Spans) -> _np.ndarray:
         std = std.copy()
-        if s.root_yaw is not None and (not self.cfg.yaw_use_unit_pi) and (self.cfg.rootyaw_floor is not None):
-            st, ed = s.root_yaw; std[st:ed] = _np.maximum(std[st:ed], float(self.cfg.rootyaw_floor))
         if s.angvel is not None and (self.cfg.angvel_floor is not None):
             st, ed = s.angvel; std[st:ed] = _np.maximum(std[st:ed], float(self.cfg.angvel_floor))
         if s.root_pos is not None and (self.cfg.other_floor is not None):
@@ -668,8 +640,7 @@ class GroupedNormalizer:
                              alpha=float(self._resolved_alpha if self._resolved_alpha is not None else -1.0),
                              dims=int((s.rot6d[1]-s.rot6d[0]) if s.rot6d else 0)),
             floor_other=dict(value=self.cfg.other_floor, dims=int((s.root_pos[1]-s.root_pos[0]) if s.root_pos else 0)),
-            floor_rootyaw=dict(value=self.cfg.rootyaw_floor, dims=int((s.root_yaw[1]-s.root_yaw[0]) if s.root_yaw else 0)),
-            floor_angvel=dict(value=self.cfg.angvel_floor, dims=int((s.angvel[1]-s.angvel[0]) if s.angvel else 0)),
+                        floor_angvel=dict(value=self.cfg.angvel_floor, dims=int((s.angvel[1]-s.angvel[0]) if s.angvel else 0)),
         )
 
     def _emit_group_priors(self) -> dict:
@@ -957,7 +928,7 @@ def _frame_get(fr: dict, key: str, default=None):
 # -----------------------------
 def load_clip(json_path: str,
               use_phase_if_missing: bool = False,
-              root_yaw_as_feature: bool = True) -> Dict[str, Any]:
+              root_yaw_as_feature: bool = False) -> Dict[str, Any]:
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     meta = dict(data.get("meta", {}) or {})
@@ -1007,11 +978,6 @@ def load_clip(json_path: str,
         # 新字段 RootVelocityXY
         root_vel = np_array([_frame_get(fr, "RootVelocityXY", [0,0]) for fr in frames])[:, :2]
 
-    # RootYaw（可选加入 X）
-    if root_yaw_as_feature and "RootYaw" in frames[0]:
-        root_yaw = np_array([_frame_get(fr, "RootYaw") for fr in frames]).reshape(T, 1)
-    else:
-        root_yaw = None
 
     # Contacts removed: NOT exported; FootEvidence to be re-read from JSON at training time.
     contacts = None
@@ -1037,8 +1003,7 @@ def load_clip(json_path: str,
         parents=np_array(parents).astype(np.int32),
         phase=phase, has_phase=has_phase,
         traj_pos=traj_pos, traj_dir=traj_dir,
-        root_pos=root_pos, root_vel=root_vel, root_yaw=root_yaw,
-        contacts=contacts, contacts_soft2=contacts_soft2,
+        root_pos=root_pos, root_vel=root_vel,         contacts=contacts, contacts_soft2=contacts_soft2,
         bone_pos=bone_pos, bone_rot6d=bone_rot6d, bone_vel=bone_vel, bone_ang_vel=bone_ang_vel,
         meta=meta,
     )
@@ -1050,7 +1015,7 @@ def load_clip(json_path: str,
 
 def pack_flat_features(clip: Dict[str, Any],
                        include_phase: bool = False,
-                       include_root_yaw: bool = True,
+                       include_root_yaw: bool = False,
                        include_bone_pos: Optional[bool] = None,
                        include_lin_vel: Optional[bool] = None,
                        include_ang_vel: Optional[bool] = True) -> Tuple[np.ndarray, Dict[str, Tuple[int,int]]]:
@@ -1083,8 +1048,6 @@ def pack_flat_features(clip: Dict[str, Any],
     # 根
     _append("RootPosition", clip.get("root_pos"))
     _append("RootVelocity", clip.get("root_vel"))
-    if include_root_yaw and clip.get("root_yaw") is not None:
-        _append("RootYaw", clip["root_yaw"])
 
     # Contacts 移除：不再拼接到 X
 
@@ -1135,7 +1098,7 @@ def convert_one(json_path: str,
                 smooth_vel: bool = False,
                 traj_keep_idx: Optional[List[int]] = None,
                 use_phase_if_missing: bool = False,
-                include_root_yaw: bool = True,
+                include_root_yaw: bool = False,
                 include_bone_pos: Optional[bool] = None,
                 include_lin_vel: Optional[bool] = None,
                 include_ang_vel: Optional[bool] = True) -> Dict[str, Any]:
@@ -1203,8 +1166,7 @@ def convert_one(json_path: str,
             yaw_diag["yaw_flip_reason"] = "mean_cos_with_root_vel<0"
         else:
             yaw_diag["yaw_flip_applied"] = False
-    clip["root_yaw"] = yaw_corr.reshape(clip["T"], 1)
-    clip["traj_cmd_yaw"] = cmd_yaw.reshape(clip["T"], 1) if cmd_yaw is not None else None
+        clip["traj_cmd_yaw"] = cmd_yaw.reshape(clip["T"], 1) if cmd_yaw is not None else None
     traj_meta = clip.setdefault("meta", {}).setdefault("trajectory", {})
     traj_meta["cmd_source"] = cmd_source
     if yaw_diag.get("forward_axis") is not None:
@@ -1330,8 +1292,7 @@ def convert_one(json_path: str,
         traj_dir=clip["traj_dir"],
         root_pos=clip["root_pos"],
         root_vel=clip["root_vel"],
-        root_yaw=(clip["root_yaw"] if clip["root_yaw"] is not None else np.zeros((0,), dtype=np.float32)),
-        meta_json=np.array(meta_json, dtype=object),
+                meta_json=np.array(meta_json, dtype=object),
         source_json=np.array(os.path.abspath(json_path)),
         state_layout_json=state_layout_json,
         output_layout_json=output_layout_json,
@@ -1370,11 +1331,8 @@ def main():
     ap.add_argument("--alpha-solver", type=str, default="kneedle", choices=["kneedle","quantile"], help="自适应 α 求解器")
     ap.add_argument("--alpha-quantile", type=float, default=0.10, help="当 alpha-solver=quantile 时使用的分位")
     ap.add_argument("--alpha-fixed", type=float, default=None, help="固定 α（留空则自适应）")
-    ap.add_argument("--yaw-robust", action="store_true", help="RootYaw 使用 robust μ/σ（默认 unit-π 不参与 μ/σ）")
-
+    
     ap.add_argument("--use-phase", action="store_true", help="Phase 缺失时是否写入 0 通道（默认不包含 Phase）")
-    ap.add_argument("--use-root-yaw", action="store_true", help="如果 JSON 带 RootYaw，是否写入到 X（默认写入）")
-    ap.add_argument("--no-root-yaw", action="store_true", help="不写 RootYaw 到 X")
     ap.add_argument("--use-bone-pos", action="store_true", help="如有 BonePositions 则写入 X")
     ap.add_argument("--use-bone-linvel", action="store_true", help="如有 BoneVelocities 则写入 X")
     ap.add_argument("--no-bone-angvel", action="store_true", help="不写 BoneAngularVelocities 到 X")
@@ -1410,7 +1368,7 @@ def main():
                 smooth_vel=args.sg_vel,
                 traj_keep_idx=traj_keep_idx,
                 use_phase_if_missing=args.use_phase,
-                include_root_yaw=(False if args.no_root_yaw else True),
+                include_root_yaw=False,
                 include_bone_pos=(True if args.use_bone_pos else None),
                 include_lin_vel=(True if args.use_bone_linvel else None),
                 include_ang_vel=(False if args.no_bone_angvel else True),
@@ -1425,7 +1383,7 @@ def main():
     if (args.export_norm or args.export_merged_norm) and len(made) > 0:
         cfg = _ConfigGN(
             group_prior_alpha=(args.alpha_fixed if args.alpha_fixed is not None else None),
-            yaw_use_unit_pi=(not args.yaw_robust),
+            # yaw removed
             # 其余 floor 参数保持 None（完全数据驱动）
             alpha_solver=args.alpha_solver,
             alpha_quantile=args.alpha_quantile

@@ -453,7 +453,16 @@ class MotionJointLoss(nn.Module):
         meta: Optional[Dict[str, Any]] = None,
         w_fk_pos: float = 0.0,
         w_rot_local: float = 0.0,
-        w_yaw: float = 0.0,
+
+        # ===== Adaptive bone weighting =====
+        adaptive_bone_weights: bool = False,
+        bone_prior_stds: Optional[Sequence[float]] = None,
+        use_hierarchy_weights: bool = False,
+        hierarchy_mode: str = 'multiply',  # 'multiply' | 'add' | 'none'
+        hierarchy_alpha: float = 0.5,       # log-space blend between motion / hierarchy
+        combine_space: str = 'log',         # 'log' | 'linear'
+        max_weight_ratio: float = 50.0,
+        weight_gamma: float = 0.7,
     ):
         super().__init__()
         self.meta = dict(meta) if isinstance(meta, dict) else {}
@@ -463,7 +472,6 @@ class MotionJointLoss(nn.Module):
         self.w_rot_delta_root = float(w_rot_delta_root)
         self.w_fk_pos = float(w_fk_pos)
         self.w_rot_local = float(w_rot_local)
-        self.w_yaw = float(w_yaw)
         self.angvel_eps = 1e-6
         self.fps = float(fps)
         self.output_layout = output_layout or {}
@@ -479,7 +487,7 @@ class MotionJointLoss(nn.Module):
         self._warned_bad_rot6d = False
         self.template_hint: Optional[str] = None
         self.bundle_hint: Optional[str] = None
-        self._joint_weight_cache: dict[tuple[str, str, int], torch.Tensor] = {}
+        self._joint_weight_cache: dict[tuple, torch.Tensor] = {}
         self.root_idx = 0
         self.bone_names: list[str] = []
         self.limb_monitor_names: list[str] = [
@@ -516,7 +524,6 @@ class MotionJointLoss(nn.Module):
             "rot_delta",
             "rot_delta_root",
             "rot_ortho",
-            "yaw",
         )
         self._reset_adaptive_tracking()
         self._loss_group_totals: Dict[str, float] = {}
@@ -529,6 +536,25 @@ class MotionJointLoss(nn.Module):
             'fk_pos': 'core',
             'rot_local': 'core',
         }
+
+        # === adaptive bone weight params ===
+        self.use_adaptive_weights = bool(adaptive_bone_weights)
+        self.bone_prior_stds: Optional[torch.Tensor] = None
+        if bone_prior_stds is not None:
+            try:
+                self.bone_prior_stds = torch.as_tensor(bone_prior_stds, dtype=torch.float32)
+            except Exception:
+                self.bone_prior_stds = None
+        self.use_hierarchy_weights = bool(use_hierarchy_weights)
+        self.hierarchy_mode = str(hierarchy_mode)
+        self.hierarchy_alpha = float(hierarchy_alpha)
+        self.combine_space = str(combine_space)
+        self.max_weight_ratio = float(max_weight_ratio)
+        self.weight_gamma = float(weight_gamma)
+
+        if self.use_hierarchy_weights and not self.parents:
+            print("[Loss][WARN] use_hierarchy_weights=True but skeleton parents missing; fallback to uniform.")
+            self.use_hierarchy_weights = False
 
     def _format_template_hint(self, prefix: str) -> str:
         hints: list[str] = []
@@ -569,6 +595,46 @@ class MotionJointLoss(nn.Module):
             except Exception:
                 self.bone_offsets = None
         self.has_fk = bool(self.parents and self.bone_offsets is not None)
+
+    def _invalidate_weight_cache(self) -> None:
+        """Drop cached joint weights / hierarchy weights when configuration changes."""
+        self._joint_weight_cache = {}
+        if hasattr(self, '_hierarchy_weights_cache'):
+            delattr(self, '_hierarchy_weights_cache')
+
+    def _compute_hierarchy_weights(self) -> Optional[torch.Tensor]:
+        """Compute log-scaled descendant counts for each bone.
+
+        Returns:
+            Tensor[J] or None if parents are missing.
+        """
+        if not self.parents:
+            return None
+        J = len(self.parents)
+        counts = torch.zeros(J, dtype=torch.float32)
+        for j in range(J):
+            ancestor = j
+            visited: set[int] = set()
+            while 0 <= ancestor < J and ancestor not in visited:
+                visited.add(ancestor)
+                counts[ancestor] += 1.0
+                parent_idx = self.parents[ancestor]
+                if not isinstance(parent_idx, int):
+                    break
+                ancestor = parent_idx
+            # root sentinel reached
+        # log smoothing, minimum 1.0 for leaves
+        weights = torch.log(counts.clamp(min=1.0)) + 1.0
+        return weights
+
+    def _load_hierarchy_weights(self) -> Optional[torch.Tensor]:
+        cached = getattr(self, '_hierarchy_weights_cache', None)
+        if cached is not None:
+            return cached
+        w = self._compute_hierarchy_weights()
+        if w is not None:
+            self._hierarchy_weights_cache = w
+        return w
 
     def _resolve_limb_masks(self, joint_count: int, device) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
         import torch
@@ -625,6 +691,42 @@ class MotionJointLoss(nn.Module):
             stats['rot_geo_limb_over_torso'] = float(ratio.detach().cpu())
         return stats
 
+    def _geo_weight_monitor(self, geo_tensor: torch.Tensor, weights: torch.Tensor) -> Dict[str, float]:
+        """Monitor whether low-weight bones are being ignored.
+
+        Reports mean geodesic error (deg) for low/high weight quartiles and the
+        current weight spread. Computed on detached tensors to keep overhead low.
+        """
+        import torch
+        stats: Dict[str, float] = {}
+        if geo_tensor is None or weights is None:
+            return stats
+        if geo_tensor.numel() == 0 or weights.numel() == 0:
+            return stats
+        # geo_tensor: (..., J), weights: (J,)
+        try:
+            joint_mean = torch.nanmean(geo_tensor.detach(), dim=tuple(range(geo_tensor.dim() - 1)))
+        except Exception:
+            return stats
+        w = weights.detach()
+        if w.numel() != joint_mean.numel():
+            return stats
+        try:
+            low_q = torch.quantile(w, 0.25)
+            high_q = torch.quantile(w, 0.75)
+        except Exception:
+            return stats
+        deg = 180.0 / _math.pi
+        low_mask = w <= low_q
+        high_mask = w >= high_q
+        if low_mask.any():
+            stats['rot_geo_lowW_deg'] = float((joint_mean[low_mask].mean() * deg).cpu())
+        if high_mask.any():
+            stats['rot_geo_highW_deg'] = float((joint_mean[high_mask].mean() * deg).cpu())
+        spread = (w.max() / w.min().clamp_min(1e-6)).item()
+        stats['rot_geo_weight_spread'] = float(spread)
+        return stats
+
     def _parent_relative_matrices(self, R: torch.Tensor) -> torch.Tensor:
         import torch
         parents = getattr(self, 'parents', None)
@@ -657,16 +759,94 @@ class MotionJointLoss(nn.Module):
         return _root_relative_matrices(R, root_idx)
 
     def _joint_weight_vector(self, device, dtype, joint_count: int) -> torch.Tensor:
-        key = (str(device), str(dtype), int(joint_count))
+        use_adaptive = bool(getattr(self, 'use_adaptive_weights', False))
+        use_hierarchy = bool(getattr(self, 'use_hierarchy_weights', False))
+        hierarchy_mode = str(getattr(self, 'hierarchy_mode', 'multiply'))
+        max_ratio = float(getattr(self, 'max_weight_ratio', 0.0) or 0.0)
+        gamma = float(getattr(self, 'weight_gamma', 1.0) or 1.0)
+        combine_space = str(getattr(self, 'combine_space', 'log'))
+        alpha = float(getattr(self, 'hierarchy_alpha', 0.5))
+
+        key = (
+            str(device), str(dtype), int(joint_count),
+            use_adaptive, use_hierarchy, hierarchy_mode, max_ratio, gamma,
+            combine_space, alpha,
+        )
         cache = getattr(self, '_joint_weight_cache', None)
         if cache is None:
             cache = {}
             self._joint_weight_cache = cache
         if key in cache:
             return cache[key]
+
         import torch
-        weights = torch.ones(joint_count, device=device, dtype=dtype)
+
+        # 1) motion-based weights
+        if use_adaptive and getattr(self, 'bone_prior_stds', None) is not None:
+            prior = self.bone_prior_stds
+            if prior.numel() == joint_count:
+                motion_w = (1.0 / (prior.to(device=device, dtype=dtype) + 1e-6))
+            else:
+                print(f"[Loss][WARN] bone_prior_stds len={prior.numel()} != joint_count={joint_count}; using uniform weights.")
+                motion_w = torch.ones(joint_count, device=device, dtype=dtype)
+        else:
+            motion_w = torch.ones(joint_count, device=device, dtype=dtype)
+
+        # 2) hierarchy weights (descendant-aware)
+        if use_hierarchy:
+            h_w = self._load_hierarchy_weights()
+            if h_w is not None and h_w.numel() >= joint_count:
+                h_w = h_w[:joint_count].to(device=device, dtype=dtype)
+            else:
+                if use_hierarchy:
+                    print("[Loss][WARN] hierarchy weights unavailable; fallback to uniform.")
+                h_w = torch.ones(joint_count, device=device, dtype=dtype)
+        else:
+            h_w = torch.ones(joint_count, device=device, dtype=dtype)
+
+        # 3) combine
+        if hierarchy_mode == 'add':
+            alpha_lin = max(0.0, min(1.0, alpha))
+            weights = alpha_lin * motion_w + (1 - alpha_lin) * h_w
+        elif hierarchy_mode == 'none':
+            weights = motion_w
+        else:  # multiply
+            if combine_space == 'log':
+                log_m = motion_w.clamp(min=1e-8).log()
+                log_h = h_w.clamp(min=1e-8).log()
+                log_m = log_m - log_m.mean()
+                log_h = log_h - log_h.mean()
+                alpha = max(0.0, min(1.0, alpha))
+                log_combined = alpha * log_m + (1.0 - alpha) * log_h
+                if max_ratio and max_ratio > 0:
+                    half = _math.log(max_ratio) / 2.0
+                    log_combined = log_combined.clamp(min=-half, max=half)
+                weights = log_combined.exp()
+            else:
+                weights = motion_w * h_w
+                # optional damping only for linear space
+                gamma = max(1e-3, min(1.0, gamma))
+                if gamma != 1.0:
+                    weights = weights.clamp(min=1e-8).pow(gamma)
+
+        # normalize -> mean 1
+        weights = weights / weights.mean().clamp_min(1e-6)
+
+        if combine_space != 'log' and max_ratio and max_ratio > 0:
+            lower = 1.0 / max_ratio
+            upper = max_ratio
+            weights = weights.clamp(min=lower, max=upper)
+            weights = weights / weights.mean().clamp_min(1e-6)
+
         cache[key] = weights
+        if not hasattr(self, '_weight_vector_logged'):
+            self._weight_vector_logged = True
+            print(
+                f"[Loss] Joint weights: range [{weights.min():.2f}, {weights.max():.2f}], "
+                f"mean={weights.mean():.2f}, std={weights.std():.2f}, mode={hierarchy_mode}, "
+                f"adaptive={use_adaptive}, hierarchy={use_hierarchy}, combine={combine_space}, "
+                f"alpha={alpha}, gamma={gamma}, max_ratio={max_ratio}"
+            )
         return weights
 
     def _fk_positions(self, R_seq: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
@@ -723,10 +903,13 @@ class MotionJointLoss(nn.Module):
 
         geo_payload = self.compute_rot6d_geo_loss(pm, gm, return_per_joint=True)
         if isinstance(geo_payload, tuple):
-            l_geo, geo_details = geo_payload
+            l_geo = geo_payload[0]
+            geo_details = geo_payload[1] if len(geo_payload) > 1 else None
+            geo_weights = geo_payload[2] if len(geo_payload) > 2 else None
         else:
             l_geo = geo_payload
             geo_details = None
+            geo_weights = None
 
         loss = self.w_attn_reg * l_attn
         self._accumulate_loss_contrib('attn', l_attn, self.w_attn_reg, group='aux')
@@ -742,6 +925,10 @@ class MotionJointLoss(nn.Module):
             limb_stats = self._collect_limb_geo_stats(geo_details.detach())
             if limb_stats:
                 stats.update(limb_stats)
+            if geo_weights is not None:
+                weight_stats = self._geo_weight_monitor(geo_details.detach(), geo_weights.detach())
+                if weight_stats:
+                    stats.update(weight_stats)
         return loss, stats
 
     def _slice_if_exists(self, name: str, X: torch.Tensor) -> Optional[torch.Tensor]:
@@ -906,10 +1093,16 @@ class MotionJointLoss(nn.Module):
         tr = RtR[..., 0, 0] + RtR[..., 1, 1] + RtR[..., 2, 2]
         cos = (tr - 1.0) * 0.5
         cos = cos.clamp(-1.0 + 1e-6, 1.0 - 1e-6)
-        theta = torch.arccos(cos)
+        theta = torch.arccos(cos)  # (..., J)
+
+        weights = self._joint_weight_vector(theta.device, theta.dtype, J)
+        view_shape = (1,) * (theta.dim() - 1) + (J,)
+        w = weights.view(*view_shape)
+        theta_weighted = theta * w
+        loss_val = theta_weighted.mean()
         if return_per_joint:
-            return theta.mean(), theta
-        return theta.mean()
+            return loss_val, theta, weights
+        return loss_val
 
 
     def compute_rot6d_ortho_loss(self, pred: torch.Tensor) -> torch.Tensor:
@@ -1152,63 +1345,6 @@ class MotionJointLoss(nn.Module):
         theta = torch.nan_to_num(theta, nan=0.0, posinf=_math.pi, neginf=0.0)
         return theta.mean()
 
-    def compute_yaw_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-        """
-        计算root yaw（朝向）的测地线误差。
-        Yaw是forward向量在水平面上的投影角度，即使在上坡也只关注水平朝向。
-        """
-        Z = lambda v: pred.new_tensor(float(v))
-
-        # 获取旋转矩阵
-        Rp = self._rot6d_matrices(pred)
-        Rg = self._rot6d_matrices(gt)
-        if Rp is None or Rg is None:
-            return Z(0.0)
-        if Rp.dim() < 5:
-            return Z(0.0)
-
-        # 重塑为 [B, T, J, 3, 3]
-        T = int(Rp.shape[-4])
-        J = int(Rp.shape[-3])
-        if T <= 0 or J <= 0:
-            return Z(0.0)
-        Rp = Rp.reshape(-1, T, J, 3, 3)
-        Rg = Rg.reshape(-1, T, J, 3, 3)
-
-        # 提取root旋转矩阵
-        root_idx = int(getattr(self, 'root_idx', 0))
-        root_idx = max(0, min(J - 1, root_idx))
-        Rp_root = Rp[:, :, root_idx]  # [B, T, 3, 3]
-        Rg_root = Rg[:, :, root_idx]
-
-        # 获取坐标系配置（默认：forward=X轴, up=Z轴）
-        forward_axis = int(getattr(self, 'yaw_forward_axis', 0))
-        up_axis = int(getattr(self, 'yaw_up_axis', 2))
-        forward_axis = max(0, min(2, forward_axis))
-        up_axis = max(0, min(2, up_axis))
-
-        # 确定水平面的两个轴（排除up轴）
-        planar_axes = [ax for ax in (0, 1, 2) if ax != up_axis]
-        if len(planar_axes) != 2:
-            planar_axes = [0, 1]  # 后备方案：使用XY平面
-        ax0, ax1 = planar_axes
-
-        # 提取forward向量（旋转矩阵的某一列）
-        forward_p = Rp_root[:, :, :, forward_axis]  # [B, T, 3]
-        forward_g = Rg_root[:, :, :, forward_axis]
-
-        # 计算yaw（只用水平面的两个分量，自动投影到水平面）
-        yaw_p = torch.atan2(forward_p[:, :, ax1], forward_p[:, :, ax0])  # [B, T]
-        yaw_g = torch.atan2(forward_g[:, :, ax1], forward_g[:, :, ax0])
-
-        # 计算测地距离（wrap to [-π, π]，处理角度周期性）
-        dyaw = torch.atan2(
-            torch.sin(yaw_p - yaw_g),
-            torch.cos(yaw_p - yaw_g)
-        )
-
-        # 返回绝对值的平均（转换为rad）
-        return dyaw.abs().mean()
 
     def compute_rot6d_log_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
         Z = lambda v: pred.new_tensor(float(v))
@@ -1333,15 +1469,6 @@ class MotionJointLoss(nn.Module):
                 self._register_component_loss('rot_local', local_loss, self.w_rot_local)
         else:
             stats.setdefault('rot_local_deg', 0.0)
-
-        if self.w_yaw > 0.0:
-            l_yaw = self.compute_yaw_loss(pm, gt_motion)
-            loss = loss + self.w_yaw * l_yaw
-            self._accumulate_loss_contrib('yaw', l_yaw, self.w_yaw, group='core')
-            stats['yaw_deg'] = float((l_yaw * (180.0 / math.pi)).detach().cpu())
-            self._register_component_loss('yaw', l_yaw, self.w_yaw)
-        else:
-            stats.setdefault('yaw_deg', 0.0)
 
         self._finalize_adaptive_payload(loss)
         stats.update(self._loss_group_stats())

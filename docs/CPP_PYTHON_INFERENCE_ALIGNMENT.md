@@ -12,7 +12,7 @@
 | ONNX 模型 (`*.onnx` 或 `UNNEModelData`) | `train/training_MPL.py` 导出的 checkpoint/ONNX | `FFusedEventMotionModel::Initialize` | 输入顺序固定：State, Cond, Contacts, AngVel Aux, PoseHist Aux |
 | Teacher 参考 (`validate/teacher_predictions/*.json`) | `train/validate/run_teacher_rollout.py` | `UEnemyAnimInstance`（可选） | 用于 Teacher 模式验证 & 回退 |
 
-> **约束**：任何改动布局/特征维度的训练改动，必须同步更新 `norm_template.json` 并在 UE 中重新指定 `SchemaJsonPath`。`RootYaw` 切片在 NPZ/推理阶段表示 “骨盆朝向（PelvisYaw）”；原始 JSON 中的 `RootYaw`（若存在）通常是轨迹朝向，会被保存在 meta.trajectory.traj_yaw_raw，仅用于诊断。
+> **约束**：任何改动布局/特征维度的训练改动，必须同步更新 `norm_template.json` 并在 UE 中重新指定 `SchemaJsonPath`。RootYaw 已废弃，不再在 NPZ/推理中使用；骨盆朝向直接由 rot6d 学习。
 
 ---
 
@@ -24,7 +24,7 @@
 | --- | --- | --- | --- | --- |
 | `RootPosition` | State | 0 | 3 | 仅用于初始化 / 调试，推理循环通常从 `MuX` 复制 |
 | `RootVelocity` | State | 3 | 2 | 先除以 `tanh_scales_rootvel`（长度 2），再标准化 |
-| `PelvisYaw` (`RootYaw` slice in NPZ) | State | 5 | 1 | `wrap_to_pi` / π；由骨盆 6D 旋转推回并与 `TrajectoryDir` 对齐，**不直接使用原始 JSON 的 RootYaw（那通常是轨迹朝向）** |
+<!-- RootYaw 已废弃，表项移除 -->
 | `BoneRotations6D` | State | 6 | 276 | 46 骨 × 6D；训练端通过 `geometry.rot6d_to_matrix`，运行时 `DecodeRot6DToMatrix` |
 | `BoneAngularVelocities` | State | 282 | 138 | 46 骨 × 3D；先 `tanh(raw / tanh_scales_angvel)` |
 | `Contacts` | State (运行时追加) | - | 2 | 左右脚接触标记；由 UE 在 `UpdateFootContacts` 中写入 |
