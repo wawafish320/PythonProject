@@ -552,9 +552,7 @@ class MotionJointLoss(nn.Module):
         self.max_weight_ratio = float(max_weight_ratio)
         self.weight_gamma = float(weight_gamma)
 
-        if self.use_hierarchy_weights and not self.parents:
-            print("[Loss][WARN] use_hierarchy_weights=True but skeleton parents missing; fallback to uniform.")
-            self.use_hierarchy_weights = False
+        # skeleton parents may be set later via set_skeleton; avoid early fallback here
 
     def _format_template_hint(self, prefix: str) -> str:
         hints: list[str] = []
@@ -758,20 +756,13 @@ class MotionJointLoss(nn.Module):
         root_idx = int(getattr(self, 'root_idx', 0))
         return _root_relative_matrices(R, root_idx)
 
+    # === Unified bone weight computation (replaces adaptive + hierarchy) ===
     def _joint_weight_vector(self, device, dtype, joint_count: int) -> torch.Tensor:
-        use_adaptive = bool(getattr(self, 'use_adaptive_weights', False))
-        use_hierarchy = bool(getattr(self, 'use_hierarchy_weights', False))
-        hierarchy_mode = str(getattr(self, 'hierarchy_mode', 'multiply'))
-        max_ratio = float(getattr(self, 'max_weight_ratio', 0.0) or 0.0)
-        gamma = float(getattr(self, 'weight_gamma', 1.0) or 1.0)
-        combine_space = str(getattr(self, 'combine_space', 'log'))
-        alpha = float(getattr(self, 'hierarchy_alpha', 0.5))
-
-        key = (
-            str(device), str(dtype), int(joint_count),
-            use_adaptive, use_hierarchy, hierarchy_mode, max_ratio, gamma,
-            combine_space, alpha,
-        )
+        """
+        influence = self_scale * |offset| + (sum lever_arm_to_descendants) ** power
+        clamp to min_w, optional visual importance; normalize mean=1.
+        """
+        key = (str(device), str(dtype), int(joint_count))
         cache = getattr(self, '_joint_weight_cache', None)
         if cache is None:
             cache = {}
@@ -779,75 +770,97 @@ class MotionJointLoss(nn.Module):
         if key in cache:
             return cache[key]
 
-        import torch
-
-        # 1) motion-based weights
-        if use_adaptive and getattr(self, 'bone_prior_stds', None) is not None:
-            prior = self.bone_prior_stds
-            if prior.numel() == joint_count:
-                motion_w = (1.0 / (prior.to(device=device, dtype=dtype) + 1e-6))
-            else:
-                print(f"[Loss][WARN] bone_prior_stds len={prior.numel()} != joint_count={joint_count}; using uniform weights.")
-                motion_w = torch.ones(joint_count, device=device, dtype=dtype)
-        else:
-            motion_w = torch.ones(joint_count, device=device, dtype=dtype)
-
-        # 2) hierarchy weights (descendant-aware)
-        if use_hierarchy:
-            h_w = self._load_hierarchy_weights()
-            if h_w is not None and h_w.numel() >= joint_count:
-                h_w = h_w[:joint_count].to(device=device, dtype=dtype)
-            else:
-                if use_hierarchy:
-                    print("[Loss][WARN] hierarchy weights unavailable; fallback to uniform.")
-                h_w = torch.ones(joint_count, device=device, dtype=dtype)
-        else:
-            h_w = torch.ones(joint_count, device=device, dtype=dtype)
-
-        # 3) combine
-        if hierarchy_mode == 'add':
-            alpha_lin = max(0.0, min(1.0, alpha))
-            weights = alpha_lin * motion_w + (1 - alpha_lin) * h_w
-        elif hierarchy_mode == 'none':
-            weights = motion_w
-        else:  # multiply
-            if combine_space == 'log':
-                log_m = motion_w.clamp(min=1e-8).log()
-                log_h = h_w.clamp(min=1e-8).log()
-                log_m = log_m - log_m.mean()
-                log_h = log_h - log_h.mean()
-                alpha = max(0.0, min(1.0, alpha))
-                log_combined = alpha * log_m + (1.0 - alpha) * log_h
-                if max_ratio and max_ratio > 0:
-                    half = _math.log(max_ratio) / 2.0
-                    log_combined = log_combined.clamp(min=-half, max=half)
-                weights = log_combined.exp()
-            else:
-                weights = motion_w * h_w
-                # optional damping only for linear space
-                gamma = max(1e-3, min(1.0, gamma))
-                if gamma != 1.0:
-                    weights = weights.clamp(min=1e-8).pow(gamma)
-
-        # normalize -> mean 1
-        weights = weights / weights.mean().clamp_min(1e-6)
-
-        if combine_space != 'log' and max_ratio and max_ratio > 0:
-            lower = 1.0 / max_ratio
-            upper = max_ratio
-            weights = weights.clamp(min=lower, max=upper)
-            weights = weights / weights.mean().clamp_min(1e-6)
-
+        weights_cpu = self._compute_unified_weights_cpu(joint_count)
+        weights = weights_cpu.to(device=device, dtype=dtype)
         cache[key] = weights
         if not hasattr(self, '_weight_vector_logged'):
             self._weight_vector_logged = True
             print(
-                f"[Loss] Joint weights: range [{weights.min():.2f}, {weights.max():.2f}], "
-                f"mean={weights.mean():.2f}, std={weights.std():.2f}, mode={hierarchy_mode}, "
-                f"adaptive={use_adaptive}, hierarchy={use_hierarchy}, combine={combine_space}, "
-                f"alpha={alpha}, gamma={gamma}, max_ratio={max_ratio}"
+                f"[Loss][UnifiedWeights] range=[{weights.min():.3f}, {weights.max():.3f}] "
+                f"mean={weights.mean():.3f} std={weights.std():.3f} "
+                f"power={getattr(self, 'unified_downstream_power', 0.6)} "
+                f"self_scale={getattr(self, 'unified_self_scale', 1.5)} "
+                f"min_w={getattr(self, 'unified_min_weight', 0.05)} "
+                f"visual={getattr(self, 'unified_use_visual_importance', True)}"
             )
         return weights
+
+    def _compute_unified_weights_cpu(self, joint_count: int) -> torch.Tensor:
+        power = float(getattr(self, 'unified_downstream_power', 0.6))
+        self_scale = float(getattr(self, 'unified_self_scale', 1.5))
+        min_w = float(getattr(self, 'unified_min_weight', 0.05))
+        use_visual = bool(getattr(self, 'unified_use_visual_importance', True))
+
+        if not self.parents or self.bone_offsets is None or len(self.parents) < joint_count:
+            return torch.ones(joint_count, dtype=torch.float32)
+
+        J = joint_count
+        parents = self.parents[:J]
+        offsets = self.bone_offsets[:J].detach().cpu().float()
+
+        global_pos = torch.zeros(J, 3, dtype=torch.float32)
+        for j in range(J):
+            p = parents[j]
+            if p < 0:
+                global_pos[j] = offsets[j]
+            else:
+                global_pos[j] = global_pos[p] + offsets[j]
+
+        children = [[] for _ in range(J)]
+        for j, p in enumerate(parents):
+            if p >= 0 and p < J:
+                children[p].append(j)
+
+        def _descendants(idx: int):
+            qs = [idx]
+            seen = set()
+            out = []
+            while qs:
+                cur = qs.pop(0)
+                for c in children[cur]:
+                    if c not in seen:
+                        seen.add(c)
+                        out.append(c)
+                        qs.append(c)
+            return out
+
+        weights = torch.zeros(J, dtype=torch.float32)
+        for i in range(J):
+            self_len = torch.norm(offsets[i])
+            bone_i = global_pos[i]
+            down = 0.0
+            for j in _descendants(i):
+                end = global_pos[j] + offsets[j]
+                lever = torch.norm(end - bone_i)
+                down += float(lever)
+            down_scaled = (down ** power) if down > 0 else 0.0
+            weights[i] = self_scale * self_len + down_scaled
+
+        weights = weights / weights.mean().clamp_min(1e-6)
+        weights = torch.clamp(weights, min=min_w)
+        weights = weights / weights.mean().clamp_min(1e-6)
+
+        if use_visual and getattr(self, 'bone_names', None):
+            weights = self._apply_visual_importance(weights, self.bone_names[:J])
+            weights = weights / weights.mean().clamp_min(1e-6)
+
+        return weights
+
+    @staticmethod
+    def _apply_visual_importance(weights: torch.Tensor, bone_names) -> torch.Tensor:
+        VISUAL = {
+            'hand': 1.5, 'finger': 1.3, 'thumb': 1.3, 'index': 1.3, 'middle': 1.3,
+            'ring': 1.3, 'pinky': 1.3, 'head': 1.2, 'upperarm': 1.1,
+            'foot': 0.8, 'calf': 0.9, 'toe': 0.5, 'ball': 0.5, 'twist': 0.7,
+        }
+        w = weights.clone()
+        for i, name in enumerate(bone_names):
+            n = str(name).lower()
+            for key, mul in VISUAL.items():
+                if key in n:
+                    w[i] = w[i] * mul
+                    break
+        return w
 
     def _fk_positions(self, R_seq: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
         if R_seq is None:

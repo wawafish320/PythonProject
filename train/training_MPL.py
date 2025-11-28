@@ -2958,45 +2958,46 @@ def _diagnose_free_run_impl(
         predX_raw = None
         gtX_raw = None
 
-        if isinstance(rv_x, slice) and predX_raw is not None and gtX_raw is not None:
-            _record_metric('RootVelMAE', float((predX_raw[..., rv_x] - gtX_raw[..., rv_x]).abs().mean().item()))
-            if getattr(self, 'diag_input_stats', False):
-                diff = (predX_raw[..., rv_x] - gtX_raw[..., rv_x]).abs()
-                result['RootVelMAE_std'] = float(diff.std().item())
-            try:
-                # 末步根速度误差（观测累积轨迹漂移）
-                rv_end = (predX_raw[:, -1, rv_x] - gtX_raw[:, -1, rv_x]).abs().mean()
-                _record_metric('RootVelEndMAE', float(rv_end.item()))
-            except Exception:
-                pass
+    # ----- diagnostics that need denormed X -----
+    if isinstance(rv_x, slice) and predX_raw is not None and gtX_raw is not None:
+        _record_metric('RootVelMAE', float((predX_raw[..., rv_x] - gtX_raw[..., rv_x]).abs().mean().item()))
+        if getattr(self, 'diag_input_stats', False):
+            diff = (predX_raw[..., rv_x] - gtX_raw[..., rv_x]).abs()
+            result['RootVelMAE_std'] = float(diff.std().item())
+        try:
+            # 末步根速度误差（观测累积轨迹漂移）
+            rv_end = (predX_raw[:, -1, rv_x] - gtX_raw[:, -1, rv_x]).abs().mean()
+            _record_metric('RootVelEndMAE', float(rv_end.item()))
+        except Exception:
+            pass
 
-        if isinstance(rot6d_x, slice) and predX_raw is not None and gtX_raw is not None:
-            try:
-                Bx, Tx, Dx = predX_raw.shape
-                px = predX_raw[..., rot6d_x]
-                gx = gtX_raw[..., rot6d_x]
-                if Dx > 0 and px.shape[-1] % 6 == 0:
-                    Jx = px.shape[-1] // 6
-                    px6 = reproject_rot6d(px.reshape(-1, px.shape[-1]))
-                    gx6 = reproject_rot6d(gx.reshape(-1, gx.shape[-1]))
-                    Rp = rot6d_to_matrix(px6.view(-1, Jx, 6)).view(Bx, Tx, Jx, 3, 3)
-                    Rg = rot6d_to_matrix(gx6.view(-1, Jx, 6)).view(Bx, Tx, Jx, 3, 3)
-                    geo_in = geodesic_R(Rp, Rg)
-                    _record_metric('InputRotGeoDeg', float((geo_in.mean() * deg).item()))
-                    result['FreeRun/InputRotGeoDeg'] = result['InputRotGeoDeg']
-                    if getattr(self, 'diag_input_stats', False):
-                        result['InputRotGeoDeg_max'] = float((geo_in.max() * deg).item())
-                        result['InputRotGeoDeg_std'] = float((geo_in.std() * deg).item())
-                    try:
-                        geo_in_deg = geo_in * deg
-                        mean_curve = _mean_curve(geo_in_deg.mean(dim=-1), reduce_dims=(0,))
-                        max_curve = geo_in_deg.max(dim=-1).values.max(dim=0).values
-                        result['InputRotGeoDegCurve'] = mean_curve.detach().cpu().tolist()
-                        result['InputRotGeoDegCurveMax'] = max_curve.detach().cpu().tolist()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+    if isinstance(rot6d_x, slice) and predX_raw is not None and gtX_raw is not None:
+        try:
+            Bx, Tx, Dx = predX_raw.shape
+            px = predX_raw[..., rot6d_x]
+            gx = gtX_raw[..., rot6d_x]
+            if Dx > 0 and px.shape[-1] % 6 == 0:
+                Jx = px.shape[-1] // 6
+                px6 = reproject_rot6d(px.reshape(-1, px.shape[-1]))
+                gx6 = reproject_rot6d(gx.reshape(-1, gx.shape[-1]))
+                Rp = rot6d_to_matrix(px6.view(-1, Jx, 6)).view(Bx, Tx, Jx, 3, 3)
+                Rg = rot6d_to_matrix(gx6.view(-1, Jx, 6)).view(Bx, Tx, Jx, 3, 3)
+                geo_in = geodesic_R(Rp, Rg)
+                _record_metric('InputRotGeoDeg', float((geo_in.mean() * deg).item()))
+                result['FreeRun/InputRotGeoDeg'] = result['InputRotGeoDeg']
+                if getattr(self, 'diag_input_stats', False):
+                    result['InputRotGeoDeg_max'] = float((geo_in.max() * deg).item())
+                    result['InputRotGeoDeg_std'] = float((geo_in.std() * deg).item())
+                try:
+                    geo_in_deg = geo_in * deg
+                    mean_curve = _mean_curve(geo_in_deg.mean(dim=-1), reduce_dims=(0,))
+                    max_curve = geo_in_deg.max(dim=-1).values.max(dim=0).values
+                    result['InputRotGeoDegCurve'] = mean_curve.detach().cpu().tolist()
+                    result['InputRotGeoDegCurveMax'] = max_curve.detach().cpu().tolist()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     # Cond vs motion diagnostics
     cond_raw_seq = None
@@ -3150,6 +3151,18 @@ def _diagnose_free_run_impl(
                 ang_mag_rel = (mag_rel * maskA).sum(dim=(0, 1)) / maskA.sum(dim=(0, 1)).clamp_min(1)
                 _record_metric('AngVelMagRel', float(torch.nanmedian(ang_mag_rel).item()))
                 try:
+                    # 角速度幅值/分量误差曲线（便于逐帧诊断）
+                    ang_mae_full = (w_pred - w_gt).abs()  # [B, T, J, 3]
+                    ang_mae_curve = ang_mae_full.mean(dim=(0, 2))  # [T]
+                    result['AngVelMAECurve'] = ang_mae_curve.detach().cpu().tolist()
+                    if bone_names and ang_mae_full.shape[2] == len(bone_names):
+                        ang_mae_bones = ang_mae_full.mean(dim=0)  # [T, J, 3]
+                        bone_curve = {
+                            name: ang_mae_bones[:, j].norm(dim=-1).detach().cpu().tolist()
+                            for j, name in enumerate(bone_names)
+                        }
+                        result['AngVelMAECurveBones'] = bone_curve
+
                     dot_full = (w_pred * w_gt).sum(dim=-1)
                     norm_full = mag_p * mag_g
                     ang_full = torch.zeros_like(dot_full)
@@ -3161,6 +3174,9 @@ def _diagnose_free_run_impl(
                     ang_curve_max = ang_full_deg.max(dim=2).values.max(dim=0).values
                     result['AngVelDirDegCurve'] = ang_curve.detach().cpu().tolist()
                     result['AngVelDirDegCurveMax'] = ang_curve_max.detach().cpu().tolist()
+                    if diag_scope == 'single_step':
+                        result['SingleStep/AngVelMAECurve'] = result.get('AngVelMAECurve')
+                        result['SingleStep/AngVelMAECurveBones'] = result.get('AngVelMAECurveBones')
                     # 末步角速度方向误差
                     _record_metric('AngVelDirDegEnd', float(ang_curve[-1].item()))
                     if diag_scope == 'single_step':
@@ -3175,6 +3191,84 @@ def _diagnose_free_run_impl(
                         summary = {}
                     if summary:
                         _record_metric('AngVelDirDegRaw', summary.get('raw', float('nan')))
+
+                    # -------- Soft-contact / sliding diagnostics (angular-velocity based) --------
+                    # 仅诊断，不参与梯度：用关节角速度作为软接触代理。
+                    contact_w_th = float(getattr(self, 'soft_contact_w_th', 0.5) or 0.5)  # rad/s
+                    foot_names = ('foot_l', 'foot_r')
+                    idx_map = {name: idx for idx, name in enumerate(bone_names)} if bone_names else {}
+                    for fname in foot_names:
+                        j_idx = idx_map.get(fname, None)
+                        if j_idx is None or j_idx >= w_pred.shape[2]:
+                            continue
+                        w_p = w_pred[..., j_idx, :]  # [B,T,3]
+                        w_g = w_gt[..., j_idx, :]
+                        mag_p = w_p.norm(dim=-1)
+                        mag_g = w_g.norm(dim=-1)
+                        contact_gt = (mag_g < contact_w_th)
+                        contact_pred = (mag_p < contact_w_th)
+                        if contact_gt.any():
+                            slip_mae = (w_p - w_g).abs()[contact_gt].mean()
+                            _record_metric(f'Foot/{fname}/ContactAngVelMAE', float(slip_mae.item()))
+                            slip_mag = mag_p[contact_gt].mean()
+                            _record_metric(f'Foot/{fname}/ContactAngVelMag', float(slip_mag.item()))
+                        # 软接触判定一致性
+                        agree = (contact_gt == contact_pred)
+                        acc = agree.float().mean()
+                        _record_metric(f'Foot/{fname}/SoftContactAcc', float(acc.item()))
+                        if contact_gt.any():
+                            fnr = (~contact_pred & contact_gt).float().mean()
+                            _record_metric(f'Foot/{fname}/SoftContactFNR', float(fnr.item()))
+                        if (~contact_gt).any():
+                            fpr = (contact_pred & (~contact_gt)).float().mean()
+                            _record_metric(f'Foot/{fname}/SoftContactFPR', float(fpr.item()))
+
+                    # -------- Foot sliding diagnostics (position based, FK) --------
+                    try:
+                        pos_pred = self._fk_positions(Rp_root)
+                        pos_gt = self._fk_positions(Rg_root)
+                    except Exception:
+                        pos_pred = pos_gt = None
+                    if pos_pred is not None and pos_gt is not None and pos_pred.shape[:3] == pos_gt.shape[:3]:
+                        Bp, Tp, Jp, _ = pos_pred.shape
+                        fps_diag = fps_eval
+                        pos_pred = pos_pred[:, :Tp]
+                        pos_gt = pos_gt[:, :Tp]
+                        idx_map_fk = idx_map
+                        def _foot_speed(pos):
+                            vel = pos[:, 1:] - pos[:, :-1]
+                            return vel.norm(dim=-1) * fps_diag  # m/s
+
+                        for fname in foot_names:
+                            j_idx = idx_map_fk.get(fname)
+                            if j_idx is None or j_idx >= Jp:
+                                continue
+                            sp = _foot_speed(pos_pred[..., j_idx, :])
+                            sg = _foot_speed(pos_gt[..., j_idx, :])
+                            # 全时段平均
+                            _record_metric(f'Foot/{fname}/SlideSpeed', float(sp.mean().item()))
+                            # GT 接触期（若有 contacts_seq）
+                            contact_mask = None
+                            if torch.is_tensor(contacts_seq) and contacts_seq.dim() >= 3 and contacts_seq.shape[1] >= sp.shape[1]:
+                                # assume contacts_seq [..., left, right]
+                                foot_idx = 0 if fname.endswith('_l') else 1
+                                if foot_idx < contacts_seq.shape[-1]:
+                                    contact_mask = contacts_seq[:, :sp.shape[1], foot_idx] > 0.5
+                            if contact_mask is not None:
+                                if contact_mask.any():
+                                    _record_metric(
+                                        f'Foot/{fname}/SlideSpeedContact',
+                                        float(sp[contact_mask].mean().item())
+                                    )
+                                    # 滑移总距离（接触窗口内 XY）
+                                    pos_xy = pos_pred[:, :, j_idx, :2]
+                                    # mask per-frame -> cumulative distance over contact frames
+                                    slide_dist = (pos_xy[:, 1:] - pos_xy[:, :-1]).norm(dim=-1)
+                                    slide_contact = slide_dist * contact_mask[:, 1:]
+                                    _record_metric(
+                                        f'Foot/{fname}/SlideDistContact',
+                                        float(slide_contact.sum().item())
+                                    )
                         _record_metric('AngVelDirDegWeighted', summary.get('weighted', float('nan')))
                         _record_metric('AngVelDirDegSmooth', summary.get('smooth', float('nan')))
                         _record_metric('AngVelDirDegTorso', summary.get('torso', float('nan')))
@@ -3199,6 +3293,7 @@ def _diagnose_free_run_impl(
         key_bone_names = getattr(self, 'eval_key_bones', None)
         if not key_bone_names:
             key_bone_names = [
+                'pelvis',
                 'upperarm_l', 'lowerarm_l', 'hand_l',
                 'upperarm_r', 'lowerarm_r', 'hand_r',
                 'thigh_l', 'calf_l', 'foot_l',
@@ -3553,6 +3648,13 @@ def train_entry():
                    help='prior_per_dim 转为运动尺度的方式：geodesic=MC测地距离（默认），mean6d=简单均值。')
     p.add_argument('--bone_prior_samples', type=int, default=1024,
                    help='bone_prior_mode=geodesic 时的采样数，数值越大越精确。')
+    # unified bone weight (new)
+    p.add_argument('--unified_downstream_power', type=float, default=0.6,
+                   help='下游影响指数压缩 power (0.5~0.7 recommended)')
+    p.add_argument('--unified_self_scale', type=float, default=1.5,
+                   help='自身长度放大系数')
+    p.add_argument('--unified_min_weight', type=float, default=0.05,
+                   help='权重保底（相对均值）')
     p.add_argument('--seq_len', type=int, default=120)
     p.add_argument('--yaw_aug_deg', type=float, default=0.0)
     p.add_argument('--normalize_c', action='store_true')
@@ -3867,6 +3969,12 @@ def train_entry():
         max_weight_ratio=max_weight_ratio,
         weight_gamma=weight_gamma,
     )
+    # Unified bone weight parameters (new scheme)
+    loss_fn.unified_downstream_power = float(_arg('unified_downstream_power', 0.6) or 0.6)
+    loss_fn.unified_self_scale = float(_arg('unified_self_scale', 1.5) or 1.5)
+    loss_fn.unified_min_weight = float(_arg('unified_min_weight', 0.05) or 0.05)
+    # Visual importance调制先禁用，如需开启再暴露参数
+    loss_fn.unified_use_visual_importance = False
     if getattr(ds_train, 'bone_names', None):
         try:
             loss_fn.set_bone_names(ds_train.bone_names)
