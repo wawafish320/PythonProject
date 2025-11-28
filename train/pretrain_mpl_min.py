@@ -77,6 +77,47 @@ def _extract_meta_from_npz(z) -> dict:
     return meta.copy()
 
 
+def _parse_output_layout_from_npz(z) -> dict:
+    """Parse output_layout_json in npz; returns dict{name: {'start': int,'size':int}}."""
+    s = z.get("output_layout_json")
+    if s is None:
+        return {}
+    if hasattr(s, "item"):
+        s = s.item()
+    if isinstance(s, (bytes, bytearray)):
+        try:
+            s = s.decode("utf-8")
+        except Exception:
+            s = str(s)
+    try:
+        j = json.loads(s)
+        out = {}
+        for k, v in (j or {}).items():
+            if isinstance(v, dict) and "start" in v and ("size" in v or "end" in v):
+                st = int(v.get("start", 0))
+                sz = int(v.get("size", v.get("end", 0) - v.get("start", 0)))
+                out[k] = {"start": st, "size": sz}
+            elif isinstance(v, (list, tuple)) and len(v) == 2:
+                st = int(v[0]); ed = int(v[1])
+                out[k] = {"start": st, "size": ed - st}
+        return out
+    except Exception:
+        return {}
+
+
+def _get_rot_slice_from_layout(layout: dict, Dy: int) -> tuple[int, int]:
+    """Return (start, size) for BoneRotations6D; fallback to leading multiple-of-6 block."""
+    if layout:
+        br = layout.get("BoneRotations6D") or layout.get("bone_rotations6d")
+        if isinstance(br, dict) and "start" in br and "size" in br:
+            st, sz = int(br["start"]), int(br["size"])
+            if sz % 6 == 0 and st >= 0 and st + sz <= Dy:
+                return st, sz
+    # Fallback: use maximal leading multiple-of-6
+    sz = (Dy // 6) * 6
+    return 0, sz
+
+
 # --------------------------- Dataset ----------------------------
 
 
@@ -121,9 +162,11 @@ def _build_angvel_norm_spec(in_glob: str, save_path: str, pose_hist_len: int = 3
             raise RuntimeError(f"{os.path.basename(files[0])} missing y_out_features")
         Y0 = np.asarray(z0["y_out_features"], dtype=np.float32)
         Dy = int(Y0.shape[1])
-        if Dy % 6 != 0:
-            raise RuntimeError(f"y_out_features dim {Dy} is not multiple of 6")
-        J = Dy // 6
+        layout0 = _parse_output_layout_from_npz(z0)
+        rot_st, rot_sz = _get_rot_slice_from_layout(layout0, Dy)
+        if rot_sz <= 0 or rot_sz % 6 != 0:
+            raise RuntimeError(f"{os.path.basename(files[0])}: cannot resolve BoneRotations6D slice (Dy={Dy})")
+        J = rot_sz // 6
 
     lo_list, hi_list, W_all = [], [], []
     pose_lo_list, pose_hi_list, pose_all = [], [], []
@@ -132,7 +175,13 @@ def _build_angvel_norm_spec(in_glob: str, save_path: str, pose_hist_len: int = 3
         with np.load(p, allow_pickle=True) as z:
             if "y_out_features" not in z:
                 raise RuntimeError(f"{os.path.basename(p)} missing y_out_features")
-            Y = np.asarray(z["y_out_features"], dtype=np.float32)
+            Y_full = np.asarray(z["y_out_features"], dtype=np.float32)
+            Dy_local = int(Y_full.shape[1])
+            layout = _parse_output_layout_from_npz(z)
+            rot_st, rot_sz = _get_rot_slice_from_layout(layout, Dy_local)
+            if rot_sz <= 0 or rot_sz % 6 != 0:
+                raise RuntimeError(f"{os.path.basename(p)}: cannot resolve BoneRotations6D slice (Dy={Dy_local})")
+            Y = Y_full[:, rot_st:rot_st + rot_sz]
             json_path = npz_scalar_to_str(z["source_json"]) if "source_json" in z else None
             fps = _get_fps_from_npz_or_json(z, json_path)
         T = int(Y.shape[0])
@@ -328,10 +377,14 @@ class YAngvelContactsDataset(Dataset):
         with np.load(self.files[0], allow_pickle=True) as z0:
             if "y_out_features" not in z0:
                 raise RuntimeError(f"{os.path.basename(self.files[0])} missing y_out_features")
-            Dy = int(np.asarray(z0["y_out_features"]).shape[1])
-            if Dy % 6 != 0:
-                raise RuntimeError(f"y_out_features length {Dy} is not multiple of 6")
-            self.J = Dy // 6
+            Y0 = np.asarray(z0["y_out_features"])
+            Dy = int(Y0.shape[1])
+            layout0 = _parse_output_layout_from_npz(z0)
+            rot_st, rot_sz = _get_rot_slice_from_layout(layout0, Dy)
+            if rot_sz <= 0 or rot_sz % 6 != 0:
+                raise RuntimeError(f"{os.path.basename(self.files[0])}: cannot resolve BoneRotations6D slice (Dy={Dy})")
+            self.rot_slice = (rot_st, rot_st + rot_sz)
+            self.J = rot_sz // 6
             self.dataset_meta = _extract_meta_from_npz(z0)
         if not hasattr(self, "dataset_meta"):
             self.dataset_meta = {}
@@ -382,10 +435,15 @@ class YAngvelContactsDataset(Dataset):
                         # 缺关键键也视为不可用
                         self._skipped.append((os.path.basename(p), -1))
                         continue
-                    Y_arr = np.asarray(z["y_out_features"], dtype=np.float32)
-                    T_npz, Dy_npz = Y_arr.shape
-                    if Dy_npz != self.J * 6:
-                        raise RuntimeError(f"{os.path.basename(p)}: y_out_features dim {Dy_npz} != J*6 {self.J*6}")
+                    Y_full = np.asarray(z["y_out_features"], dtype=np.float32)
+                    T_npz, Dy_npz = Y_full.shape
+                    layout = _parse_output_layout_from_npz(z)
+                    rs, re = getattr(self, "rot_slice", None) or _get_rot_slice_from_layout(layout, Dy_npz)
+                    rot_sz = re - rs
+                    if rot_sz <= 0 or rot_sz % 6 != 0:
+                        raise RuntimeError(f"{os.path.basename(p)}: cannot resolve BoneRotations6D slice (Dy={Dy_npz})")
+                    Y_arr = Y_full[:, rs:re]
+                    T_npz = Y_arr.shape[0]
 
                     if "source_json" not in z:
                         self._skipped.append((os.path.basename(p), -1))
@@ -422,10 +480,15 @@ class YAngvelContactsDataset(Dataset):
         with np.load(p, allow_pickle=True) as z:
             if "y_out_features" not in z:
                 raise RuntimeError(f"{os.path.basename(p)} missing y_out_features")
-            Y = np.asarray(z["y_out_features"], dtype=np.float32)  # [T_npz, J*6]
+            Y_full = np.asarray(z["y_out_features"], dtype=np.float32)
+            layout = _parse_output_layout_from_npz(z)
+            Dy_full = Y_full.shape[1]
+            rs, re = getattr(self, "rot_slice", None) or _get_rot_slice_from_layout(layout, Dy_full)
+            rot_sz = re - rs
+            if rot_sz <= 0 or rot_sz % 6 != 0:
+                raise RuntimeError(f"{os.path.basename(p)}: cannot resolve BoneRotations6D slice (Dy={Dy_full})")
+            Y = Y_full[:, rs:re]
             T_npz, Dy = Y.shape
-            if Dy != self.J * 6:
-                raise RuntimeError(f"{os.path.basename(p)}: Dy mismatch {Dy} vs J*6 {self.J*6}")
 
             if "source_json" not in z:
                 raise RuntimeError(f"{os.path.basename(p)} missing source_json")

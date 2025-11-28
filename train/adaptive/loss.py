@@ -21,7 +21,7 @@ class AdaptiveLossWeighting(nn.Module):
         dwa_temperature: float = 2.0,
         *,
         scales: Optional[Dict[str, float]] = None,
-        weight_ema_beta: float = 0.0,
+        weight_ema_beta: float = 0.5,
         logvar_clip: float = 4.0,
     ):
         super().__init__()
@@ -56,6 +56,8 @@ class AdaptiveLossWeighting(nn.Module):
         losses: Dict[str, torch.Tensor],
         model: Optional[nn.Module] = None,
         epoch: int = 1,
+        *,
+        scales_override: Optional[Dict[str, float]] = None,
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         if not losses:
             raise ValueError("losses 字典不能为空")
@@ -69,24 +71,28 @@ class AdaptiveLossWeighting(nn.Module):
             raise ValueError("提供的 losses 中不包含需要自适应的项目")
 
         if self.method == "gradnorm":
-            return self._gradnorm_weighting(filtered, model)
+            return self._gradnorm_weighting(filtered, model, scales_override)
         if self.method == "uncertainty":
-            return self._uncertainty_weighting(filtered)
+            return self._uncertainty_weighting(filtered, scales_override)
         if self.method == "dwa":
-            return self._dwa_weighting(filtered, epoch)
+            return self._dwa_weighting(filtered, epoch, scales_override)
         weight = 1.0 / len(filtered)
         weights = {name: weight for name in filtered}
         total = sum(weight * filtered[name] for name in filtered)
         return total, weights
 
-    def _maybe_scale(self, name: str, loss: torch.Tensor) -> torch.Tensor:
-        scale = float(self.scales.get(name, 1.0)) if hasattr(self, "scales") else 1.0
+    def _maybe_scale(self, name: str, loss: torch.Tensor, scales_override: Optional[Dict[str, float]]) -> torch.Tensor:
+        scale = None
+        if isinstance(scales_override, dict) and name in scales_override:
+            scale = scales_override[name]
+        if scale is None:
+            scale = float(self.scales.get(name, 1.0)) if hasattr(self, "scales") else 1.0
         if scale <= 0 or not math.isfinite(scale):
             return loss
         return loss / scale
 
     def _gradnorm_weighting(
-        self, losses: Dict[str, torch.Tensor], model: Optional[nn.Module]
+        self, losses: Dict[str, torch.Tensor], model: Optional[nn.Module], scales_override: Optional[Dict[str, float]]
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         if model is None:
             raise ValueError("GradNorm 需要传入 model 以获取梯度")
@@ -98,7 +104,7 @@ class AdaptiveLossWeighting(nn.Module):
 
         grad_norms: Dict[str, float] = {}
         for name, loss in losses.items():
-            loss_scaled = self._maybe_scale(name, loss)
+            loss_scaled = self._maybe_scale(name, loss, scales_override)
             grad = autograd.grad(
                 loss_scaled,
                 last_layer,
@@ -119,7 +125,7 @@ class AdaptiveLossWeighting(nn.Module):
         return weighted_loss, weights
 
     def _uncertainty_weighting(
-        self, losses: Dict[str, torch.Tensor]
+        self, losses: Dict[str, torch.Tensor], scales_override: Optional[Dict[str, float]]
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         if self.log_vars is None:
             raise ValueError("未初始化 uncertainty 参数")
@@ -133,7 +139,7 @@ class AdaptiveLossWeighting(nn.Module):
         log_vars = torch.clamp(self.log_vars, -self.logvar_clip, self.logvar_clip)
         for idx, name in enumerate(valid_names):
             precision = torch.exp(-log_vars[idx])
-            loss_scaled = self._maybe_scale(name, losses[name])
+            loss_scaled = self._maybe_scale(name, losses[name], scales_override)
             term = precision * loss_scaled + log_vars[idx]
             weighted_terms.append(term)
             weights_display[name] = float(precision.detach().cpu().item())
@@ -154,7 +160,7 @@ class AdaptiveLossWeighting(nn.Module):
         return sum(weighted_terms), weights_display
 
     def _dwa_weighting(
-        self, losses: Dict[str, torch.Tensor], epoch: int
+        self, losses: Dict[str, torch.Tensor], epoch: int, scales_override: Optional[Dict[str, float]]
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         for name, loss in losses.items():
             if name in self.loss_history:
@@ -177,7 +183,7 @@ class AdaptiveLossWeighting(nn.Module):
             denom = sum(exp_rates.values()) + 1e-8
             weights = {n: exp_rates.get(n, 0.0) / denom for n in losses}
 
-        weighted_loss = sum(weights[name] * losses[name] for name in weights)
+        weighted_loss = sum(weights[name] * self._maybe_scale(name, losses[name], scales_override) for name in weights)
         return weighted_loss, weights
 
 
@@ -186,6 +192,7 @@ def build_adaptive_loss(
     method: str,
     alpha: float = 1.5,
     dwa_temperature: float = 2.0,
+    weight_ema_beta: float = 0.5,
 ) -> Optional[AdaptiveLossWeighting]:
     method = (method or "none").lower()
     if method in ("", "none"):
@@ -195,6 +202,7 @@ def build_adaptive_loss(
         method=method,
         alpha=alpha,
         dwa_temperature=dwa_temperature,
+        weight_ema_beta=weight_ema_beta,
     )
 
 

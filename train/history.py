@@ -25,6 +25,7 @@ class AdaptiveHistoryModule(nn.Module):
         num_heads: int = 2,
         use_gate: bool = True,
         train_variable_history: bool = True,
+        history_dropout_prob: float = 0.0,
     ) -> None:
         super().__init__()
         if hidden_dim % num_heads != 0:
@@ -39,6 +40,7 @@ class AdaptiveHistoryModule(nn.Module):
         self.max_history_frames = int(max_history_frames or num_history_frames)
         self.train_variable_history = bool(train_variable_history)
         self.use_gate = bool(use_gate)
+        self.history_dropout_prob = float(history_dropout_prob)
 
         self.frame_proj = nn.Linear(self.pose_dim, self.hidden_dim)
         self.k_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
@@ -68,6 +70,19 @@ class AdaptiveHistoryModule(nn.Module):
         """
         if pose_history is None:
             raise ValueError("pose_history tensor is required for AdaptiveHistoryModule.")
+
+        # History Dropout: force model to rely on other cues (e.g., future cond) occasionally
+        if self.training and self.history_dropout_prob > 0:
+            if torch.rand(1, device=pose_history.device).item() < self.history_dropout_prob:
+                B = pose_history.shape[0]
+                zero_out = pose_history.new_zeros(B, self.num_slots * self.pose_dim)
+                diag = {
+                    "effective_frames": 0.0,
+                    "dropout_applied": True,
+                    "frame_importance": None,
+                }
+                self._last_diag = diag
+                return zero_out, diag
 
         if pose_history.dim() == 2:
             total_dim = pose_history.shape[-1]
@@ -136,6 +151,7 @@ class AdaptiveHistoryModule(nn.Module):
         diag = {
             "effective_frames": float(eff),
             "frame_importance": attn.detach().mean(dim=1),  # [B, num_slots, eff]
+            "dropout_applied": False,
         }
         self._last_diag = diag
         return out, diag

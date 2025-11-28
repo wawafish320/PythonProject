@@ -1,0 +1,856 @@
+{
+  "epoch": 8,
+  "tag": "valfree",
+  "timestamp": "2025-11-29T01:45:30",
+  "metrics": {
+    "RootVelMAE": 0.3379226128260295,
+    "FreeRun/RootVelMAE": 0.3379226128260295,
+    "RootVelMAE_std": 0.3360763688882192,
+    "RootVelEndMAE": 0.3342048128445943,
+    "FreeRun/RootVelEndMAE": 0.3342048128445943,
+    "InputRotGeoDeg": 2.3385512034098306,
+    "FreeRun/InputRotGeoDeg": 2.3385512034098306,
+    "InputRotGeoDeg_max": 57.02240498860677,
+    "InputRotGeoDeg_std": 4.1389656861623125,
+    "InputRotGeoDegCurve": [
+      [
+        0.7310495376586914,
+        0.4005488157272339,
+        0.7815759181976318,
+        1.3378574848175049,
+        1.8485184907913208,
+        2.379788637161255,
+        2.881108522415161,
+        3.451154947280884,
+        3.97151255607605,
+        4.530843734741211
+      ],
+      [
+        0.8174890875816345,
+        0.43727943301200867,
+        0.9175208806991577,
+        1.5257796049118042,
+        2.083326578140259,
+        2.6653695106506348,
+        3.2414798736572266,
+        3.8405237197875977,
+        4.437646865844727,
+        4.986105918884277
+      ],
+      [
+        0.7022367715835571,
+        0.37281835079193115,
+        0.775134801864624,
+        1.304471731185913,
+        1.859905481338501,
+        2.4840662479400635,
+        3.057258129119873,
+        3.6297788619995117,
+        4.11250638961792,
+        4.591879844665527
+      ]
+    ],
+    "InputRotGeoDegCurveMax": [
+      [
+        5.982287406921387,
+        5.203678607940674,
+        8.261013984680176,
+        15.255416870117188,
+        22.319047927856445,
+        28.316871643066406,
+        36.93415069580078,
+        44.813072204589844,
+        51.99027633666992,
+        60.66507339477539
+      ],
+      [
+        6.7172627449035645,
+        7.840822696685791,
+        11.442757606506348,
+        16.26814842224121,
+        21.309295654296875,
+        27.945556640625,
+        34.55827713012695,
+        41.16166687011719,
+        47.85116195678711,
+        54.4664306640625
+      ],
+      [
+        6.204471111297607,
+        5.841102123260498,
+        7.845527648925781,
+        13.479300498962402,
+        20.622516632080078,
+        27.723913192749023,
+        35.68894958496094,
+        41.9998893737793,
+        48.96464157104492,
+        55.93571090698242
+      ]
+    ],
+    "CondVelVsPredMAE": 0.2937332093715668,
+    "FreeRun/CondVelVsPredMAE": 0.2937332093715668,
+    "period_abs_mean": 0.6212102373441061,
+    "period_abs_std": 0.3150702913602193,
+    "GeoDeg": 2.785485585530599,
+    "FreeRun/GeoDeg": 2.785485585530599,
+    "SingleStep/GeoDeg": 2.785485585530599,
+    "GeoDegCurve": [
+      [
+        0.3835330605506897,
+        0.8237323760986328,
+        1.3305199146270752,
+        1.8822091817855835,
+        2.369779586791992,
+        2.8880467414855957,
+        3.424335241317749,
+        4.0135650634765625,
+        4.534093379974365,
+        5.0203447341918945
+      ],
+      [
+        0.4514717161655426,
+        0.9314491748809814,
+        1.5661767721176147,
+        2.10286283493042,
+        2.69185209274292,
+        3.2914090156555176,
+        3.8613407611846924,
+        4.451846122741699,
+        4.990382194519043,
+        5.520500183105469
+      ],
+      [
+        0.32542884349823,
+        0.7729151248931885,
+        1.289247989654541,
+        1.8728313446044922,
+        2.4555423259735107,
+        3.060593605041504,
+        3.6102499961853027,
+        4.108773708343506,
+        4.561842441558838,
+        4.977701187133789
+      ]
+    ],
+    "GeoDegCurveMax": [
+      [
+        2.7729053497314453,
+        7.389101982116699,
+        13.616192817687988,
+        21.358409881591797,
+        28.79766273498535,
+        35.09428787231445,
+        43.72380447387695,
+        51.4156379699707,
+        58.249855041503906,
+        66.1889419555664
+      ],
+      [
+        3.626984119415283,
+        8.476696014404297,
+        14.702180862426758,
+        21.95882797241211,
+        27.52886199951172,
+        34.19309616088867,
+        40.62323760986328,
+        48.13549041748047,
+        54.09672927856445,
+        60.436622619628906
+      ],
+      [
+        3.240027904510498,
+        8.256258964538574,
+        14.644452095031738,
+        20.198261260986328,
+        27.20060157775879,
+        34.03358840942383,
+        41.78777313232422,
+        48.46628952026367,
+        55.60421371459961,
+        62.4693489074707
+      ]
+    ],
+    "GeoDegEnd": 5.172848701477051,
+    "FreeRun/GeoDegEnd": 5.172848701477051,
+    "GeoDegCurveBones": {},
+    "GeoLocalDeg": 3.293292840321859,
+    "FreeRun/GeoLocalDeg": 3.293292840321859,
+    "SingleStep/GeoLocalDeg": 3.293292840321859,
+    "GeoLocalDegCurve": [
+      [
+        0.3477025032043457,
+        0.9939066767692566,
+        1.7196508646011353,
+        2.4140491485595703,
+        3.005750894546509,
+        3.6712632179260254,
+        4.340381622314453,
+        5.071165084838867,
+        5.813847064971924,
+        6.567045211791992
+      ],
+      [
+        0.38220658898353577,
+        0.964241623878479,
+        1.712842583656311,
+        2.38324236869812,
+        3.0772829055786133,
+        3.675990581512451,
+        4.28074312210083,
+        4.890446662902832,
+        5.428703784942627,
+        5.973672866821289
+      ],
+      [
+        0.29492342472076416,
+        0.8991661667823792,
+        1.5760631561279297,
+        2.2751779556274414,
+        2.964902400970459,
+        3.654102325439453,
+        4.252209663391113,
+        4.840951919555664,
+        5.393692970275879,
+        5.933459758758545
+      ]
+    ],
+    "GeoLocalDegCurveMax": [
+      [
+        2.772623062133789,
+        7.120175838470459,
+        13.947375297546387,
+        21.58122444152832,
+        28.79079818725586,
+        34.84589385986328,
+        43.08895492553711,
+        50.383670806884766,
+        56.818660736083984,
+        64.3830337524414
+      ],
+      [
+        3.626984119415283,
+        8.864081382751465,
+        15.531638145446777,
+        21.1392879486084,
+        27.37228012084961,
+        33.60978317260742,
+        39.7266731262207,
+        46.74673843383789,
+        52.14604568481445,
+        59.197967529296875
+      ],
+      [
+        3.239786148071289,
+        8.121996879577637,
+        14.530686378479004,
+        19.957780838012695,
+        26.884912490844727,
+        33.4925537109375,
+        41.17289733886719,
+        47.660057067871094,
+        54.753135681152344,
+        61.66402816772461
+      ]
+    ],
+    "GeoLocalDegEnd": 6.158059279123942,
+    "FreeRun/GeoLocalDegEnd": 6.158059279123942,
+    "GeoLocalDegCurveBones": {},
+    "AngVelMAE": 0.2700779438018799,
+    "FreeRun/AngVelMAE": 0.2700779438018799,
+    "AngVelMagRel": 0.4927455186843872,
+    "FreeRun/AngVelMagRel": 0.4927455186843872,
+    "AngVelMAECurve": [
+      [
+        [
+          0.2742786109447479,
+          0.17259030044078827,
+          0.3429535925388336
+        ],
+        [
+          0.2551411986351013,
+          0.1780778020620346,
+          0.34560585021972656
+        ],
+        [
+          0.2538815140724182,
+          0.17944000661373138,
+          0.3680878281593323
+        ],
+        [
+          0.26010236144065857,
+          0.16619348526000977,
+          0.3589162826538086
+        ],
+        [
+          0.26163339614868164,
+          0.17599116265773773,
+          0.3900066018104553
+        ],
+        [
+          0.26124414801597595,
+          0.17565801739692688,
+          0.3972559869289398
+        ],
+        [
+          0.26164543628692627,
+          0.17744603753089905,
+          0.4288862645626068
+        ],
+        [
+          0.26557818055152893,
+          0.16803285479545593,
+          0.41620102524757385
+        ],
+        [
+          0.26882266998291016,
+          0.1699674427509308,
+          0.39782896637916565
+        ]
+      ],
+      [
+        [
+          0.2719927132129669,
+          0.18934032320976257,
+          0.3781004548072815
+        ],
+        [
+          0.27155163884162903,
+          0.19654278457164764,
+          0.4014216661453247
+        ],
+        [
+          0.26556655764579773,
+          0.17751772701740265,
+          0.35216373205184937
+        ],
+        [
+          0.2847626805305481,
+          0.18809883296489716,
+          0.39428281784057617
+        ],
+        [
+          0.2877834141254425,
+          0.1818704605102539,
+          0.37008675932884216
+        ],
+        [
+          0.2997646927833557,
+          0.17199543118476868,
+          0.359296053647995
+        ],
+        [
+          0.29900923371315,
+          0.1687954068183899,
+          0.36436378955841064
+        ],
+        [
+          0.3149349093437195,
+          0.16289259493350983,
+          0.3574422001838684
+        ],
+        [
+          0.29410579800605774,
+          0.17080575227737427,
+          0.3831212520599365
+        ]
+      ],
+      [
+        [
+          0.2277611345052719,
+          0.16630320250988007,
+          0.3656083941459656
+        ],
+        [
+          0.232399120926857,
+          0.16224828362464905,
+          0.3720393180847168
+        ],
+        [
+          0.2570691406726837,
+          0.16458165645599365,
+          0.3718024492263794
+        ],
+        [
+          0.25144436955451965,
+          0.16110371053218842,
+          0.36788102984428406
+        ],
+        [
+          0.2589675784111023,
+          0.17439454793930054,
+          0.3821529448032379
+        ],
+        [
+          0.26299774646759033,
+          0.17236095666885376,
+          0.3781570792198181
+        ],
+        [
+          0.2490340918302536,
+          0.16219864785671234,
+          0.3654104769229889
+        ],
+        [
+          0.2397780418395996,
+          0.14883865416049957,
+          0.3436320126056671
+        ],
+        [
+          0.23765546083450317,
+          0.14889907836914062,
+          0.3225178122520447
+        ]
+      ]
+    ],
+    "AngVelMAECurveBones": {},
+    "AngVelDirDegCurve": [
+      [
+        79.21910095214844,
+        80.71739196777344,
+        83.62335205078125,
+        77.8124008178711,
+        79.72071838378906,
+        85.91999053955078,
+        77.51668548583984,
+        79.26567840576172,
+        80.79499816894531
+      ],
+      [
+        75.07456970214844,
+        81.63298034667969,
+        79.05333709716797,
+        87.48283386230469,
+        79.98866271972656,
+        79.4740219116211,
+        80.61767578125,
+        85.41389465332031,
+        81.50599670410156
+      ],
+      [
+        78.40372467041016,
+        82.3145980834961,
+        81.09517669677734,
+        78.23252868652344,
+        87.06283569335938,
+        77.81139373779297,
+        79.69856262207031,
+        84.59827423095703,
+        86.13514709472656
+      ]
+    ],
+    "AngVelDirDegCurveMax": [
+      [
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0
+      ],
+      [
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0
+      ],
+      [
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0,
+        180.0
+      ]
+    ],
+    "AngVelDirDegEnd": 82.81204732259114,
+    "FreeRun/AngVelDirDegEnd": 82.81204732259114,
+    "AngVelDirDegRaw": 85.69935862223308,
+    "FreeRun/AngVelDirDegRaw": 85.69935862223308,
+    "Foot/foot_l/ContactAngVelMAE": 0.18563808500766754,
+    "FreeRun/Foot/foot_l/ContactAngVelMAE": 0.18563808500766754,
+    "Foot/foot_l/ContactAngVelMag": 0.2952406356732051,
+    "FreeRun/Foot/foot_l/ContactAngVelMag": 0.2952406356732051,
+    "Foot/foot_l/SoftContactAcc": 0.1759259303410848,
+    "FreeRun/Foot/foot_l/SoftContactAcc": 0.1759259303410848,
+    "Foot/foot_l/SoftContactFNR": 0.009259259328246117,
+    "FreeRun/Foot/foot_l/SoftContactFNR": 0.009259259328246117,
+    "Foot/foot_l/SoftContactFPR": 0.8148148059844971,
+    "FreeRun/Foot/foot_l/SoftContactFPR": 0.8148148059844971,
+    "Foot/foot_r/ContactAngVelMAE": 0.20814595619837442,
+    "FreeRun/Foot/foot_r/ContactAngVelMAE": 0.20814595619837442,
+    "Foot/foot_r/ContactAngVelMag": 0.36120471358299255,
+    "FreeRun/Foot/foot_r/ContactAngVelMag": 0.36120471358299255,
+    "Foot/foot_r/SoftContactAcc": 0.467592587073644,
+    "FreeRun/Foot/foot_r/SoftContactAcc": 0.467592587073644,
+    "Foot/foot_r/SoftContactFNR": 0.06481481653948624,
+    "FreeRun/Foot/foot_r/SoftContactFNR": 0.06481481653948624,
+    "Foot/foot_r/SoftContactFPR": 0.46759260694185895,
+    "FreeRun/Foot/foot_r/SoftContactFPR": 0.46759260694185895,
+    "Foot/foot_l/SlideSpeed": 0.5574795603752136,
+    "FreeRun/Foot/foot_l/SlideSpeed": 0.5574795603752136,
+    "Foot/foot_l/SlideSpeedContact": 0.4251210590203603,
+    "FreeRun/Foot/foot_l/SlideSpeedContact": 0.4251210590203603,
+    "Bone/pelvis/AngVelMagMAE": 2.983966912447339e-14,
+    "Bone/pelvis/AngVelMAE": 1.5642360160163873e-14,
+    "Bone/Bip001/AngVelMagMAE": 0.13516862442096075,
+    "Bone/Bip001/AngVelMAE": 0.12874644746383032,
+    "Bone/spine_01/AngVelMagMAE": 0.09927528848250707,
+    "Bone/spine_01/AngVelMAE": 0.11687984317541122,
+    "Bone/spine_02/AngVelMagMAE": 0.2000980426867803,
+    "Bone/spine_02/AngVelMAE": 0.19647769133249918,
+    "Bone/clavicle_l/AngVelMagMAE": 0.1890350083510081,
+    "Bone/clavicle_l/AngVelMAE": 0.15664910276730856,
+    "Bone/upperarm_l/AngVelMagMAE": 0.30107009410858154,
+    "Bone/upperarm_l/AngVelMAE": 0.2551748553911845,
+    "Bone/RUpArmTwist_l_01/AngVelMagMAE": 0.3152589698632558,
+    "Bone/RUpArmTwist_l_01/AngVelMAE": 0.29713696241378784,
+    "Bone/RUpArmTwist_l_02/AngVelMagMAE": 0.14815613627433777,
+    "Bone/RUpArmTwist_l_02/AngVelMAE": 0.07099771872162819,
+    "Bone/lowerarm_l/AngVelMagMAE": 0.49540520707766217,
+    "Bone/lowerarm_l/AngVelMAE": 0.36537179350852966,
+    "Bone/L_ForeTwist_01/AngVelMagMAE": 0.34611477454503375,
+    "Bone/L_ForeTwist_01/AngVelMAE": 0.1701615403095881,
+    "Bone/L_ForeTwist_02/AngVelMagMAE": 0.030914636328816414,
+    "Bone/L_ForeTwist_02/AngVelMAE": 0.01442178493986527,
+    "Bone/hand_l/AngVelMagMAE": 0.4888089100519816,
+    "Bone/hand_l/AngVelMAE": 0.3127261499563853,
+    "Bone/index_01_l/AngVelMagMAE": 0.3175380925337474,
+    "Bone/index_01_l/AngVelMAE": 0.2633012980222702,
+    "Bone/middle_01_l/AngVelMagMAE": 0.3315676748752594,
+    "Bone/middle_01_l/AngVelMAE": 0.2459715853134791,
+    "Bone/pinky_01_l/AngVelMagMAE": 1.293167233467102,
+    "Bone/pinky_01_l/AngVelMAE": 0.9783421556154887,
+    "Bone/ring_01_l/AngVelMagMAE": 0.3551439940929413,
+    "Bone/ring_01_l/AngVelMAE": 0.2680097023646037,
+    "Bone/thumb_01_l/AngVelMagMAE": 0.603468636671702,
+    "Bone/thumb_01_l/AngVelMAE": 0.43439777692159015,
+    "Bone/clavicle_r/AngVelMagMAE": 0.175650621453921,
+    "Bone/clavicle_r/AngVelMAE": 0.16285766661167145,
+    "Bone/upperarm_r/AngVelMagMAE": 0.31093669931093854,
+    "Bone/upperarm_r/AngVelMAE": 0.27874359488487244,
+    "Bone/RUpArmTwist_r_01/AngVelMagMAE": 0.5256369908650717,
+    "Bone/RUpArmTwist_r_01/AngVelMAE": 0.3878193100293477,
+    "Bone/RUpArmTwist_r_02/AngVelMagMAE": 0.29066548744837445,
+    "Bone/RUpArmTwist_r_02/AngVelMAE": 0.13113100826740265,
+    "Bone/lowerarm_r/AngVelMagMAE": 0.3967146376768748,
+    "Bone/lowerarm_r/AngVelMAE": 0.3454038103421529,
+    "Bone/R_ForeTwist_01/AngVelMagMAE": 0.23478653033574423,
+    "Bone/R_ForeTwist_01/AngVelMAE": 0.14179749290148416,
+    "Bone/R_ForeTwist_02/AngVelMagMAE": 0.03386262928446134,
+    "Bone/R_ForeTwist_02/AngVelMAE": 0.01696608526011308,
+    "Bone/hand_r/AngVelMagMAE": 0.4511878291765849,
+    "Bone/hand_r/AngVelMAE": 0.3796820143858592,
+    "Bone/index_01_r/AngVelMagMAE": 0.34213831027348834,
+    "Bone/index_01_r/AngVelMAE": 0.2602621664603551,
+    "Bone/middle_01_r/AngVelMagMAE": 0.34198224544525146,
+    "Bone/middle_01_r/AngVelMAE": 0.26278706391652423,
+    "Bone/pinky_01_r/AngVelMagMAE": 0.4931976795196533,
+    "Bone/pinky_01_r/AngVelMAE": 0.34138043721516925,
+    "Bone/ring_01_r/AngVelMagMAE": 0.3349497119585673,
+    "Bone/ring_01_r/AngVelMAE": 0.26553888618946075,
+    "Bone/thumb_01_r/AngVelMagMAE": 0.4331658681233724,
+    "Bone/thumb_01_r/AngVelMAE": 0.30767663319905597,
+    "Bone/neck_01/AngVelMagMAE": 0.23988228539625803,
+    "Bone/neck_01/AngVelMAE": 0.2016329069932302,
+    "Bone/head/AngVelMagMAE": 0.15112002193927765,
+    "Bone/head/AngVelMAE": 0.14319954812526703,
+    "Bone/thigh_l/AngVelMagMAE": 0.5746990740299225,
+    "Bone/thigh_l/AngVelMAE": 0.44059457381566364,
+    "Bone/calf_l/AngVelMagMAE": 0.8991007407506307,
+    "Bone/calf_l/AngVelMAE": 0.6279368797938029,
+    "Bone/LCalfTwist_01/AngVelMagMAE": 1.2010924418767293,
+    "Bone/LCalfTwist_01/AngVelMAE": 0.5318630635738373,
+    "Bone/LCalfTwist_02/AngVelMagMAE": 0.055189902583758034,
+    "Bone/LCalfTwist_02/AngVelMAE": 0.01985676834980647,
+    "Bone/LCalfTwist_03/AngVelMagMAE": 0.04710520555575689,
+    "Bone/LCalfTwist_03/AngVelMAE": 0.024663784851630528,
+    "Bone/foot_l/AngVelMagMAE": 1.2108927965164185,
+    "Bone/foot_l/AngVelMAE": 0.7231757442156473,
+    "Bone/ball_l/AngVelMagMAE": 1.2519877950350444,
+    "Bone/ball_l/AngVelMAE": 0.741779108842214,
+    "Bone/thigh_r/AngVelMagMAE": 0.28774650394916534,
+    "Bone/thigh_r/AngVelMAE": 0.2570990025997162,
+    "Bone/calf_r/AngVelMagMAE": 0.3501367966334025,
+    "Bone/calf_r/AngVelMAE": 0.27046507596969604,
+    "Bone/RCalfTwist_01/AngVelMagMAE": 0.24404151240984598,
+    "Bone/RCalfTwist_01/AngVelMAE": 0.1675301194190979,
+    "Bone/RCalfTwist_02/AngVelMagMAE": 0.035914438466231026,
+    "Bone/RCalfTwist_02/AngVelMAE": 0.013700993421177069,
+    "Bone/RCalfTwist_03/AngVelMagMAE": 0.04033865158756574,
+    "Bone/RCalfTwist_03/AngVelMAE": 0.02393109103043874,
+    "Bone/foot_r/AngVelMagMAE": 0.39860278367996216,
+    "Bone/foot_r/AngVelMAE": 0.326623131831487,
+    "Bone/ball_r/AngVelMagMAE": 0.39162875215212506,
+    "Bone/ball_r/AngVelMAE": 0.35272104541460675,
+    "KeyBone/pelvis/GeoDeg": 1.9708314736684163,
+    "KeyBone/pelvis/GeoLocalDeg": 0.08156468719244003,
+    "KeyBone/pelvis/AngVelMAE": 1.5642360160163873e-14,
+    "KeyBone/pelvis/AngVelMagMAE": 2.983966912447339e-14,
+    "KeyBone/pelvis/AngVelMagRel": null,
+    "KeyBone/pelvis/AngVelDirDeg": 0.08156468719244003,
+    "KeyBone/upperarm_l/GeoDeg": 4.345360994338989,
+    "KeyBone/upperarm_l/GeoLocalDeg": 4.967208385467529,
+    "KeyBone/upperarm_l/AngVelMAE": 0.2551748553911845,
+    "KeyBone/upperarm_l/AngVelMagMAE": 0.30107009410858154,
+    "KeyBone/upperarm_l/AngVelMagRel": 0.47255662083625793,
+    "KeyBone/upperarm_l/AngVelDirDeg": 4.967208385467529,
+    "KeyBone/lowerarm_l/GeoDeg": 3.362799882888794,
+    "KeyBone/lowerarm_l/GeoLocalDeg": 3.3662450313568115,
+    "KeyBone/lowerarm_l/AngVelMAE": 0.36537179350852966,
+    "KeyBone/lowerarm_l/AngVelMagMAE": 0.49540520707766217,
+    "KeyBone/lowerarm_l/AngVelMagRel": 0.5387894014517466,
+    "KeyBone/lowerarm_l/AngVelDirDeg": 3.3662450313568115,
+    "KeyBone/hand_l/GeoDeg": 3.417398770650228,
+    "KeyBone/hand_l/GeoLocalDeg": 4.233859141667684,
+    "KeyBone/hand_l/AngVelMAE": 0.3127261499563853,
+    "KeyBone/hand_l/AngVelMagMAE": 0.4888089100519816,
+    "KeyBone/hand_l/AngVelMagRel": 0.6035763124624888,
+    "KeyBone/hand_l/AngVelDirDeg": 4.233859141667684,
+    "KeyBone/upperarm_r/GeoDeg": 4.7337752978007,
+    "KeyBone/upperarm_r/GeoLocalDeg": 5.362712065378825,
+    "KeyBone/upperarm_r/AngVelMAE": 0.27874359488487244,
+    "KeyBone/upperarm_r/AngVelMagMAE": 0.31093669931093854,
+    "KeyBone/upperarm_r/AngVelMagRel": 0.392412135998408,
+    "KeyBone/upperarm_r/AngVelDirDeg": 5.362712065378825,
+    "KeyBone/lowerarm_r/GeoDeg": 2.7826294898986816,
+    "KeyBone/lowerarm_r/GeoLocalDeg": 3.4898605346679688,
+    "KeyBone/lowerarm_r/AngVelMAE": 0.3454038103421529,
+    "KeyBone/lowerarm_r/AngVelMagMAE": 0.3967146376768748,
+    "KeyBone/lowerarm_r/AngVelMagRel": 0.4659010072549184,
+    "KeyBone/lowerarm_r/AngVelDirDeg": 3.4898605346679688,
+    "KeyBone/hand_r/GeoDeg": 4.097686767578125,
+    "KeyBone/hand_r/GeoLocalDeg": 4.792798678080241,
+    "KeyBone/hand_r/AngVelMAE": 0.3796820143858592,
+    "KeyBone/hand_r/AngVelMagMAE": 0.4511878291765849,
+    "KeyBone/hand_r/AngVelMagRel": 0.5692970355351766,
+    "KeyBone/hand_r/AngVelDirDeg": 4.792798678080241,
+    "KeyBone/thigh_l/GeoDeg": 7.0177232424418134,
+    "KeyBone/thigh_l/GeoLocalDeg": 7.676994959513347,
+    "KeyBone/thigh_l/AngVelMAE": 0.44059457381566364,
+    "KeyBone/thigh_l/AngVelMagMAE": 0.5746990740299225,
+    "KeyBone/thigh_l/AngVelMagRel": 0.6489175955454508,
+    "KeyBone/thigh_l/AngVelDirDeg": 7.676994959513347,
+    "KeyBone/calf_l/GeoDeg": 11.761822382609049,
+    "KeyBone/calf_l/GeoLocalDeg": 13.017310778299967,
+    "KeyBone/calf_l/AngVelMAE": 0.6279368797938029,
+    "KeyBone/calf_l/AngVelMagMAE": 0.8991007407506307,
+    "KeyBone/calf_l/AngVelMagRel": 0.7794205943743387,
+    "KeyBone/calf_l/AngVelDirDeg": 13.017310778299967,
+    "KeyBone/foot_l/GeoDeg": 8.671566645304361,
+    "KeyBone/foot_l/GeoLocalDeg": 9.65848191579183,
+    "KeyBone/foot_l/AngVelMAE": 0.7231757442156473,
+    "KeyBone/foot_l/AngVelMagMAE": 1.2108927965164185,
+    "KeyBone/foot_l/AngVelMagRel": 1.053245723247528,
+    "KeyBone/foot_l/AngVelDirDeg": 9.65848191579183,
+    "KeyBone/thigh_r/GeoDeg": 4.188611666361491,
+    "KeyBone/thigh_r/GeoLocalDeg": 4.653748353322347,
+    "KeyBone/thigh_r/AngVelMAE": 0.2570990025997162,
+    "KeyBone/thigh_r/AngVelMagMAE": 0.28774650394916534,
+    "KeyBone/thigh_r/AngVelMagRel": 0.4079953630765279,
+    "KeyBone/thigh_r/AngVelDirDeg": 4.653748353322347,
+    "KeyBone/calf_r/GeoDeg": 3.0651444594065347,
+    "KeyBone/calf_r/GeoLocalDeg": 3.699723164240519,
+    "KeyBone/calf_r/AngVelMAE": 0.27046507596969604,
+    "KeyBone/calf_r/AngVelMagMAE": 0.3501367966334025,
+    "KeyBone/calf_r/AngVelMagRel": 0.44261770447095233,
+    "KeyBone/calf_r/AngVelDirDeg": 3.699723164240519,
+    "KeyBone/foot_r/GeoDeg": 4.028113762537639,
+    "KeyBone/foot_r/GeoLocalDeg": 4.08048137029012,
+    "KeyBone/foot_r/AngVelMAE": 0.326623131831487,
+    "KeyBone/foot_r/AngVelMagMAE": 0.39860278367996216,
+    "KeyBone/foot_r/AngVelMagRel": 0.41106197237968445,
+    "KeyBone/foot_r/AngVelDirDeg": 4.08048137029012,
+    "KeyBone/GeoDegMean": 4.880266525806525,
+    "FreeRun/KeyBone/GeoDegMean": 4.880266525806525,
+    "KeyBone/AngVelMAE": 0.3525382020534626,
+    "FreeRun/KeyBone/AngVelMAE": 0.3525382020534626,
+    "KeyBone/AngVelMagMAE": 0.4742540056124735,
+    "FreeRun/KeyBone/AngVelMagMAE": 0.4742540056124735,
+    "KeyBone/AngVelMagRel": 0.5654826222194566,
+    "FreeRun/KeyBone/AngVelMagRel": 0.5654826222194566,
+    "KeyBone/GeoLocalDegMean": 5.313922235789971,
+    "FreeRun/KeyBone/GeoLocalDegMean": 5.313922235789971,
+    "KeyBone/AngVelDirDeg": 5.313922235789971,
+    "FreeRun/KeyBone/AngVelDirDeg": 5.313922235789971,
+    "KeyBone/AngVelDirDegCurve": [
+      [
+        0.47846338152885437,
+        1.474313497543335,
+        2.610689163208008,
+        3.762326240539551,
+        4.734001159667969,
+        5.795820236206055,
+        6.9150567054748535,
+        8.146199226379395,
+        9.372954368591309,
+        10.549325942993164
+      ],
+      [
+        0.5419348478317261,
+        1.4932832717895508,
+        2.7066571712493896,
+        3.7229034900665283,
+        4.847736358642578,
+        5.7778239250183105,
+        6.784030437469482,
+        7.820305824279785,
+        8.756800651550293,
+        9.63604736328125
+      ],
+      [
+        0.46010392904281616,
+        1.4719572067260742,
+        2.597952127456665,
+        3.770155906677246,
+        4.977113246917725,
+        6.181787490844727,
+        7.204931259155273,
+        8.141993522644043,
+        8.950356483459473,
+        9.734644889831543
+      ]
+    ],
+    "KeyBoneDetails": {
+      "pelvis": {
+        "GeoDeg": 1.9708314736684163,
+        "GeoLocalDeg": 0.08156468719244003,
+        "AngVelMAE": 1.5642360160163873e-14,
+        "AngVelMagMAE": 2.983966912447339e-14,
+        "AngVelMagRel": null,
+        "AngVelDirDeg": 0.08156468719244003
+      },
+      "upperarm_l": {
+        "GeoDeg": 4.345360994338989,
+        "GeoLocalDeg": 4.967208385467529,
+        "AngVelMAE": 0.2551748553911845,
+        "AngVelMagMAE": 0.30107009410858154,
+        "AngVelMagRel": 0.47255662083625793,
+        "AngVelDirDeg": 4.967208385467529
+      },
+      "lowerarm_l": {
+        "GeoDeg": 3.362799882888794,
+        "GeoLocalDeg": 3.3662450313568115,
+        "AngVelMAE": 0.36537179350852966,
+        "AngVelMagMAE": 0.49540520707766217,
+        "AngVelMagRel": 0.5387894014517466,
+        "AngVelDirDeg": 3.3662450313568115
+      },
+      "hand_l": {
+        "GeoDeg": 3.417398770650228,
+        "GeoLocalDeg": 4.233859141667684,
+        "AngVelMAE": 0.3127261499563853,
+        "AngVelMagMAE": 0.4888089100519816,
+        "AngVelMagRel": 0.6035763124624888,
+        "AngVelDirDeg": 4.233859141667684
+      },
+      "upperarm_r": {
+        "GeoDeg": 4.7337752978007,
+        "GeoLocalDeg": 5.362712065378825,
+        "AngVelMAE": 0.27874359488487244,
+        "AngVelMagMAE": 0.31093669931093854,
+        "AngVelMagRel": 0.392412135998408,
+        "AngVelDirDeg": 5.362712065378825
+      },
+      "lowerarm_r": {
+        "GeoDeg": 2.7826294898986816,
+        "GeoLocalDeg": 3.4898605346679688,
+        "AngVelMAE": 0.3454038103421529,
+        "AngVelMagMAE": 0.3967146376768748,
+        "AngVelMagRel": 0.4659010072549184,
+        "AngVelDirDeg": 3.4898605346679688
+      },
+      "hand_r": {
+        "GeoDeg": 4.097686767578125,
+        "GeoLocalDeg": 4.792798678080241,
+        "AngVelMAE": 0.3796820143858592,
+        "AngVelMagMAE": 0.4511878291765849,
+        "AngVelMagRel": 0.5692970355351766,
+        "AngVelDirDeg": 4.792798678080241
+      },
+      "thigh_l": {
+        "GeoDeg": 7.0177232424418134,
+        "GeoLocalDeg": 7.676994959513347,
+        "AngVelMAE": 0.44059457381566364,
+        "AngVelMagMAE": 0.5746990740299225,
+        "AngVelMagRel": 0.6489175955454508,
+        "AngVelDirDeg": 7.676994959513347
+      },
+      "calf_l": {
+        "GeoDeg": 11.761822382609049,
+        "GeoLocalDeg": 13.017310778299967,
+        "AngVelMAE": 0.6279368797938029,
+        "AngVelMagMAE": 0.8991007407506307,
+        "AngVelMagRel": 0.7794205943743387,
+        "AngVelDirDeg": 13.017310778299967
+      },
+      "foot_l": {
+        "GeoDeg": 8.671566645304361,
+        "GeoLocalDeg": 9.65848191579183,
+        "AngVelMAE": 0.7231757442156473,
+        "AngVelMagMAE": 1.2108927965164185,
+        "AngVelMagRel": 1.053245723247528,
+        "AngVelDirDeg": 9.65848191579183
+      },
+      "thigh_r": {
+        "GeoDeg": 4.188611666361491,
+        "GeoLocalDeg": 4.653748353322347,
+        "AngVelMAE": 0.2570990025997162,
+        "AngVelMagMAE": 0.28774650394916534,
+        "AngVelMagRel": 0.4079953630765279,
+        "AngVelDirDeg": 4.653748353322347
+      },
+      "calf_r": {
+        "GeoDeg": 3.0651444594065347,
+        "GeoLocalDeg": 3.699723164240519,
+        "AngVelMAE": 0.27046507596969604,
+        "AngVelMagMAE": 0.3501367966334025,
+        "AngVelMagRel": 0.44261770447095233,
+        "AngVelDirDeg": 3.699723164240519
+      },
+      "foot_r": {
+        "GeoDeg": 4.028113762537639,
+        "GeoLocalDeg": 4.08048137029012,
+        "AngVelMAE": 0.326623131831487,
+        "AngVelMagMAE": 0.39860278367996216,
+        "AngVelMagRel": 0.41106197237968445,
+        "AngVelDirDeg": 4.08048137029012
+      }
+    },
+    "FreeRun/KeyBoneDetails": {},
+    "KeyBoneSummary": {
+      "GeoDegMean": 4.880266525806524,
+      "AngVelMAE": 0.3525382020534626,
+      "AngVelMagMAE": 0.4742540056124735,
+      "AngVelMagRel": 0.5654826222194566,
+      "GeoLocalDegMean": 5.313922235789971,
+      "AngVelDirDeg": 5.313922235789971
+    },
+    "FreeRun/KeyBoneSummary": {
+      "GeoDegMean": 4.880266525806524,
+      "AngVelMAE": 0.3525382020534626,
+      "AngVelMagMAE": 0.4742540056124735,
+      "AngVelMagRel": 0.5654826222194566,
+      "GeoLocalDegMean": 5.313922235789971,
+      "AngVelDirDeg": 5.313922235789971
+    },
+    "AngVelGTReconMAE": 0.3655630648136139,
+    "AngVelGTReconDirDeg": 72.46981557210286,
+    "FootContact": 0.9985909660657247,
+    "MSEnormY": 0.37349817156791687,
+    "YawAbsDeg": null,
+    "phase": "freerun",
+    "tf_ratio": 0.7975
+  }
+}

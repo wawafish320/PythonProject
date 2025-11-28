@@ -425,13 +425,35 @@ class MotionEventDataset(Dataset):
                     except Exception as _sc_err:
                         print(f"[Dataset] soft_contact unavailable for {p}: {_sc_err}")
 
-                rot_seq = clip.get('y_out_features')
-                if rot_seq is not None:
-                    rot_seq = np.asarray(rot_seq, dtype=np.float32)
-                    if rot_seq.shape[0] != T:
-                        rot_seq = rot_seq[:T]
-                else:
-                    rot_seq = None
+                rot_seq_full = clip.get('y_out_features')
+                output_layout_json = clip.get('output_layout_json', None)
+                rot_seq = None
+                if rot_seq_full is not None:
+                    rot_seq_full = np.asarray(rot_seq_full, dtype=np.float32)
+                    if rot_seq_full.shape[0] != T:
+                        rot_seq_full = rot_seq_full[:T]
+                    # 取 BoneRotations6D 切片，兼容末尾附加通道
+                    rot_slice = None
+                    try:
+                        if output_layout_json is not None:
+                            s = output_layout_json
+                            if hasattr(s, 'item'):
+                                s = s.item()
+                            if isinstance(s, (bytes, bytearray)):
+                                s = s.decode('utf-8', 'ignore')
+                            layout = json.loads(str(s))
+                            br = layout.get('BoneRotations6D') or layout.get('bone_rotations6d')
+                            if isinstance(br, dict) and 'start' in br and ('size' in br or 'end' in br):
+                                st = int(br.get('start', 0))
+                                sz = int(br.get('size', br.get('end', 0) - br.get('start', 0)))
+                                rot_slice = (st, st + sz)
+                    except Exception:
+                        rot_slice = None
+                    if rot_slice is None:
+                        rot_len = (rot_seq_full.shape[1] // 6) * 6
+                        rot_slice = (0, rot_len)
+                    st, ed = rot_slice
+                    rot_seq = rot_seq_full[:, st:ed]
 
                 if rot_seq is not None and rot_seq.size > 0:
                     try:

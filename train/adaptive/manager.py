@@ -20,12 +20,14 @@ class AdaptiveLossManager:
         loss_alpha: float = 1.5,
         loss_temperature: float = 2.0,
         scheduler_params: Optional[Dict[str, float]] = None,
+        weight_ema_beta: float = 0.5,
     ):
         self.loss_module: Optional[AdaptiveLossWeighting] = build_adaptive_loss(
             loss_terms or [],
             loss_method,
             alpha=loss_alpha,
             dwa_temperature=loss_temperature,
+            weight_ema_beta=weight_ema_beta,
         )
         self.scheduler: Optional[AdaptiveHyperparamScheduler] = (
             AdaptiveHyperparamScheduler(scheduler_params or {}) if scheduler_params else None

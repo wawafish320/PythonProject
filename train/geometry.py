@@ -142,28 +142,44 @@ def normalize_rot6d_delta(delta_flat: torch.Tensor, *, columns=("X", "Z")) -> to
 
 def compose_rot6d_delta(prev_rot6d: torch.Tensor, delta_rot6d: torch.Tensor, *, columns=("X", "Z")) -> torch.Tensor:
     """
-    合成 6D 旋转增量：R_next = ΔR @ R_prev
+    合成 6D 旋转增量，允许在末尾携带非旋转通道（例如速度等附加输出）。
+
+    - 对前 rot_len = floor(D/6)*6 维做旋转合成：R_next = ΔR @ R_prev
+    - 对尾部残余通道（若有）执行残差相加：tail_next = tail_prev + tail_delta
 
     Args:
-        prev_rot6d: (..., J*6) - 上一帧的绝对 6D 旋转
-        delta_rot6d: (..., J*6) - 模型预测的增量 Δrot6d
-        columns: 轴列定义
+        prev_rot6d: (..., D)
+        delta_rot6d: (..., D)
 
     Returns:
-        (..., J*6) - 新的绝对 6D 旋转
+        (..., D)
     """
     if prev_rot6d.shape != delta_rot6d.shape:
         raise ValueError(f"[compose_rot6d_delta] shape mismatch: prev={prev_rot6d.shape}, delta={delta_rot6d.shape}")
-    if prev_rot6d.shape[-1] % 6 != 0:
-        raise ValueError(f"[compose_rot6d_delta] last dim must be multiple of 6, got {prev_rot6d.shape[-1]}")
-    orig_shape = prev_rot6d.shape
-    J = orig_shape[-1] // 6
-    prev = reproject_rot6d(prev_rot6d).view(*orig_shape[:-1], J, 6)
-    delta = normalize_rot6d_delta(delta_rot6d, columns=columns)
+    D = prev_rot6d.shape[-1]
+    rot_len = (D // 6) * 6
+    if rot_len <= 0:
+        raise ValueError(f"[compose_rot6d_delta] cannot infer rot6d part from dim={D}")
+
+    # 旋转部分
+    prev_rot = prev_rot6d[..., :rot_len]
+    delta_rot = delta_rot6d[..., :rot_len]
+    orig_shape = prev_rot.shape
+    J = rot_len // 6
+    prev = reproject_rot6d(prev_rot).view(*orig_shape[:-1], J, 6)
+    delta = normalize_rot6d_delta(delta_rot, columns=columns)
     R_prev = rot6d_to_matrix(prev, columns=columns)
     R_delta = rot6d_to_matrix(delta, columns=columns)
     R_next = torch.matmul(R_delta, R_prev)
-    return matrix_to_rot6d(R_next, columns=columns).view(orig_shape)
+    rot_next = matrix_to_rot6d(R_next, columns=columns).view(*orig_shape[:-1], rot_len)
+
+    # 额外通道残差相加
+    if rot_len == D:
+        return rot_next.view(*prev_rot6d.shape)
+    tail_prev = prev_rot6d[..., rot_len:]
+    tail_delta = delta_rot6d[..., rot_len:]
+    tail_next = tail_prev + tail_delta
+    return torch.cat([rot_next, tail_next], dim=-1)
 
 
 def infer_rot6d_delta_from_abs(rot6d_seq: torch.Tensor, *, columns=("X", "Z")) -> Optional[torch.Tensor]:

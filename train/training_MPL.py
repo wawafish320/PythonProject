@@ -246,6 +246,20 @@ class Trainer:
                         )
                         pose_hist_buffer_norm = self._pose_hist_transform_vec(pose_hist_buffer_raw, scales, mu, std)
 
+                if getattr(self.model, 'training', False) and mode == 'teacher':
+                    noise_deg = float(getattr(self, 'teacher_rot_noise_deg', 0.0) or 0.0)
+                    noise_prob = float(getattr(self, 'teacher_rot_noise_prob', 0.0) or 0.0)
+                    noise_deg = noise_deg * float(getattr(self, 'teacher_noise_boost', 1.0) or 1.0)
+                    pose_hist_buffer_norm, pose_hist_buffer_raw = self._inject_pose_hist_noise(
+                        pose_hist_buffer_norm,
+                        pose_hist_buffer_raw,
+                        scales,
+                        mu,
+                        std,
+                        noise_deg=noise_deg,
+                        noise_prob=noise_prob,
+                    )
+
         cond_norm_mu = self._prepare_cond_stat(cond_norm_mu, state_seq) if cond_norm_mu is not None else None
         cond_norm_std = self._prepare_cond_stat(cond_norm_std, state_seq) if cond_norm_std is not None else None
 
@@ -466,35 +480,104 @@ class Trainer:
         return preds, last_attn
 
     def _maybe_apply_teacher_noise(self, state_seq: torch.Tensor) -> torch.Tensor:
-        noise_deg = float(getattr(self, 'teacher_rot_noise_deg', 0.0) or 0.0)
-        noise_prob = float(getattr(self, 'teacher_rot_noise_prob', 0.0) or 0.0)
+        return self._apply_rot_noise(
+            state_seq,
+            getattr(self, 'rot6d_x_slice', None),
+            noise_prob=float(getattr(self, 'teacher_rot_noise_prob', 0.0) or 0.0),
+            noise_deg=float(getattr(self, 'teacher_rot_noise_deg', 0.0) or 0.0),
+            min_time_steps=2,
+        )
+
+    def _inject_pose_hist_noise(
+        self,
+        pose_hist_norm: Optional[torch.Tensor],
+        pose_hist_raw: Optional[torch.Tensor],
+        scales: Optional[torch.Tensor],
+        mu: Optional[torch.Tensor],
+        std: Optional[torch.Tensor],
+        *,
+        noise_deg: float,
+        noise_prob: float,
+    ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """
+        Inject rotation noise into pose-history buffer to simulate accumulated errors in teacher mode.
+        """
+        import torch
+        noise_deg = float(noise_deg or 0.0)
+        noise_prob = float(noise_prob or 0.0)
+        if (
+            pose_hist_norm is None
+            or pose_hist_raw is None
+            or noise_deg <= 1e-6
+            or noise_prob <= 0.0
+        ):
+            return pose_hist_norm, pose_hist_raw
+
+        pose_hist_len = int(getattr(self, "pose_hist_len", 0) or 0)
+        pose_hist_dim = int(getattr(self, "pose_hist_dim", pose_hist_raw.shape[-1]) or pose_hist_raw.shape[-1])
+        stride = pose_hist_dim // max(1, pose_hist_len) if pose_hist_len > 0 else 0
+        if (
+            pose_hist_len <= 0
+            or pose_hist_dim <= 0
+            or stride <= 0
+            or stride * pose_hist_len != pose_hist_dim
+            or stride % 6 != 0
+        ):
+            return pose_hist_norm, pose_hist_raw
+
+        with torch.no_grad():
+            pose_hist_raw = self._apply_rot_noise(
+                pose_hist_raw,
+                slice(0, pose_hist_dim),
+                noise_prob=noise_prob,
+                noise_deg=noise_deg,
+                min_time_steps=pose_hist_len,
+            )
+            pose_hist_norm = self._pose_hist_transform_vec(pose_hist_raw, scales, mu, std)
+        return pose_hist_norm, pose_hist_raw
+
+    def _apply_rot_noise(
+        self,
+        tensor: torch.Tensor,
+        rot_slice: Optional[slice],
+        *,
+        noise_prob: float,
+        noise_deg: float,
+        min_time_steps: int = 1,
+    ) -> torch.Tensor:
+        """Shared rot6d noise injector for teacher inputs & pose history."""
+        import torch
+        noise_deg = float(noise_deg or 0.0)
+        noise_prob = float(noise_prob or 0.0)
         if noise_deg <= 1e-6 or noise_prob <= 0.0:
-            return state_seq
-        rot_slice = getattr(self, 'rot6d_x_slice', None)
+            return tensor
         if not isinstance(rot_slice, slice):
-            return state_seq
-        rot_chunk = state_seq[..., rot_slice]
-        B, T, D = rot_chunk.shape
-        if D % 6 != 0 or T < 2:
-            return state_seq
+            return tensor
+        rot_chunk = tensor[..., rot_slice]
+        if rot_chunk.dim() < 2 or rot_chunk.shape[-2] < min_time_steps:
+            return tensor
+        # ensure time dimension: [..., T, D]
+        if rot_chunk.dim() == 2:
+            rot_chunk = rot_chunk.unsqueeze(1)
+        *prefix, T, D = rot_chunk.shape
+        if D % 6 != 0:
+            return tensor
         J = D // 6
-        device = state_seq.device
-        rotJ = rot_chunk.view(B, T, J, 6)
-        R = rot6d_to_matrix(rotJ)
-        B, T, J = R.shape[:3]
-        mask_shape = R.shape[:-2]
-        mask = (torch.rand(mask_shape, device=device) < float(noise_prob))
+        flat = rot_chunk.view(-1, T, J, 6)
+        R = rot6d_to_matrix(flat)
+        mask = torch.rand(R.shape[:-2], device=rot_chunk.device) < noise_prob
         if not mask.any():
-            return state_seq
-        max_rad = float(noise_deg) * (_math.pi / 180.0)
-        angles = torch.empty(B, T, J, device=device, dtype=state_seq.dtype).uniform_(-max_rad, max_rad)
-        axes = torch.randn(B, T, J, 3, device=device, dtype=state_seq.dtype)
+            return tensor
+        max_rad = noise_deg * (_math.pi / 180.0)
+        angles = torch.empty_like(mask, dtype=rot_chunk.dtype).uniform_(-max_rad, max_rad)
+        axes = torch.randn(*mask.shape, 3, device=rot_chunk.device, dtype=rot_chunk.dtype)
         delta_R = axis_angle_to_matrix(axes, angles)
         R_noisy = torch.matmul(delta_R, R)
-        mask_mat = mask.unsqueeze(-1).unsqueeze(-1)
-        R = torch.where(mask_mat, R_noisy, R)
-        rot_noisy = matrix_to_rot6d(R).view(B, T, J * 6)
-        out = state_seq.clone()
+        R = torch.where(mask.unsqueeze(-1).unsqueeze(-1), R_noisy, R)
+        rot_noisy = matrix_to_rot6d(R).view(*prefix, T, J * 6)
+        if tensor.dim() == 2:
+            rot_noisy = rot_noisy.squeeze(1)
+        out = tensor.clone()
         out[..., rot_slice] = rot_noisy
         return out
 
@@ -652,6 +735,7 @@ class Trainer:
         Feedback controller for freerun knobs, coupled to teacher noise.
         - noise is the single knob; horizon/weight follow a quadratic of noise.
         - uses only generic signals (yaw drift, GeoDeg, grad_ratio) to stay task-agnostic.
+        - now also co-tunes history dropout to stage-wise difficulty.
         """
         import math as _math
         if not isinstance(free_metrics, dict) or not free_metrics:
@@ -676,10 +760,21 @@ class Trainer:
         new_h = int(max(6, min(18, round(6 + k_h * noise * noise))))
         new_w = float(max(0.08, min(0.30, 0.08 + k_w * noise * noise)))
 
+        # History dropout co-tuning: align difficulty with noise
+        drop = float(getattr(self, "history_dropout_prob", 0.0) or 0.0)
+        if plateau and not unstable and not vanishing:
+            drop = min(0.30, drop + 0.02)
+        elif unstable or vanishing:
+            drop = max(0.05, drop - 0.02)
+        # Keep dropout roughly proportional to noise, but bounded
+        target_drop = max(0.05, min(0.30, 0.05 + 0.04 * (noise - 1.0)))
+        drop = 0.5 * drop + 0.5 * target_drop
+
         self.teacher_rot_noise_deg = noise
         self.freerun_horizon = new_h
         self.freerun_weight = new_w
-        return {"noise": noise, "horizon": new_h, "weight": new_w}
+        self.history_dropout_prob = drop
+        return {"noise": noise, "horizon": new_h, "weight": new_w, "history_dropout": drop}
 
     def _should_log_freerun_gradients(self, batch_idx: int) -> bool:
         if not bool(getattr(self, 'freerun_grad_log', False)):
@@ -1041,6 +1136,14 @@ class Trainer:
                         coerced = float(value)
                     except Exception:
                         coerced = current
+            # clamp history dropout if assigned via schedule
+            if attr_name == 'history_dropout_prob':
+                try:
+                    lo = float(getattr(self, 'history_dropout_prob_min', 0.05))
+                    hi = float(getattr(self, 'history_dropout_prob_max', 0.30))
+                    coerced = max(lo, min(hi, float(coerced)))
+                except Exception:
+                    pass
             setattr(target, attr_name, coerced)
             key_name = key if prefix else attr_name
             overrides[key_name] = coerced
@@ -1511,6 +1614,9 @@ class Trainer:
             for name in module.loss_names
             if name in raw_losses and raw_losses[name] is not None
         }
+        # 如果未显式指定 loss_names，运行时自动使用 payload 中的条目
+        if not filtered and not module.loss_names:
+            filtered = {k: v for k, v in raw_losses.items() if v is not None}
         if not filtered:
             return loss, stats
         core_loss = payload.get('core_loss') or loss
@@ -1518,6 +1624,7 @@ class Trainer:
             filtered,
             model=self.model,
             epoch=getattr(self, 'cur_epoch', 0),
+            scales_override=None,  # component weights不是尺度，避免放大/缩小loss
         )
         adapted = core_loss + weighted_loss * total_weight
         if not isinstance(stats, dict):
@@ -2286,10 +2393,27 @@ class Trainer:
                     delta_raw = delta_norm * std_t.clamp_min(1e-6)
             except Exception:
                 pass
+        # 仅对 rot6d 部分做增量合成，尾部附加通道（如 RootVelocity）直接做残差相加
+        rot_slice = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
+        if not isinstance(rot_slice, slice):
+            rot_slice = slice(0, y_prev_raw.shape[-1])
+        rot_len = rot_slice.stop - rot_slice.start
+        if rot_len % 6 != 0:
+            self._raise_norm_error(f"compose_delta_to_raw: rot_slice 长度 {rot_len} 不是 6 的倍数。")
         try:
-            return compose_rot6d_delta(y_prev_raw, delta_raw)
+            rot_next = compose_rot6d_delta(
+                y_prev_raw[..., rot_slice],
+                delta_raw[..., rot_slice],
+            )
         except Exception as e:
             self._raise_norm_error("compose_rot6d_delta 失败", e)
+
+        if rot_len == y_prev_raw.shape[-1]:
+            return rot_next
+        tail_prev = y_prev_raw[..., rot_slice.stop:]
+        tail_delta = delta_raw[..., rot_slice.stop:]
+        tail_next = tail_prev + tail_delta
+        return torch.cat([rot_next, tail_next], dim=-1)
 
     def _reproject_cond_to_local_frame(self, cond_raw, yaw_gt, yaw_pred):
         """
@@ -3587,6 +3711,8 @@ def train_entry():
                    help='adaptive history 注意力头数')
     p.add_argument('--history_adaptive_train_variable', action='store_true',
                    help='训练时随机截断历史长度，提升部署鲁棒性')
+    p.add_argument('--history_dropout_prob', type=float, default=0.15,
+                   help='训练期以该概率完全屏蔽历史特征，迫使模型依赖未来条件信号进行纠错。')
     p.add_argument('--freerun_stage_schedule', type=str, default=None,
                    help='分阶段调度（freerun/tf/损失等）的 JSON/字符串配置。')
     p.add_argument('--adaptive_loss_method', type=str, default='none', choices=['none', 'gradnorm', 'uncertainty', 'dwa'],
@@ -3595,8 +3721,10 @@ def train_entry():
                    help='GradNorm 等策略的调节超参。')
     p.add_argument('--adaptive_loss_temperature', type=float, default=2.0,
                    help='DWA 策略温度，默认 2.0。')
-    p.add_argument('--adaptive_loss_terms', type=str, default='fk_pos,rot_local,rot_delta,rot_delta_root,rot_ortho',
-                   help='需要自适应权重的 loss 名称，逗号分隔。')
+    p.add_argument('--adaptive_loss_ema_beta', type=float, default=0.5,
+                   help='自适应权重显示的 EMA 平滑系数（0 关闭；建议 0.3~0.7）。')
+    p.add_argument('--adaptive_loss_terms', type=str, default='fk_pos,rot_local,rot_delta,rot_delta_root,rot_ortho,root_vel,root_speed',
+                   help='需要自适应权重的 loss 名称，逗号分隔。留空则使用全部可用 loss。')
     p.add_argument('--adaptive_loss_tuning', action='store_true',
                    help='启用基于验证指标的自适应损失权重调整（StageMetricAdjuster）。')
     p.add_argument('--config_path', type=str, default=None,
@@ -3630,6 +3758,10 @@ def train_entry():
                    help='FK 末端位置损失权重（0 表示禁用）。')
     p.add_argument('--w_rot_local', type=float, default=0.0,
                    help='父子关节局部 geodesic 约束权重（0=关闭）。')
+    p.add_argument('--w_root_vel', type=float, default=0.0,
+                   help='根速度向量 MSE 损失权重（输出包含 RootVelocity 时生效）。')
+    p.add_argument('--w_root_speed', type=float, default=0.0,
+                   help='根速度模长 MAE 损失权重（输出包含 RootVelocity 时生效）。')
     p.add_argument('--adaptive_bone_weights', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
                    help='是否根据骨骼运动幅度自适应权重（默认开启）。')
     p.add_argument('--use_hierarchy_weights', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
@@ -3871,6 +4003,7 @@ def train_entry():
                 cond_dim=0,
                 num_heads=int(_arg('history_adaptive_heads', 2) or 2),
                 train_variable_history=bool(_arg('history_adaptive_train_variable', False)),
+                history_dropout_prob=float(_arg('history_dropout_prob', 0.15) or 0.0),
             ).to(module_device)
             model.enable_adaptive_history(history_module, pose_hist_len=pose_hist_len_raw)
 
@@ -4095,7 +4228,19 @@ def train_entry():
     trainer.freerun_horizon_min = int(_arg('freerun_horizon_min', 6) or 6)
     trainer.freerun_debug_steps = int(_arg('freerun_debug_steps', 0) or 0)
     trainer.history_debug_steps = int(_arg('history_debug_steps', 0) or 0)
-    trainer.freerun_stage_schedule = _parse_stage_schedule(_arg('freerun_stage_schedule', None))
+    trainer.history_dropout_prob = float(_arg('history_dropout_prob', 0.15) or 0.0)
+    trainer.history_dropout_prob_min = 0.05
+    trainer.history_dropout_prob_max = 0.30
+    _stage_spec = _arg('freerun_stage_schedule', None)
+    if _stage_spec is None:
+        # More aggressive autoregressive exposure (see docs/history_correction_strategies.md)
+        _stage_spec = [
+            {"label": "stage1_warmup", "start": 1, "end": 5, "params": {"tf_max": 0.95, "tf_min": 0.95, "freerun_weight": 0.0}},
+            {"label": "stage2_mixed", "start": 6, "end": 15, "params": {"tf_max": 0.70, "tf_min": 0.70, "freerun_weight": 0.10}},
+            {"label": "stage3_aggressive", "start": 16, "end": 30, "params": {"tf_max": 0.30, "tf_min": 0.30, "freerun_weight": 0.30}},
+            {"label": "stage4_freerun", "start": 31, "end": 9999, "params": {"tf_max": 0.10, "tf_min": 0.10, "freerun_weight": 0.50}},
+        ]
+    trainer.freerun_stage_schedule = _parse_stage_schedule(_stage_spec)
     _init_h_arg = _arg('freerun_init_horizon', None)
     if _init_h_arg is None:
         if trainer.freerun_horizon > 0:
@@ -4154,25 +4299,12 @@ def train_entry():
         loss_alpha=float(_arg('adaptive_loss_alpha', 1.5)),
         loss_temperature=float(_arg('adaptive_loss_temperature', 2.0)),
         scheduler_params=sched_params,
+        weight_ema_beta=float(_arg('adaptive_loss_ema_beta', 0.5)),
     )
     trainer.adaptive_loss_module = adaptive_manager.loss_module
     trainer.hyperparam_scheduler = adaptive_manager.scheduler
     trainer.teacher_rot_noise_deg = float(_arg('teacher_rot_noise_deg', 0.0))
     trainer.teacher_rot_noise_prob = float(_arg('teacher_rot_noise_prob', 0.0))
-    if _arg('adaptive_scheduler', False):
-        scheduler_init = {
-            'freerun_horizon': int(trainer.freerun_horizon or trainer.freerun_init_horizon),
-            'freerun_min': int(trainer.freerun_horizon_min),
-            'freerun_max': int(max(trainer.freerun_horizon, trainer.freerun_init_horizon, trainer.freerun_horizon_min)),
-            'teacher_forcing_ratio': float(_arg('tf_max', 1.0)),
-        }
-        trainer.hyperparam_scheduler = AdaptiveHyperparamScheduler(
-            scheduler_init,
-            loss_spike_threshold=float(_arg('adaptive_sched_loss_spike', 1.5)),
-            convergence_threshold=float(_arg('adaptive_sched_convergence', 0.02)),
-            adjustment_rate=float(_arg('adaptive_sched_adjustment', 0.1)),
-            check_interval=int(_arg('adaptive_sched_interval', 50) or 50),
-        )
     steps_per_epoch = max(1, len(train_loader))
     total_steps = max(1, _arg('epochs', 300) * steps_per_epoch)
     effective_warmup = min(_arg('warmup_steps', 1000), int(total_steps * 0.1))
