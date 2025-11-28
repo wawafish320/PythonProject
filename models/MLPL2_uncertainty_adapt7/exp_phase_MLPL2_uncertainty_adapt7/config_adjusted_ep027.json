@@ -32,8 +32,6 @@
   "teacher_rot_noise_prob": 0.08,
   "w_fk_pos": 0.07,
   "w_rot_local": 0.07,
-  "w_root_vel": 0.05,
-  "w_root_speed": 0.03,
   "freerun_stage_schedule": [
     {
       "range": [
@@ -59,9 +57,7 @@
       "loss_groups": {
         "core": {
           "w_fk_pos": 0.07,
-          "w_rot_local": 0.07,
-          "w_root_vel": 0.05,
-          "w_root_speed": 0.03
+          "w_rot_local": 0.07
         }
       },
       "tf": {
@@ -84,7 +80,8 @@
             "hi": 0.12
           }
         }
-      }
+      },
+      "loss": {}
     },
     {
       "range": [
@@ -93,7 +90,7 @@
       ],
       "label": "stage2_mixed_warmup",
       "trainer": {
-        "freerun_weight": 0.12,
+        "freerun_weight": 0.02,
         "freerun_horizon": 8,
         "eval_horizon": 8,
         "teacher_rot_noise_deg_start": 1.5,
@@ -111,9 +108,7 @@
         "core": {
           "w_fk_pos": 0.2275,
           "w_rot_local": 0.2275,
-          "w_rot_delta_root": 0.2,
-          "w_root_vel": 0.08,
-          "w_root_speed": 0.05
+          "w_rot_delta_root": 0.2
         }
       },
       "tf": {
@@ -139,7 +134,8 @@
             "hi": 0.2
           }
         }
-      }
+      },
+      "loss": {}
     },
     {
       "range": [
@@ -148,7 +144,7 @@
       ],
       "label": "stage2_mixed_ramp",
       "trainer": {
-        "freerun_weight": 0.1,
+        "freerun_weight": 0.0282,
         "freerun_horizon": 8,
         "eval_horizon": 8,
         "teacher_rot_noise_deg_start": 2.0,
@@ -166,9 +162,7 @@
         "core": {
           "w_fk_pos": 0.2275,
           "w_rot_local": 0.2275,
-          "w_rot_delta_root": 0.2,
-          "w_root_vel": 0.08,
-          "w_root_speed": 0.05
+          "w_rot_delta_root": 0.2
         }
       },
       "tf": {
@@ -194,7 +188,8 @@
             "hi": 0.19
           }
         }
-      }
+      },
+      "loss": {}
     },
     {
       "range": [
@@ -203,7 +198,7 @@
       ],
       "label": "stage3_freerun",
       "trainer": {
-        "freerun_weight": 0.25,
+        "freerun_weight": 0.1477,
         "freerun_horizon": 16,
         "eval_horizon": 14,
         "teacher_rot_noise_deg_start": 2.3,
@@ -221,9 +216,7 @@
         "core": {
           "w_fk_pos": 0.4025,
           "w_rot_local": 0.4025,
-          "w_rot_delta_root": 0.25,
-          "w_root_vel": 0.15,
-          "w_root_speed": 0.08
+          "w_rot_delta_root": 0.25
         }
       },
       "tf": {
@@ -248,7 +241,8 @@
             "hi": 0.02
           }
         }
-      }
+      },
+      "loss": {}
     }
   ],
   "dataset_profile": {

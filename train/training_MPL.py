@@ -3930,6 +3930,8 @@ def train_entry():
     w_rot_delta = float(_arg('w_rot_delta', 1.0))
     w_fk_pos = float(_arg('w_fk_pos', 0.0) or 0.0)
     w_rot_local = float(_arg('w_rot_local', 0.0) or 0.0)
+    w_root_vel = float(_arg('w_root_vel', 0.0) or 0.0)
+    w_root_speed = float(_arg('w_root_speed', 0.0) or 0.0)
 
     bone_prior_mode = str(_arg('bone_prior_mode', 'geodesic') or 'geodesic')
     bone_prior_samples = int(_arg('bone_prior_samples', 1024) or 1024)
@@ -3959,6 +3961,8 @@ def train_entry():
         meta=getattr(ds_train, 'meta', None),
         w_fk_pos=w_fk_pos,
         w_rot_local=w_rot_local,
+        w_root_vel=w_root_vel,
+        w_root_speed=w_root_speed,
 
         adaptive_bone_weights=adaptive_bone_weights,
         bone_prior_stds=bone_prior_stds,

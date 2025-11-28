@@ -453,6 +453,8 @@ class MotionJointLoss(nn.Module):
         meta: Optional[Dict[str, Any]] = None,
         w_fk_pos: float = 0.0,
         w_rot_local: float = 0.0,
+        w_root_vel: float = 0.0,
+        w_root_speed: float = 0.0,
 
         # ===== Adaptive bone weighting =====
         adaptive_bone_weights: bool = False,
@@ -472,6 +474,8 @@ class MotionJointLoss(nn.Module):
         self.w_rot_delta_root = float(w_rot_delta_root)
         self.w_fk_pos = float(w_fk_pos)
         self.w_rot_local = float(w_rot_local)
+        self.w_root_vel = float(w_root_vel)
+        self.w_root_speed = float(w_root_speed)
         self.angvel_eps = 1e-6
         self.fps = float(fps)
         self.output_layout = output_layout or {}
@@ -535,6 +539,8 @@ class MotionJointLoss(nn.Module):
             'rot_ortho': 'core',
             'fk_pos': 'core',
             'rot_local': 'core',
+            'root_vel': 'core',
+            'root_speed': 'core',
         }
 
         # === adaptive bone weight params ===
@@ -1482,6 +1488,34 @@ class MotionJointLoss(nn.Module):
                 self._register_component_loss('rot_local', local_loss, self.w_rot_local)
         else:
             stats.setdefault('rot_local_deg', 0.0)
+
+        # Root velocity losses（向量 + 模长），对应输出布局中的 RootVelocity 切片
+        rv_slice = self.group_slices.get('RootVelocity')
+        if rv_slice is not None and (self.w_root_vel > 0.0 or self.w_root_speed > 0.0):
+            pred_vel = pm[..., rv_slice]
+            gt_vel = gm[..., rv_slice]
+            if self.w_root_vel > 0.0:
+                vel_mse = F.mse_loss(pred_vel, gt_vel)
+                loss = loss + self.w_root_vel * vel_mse
+                self._accumulate_loss_contrib('root_vel', vel_mse, self.w_root_vel, group='core')
+                stats['root_vel_mse'] = float(vel_mse.detach().cpu())
+                self._register_component_loss('root_vel', vel_mse, self.w_root_vel)
+            else:
+                stats.setdefault('root_vel_mse', 0.0)
+
+            if self.w_root_speed > 0.0:
+                pred_speed = torch.norm(pred_vel, dim=-1)
+                gt_speed = torch.norm(gt_vel, dim=-1)
+                speed_mae = F.l1_loss(pred_speed, gt_speed)
+                loss = loss + self.w_root_speed * speed_mae
+                self._accumulate_loss_contrib('root_speed', speed_mae, self.w_root_speed, group='core')
+                stats['root_speed_mae'] = float(speed_mae.detach().cpu())
+                self._register_component_loss('root_speed', speed_mae, self.w_root_speed)
+            else:
+                stats.setdefault('root_speed_mae', 0.0)
+        else:
+            stats.setdefault('root_vel_mse', 0.0)
+            stats.setdefault('root_speed_mae', 0.0)
 
         self._finalize_adaptive_payload(loss)
         stats.update(self._loss_group_stats())

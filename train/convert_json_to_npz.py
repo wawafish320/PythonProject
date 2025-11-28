@@ -784,6 +784,70 @@ def _compute_planar_vel_dir_and_speed(clip: dict):
     return vel_dir, speed
 
 
+def _action_name_from_json(data: dict) -> str:
+    """尽量与 _load_action_meta_and_clip_action 保持一致的动作名称提取。"""
+    clip_action = str(data.get("ClipAction") or data.get("clip_action") or data.get("Action") or "").strip()
+    if clip_action:
+        return clip_action.split("::")[-1].strip().lower()
+    meta = data.get("meta", {}) if isinstance(data, dict) else {}
+    act = str(meta.get("action") or "").strip()
+    return act.lower() if act else "unknown"
+
+
+def compute_action_speed_stats(json_files: List[str], fps_override: Optional[int] = None) -> dict:
+    """
+    预先统计各动作的速度分布，用于构造相对速度倍率（multiplier）。
+    返回: {action: {mean, std, p50, p95, count}}
+    """
+    from collections import defaultdict
+    speed_map: dict[str, List[float]] = defaultdict(list)
+
+    for path in json_files:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+
+        frames = data.get("Frames") or []
+        if not frames:
+            continue
+
+        fps = float(fps_override if fps_override and fps_override > 0 else data.get("FPS", 60.0))
+
+        # 优先使用 RootVelocity / RootVelocityXY
+        if "RootVelocity" in frames[0]:
+            root_vel = np_array([_frame_get(fr, "RootVelocity") for fr in frames])[:, :2]
+        elif "RootVelocityXY" in frames[0]:
+            root_vel = np_array([_frame_get(fr, "RootVelocityXY", [0, 0]) for fr in frames])[:, :2]
+        else:
+            # 回退到位置差分
+            root_pos = np_array([_frame_get(fr, "RootPosition", [0, 0, 0]) for fr in frames])[:, :2]
+            root_vel = np.zeros_like(root_pos)
+            root_vel[1:] = (root_pos[1:] - root_pos[:-1]) * fps
+
+        speed = np.linalg.norm(root_vel, axis=1)
+        if not np.isfinite(speed).all():
+            speed = np.nan_to_num(speed, nan=0.0, posinf=0.0, neginf=0.0)
+
+        act = _action_name_from_json(data)
+        speed_map[act].extend(speed.tolist())
+
+    stats: dict[str, dict] = {}
+    for act, values in speed_map.items():
+        if not values:
+            continue
+        arr = np.asarray(values, dtype=np.float32)
+        stats[act] = {
+            "mean": float(np.mean(arr)),
+            "std": float(np.std(arr)),
+            "p50": float(np.percentile(arr, 50)),
+            "p95": float(np.percentile(arr, 95)),
+            "count": int(arr.shape[0]),
+        }
+    return stats
+
+
 def _rotate_dir_deg(v2: np.ndarray, deg: float) -> np.ndarray:
     """Rotate 2D vectors by given degrees about +Z."""
     if v2 is None:
@@ -1101,7 +1165,11 @@ def convert_one(json_path: str,
                 include_root_yaw: bool = False,
                 include_bone_pos: Optional[bool] = None,
                 include_lin_vel: Optional[bool] = None,
-                include_ang_vel: Optional[bool] = True) -> Dict[str, Any]:
+                include_ang_vel: Optional[bool] = True,
+                *,
+                action_speed_stats: Optional[Dict[str, Any]] = None,
+                base_speed_key: str = "p50",
+                speed_multiplier_clip: float = 5.0) -> Dict[str, Any]:
     clip = load_clip(json_path, use_phase_if_missing, include_root_yaw)
     if clip.get("root_yaw") is not None:
         clip["traj_yaw_raw"] = clip["root_yaw"].copy()
@@ -1186,11 +1254,16 @@ def convert_one(json_path: str,
         include_ang_vel=include_ang_vel
     )
 
-    # 自回归对齐：x[t] -> y[t+1]（这里的 Y 用 6D 旋转；如需扩展可调整）
+    # 自回归对齐：x[t] -> y[t+1]，输出包括骨骼 6D + 根速度（XY）
     T = int(clip["T"]); B = int(clip["B"])
     Y_flat = clip["bone_rot6d"].reshape(T, B*6).astype(np.float32)
+    root_vel_out = clip["root_vel"] if clip.get("root_vel") is not None else np.zeros((T, 2), dtype=np.float32)
+    root_vel_out = np.asarray(root_vel_out, dtype=np.float32)[:, :2]
     x_in_features = sanitize_f32(X_flat[:-1], "x_in_features")
-    y_out_features = sanitize_f32(Y_flat[1:], "y_out_features")
+    y_out_features = sanitize_f32(
+        np.concatenate([Y_flat[1:], root_vel_out[1:]], axis=-1),
+        "y_out_features"
+    )
 
     # cond_in: onehot(action) + 方向(cos,sin) + 速度标量（7 维），其中方向优先使用 TrajectoryDir（保证与骨架对齐）
     enum, act_size, clip_action = _load_action_meta_and_clip_action(json_path)
@@ -1244,7 +1317,21 @@ def convert_one(json_path: str,
     cond_dir_world[norm[:, 0] >= 1e-6] /= np.clip(norm[norm[:, 0] >= 1e-6], 1e-6, None)
 
     cond_dir = cond_dir_world[:-1]
-    cond_speed = speed[:-1]
+
+    # 依据动作基准速度计算倍率；默认使用统计的 p50 作为基准，回退到当前片段的中位数
+    base_speed = None
+    if action_speed_stats:
+        stats = action_speed_stats.get(act_name_norm) or action_speed_stats.get(act_name_norm.lower())
+        if stats:
+            base_speed = float(stats.get(base_speed_key, stats.get("mean", 0.0)))
+    if base_speed is None or base_speed <= 1e-6:
+        base_speed = float(np.percentile(speed, 50))
+    base_speed = max(base_speed, 1e-3)
+
+    speed_multiplier = speed / base_speed
+    speed_multiplier = np.clip(speed_multiplier, 0.0, float(speed_multiplier_clip))
+
+    cond_speed = speed_multiplier[:-1]
     cond_in = sanitize_f32(np.concatenate([act_oh, cond_dir, cond_speed], axis=-1), "cond_in")
 
 
@@ -1256,7 +1343,10 @@ def convert_one(json_path: str,
     # 序列化 layout（严格与 X_flat 一致）
     import json as _json
     state_layout_json = _json.dumps({k: {'start': int(v[0]), 'size': int(v[1]) - int(v[0])} for k, v in layout.items()}, ensure_ascii=False)
-    output_layout_json = _json.dumps({'BoneRotations6D': {'start': 0, 'size': B*6}}, ensure_ascii=False)
+    output_layout_json = _json.dumps({
+        'BoneRotations6D': {'start': 0, 'size': B*6},
+        'RootVelocity': {'start': B*6, 'size': 2},
+    }, ensure_ascii=False)
 
     meta_payload = dict(clip.get("meta") or {})
     if clip.get("bone_ang_vel") is not None and clip["bone_ang_vel"].size > 0:
@@ -1273,6 +1363,9 @@ def convert_one(json_path: str,
         traj_hand = (meta_payload.get("trajectory") or {}).get("handedness")
         meta_payload["handedness"] = traj_hand or "right"
 
+    if action_speed_stats:
+        meta_payload["action_speed_stats"] = action_speed_stats
+        meta_payload["action_speed_base_key"] = base_speed_key
     meta_json = _json.dumps(meta_payload, ensure_ascii=False)
 
     np.savez_compressed(
@@ -1347,6 +1440,16 @@ def main():
     out_dir = args.out
     os.makedirs(out_dir, exist_ok=True)
 
+    # 先统计动作速度，用于相对倍率；写入输出目录便于检查
+    fps_override = args.fps if args.fps and args.fps > 0 else None
+    action_speed_stats = compute_action_speed_stats(files, fps_override=fps_override)
+    try:
+        with open(os.path.join(out_dir, "action_speed_stats.json"), "w", encoding="utf-8") as f:
+            json.dump(action_speed_stats, f, ensure_ascii=False, indent=2)
+        print(f"ℹ️  已统计动作速度分布 → action_speed_stats.json")
+    except Exception as _e:
+        print(f"[WARN] 无法写入 action_speed_stats.json: {_e}")
+
     made = []
     for j in files:
         # 跳过输出目录中的 JSON（例如之前生成的 norm_template.json）
@@ -1372,6 +1475,9 @@ def main():
                 include_bone_pos=(True if args.use_bone_pos else None),
                 include_lin_vel=(True if args.use_bone_linvel else None),
                 include_ang_vel=(False if args.no_bone_angvel else True),
+                action_speed_stats=action_speed_stats,
+                base_speed_key="p50",
+                speed_multiplier_clip=5.0,
             )
             made.append(info["out"])
             print(f"✔ {os.path.basename(j)} -> {os.path.basename(info['out'])} "
