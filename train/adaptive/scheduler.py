@@ -20,12 +20,14 @@ class AdaptiveHyperparamScheduler:
         self.params = dict(initial_params)
         self.loss_history = deque(maxlen=max(check_interval, 50))
         self.grad_norm_history = deque(maxlen=max(check_interval, 50))
+        # 用户可传入固定阈值，但实际判断会结合最近窗口的统计量自适应调节
         self.loss_spike_threshold = float(loss_spike_threshold)
         self.convergence_threshold = float(convergence_threshold)
         self.adjustment_rate = float(adjustment_rate)
         self.check_interval = int(max(1, check_interval))
         self._last_loss_ratio: float = 1.0
         self._last_cv: float = 1.0
+        self._last_slope: float = 0.0
 
     def step(self, loss: float, grad_norm: float):
         self.loss_history.append(float(loss))
@@ -44,14 +46,17 @@ class AdaptiveHyperparamScheduler:
     def _detect_loss_spike(self) -> bool:
         if len(self.loss_history) < self.check_interval * 2:
             return False
-        recent = np.mean(list(self.loss_history)[-self.check_interval :])
-        baseline = np.mean(
-            list(self.loss_history)[-self.check_interval * 2 : -self.check_interval]
-        )
+        recent_window = list(self.loss_history)[-self.check_interval :]
+        baseline_window = list(self.loss_history)[-self.check_interval * 2 : -self.check_interval]
+        recent = np.mean(recent_window)
+        baseline = np.mean(baseline_window)
         if baseline <= 0:
             return False
+        # 动态阈值：基于baseline窗口的变异系数，避免早期高噪声阶段误报
+        baseline_cv = np.std(baseline_window) / max(baseline, 1e-8)
+        dyn_thresh = max(self.loss_spike_threshold, 1.0 + 2.5 * baseline_cv)
         self._last_loss_ratio = recent / baseline
-        return self._last_loss_ratio > self.loss_spike_threshold
+        return self._last_loss_ratio > dyn_thresh
 
     def _detect_convergence(self) -> bool:
         if len(self.loss_history) < self.check_interval:
@@ -62,7 +67,20 @@ class AdaptiveHyperparamScheduler:
         if mean <= 1e-8:
             return False
         self._last_cv = std / mean
-        return self._last_cv < self.convergence_threshold
+        # 若有上一窗口，使用斜率限制，避免在损失上升时误触发“收敛”逻辑
+        adaptive_threshold = self.convergence_threshold
+        if len(self.loss_history) >= self.check_interval * 2:
+            baseline = list(self.loss_history)[-self.check_interval * 2 : -self.check_interval]
+            baseline_mean = np.mean(baseline)
+            if baseline_mean > 1e-8:
+                self._last_slope = (mean - baseline_mean) / baseline_mean
+                # baseline 波动越大，阈值越宽松；波动变小则收紧
+                baseline_cv = np.std(baseline) / baseline_mean
+                adaptive_threshold = min(self.convergence_threshold, baseline_cv * 0.5)
+                # 如果损失正在上升，不认为是收敛
+                if self._last_slope > 0.02:
+                    return False
+        return self._last_cv < adaptive_threshold
 
     def _detect_vanishing_gradients(self) -> bool:
         if len(self.grad_norm_history) < self.check_interval * 2:

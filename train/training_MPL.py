@@ -757,17 +757,37 @@ class Trainer:
             noise = max(1.0, noise - 0.2)     # pull back if drift or grad vanishes
 
         k_h, k_w = 1.5, 0.04
-        new_h = int(max(6, min(18, round(6 + k_h * noise * noise))))
+        # allow slightly longer diagnostic horizon in later stages (up to 20)
+        new_h = int(max(6, min(20, round(6 + k_h * noise * noise))))
         new_w = float(max(0.08, min(0.30, 0.08 + k_w * noise * noise)))
 
-        # History dropout co-tuning: align difficulty with noise
+        # ---- Stage-aware history dropout scheduling ----
+        # We treat stages by epoch index to keep behaviour predictable:
+        #   - ep  1- 6 (stage1_teacher): 0.00 ~ 0.10
+        #   - ep  7-14 (stage2_mixed_warmup): 0.05 ~ 0.10
+        #   - ep 15-22 (stage2_mixed_ramp):   0.05 ~ 0.15
+        #   - ep 23+   (stage3_freerun):      0.10 ~ 0.25
+        ep = int(getattr(self, "cur_epoch", 1) or 1)
+        if ep <= 6:
+            drop_lo, drop_hi, target_base = 0.0, 0.10, 0.05
+        elif ep <= 14:
+            drop_lo, drop_hi, target_base = 0.05, 0.10, 0.075
+        elif ep <= 22:
+            drop_lo, drop_hi, target_base = 0.05, 0.15, 0.10
+        else:
+            drop_lo, drop_hi, target_base = 0.10, 0.25, 0.18
+
         drop = float(getattr(self, "history_dropout_prob", 0.0) or 0.0)
+        # plateau → 可以稍微加一点难度；unstable/vanishing → 适当减一点
         if plateau and not unstable and not vanishing:
-            drop = min(0.30, drop + 0.02)
+            drop = min(drop_hi, drop + 0.01)
         elif unstable or vanishing:
-            drop = max(0.05, drop - 0.02)
-        # Keep dropout roughly proportional to noise, but bounded
-        target_drop = max(0.05, min(0.30, 0.05 + 0.04 * (noise - 1.0)))
+            drop = max(drop_lo, drop - 0.01)
+
+        # 将 noise 作为轻微调制，而不是唯一驱动力
+        rel = max(0.0, min(1.0, (noise - 1.0) / 2.0))  # noise∈[1,3] → rel∈[0,1]
+        target_drop = target_base + (drop_hi - target_base) * 0.5 * rel
+        target_drop = max(drop_lo, min(drop_hi, target_drop))
         drop = 0.5 * drop + 0.5 * target_drop
 
         self.teacher_rot_noise_deg = noise
@@ -1676,7 +1696,8 @@ class Trainer:
         self.full_config = None
         self._adaptive_config_path: Optional[Path] = None
         if self.enable_adaptive:
-            cfg_path = getattr(args, 'config_path', None) if args is not None else _arg('config_path', None) or _arg('config_json', None)
+            # 仅使用显式传入的 config_path，避免 CLI fallback 干扰（路径已写入配置）
+            cfg_path = getattr(args, 'config_path', None) if args is not None else _arg('config_path', None)
             if cfg_path:
                 cfg_file = Path(cfg_path).expanduser()
                 self._adaptive_config_path = cfg_file
@@ -2518,12 +2539,25 @@ class Trainer:
 
         # --- 2) 根部朝向（yaw） --- （若无 RootYaw 切片则跳过）
         if isinstance(yaw_sl, slice):
-            yaw_pred_rot6d = self._infer_root_yaw_from_rot6d(y_denorm)
-            if yaw_pred_rot6d is not None:
-                yaw_pred_rot6d = torch.atan2(torch.sin(yaw_pred_rot6d), torch.cos(yaw_pred_rot6d))
-                if yaw_pred_rot6d.dim() == 1:
-                    yaw_pred_rot6d = yaw_pred_rot6d.unsqueeze(-1)
-                yaw_write = yaw_pred_rot6d.to(device=device, dtype=dtype)
+            yaw_write = None
+            # Optional: force yaw to follow cond direction to prevent drift
+            force_cond_yaw = bool(getattr(self, "freerun_force_cond_yaw", False))
+            if force_cond_yaw and cond_raw is not None:
+                dir_world = cond_raw[..., -3:-1] if cond_raw.shape[-1] >= 3 else cond_raw[..., :2]
+                if dir_world is not None and dir_world.numel() > 0:
+                    dir_unit = dir_world / dir_world.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+                    yaw_cmd = torch.atan2(dir_unit[..., 1], dir_unit[..., 0])
+                    yaw_write = torch.atan2(torch.sin(yaw_cmd), torch.cos(yaw_cmd))
+                    if yaw_write.dim() == 1:
+                        yaw_write = yaw_write.unsqueeze(-1)
+            if yaw_write is None:
+                yaw_pred_rot6d = self._infer_root_yaw_from_rot6d(y_denorm)
+                if yaw_pred_rot6d is not None:
+                    yaw_pred_rot6d = torch.atan2(torch.sin(yaw_pred_rot6d), torch.cos(yaw_pred_rot6d))
+                    if yaw_pred_rot6d.dim() == 1:
+                        yaw_pred_rot6d = yaw_pred_rot6d.unsqueeze(-1)
+                    yaw_write = yaw_pred_rot6d.to(device=device, dtype=dtype)
+            if yaw_write is not None:
                 x_next[..., yaw_sl] = yaw_write
             elif not getattr(self, '_warned_no_yaw_slice', False):
                 self._warned_no_yaw_slice = True
@@ -2743,7 +2777,6 @@ class Trainer:
         if offset != 0.0:
             yaw = yaw - offset
         return torch.atan2(torch.sin(yaw), torch.cos(yaw))
-
     def _train_augment_if_needed(self, state_seq, gt_seq, cond_seq=None):
         """仅训练阶段使用的时序/噪声增强。"""
         import torch
@@ -3058,6 +3091,7 @@ def _diagnose_free_run_impl(
         return cur
 
     predX_tensor = torch.stack(predsX, dim=1) if predsX else None
+    model = getattr(self, 'model', None)
     gtX_raw_full = None
     if motion_seq is not None:
         try:
@@ -3190,6 +3224,7 @@ def _diagnose_free_run_impl(
         except Exception:
             pass
 
+
     w_pred = w_gt = None
     angvel_slice = getattr(self, 'angvel_x_slice', None)
     if isinstance(rot6d_y, slice):
@@ -3288,16 +3323,28 @@ def _diagnose_free_run_impl(
                         result['AngVelMAECurveBones'] = bone_curve
 
                     dot_full = (w_pred * w_gt).sum(dim=-1)
-                    norm_full = mag_p * mag_g
                     ang_full = torch.zeros_like(dot_full)
-                    valid_full = norm_full > 1e-6
+                    eps = float(getattr(self, 'angvel_eps', 1e-6) or 1e-6)
+                    dir_th = float(getattr(self, 'angvel_dir_threshold', 0.1) or 0.1)  # rad/s
+                    valid_full = (mag_p > dir_th) & (mag_g > dir_th)
                     if valid_full.any():
-                        ang_full[valid_full] = torch.acos(torch.clamp(dot_full[valid_full] / norm_full[valid_full], -1.0, 1.0))
+                        norm_full = (mag_p * mag_g).clamp_min(eps)
+                        cos = torch.clamp(dot_full / norm_full, -1.0 + 1e-6, 1.0 - 1e-6)
+                        ang_full[valid_full] = torch.acos(cos[valid_full])
                     ang_full_deg = ang_full * deg
-                    ang_curve = ang_full_deg.mean(dim=(0, 2))
-                    ang_curve_max = ang_full_deg.max(dim=2).values.max(dim=0).values
-                    result['AngVelDirDegCurve'] = ang_curve.detach().cpu().tolist()
-                    result['AngVelDirDegCurveMax'] = ang_curve_max.detach().cpu().tolist()
+                    if valid_full.any():
+                        valid_f = valid_full.float()
+                        ang_sum = (ang_full_deg * valid_f).sum(dim=(0, 2))
+                        valid_cnt = valid_f.sum(dim=(0, 2)).clamp_min(1.0)
+                        ang_curve = ang_sum / valid_cnt
+                        ang_curve_max = ang_full_deg.max(dim=2).values.max(dim=0).values
+                        result['AngVelDirDegCurve'] = ang_curve.detach().cpu().tolist()
+                        result['AngVelDirDegCurveMax'] = ang_curve_max.detach().cpu().tolist()
+                        result['AngVelDirDegValidRatio'] = float(valid_f.mean().item())
+                    else:
+                        result['AngVelDirDegCurve'] = []
+                        result['AngVelDirDegCurveMax'] = []
+                        result['AngVelDirDegSkipped'] = True
                     if diag_scope == 'single_step':
                         result['SingleStep/AngVelMAECurve'] = result.get('AngVelMAECurve')
                         result['SingleStep/AngVelMAECurveBones'] = result.get('AngVelMAECurveBones')
@@ -3316,36 +3363,197 @@ def _diagnose_free_run_impl(
                     if summary:
                         _record_metric('AngVelDirDegRaw', summary.get('raw', float('nan')))
 
-                    # -------- Soft-contact / sliding diagnostics (angular-velocity based) --------
-                    # 仅诊断，不参与梯度：用关节角速度作为软接触代理。
-                    contact_w_th = float(getattr(self, 'soft_contact_w_th', 0.5) or 0.5)  # rad/s
+                    # -------- Foot contact-phase ang-vel stats (GT mask, no heuristic thresholds) --------
                     foot_names = ('foot_l', 'foot_r')
                     idx_map = {name: idx for idx, name in enumerate(bone_names)} if bone_names else {}
+
+                    def _masked_mean(val: torch.Tensor, mask: torch.Tensor):
+                        mask_f = mask.to(val.dtype)
+                        w_sum = mask_f.sum()
+                        if w_sum < 1e-6:
+                            return None
+                        return (val * mask_f).sum() / w_sum
+
+                    contacts_mask = None
+                    if torch.is_tensor(contacts_seq) and contacts_seq.dim() >= 3:
+                        contacts_mask = contacts_seq[:, : w_pred.shape[1]] > 0.5  # [B,T,2] bool
+
                     for fname in foot_names:
                         j_idx = idx_map.get(fname, None)
                         if j_idx is None or j_idx >= w_pred.shape[2]:
                             continue
+                        foot_idx = 0 if fname.endswith('_l') else 1
                         w_p = w_pred[..., j_idx, :]  # [B,T,3]
                         w_g = w_gt[..., j_idx, :]
                         mag_p = w_p.norm(dim=-1)
                         mag_g = w_g.norm(dim=-1)
-                        contact_gt = (mag_g < contact_w_th)
-                        contact_pred = (mag_p < contact_w_th)
-                        if contact_gt.any():
-                            slip_mae = (w_p - w_g).abs()[contact_gt].mean()
-                            _record_metric(f'Foot/{fname}/ContactAngVelMAE', float(slip_mae.item()))
-                            slip_mag = mag_p[contact_gt].mean()
-                            _record_metric(f'Foot/{fname}/ContactAngVelMag', float(slip_mag.item()))
-                        # 软接触判定一致性
-                        agree = (contact_gt == contact_pred)
-                        acc = agree.float().mean()
-                        _record_metric(f'Foot/{fname}/SoftContactAcc', float(acc.item()))
-                        if contact_gt.any():
-                            fnr = (~contact_pred & contact_gt).float().mean()
-                            _record_metric(f'Foot/{fname}/SoftContactFNR', float(fnr.item()))
-                        if (~contact_gt).any():
-                            fpr = (contact_pred & (~contact_gt)).float().mean()
-                            _record_metric(f'Foot/{fname}/SoftContactFPR', float(fpr.item()))
+
+                        stance_mask = swing_mask = None
+                        if contacts_mask is not None and foot_idx < contacts_mask.shape[-1]:
+                            stance_mask = contacts_mask[..., foot_idx]
+                            swing_mask = ~stance_mask
+
+                        # GT 接触期：直接按掩码平均
+                        if stance_mask is not None and stance_mask.any():
+                            mae_contact = _masked_mean((w_p - w_g).abs().norm(dim=-1), stance_mask)
+                            mag_contact = _masked_mean(mag_p, stance_mask)
+                            if mae_contact is not None:
+                                _record_metric(f'Foot/{fname}/ContactAngVelMAE', float(mae_contact.item()))
+                            if mag_contact is not None:
+                                _record_metric(f'Foot/{fname}/ContactAngVelMag', float(mag_contact.item()))
+
+                        # 方向误差（夹角）在 stance/swing 分别统计
+                        dot = (w_p * w_g).sum(dim=-1)
+                        norm_prod = mag_p * mag_g
+                        ang = torch.zeros_like(dot)
+                        valid = norm_prod > 1e-6
+                        ang[valid] = torch.acos(torch.clamp(dot[valid] / norm_prod[valid], -1.0, 1.0)) * deg
+
+                        if stance_mask is not None and stance_mask.any():
+                            ang_stance = _masked_mean(ang, stance_mask)
+                            if ang_stance is not None:
+                                _record_metric(f'Foot/{fname}/AngVelDirDegStance', float(ang_stance.item()))
+                        if swing_mask is not None and swing_mask.any():
+                            ang_swing = _masked_mean(ang, swing_mask)
+                            if ang_swing is not None:
+                                _record_metric(f'Foot/{fname}/AngVelDirDegSwing', float(ang_swing.item()))
+
+                        # 幅值在 stance/swing 的误差
+                        if stance_mask is not None and stance_mask.any():
+                            mag_mae = _masked_mean((mag_p - mag_g).abs(), stance_mask)
+                            if mag_mae is not None:
+                                _record_metric(f'Foot/{fname}/AngVelMagMAEStance', float(mag_mae.item()))
+                        if swing_mask is not None and swing_mask.any():
+                            mag_mae_sw = _masked_mean((mag_p - mag_g).abs(), swing_mask)
+                            if mag_mae_sw is not None:
+                                _record_metric(f'Foot/{fname}/AngVelMagMAESwing', float(mag_mae_sw.item()))
+
+                except Exception:
+                    # Be robust to any diagnostics failure; do not break training/eval.
+                    pass
+
+                # -------- Soft-period diagnostic: map ang-vel to phase bins and compare pred vs GT soft period --------
+                def _phase_from_vec(vec: torch.Tensor) -> Optional[torch.Tensor]:
+                    """vec [..., D]; expects D>=2 (cos,sin). Returns phase in [-pi, pi]."""
+                    if vec is None or not torch.is_tensor(vec) or vec.shape[-1] < 2:
+                        return None
+                    return torch.atan2(vec[..., 1], vec[..., 0])
+
+                period_pred = None
+                if period_seq_pred:
+                    try:
+                        pp = period_seq_pred[0]
+                        if isinstance(pp, torch.Tensor):
+                            period_pred = torch.stack([p if p.dim() == 3 else p.unsqueeze(1) for p in period_seq_pred], dim=1)
+                            if period_pred.dim() == 4 and period_pred.size(2) == 1:
+                                period_pred = period_pred.squeeze(2)
+                    except Exception:
+                        period_pred = None
+
+                period_gt = None
+                if model is not None and getattr(model, 'frozen_encoder', None) is not None and getattr(model, 'frozen_period_head', None) is not None:
+                    try:
+                        enc_in_list = []
+                        for tensor in (contacts_seq, angvel_seq, pose_hist_seq):
+                            if torch.is_tensor(tensor):
+                                enc_in_list.append(tensor)
+                        if enc_in_list:
+                            enc_input = torch.cat([t for t in enc_in_list if t is not None], dim=-1)
+                            enc_hidden = model.frozen_encoder(enc_input, return_summary=False)
+                            if isinstance(enc_hidden, tuple):
+                                enc_hidden = enc_hidden[-1]
+                            period_gt = torch.tanh(model.frozen_period_head(enc_hidden))
+                    except Exception:
+                        period_gt = None
+
+                # --- Embedding-level comparison (works even for non-periodic motion) ---
+                mag_threshold = float(getattr(self, 'period_mag_threshold', 0.1) or 0.1)
+                embed_l2 = embed_cos = None
+                if period_pred is not None and period_gt is not None and period_pred.shape == period_gt.shape:
+                    try:
+                        diff = period_pred - period_gt
+                        embed_l2 = diff.norm(dim=-1).mean()
+                        _record_metric('Period/EmbedL2', float(embed_l2.item()))
+                        # cosine similarity (safe for small norms)
+                        eps = 1e-6
+                        cos = ((period_pred * period_gt).sum(dim=-1)) / (period_pred.norm(dim=-1) * period_gt.norm(dim=-1) + eps)
+                        embed_cos = cos.clamp(-1.0, 1.0).mean()
+                        _record_metric('Period/EmbedCos', float(embed_cos.item()))
+                    except Exception:
+                        pass
+
+                # --- Phase diagnostics: only when both embeddings carry sufficient magnitude ---
+                phi_pred = _phase_from_vec(period_pred)
+                phi_gt = _phase_from_vec(period_gt)
+                mag_pred = period_pred.norm(dim=-1) if period_pred is not None else None
+                mag_gt = period_gt.norm(dim=-1) if period_gt is not None else None
+                mag_ok = False
+                try:
+                    if mag_pred is not None and mag_gt is not None:
+                        mag_ok = (mag_pred.mean() > mag_threshold) and (mag_gt.mean() > mag_threshold)
+                except Exception:
+                    mag_ok = False
+
+                if mag_ok and phi_pred is not None and phi_gt is not None and phi_pred.shape[:2] == phi_gt.shape[:2]:
+                    try:
+                        phase_diff = torch.atan2(torch.sin(phi_pred - phi_gt), torch.cos(phi_pred - phi_gt))
+                        _record_metric('Period/PhaseMAE', float(phase_diff.abs().mean().item()))
+                        cos_sim = torch.cos(phi_pred - phi_gt).mean()
+                        _record_metric('Period/PhaseCosSim', float(cos_sim.item()))
+
+                        bins = int(getattr(self, 'period_phase_bins', 16) or 16)
+                        bin_edges = torch.linspace(-_math.pi, _math.pi, bins + 1, device=phi_gt.device, dtype=phi_gt.dtype)
+                        phase_targets = {}
+                        for name in ('foot_l', 'foot_r', 'ball_l', 'ball_r'):
+                            idx = idx_map.get(name, None)
+                            if idx is not None:
+                                phase_targets[name] = idx
+
+                        def _phase_curve(values: torch.Tensor, phase: torch.Tensor) -> Optional[torch.Tensor]:
+                            curves = values.new_full((bins,), float('nan'))
+                            for i in range(bins):
+                                mask = (phase >= bin_edges[i]) & (phase < bin_edges[i + 1])
+                                if mask.any():
+                                    curves[i] = values[mask].mean()
+                            return curves if torch.isfinite(curves).any() else None
+
+                        for fname, j_idx in phase_targets.items():
+                            if j_idx is None or j_idx >= w_pred.shape[2]:
+                                continue
+                            w_p = w_pred[..., j_idx, :]
+                            w_g = w_gt[..., j_idx, :]
+                            mag_p = w_p.norm(dim=-1)
+                            mag_g = w_g.norm(dim=-1)
+
+                            curve_p = _phase_curve(mag_p, phi_pred)
+                            curve_g = _phase_curve(mag_g, phi_gt)
+                            if curve_p is not None:
+                                result[f'Foot/{fname}/Phase/AngVelMagPred'] = curve_p.detach().cpu().tolist()
+                            if curve_g is not None:
+                                result[f'Foot/{fname}/Phase/AngVelMagGT'] = curve_g.detach().cpu().tolist()
+                            if curve_p is not None and curve_g is not None:
+                                mask = torch.isfinite(curve_p) & torch.isfinite(curve_g)
+                                if mask.any():
+                                    l1 = (curve_p[mask] - curve_g[mask]).abs().mean()
+                                    _record_metric(f'Foot/{fname}/Phase/AngVelMagL1', float(l1.item()))
+
+                            eps = 1e-6
+                            dir_p = w_p / (mag_p.unsqueeze(-1) + eps)
+                            dir_g = w_g / (mag_g.unsqueeze(-1) + eps)
+                            dot = (dir_p * dir_g).sum(dim=-1).clamp(-1.0, 1.0)
+                            ang = torch.acos(dot) * deg
+                            curve_ang = _phase_curve(ang, phi_gt)
+                            if curve_ang is not None:
+                                result[f'Foot/{fname}/Phase/AngVelDirDeg'] = curve_ang.detach().cpu().tolist()
+                                ang_mean = torch.nanmean(curve_ang) if torch.isfinite(curve_ang).any() else None
+                                if ang_mean is not None:
+                                    _record_metric(f'Foot/{fname}/Phase/AngVelDirDegMean', float(ang_mean.item()))
+                    except Exception:
+                        pass
+                else:
+                    # 标记未做相位诊断（适用于非周期或低置信度情况）
+                    result['Period/PhaseSkipped'] = True
+
 
                     # -------- Foot sliding diagnostics (position based, FK) --------
                     try:
@@ -3398,8 +3606,6 @@ def _diagnose_free_run_impl(
                         _record_metric('AngVelDirDegTorso', summary.get('torso', float('nan')))
                         _record_metric('AngVelDirDegProximal', summary.get('proximal', float('nan')))
                         _record_metric('AngVelDirDegDistal', summary.get('distal', float('nan')))
-                except Exception:
-                    pass
             except Exception:
                 pass
 
@@ -3711,7 +3917,7 @@ def train_entry():
                    help='adaptive history 注意力头数')
     p.add_argument('--history_adaptive_train_variable', action='store_true',
                    help='训练时随机截断历史长度，提升部署鲁棒性')
-    p.add_argument('--history_dropout_prob', type=float, default=0.15,
+    p.add_argument('--history_dropout_prob', type=float, default=0.10,
                    help='训练期以该概率完全屏蔽历史特征，迫使模型依赖未来条件信号进行纠错。')
     p.add_argument('--freerun_stage_schedule', type=str, default=None,
                    help='分阶段调度（freerun/tf/损失等）的 JSON/字符串配置。')
@@ -4228,19 +4434,16 @@ def train_entry():
     trainer.freerun_horizon_min = int(_arg('freerun_horizon_min', 6) or 6)
     trainer.freerun_debug_steps = int(_arg('freerun_debug_steps', 0) or 0)
     trainer.history_debug_steps = int(_arg('history_debug_steps', 0) or 0)
-    trainer.history_dropout_prob = float(_arg('history_dropout_prob', 0.15) or 0.0)
+    trainer.history_dropout_prob = float(_arg('history_dropout_prob', 0.10) or 0.0)
     trainer.history_dropout_prob_min = 0.05
     trainer.history_dropout_prob_max = 0.30
     _stage_spec = _arg('freerun_stage_schedule', None)
-    if _stage_spec is None:
-        # More aggressive autoregressive exposure (see docs/history_correction_strategies.md)
-        _stage_spec = [
-            {"label": "stage1_warmup", "start": 1, "end": 5, "params": {"tf_max": 0.95, "tf_min": 0.95, "freerun_weight": 0.0}},
-            {"label": "stage2_mixed", "start": 6, "end": 15, "params": {"tf_max": 0.70, "tf_min": 0.70, "freerun_weight": 0.10}},
-            {"label": "stage3_aggressive", "start": 16, "end": 30, "params": {"tf_max": 0.30, "tf_min": 0.30, "freerun_weight": 0.30}},
-            {"label": "stage4_freerun", "start": 31, "end": 9999, "params": {"tf_max": 0.10, "tf_min": 0.10, "freerun_weight": 0.50}},
-        ]
-    trainer.freerun_stage_schedule = _parse_stage_schedule(_stage_spec)
+    try:
+        trainer.freerun_stage_schedule = _parse_stage_schedule(_stage_spec)
+    except Exception as exc:
+        # 保底：无配置或解析失败时使用空列表，而不是抛异常
+        trainer.freerun_stage_schedule = []
+        print(f"[StageSchedule][WARN] failed to parse freerun_stage_schedule ({exc}); fallback to empty schedule.")
     _init_h_arg = _arg('freerun_init_horizon', None)
     if _init_h_arg is None:
         if trainer.freerun_horizon > 0:

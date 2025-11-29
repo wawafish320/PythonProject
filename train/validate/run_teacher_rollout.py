@@ -31,14 +31,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from train.training_MPL import (
-    MotionEventDataset,
-    Trainer,
-    validate_and_fix_model_,
-    rot6d_to_matrix,
-    reproject_rot6d,
-    geodesic_R,
-)
+from train.training_MPL import MotionEventDataset, Trainer, validate_and_fix_model_, geodesic_R
+from train.geometry import rot6d_to_matrix, matrix_to_rot6d, reproject_rot6d, normalize_rot6d_delta
 from train.models import EventMotionModel, MotionJointLoss
 from train.layout import LayoutCenter, DataNormalizer
 from train.geometry import compose_rot6d_delta
@@ -436,8 +430,8 @@ class TeacherRolloutRunner:
         providers = ["CPUExecutionProvider"]
         session = ort.InferenceSession(str(self.onnx_path), providers=providers)
         inputs = session.get_inputs()
-        if len(inputs) != 5:
-            raise SystemExit(f"[FATAL] Expected 5 ONNX inputs (state/cond/contacts/angvel/pose_hist); got {len(inputs)}")
+        if not inputs:
+            raise SystemExit("[FATAL] ONNX model has no inputs.")
         canonical = ["state", "cond", "contact", "ang", "pose"]
         mapping: dict[str, str] = {}
         for inp in inputs:
@@ -446,16 +440,31 @@ class TeacherRolloutRunner:
                 if key not in mapping and key in name_l:
                     mapping[key] = inp.name
                     break
-        if len(mapping) < 5:
-            ordered = [inp.name for inp in inputs]
-            mapping = dict(zip(["state", "cond", "contact", "ang", "pose"], ordered))
-        self.ort_input_map = {
-            "state": mapping["state"],
-            "cond": mapping["cond"],
-            "contacts": mapping["contact"],
-            "angvel": mapping["ang"],
-            "pose_hist": mapping["pose"],
-        }
+        # 若基于名字匹配不完整，则回退到按顺序分配至少 state/cond
+        ordered = [inp.name for inp in inputs]
+        if "state" not in mapping and ordered:
+            mapping["state"] = ordered[0]
+        if "cond" not in mapping and len(ordered) > 1:
+            mapping["cond"] = ordered[1]
+
+        # 仅为实际存在的 canonical 键构建输入映射，兼容旧 ONNX（仅 state/cond）和新 ONNX（5 输入）
+        ort_input_map: dict[str, str] = {}
+        if "state" in mapping:
+            ort_input_map["state"] = mapping["state"]
+        if "cond" in mapping:
+            ort_input_map["cond"] = mapping["cond"]
+        if "contact" in mapping:
+            ort_input_map["contacts"] = mapping["contact"]
+        if "ang" in mapping:
+            ort_input_map["angvel"] = mapping["ang"]
+        if "pose" in mapping:
+            ort_input_map["pose_hist"] = mapping["pose"]
+
+        # 至少必须有 state；其余输入视为可选
+        if "state" not in ort_input_map:
+            raise SystemExit("[FATAL] Unable to identify 'state' input in ONNX model.")
+
+        self.ort_input_map = ort_input_map
         outputs = session.get_outputs()
         if not outputs:
             raise SystemExit("[FATAL] ONNX model has no outputs.")
@@ -650,40 +659,77 @@ class TeacherRolloutRunner:
             return None
 
         rot_x_slice = _span_to_slice(self.bundle.state_layout.get("BoneRotations6D") if self.bundle else None)
-        rot_y_slice = _span_to_slice(self.bundle.output_layout.get("BoneRotations6D") if self.bundle else None)
-        if not isinstance(rot_x_slice, slice) or not isinstance(rot_y_slice, slice):
+        # 输出端的 rot6d 仅用于诊断；ONNX 输出本身工作在 Y 空间，因此这里只需要 X 端切片
+        if not isinstance(rot_x_slice, slice):
             raise SystemExit("[FATAL] BoneRotations6D slice missing in bundle layouts; cannot denorm ONNX outputs.")
 
-        state_t0 = torch.from_numpy(state_arr[:1]).to(torch.float32)
-        motion_raw = self.normalizer.denorm_x(state_t0)
-        y_raw_local = motion_raw[:, rot_x_slice].clone()
+        # Teacher-forcing: 以 GT Y_raw 作为上一帧基准，在 Y 空间合成 delta
+        if gt_norm is None or gt_norm.shape[0] == 0:
+            raise SystemExit("[FATAL] gt_norm is required for ONNX teacher rollout.")
+        gt0 = torch.from_numpy(gt_norm[:1]).to(torch.float32)
+        y_prev_raw = self.normalizer.denorm(gt0)  # [1, Dy_raw]
 
         std_y = None
         if getattr(self.normalizer, "std_y", None) is not None:
             std_y = torch.as_tensor(self.normalizer.std_y, dtype=torch.float32).view(1, -1)
 
         for t in range(T):
-            feeds = {
-                self.ort_input_map["state"]: state_arr[t : t + 1],
-                self.ort_input_map["cond"]: cond_arr[t : t + 1],
-                self.ort_input_map["contacts"]: contacts[t : t + 1],
-                self.ort_input_map["angvel"]: angvel[t : t + 1],
-                self.ort_input_map["pose_hist"]: pose_hist[t : t + 1],
-            }
+            # 仅喂给 ONNX 实际声明的输入，兼容旧模型（state/cond）和新模型（state/cond/contacts/angvel/pose_hist）
+            feeds: dict[str, np.ndarray] = {}
+            if "state" in self.ort_input_map:
+                feeds[self.ort_input_map["state"]] = state_arr[t : t + 1]
+            if "cond" in self.ort_input_map and cond_arr.shape[1] > 0:
+                feeds[self.ort_input_map["cond"]] = cond_arr[t : t + 1]
+            if "contacts" in self.ort_input_map and contacts.shape[1] > 0:
+                feeds[self.ort_input_map["contacts"]] = contacts[t : t + 1]
+            if "angvel" in self.ort_input_map and angvel.shape[1] > 0:
+                feeds[self.ort_input_map["angvel"]] = angvel[t : t + 1]
+            if "pose_hist" in self.ort_input_map and pose_hist.shape[1] > 0:
+                feeds[self.ort_input_map["pose_hist"]] = pose_hist[t : t + 1]
+
             y = self.ort_session.run([self.ort_output_name], feeds)[0]
-            delta_norm = torch.as_tensor(np.asarray(y, dtype=np.float32), dtype=torch.float32)
+            delta_norm = torch.as_tensor(np.asarray(y, dtype=np.float32), dtype=torch.float32)  # [1, Dy]
+
+            # ΔY_norm -> ΔY_raw
             if std_y is not None:
-                delta_raw = delta_norm * std_y
+                delta_raw = delta_norm * std_y.clamp_min(1e-6)
             else:
                 delta_raw = delta_norm
-            y_raw = compose_rot6d_delta(y_raw_local, delta_raw[:, rot_y_slice])
+
+            # 在 Y 空间合成：前 rot6d 部分用 compose_rot6d_delta，尾部（如 RootVel）做残差相加
+            D = int(delta_raw.shape[-1])
+            rot_len = (D // 6) * 6
+            if rot_len <= 0:
+                raise SystemExit(f"[FATAL] invalid Y-dim for rot6d composition: {D}")
+
+            y_prev = y_prev_raw
+            prev_rot = y_prev[..., :rot_len]
+            delta_rot = delta_raw[..., :rot_len]
+            # 正规化 delta_rot 并转换为矩阵
+            J = rot_len // 6
+            prev = reproject_rot6d(prev_rot).view(1, J, 6)
+            delta = normalize_rot6d_delta(delta_rot, columns=("X", "Z"))
+            R_prev = rot6d_to_matrix(prev, columns=("X", "Z"))
+            R_delta = rot6d_to_matrix(delta, columns=("X", "Z"))
+            R_next = torch.matmul(R_delta, R_prev)
+            rot_next = matrix_to_rot6d(R_next, columns=("X", "Z")).view(1, rot_len)
+
+            if rot_len == D:
+                y_raw = rot_next
+            else:
+                tail_prev = y_prev[..., rot_len:]
+                tail_delta = delta_raw[..., rot_len:]
+                tail_next = tail_prev + tail_delta
+                y_raw = torch.cat([rot_next, tail_next], dim=-1)
+
             y_norm = self.normalizer.norm_y(y_raw)
             outputs.append(y_norm.squeeze(0).cpu().numpy())
-            if gt_norm is not None and (t + 1) < gt_norm.shape[0]:
+            # Teacher 模式：每步都以 GT 下一帧作为基准，避免累积误差干扰对齐检查
+            if (t + 1) < gt_norm.shape[0]:
                 gt_next = torch.from_numpy(gt_norm[t + 1 : t + 2]).to(torch.float32)
-                y_raw_local = self.normalizer.denorm(gt_next)
+                y_prev_raw = self.normalizer.denorm(gt_next)
             else:
-                y_raw_local = y_raw.detach()
+                y_prev_raw = y_raw.detach()
 
         return np.stack(outputs, axis=0)
 

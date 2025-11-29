@@ -1338,7 +1338,10 @@ class MotionJointLoss(nn.Module):
 
         theta = geodesic_R(dRp, dRg)
         theta = torch.nan_to_num(theta, nan=0.0, posinf=_math.pi, neginf=0.0)
-        return theta.mean()
+        # Bone weighting aligned with FK/local losses
+        weights = self._joint_weight_vector(theta.device, theta.dtype, theta.shape[-1])
+        w = weights.view(1, 1, -1)
+        return (theta * w).mean()
 
     def compute_root_geodesic_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
         Z = lambda v: pred.new_tensor(float(v))

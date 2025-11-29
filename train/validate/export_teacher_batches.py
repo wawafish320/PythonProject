@@ -128,7 +128,6 @@ def spans_from_meta(meta: Dict[str, object]) -> _Spans:
     return _Spans(
         root_pos=_parse_layout_entry(layout.get("RootPosition")),
         root_vel=_parse_layout_entry(layout.get("RootVelocity")),
-        root_yaw=None,
         rot6d=_parse_layout_entry(layout.get("BoneRotations6D")),
         angvel=_parse_layout_entry(layout.get("BoneAngularVelocities")),
     )
