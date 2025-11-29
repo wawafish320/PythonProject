@@ -3058,6 +3058,7 @@ def _diagnose_free_run_impl(
         return cur
 
     predX_tensor = torch.stack(predsX, dim=1) if predsX else None
+    model = getattr(self, 'model', None)
     gtX_raw_full = None
     if motion_seq is not None:
         try:
@@ -3190,6 +3191,7 @@ def _diagnose_free_run_impl(
         except Exception:
             pass
 
+
     w_pred = w_gt = None
     angvel_slice = getattr(self, 'angvel_x_slice', None)
     if isinstance(rot6d_y, slice):
@@ -3316,36 +3318,194 @@ def _diagnose_free_run_impl(
                     if summary:
                         _record_metric('AngVelDirDegRaw', summary.get('raw', float('nan')))
 
-                    # -------- Soft-contact / sliding diagnostics (angular-velocity based) --------
-                    # 仅诊断，不参与梯度：用关节角速度作为软接触代理。
-                    contact_w_th = float(getattr(self, 'soft_contact_w_th', 0.5) or 0.5)  # rad/s
+                    # -------- Foot contact-phase ang-vel stats (GT mask, no heuristic thresholds) --------
                     foot_names = ('foot_l', 'foot_r')
                     idx_map = {name: idx for idx, name in enumerate(bone_names)} if bone_names else {}
+
+                    def _masked_mean(val: torch.Tensor, mask: torch.Tensor):
+                        mask_f = mask.to(val.dtype)
+                        w_sum = mask_f.sum()
+                        if w_sum < 1e-6:
+                            return None
+                        return (val * mask_f).sum() / w_sum
+
+                    contacts_mask = None
+                    if torch.is_tensor(contacts_seq) and contacts_seq.dim() >= 3:
+                        contacts_mask = contacts_seq[:, : w_pred.shape[1]] > 0.5  # [B,T,2] bool
+
                     for fname in foot_names:
                         j_idx = idx_map.get(fname, None)
                         if j_idx is None or j_idx >= w_pred.shape[2]:
                             continue
+                        foot_idx = 0 if fname.endswith('_l') else 1
                         w_p = w_pred[..., j_idx, :]  # [B,T,3]
                         w_g = w_gt[..., j_idx, :]
                         mag_p = w_p.norm(dim=-1)
                         mag_g = w_g.norm(dim=-1)
-                        contact_gt = (mag_g < contact_w_th)
-                        contact_pred = (mag_p < contact_w_th)
-                        if contact_gt.any():
-                            slip_mae = (w_p - w_g).abs()[contact_gt].mean()
-                            _record_metric(f'Foot/{fname}/ContactAngVelMAE', float(slip_mae.item()))
-                            slip_mag = mag_p[contact_gt].mean()
-                            _record_metric(f'Foot/{fname}/ContactAngVelMag', float(slip_mag.item()))
-                        # 软接触判定一致性
-                        agree = (contact_gt == contact_pred)
-                        acc = agree.float().mean()
-                        _record_metric(f'Foot/{fname}/SoftContactAcc', float(acc.item()))
-                        if contact_gt.any():
-                            fnr = (~contact_pred & contact_gt).float().mean()
-                            _record_metric(f'Foot/{fname}/SoftContactFNR', float(fnr.item()))
-                        if (~contact_gt).any():
-                            fpr = (contact_pred & (~contact_gt)).float().mean()
-                            _record_metric(f'Foot/{fname}/SoftContactFPR', float(fpr.item()))
+
+                        stance_mask = swing_mask = None
+                        if contacts_mask is not None and foot_idx < contacts_mask.shape[-1]:
+                            stance_mask = contacts_mask[..., foot_idx]
+                            swing_mask = ~stance_mask
+
+                        # GT 接触期：直接按掩码平均
+                        if stance_mask is not None and stance_mask.any():
+                            mae_contact = _masked_mean((w_p - w_g).abs().norm(dim=-1), stance_mask)
+                            mag_contact = _masked_mean(mag_p, stance_mask)
+                            if mae_contact is not None:
+                                _record_metric(f'Foot/{fname}/ContactAngVelMAE', float(mae_contact.item()))
+                            if mag_contact is not None:
+                                _record_metric(f'Foot/{fname}/ContactAngVelMag', float(mag_contact.item()))
+
+                        # 方向误差（夹角）在 stance/swing 分别统计
+                        dot = (w_p * w_g).sum(dim=-1)
+                        norm_prod = mag_p * mag_g
+                        ang = torch.zeros_like(dot)
+                        valid = norm_prod > 1e-6
+                        ang[valid] = torch.acos(torch.clamp(dot[valid] / norm_prod[valid], -1.0, 1.0)) * deg
+
+                        if stance_mask is not None and stance_mask.any():
+                            ang_stance = _masked_mean(ang, stance_mask)
+                            if ang_stance is not None:
+                                _record_metric(f'Foot/{fname}/AngVelDirDegStance', float(ang_stance.item()))
+                        if swing_mask is not None and swing_mask.any():
+                            ang_swing = _masked_mean(ang, swing_mask)
+                            if ang_swing is not None:
+                                _record_metric(f'Foot/{fname}/AngVelDirDegSwing', float(ang_swing.item()))
+
+                        # 幅值在 stance/swing 的误差
+                        if stance_mask is not None and stance_mask.any():
+                            mag_mae = _masked_mean((mag_p - mag_g).abs(), stance_mask)
+                            if mag_mae is not None:
+                                _record_metric(f'Foot/{fname}/AngVelMagMAEStance', float(mag_mae.item()))
+                        if swing_mask is not None and swing_mask.any():
+                            mag_mae_sw = _masked_mean((mag_p - mag_g).abs(), swing_mask)
+                            if mag_mae_sw is not None:
+                                _record_metric(f'Foot/{fname}/AngVelMagMAESwing', float(mag_mae_sw.item()))
+
+
+                # -------- Soft-period diagnostic: map ang-vel to phase bins and compare pred vs GT soft period --------
+                def _phase_from_vec(vec: torch.Tensor) -> Optional[torch.Tensor]:
+                    """vec [..., D]; expects D>=2 (cos,sin). Returns phase in [-pi, pi]."""
+                    if vec is None or not torch.is_tensor(vec) or vec.shape[-1] < 2:
+                        return None
+                    return torch.atan2(vec[..., 1], vec[..., 0])
+
+                period_pred = None
+                if period_seq_pred:
+                    try:
+                        pp = period_seq_pred[0]
+                        if isinstance(pp, torch.Tensor):
+                            period_pred = torch.stack([p if p.dim() == 3 else p.unsqueeze(1) for p in period_seq_pred], dim=1)
+                            if period_pred.dim() == 4 and period_pred.size(2) == 1:
+                                period_pred = period_pred.squeeze(2)
+                    except Exception:
+                        period_pred = None
+
+                period_gt = None
+                if model is not None and getattr(model, 'frozen_encoder', None) is not None and getattr(model, 'frozen_period_head', None) is not None:
+                    try:
+                        enc_in_list = []
+                        for tensor in (contacts_seq, angvel_seq, pose_hist_seq):
+                            if torch.is_tensor(tensor):
+                                enc_in_list.append(tensor)
+                        if enc_in_list:
+                            enc_input = torch.cat([t for t in enc_in_list if t is not None], dim=-1)
+                            enc_hidden = model.frozen_encoder(enc_input, return_summary=False)
+                            if isinstance(enc_hidden, tuple):
+                                enc_hidden = enc_hidden[-1]
+                            period_gt = torch.tanh(model.frozen_period_head(enc_hidden))
+                    except Exception:
+                        period_gt = None
+
+                # --- Embedding-level comparison (works even for non-periodic motion) ---
+                mag_threshold = float(getattr(self, 'period_mag_threshold', 0.1) or 0.1)
+                embed_l2 = embed_cos = None
+                if period_pred is not None and period_gt is not None and period_pred.shape == period_gt.shape:
+                    try:
+                        diff = period_pred - period_gt
+                        embed_l2 = diff.norm(dim=-1).mean()
+                        _record_metric('Period/EmbedL2', float(embed_l2.item()))
+                        # cosine similarity (safe for small norms)
+                        eps = 1e-6
+                        cos = ((period_pred * period_gt).sum(dim=-1)) / (period_pred.norm(dim=-1) * period_gt.norm(dim=-1) + eps)
+                        embed_cos = cos.clamp(-1.0, 1.0).mean()
+                        _record_metric('Period/EmbedCos', float(embed_cos.item()))
+                    except Exception:
+                        pass
+
+                # --- Phase diagnostics: only when both embeddings carry sufficient magnitude ---
+                phi_pred = _phase_from_vec(period_pred)
+                phi_gt = _phase_from_vec(period_gt)
+                mag_pred = period_pred.norm(dim=-1) if period_pred is not None else None
+                mag_gt = period_gt.norm(dim=-1) if period_gt is not None else None
+                mag_ok = False
+                try:
+                    if mag_pred is not None and mag_gt is not None:
+                        mag_ok = (mag_pred.mean() > mag_threshold) and (mag_gt.mean() > mag_threshold)
+                except Exception:
+                    mag_ok = False
+
+                if mag_ok and phi_pred is not None and phi_gt is not None and phi_pred.shape[:2] == phi_gt.shape[:2]:
+                    try:
+                        phase_diff = torch.atan2(torch.sin(phi_pred - phi_gt), torch.cos(phi_pred - phi_gt))
+                        _record_metric('Period/PhaseMAE', float(phase_diff.abs().mean().item()))
+                        cos_sim = torch.cos(phi_pred - phi_gt).mean()
+                        _record_metric('Period/PhaseCosSim', float(cos_sim.item()))
+
+                        bins = int(getattr(self, 'period_phase_bins', 16) or 16)
+                        bin_edges = torch.linspace(-_math.pi, _math.pi, bins + 1, device=phi_gt.device, dtype=phi_gt.dtype)
+                        phase_targets = {}
+                        for name in ('foot_l', 'foot_r', 'ball_l', 'ball_r'):
+                            idx = idx_map.get(name, None)
+                            if idx is not None:
+                                phase_targets[name] = idx
+
+                        def _phase_curve(values: torch.Tensor, phase: torch.Tensor) -> Optional[torch.Tensor]:
+                            curves = values.new_full((bins,), float('nan'))
+                            for i in range(bins):
+                                mask = (phase >= bin_edges[i]) & (phase < bin_edges[i + 1])
+                                if mask.any():
+                                    curves[i] = values[mask].mean()
+                            return curves if torch.isfinite(curves).any() else None
+
+                        for fname, j_idx in phase_targets.items():
+                            if j_idx is None or j_idx >= w_pred.shape[2]:
+                                continue
+                            w_p = w_pred[..., j_idx, :]
+                            w_g = w_gt[..., j_idx, :]
+                            mag_p = w_p.norm(dim=-1)
+                            mag_g = w_g.norm(dim=-1)
+
+                            curve_p = _phase_curve(mag_p, phi_pred)
+                            curve_g = _phase_curve(mag_g, phi_gt)
+                            if curve_p is not None:
+                                result[f'Foot/{fname}/Phase/AngVelMagPred'] = curve_p.detach().cpu().tolist()
+                            if curve_g is not None:
+                                result[f'Foot/{fname}/Phase/AngVelMagGT'] = curve_g.detach().cpu().tolist()
+                            if curve_p is not None and curve_g is not None:
+                                mask = torch.isfinite(curve_p) & torch.isfinite(curve_g)
+                                if mask.any():
+                                    l1 = (curve_p[mask] - curve_g[mask]).abs().mean()
+                                    _record_metric(f'Foot/{fname}/Phase/AngVelMagL1', float(l1.item()))
+
+                            eps = 1e-6
+                            dir_p = w_p / (mag_p.unsqueeze(-1) + eps)
+                            dir_g = w_g / (mag_g.unsqueeze(-1) + eps)
+                            dot = (dir_p * dir_g).sum(dim=-1).clamp(-1.0, 1.0)
+                            ang = torch.acos(dot) * deg
+                            curve_ang = _phase_curve(ang, phi_gt)
+                            if curve_ang is not None:
+                                result[f'Foot/{fname}/Phase/AngVelDirDeg'] = curve_ang.detach().cpu().tolist()
+                                ang_mean = torch.nanmean(curve_ang) if torch.isfinite(curve_ang).any() else None
+                                if ang_mean is not None:
+                                    _record_metric(f'Foot/{fname}/Phase/AngVelDirDegMean', float(ang_mean.item()))
+                    except Exception:
+                        pass
+                else:
+                    # 标记未做相位诊断（适用于非周期或低置信度情况）
+                    result['Period/PhaseSkipped'] = True
+
 
                     # -------- Foot sliding diagnostics (position based, FK) --------
                     try:
