@@ -341,8 +341,6 @@ class FreeRunCycleRunner:
         ds = self._build_dataset(npz_path, seq_len=T_base)
         self._ensure_model_ready(ds)
         clip = ds.clips[0]
-        # Enable optional cond-yaw forcing during freerun to reduce drift
-        setattr(self.trainer, "freerun_force_cond_yaw", True)
 
         # Construct a single "full‑cycle" sample equivalent to MotionEventDataset.__getitem__ at s=0.
         base_sample = _build_full_cycle_sample(ds, clip, seq_len=T_base)

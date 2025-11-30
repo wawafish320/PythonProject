@@ -2539,25 +2539,12 @@ class Trainer:
 
         # --- 2) 根部朝向（yaw） --- （若无 RootYaw 切片则跳过）
         if isinstance(yaw_sl, slice):
-            yaw_write = None
-            # Optional: force yaw to follow cond direction to prevent drift
-            force_cond_yaw = bool(getattr(self, "freerun_force_cond_yaw", False))
-            if force_cond_yaw and cond_raw is not None:
-                dir_world = cond_raw[..., -3:-1] if cond_raw.shape[-1] >= 3 else cond_raw[..., :2]
-                if dir_world is not None and dir_world.numel() > 0:
-                    dir_unit = dir_world / dir_world.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-                    yaw_cmd = torch.atan2(dir_unit[..., 1], dir_unit[..., 0])
-                    yaw_write = torch.atan2(torch.sin(yaw_cmd), torch.cos(yaw_cmd))
-                    if yaw_write.dim() == 1:
-                        yaw_write = yaw_write.unsqueeze(-1)
-            if yaw_write is None:
-                yaw_pred_rot6d = self._infer_root_yaw_from_rot6d(y_denorm)
-                if yaw_pred_rot6d is not None:
-                    yaw_pred_rot6d = torch.atan2(torch.sin(yaw_pred_rot6d), torch.cos(yaw_pred_rot6d))
-                    if yaw_pred_rot6d.dim() == 1:
-                        yaw_pred_rot6d = yaw_pred_rot6d.unsqueeze(-1)
-                    yaw_write = yaw_pred_rot6d.to(device=device, dtype=dtype)
-            if yaw_write is not None:
+            yaw_pred_rot6d = self._infer_root_yaw_from_rot6d(y_denorm)
+            if yaw_pred_rot6d is not None:
+                yaw_pred_rot6d = torch.atan2(torch.sin(yaw_pred_rot6d), torch.cos(yaw_pred_rot6d))
+                if yaw_pred_rot6d.dim() == 1:
+                    yaw_pred_rot6d = yaw_pred_rot6d.unsqueeze(-1)
+                yaw_write = yaw_pred_rot6d.to(device=device, dtype=dtype)
                 x_next[..., yaw_sl] = yaw_write
             elif not getattr(self, '_warned_no_yaw_slice', False):
                 self._warned_no_yaw_slice = True
