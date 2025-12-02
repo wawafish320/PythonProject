@@ -28,8 +28,53 @@
   "freerun_debug_steps": 14,
   "yaw_forward_offset": 0,
   "history_debug_steps": 0,
+  "history_use_trend_features": true,
   "teacher_rot_noise_deg": 1.5,
   "teacher_rot_noise_prob": 0.08,
+  "input_step_noise_prob": 0.35,
+  "input_noise_deg_mix": [
+    {
+      "prob": 0.8,
+      "min": 3.0,
+      "max": 8.0
+    },
+    {
+      "prob": 0.15,
+      "min": 10.0,
+      "max": 20.0
+    },
+    {
+      "prob": 0.05,
+      "min": 20.0,
+      "max": 35.0
+    }
+  ],
+  "contraction_weight": 0.12,
+  "contraction_horizon": 24,
+  "contraction_prob": 0.35,
+  "contraction_decay": 0.8,
+  "contraction_ratio_weight": 0.8,
+  "contraction_step_weight": 0.35,
+  "contraction_terminal_weight": 1.0,
+  "contraction_noise_deg": 18.0,
+  "contraction_noise_prob": 0.4,
+  "contraction_noise_deg_mix": [
+    {
+      "prob": 0.6,
+      "min": 6.0,
+      "max": 12.0
+    },
+    {
+      "prob": 0.3,
+      "min": 12.0,
+      "max": 22.0
+    },
+    {
+      "prob": 0.1,
+      "min": 22.0,
+      "max": 35.0
+    }
+  ],
   "w_fk_pos": 0.07,
   "w_rot_local": 0.07,
   "w_root_vel": 0.05,
