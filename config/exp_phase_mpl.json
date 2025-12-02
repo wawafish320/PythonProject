@@ -34,6 +34,8 @@
   "w_rot_local": 0.07,
   "w_root_vel": 0.05,
   "w_root_speed": 0.03,
+  "freerun_rot_time_weight": 0.3,
+  "freerun_rot_time_weight_max": 2.0,
   "freerun_stage_schedule": [
     {
       "range": [
@@ -45,6 +47,8 @@
         "freerun_weight": 0.0,
         "freerun_horizon": 8,
         "eval_horizon": 8,
+        "freerun_traj_weight": 0.0,
+        "freerun_traj_time_weight_max": 1.0,
         "monitor_batches": 0,
         "teacher_eval_max_batches": 0,
         "tf_max": 1.0,
@@ -79,9 +83,6 @@
           },
           "GeoDeg": {
             "hi": 2.5
-          },
-          "MSEnormY": {
-            "hi": 0.12
           }
         }
       }
@@ -96,6 +97,8 @@
         "freerun_weight": 0.05,
         "freerun_horizon": 8,
         "eval_horizon": 8,
+        "freerun_traj_weight": 0.03,
+        "freerun_traj_time_weight_max": 1.5,
         "teacher_rot_noise_deg_start": 0.5,
         "teacher_rot_noise_deg_end": 1.5,
         "teacher_rot_noise_prob_start": 0.05,
@@ -131,10 +134,6 @@
             "ref": 2.3,
             "hi_ratio": 1.05
           },
-          "YawAbsDeg": {
-            "ref": 18.0,
-            "hi_ratio": 0.9
-          },
           "RootVelMAE": {
             "hi": 0.2
           }
@@ -151,6 +150,8 @@
         "freerun_weight": 0.12,
         "freerun_horizon": 10,
         "eval_horizon": 10,
+        "freerun_traj_weight": 0.06,
+        "freerun_traj_time_weight_max": 2.0,
         "teacher_rot_noise_deg_start": 1.0,
         "teacher_rot_noise_deg_end": 2.0,
         "teacher_rot_noise_prob_start": 0.08,
@@ -186,10 +187,6 @@
             "ref": 2.0,
             "hi_ratio": 1.04
           },
-          "YawAbsDeg": {
-            "ref": 12.0,
-            "hi_ratio": 0.88
-          },
           "RootVelMAE": {
             "hi": 0.19
           }
@@ -206,6 +203,8 @@
         "freerun_weight": 0.20,
         "freerun_horizon": 14,
         "eval_horizon": 14,
+        "freerun_traj_weight": 0.10,
+        "freerun_traj_time_weight_max": 2.5,
         "teacher_rot_noise_deg_start": 1.5,
         "teacher_rot_noise_deg_end": 2.5,
         "teacher_rot_noise_prob_start": 0.10,
@@ -239,10 +238,6 @@
           "GeoDeg": {
             "ref": 2.0,
             "hi_ratio": 1.02
-          },
-          "YawAbsDeg": {
-            "ref": 10.0,
-            "hi_ratio": 0.9
           },
           "FreeRun/RootVelMAE": {
             "hi": 0.02

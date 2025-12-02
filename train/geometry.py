@@ -140,7 +140,13 @@ def normalize_rot6d_delta(delta_flat: torch.Tensor, *, columns=("X", "Z")) -> to
     return delta_proj.view(*orig[:-1], J, 6)
 
 
-def compose_rot6d_delta(prev_rot6d: torch.Tensor, delta_rot6d: torch.Tensor, *, columns=("X", "Z")) -> torch.Tensor:
+def compose_rot6d_delta(
+    prev_rot6d: torch.Tensor,
+    delta_rot6d: torch.Tensor,
+    *,
+    columns=("X", "Z"),
+    reproject_result: bool = True,
+) -> torch.Tensor:
     """
     合成 6D 旋转增量，允许在末尾携带非旋转通道（例如速度等附加输出）。
 
@@ -150,6 +156,8 @@ def compose_rot6d_delta(prev_rot6d: torch.Tensor, delta_rot6d: torch.Tensor, *, 
     Args:
         prev_rot6d: (..., D)
         delta_rot6d: (..., D)
+        columns: 6D 表示中使用的两列轴
+        reproject_result: 是否在合成后将 R_next 投影回 SO(3)
 
     Returns:
         (..., D)
@@ -171,6 +179,9 @@ def compose_rot6d_delta(prev_rot6d: torch.Tensor, delta_rot6d: torch.Tensor, *, 
     R_prev = rot6d_to_matrix(prev, columns=columns)
     R_delta = rot6d_to_matrix(delta, columns=columns)
     R_next = torch.matmul(R_delta, R_prev)
+    if reproject_result:
+        # 使用 SVD 将接近正交的矩阵精确投影回 SO(3)，抑制自回归链上的数值漂移
+        R_next = orthogonalize_rotation_matrix(R_next)
     rot_next = matrix_to_rot6d(R_next, columns=columns).view(*orig_shape[:-1], rot_len)
 
     # 额外通道残差相加
@@ -245,6 +256,49 @@ def reproject_rot6d(flat_6d: torch.Tensor) -> torch.Tensor:
 
     y = torch.cat([b1, b2], dim=-1)        # (..., J, 6)
     return y.view(*orig[:-1], 6 * J)        # 还原到 (..., D)
+
+
+def orthogonalize_rotation_matrix(R: torch.Tensor) -> torch.Tensor:
+    """
+    使用 SVD 将接近正交的矩阵精确投影回 SO(3) 流形 (det=+1)。
+
+    对于数值上接近旋转矩阵的 R，找到 Frobenius 范数下最近的正交矩阵：
+        R ≈ U S V^T  ->  R_ortho = U D V^T,  D = diag(1, 1, sign(det(UV^T)))
+
+    Args:
+        R: (..., 3, 3) - 近似旋转矩阵
+
+    Returns:
+        (..., 3, 3) - 严格的旋转矩阵 (R^T R = I, det(R) = 1)
+    """
+    if R.shape[-2:] != (3, 3):
+        raise ValueError(f"[orthogonalize_rotation_matrix] expects (..., 3, 3), got {R.shape}")
+
+    orig_shape = R.shape
+    R_flat = R.reshape(-1, 3, 3)  # (N, 3, 3)
+
+    # SVD: R = U S V^T
+    # 注意: 在 MPS 后端上，torch.linalg.svd 会自动回退到 CPU；这里统一使用 U.device
+    U, _, Vh = torch.linalg.svd(R_flat)  # Vh is V^T
+    device = U.device
+    dtype = U.dtype
+
+    # 最近的正交矩阵为 U D V^T，其中 D 的对角为 (1, 1, sign(det(UV^T)))
+    UVt = torch.matmul(U, Vh)
+    # 为避免在 MPS 上触发 det 的反向传播（需要未实现的 LU 求解），
+    # 我们将 det 视为常数: 在 no_grad 上下文中计算其符号。
+    with torch.no_grad():
+        det = torch.linalg.det(UVt)  # (N,)
+        sign = det.sign()
+
+    # 构造 D: (N, 3, 3)，初始为单位矩阵，将最后一个奇异值乘以 det 的符号
+    eye = torch.eye(3, device=device, dtype=dtype).unsqueeze(0)
+    D = eye.repeat(U.shape[0], 1, 1)
+    D[:, 2, 2] = sign.to(dtype=dtype)
+
+    R_ortho = torch.matmul(torch.matmul(U, D), Vh)
+    # 若 SVD 在 CPU 上运行，确保返回张量在与输入相同的设备上
+    return R_ortho.to(R.device).reshape(orig_shape)
 
 
 # ============================================

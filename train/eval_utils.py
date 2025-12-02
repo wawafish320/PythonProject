@@ -479,7 +479,6 @@ def evaluate_freerun(
         gt_start = start_t
         gt_end = gt_start + free_steps
         gtY = gt_seq[:, gt_start:gt_end]
-        mse_normY = torch.mean((predY - gtY) ** 2).item()
 
         motion_ref = state_seq[:, gt_start:gt_end + 1]
 
@@ -497,28 +496,18 @@ def evaluate_freerun(
         )
         if batch_stats is None:
             continue
-        batch_stats["MSEnormY"] = mse_normY
 
         for key, value in batch_stats.items():
             stats_accum.setdefault(key, []).append(value)
 
         if diag_records:
-            yaw_slope = None
+            # 保留 delta_norm_abs 等量级诊断，但不再萃取 yaw 相关统计。
             delta_energy = None
-            slope_vals = []
             delta_vals = []
             for rec in diag_records:
-                y = rec.get("yaw_abs_deg")
-                if y is not None:
-                    slope_vals.append(y)
                 delta = rec.get("delta_norm_abs")
                 if delta is not None:
                     delta_vals.append(delta)
-            if len(slope_vals) >= 2:
-                slope_seq = [
-                    slope_vals[i + 1] - slope_vals[i] for i in range(len(slope_vals) - 1)
-                ]
-                yaw_slope = float(sum(slope_seq) / max(1, len(slope_seq)))
             if delta_vals:
                 delta_mean = sum(delta_vals) / len(delta_vals)
                 if len(delta_vals) > 1:
@@ -527,8 +516,6 @@ def evaluate_freerun(
                 else:
                     delta_var = 0.0
                 delta_energy = dict(mean=float(delta_mean), var=float(delta_var))
-            if yaw_slope is not None:
-                batch_stats["Diag/YawSlope"] = yaw_slope
             if delta_energy is not None:
                 batch_stats["Diag/DeltaEnergyMean"] = delta_energy["mean"]
                 batch_stats["Diag/DeltaEnergyVar"] = delta_energy["var"]
@@ -608,9 +595,7 @@ def evaluate_freerun(
                 torch.save(payload, debug_path)
                 last_debug_path = debug_path
                 headline = []
-                if "yaw_abs_deg" in slice_stats:
-                    yaw = slice_stats["yaw_abs_deg"]
-                    headline.append(f"yaw {yaw['mean']:.2f}° (Δ {yaw['trend']:+.2f})")
+                # 不再打印 yaw_abs_deg 作为 headline 指标
                 if "root_vel_mae" in slice_stats:
                     rv = slice_stats["root_vel_mae"]
                     headline.append(f"root_vel {rv['mean']:.3f}")
@@ -674,9 +659,7 @@ def evaluate_freerun(
             summary[key] = values
 
     defaults: Dict[str, Any] = {
-        "MSEnormY": float("nan"),
         "GeoDeg": float("nan"),
-        "YawAbsDeg": float("nan"),
         "RootVelMAE": float("nan"),
         "AngVelMAE": float("nan"),
         "AngVelMagRel": float("nan"),

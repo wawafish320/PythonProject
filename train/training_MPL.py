@@ -265,6 +265,11 @@ class Trainer:
 
         # 相对化重投影配置
         enable_reprojection = bool(getattr(self, 'enable_cond_reprojection', True))
+        # 当 freerun_yaw_strategy='trajectory' 时，坐标系直接由 cond_dir 定义，
+        # 不再依赖骨骼 yaw，因此禁用基于 root yaw 的 cond 重投影。
+        yaw_strategy = str(getattr(self, 'freerun_yaw_strategy', 'trajectory') or 'trajectory')
+        if yaw_strategy == 'trajectory':
+            enable_reprojection = False
         reprojection_applied_count = 0
 
         for t in range(T):
@@ -329,6 +334,35 @@ class Trainer:
 
             if cond_input is None and cond_seq is not None:
                 cond_input = cond_seq[:, t] if has_time_dim['cond'] else cond_seq
+
+            # --- Autoregressive input noise (self-correction training) ---
+            # 只在 mixed/train_free 且存在自由运行成分时，对当前 RAW 姿态注入噪声，
+            # 模拟累计误差输入，让模型学会纠错。
+            if getattr(self.model, "training", False) and mode in ("mixed", "train_free"):
+                try:
+                    tf_cur = float(tf_ratio)
+                except Exception:
+                    tf_cur = 1.0
+                # 纯 teacher 阶段（tf≈1.0）保持输入干净
+                if tf_cur < 0.999:
+                    import torch as _t
+                    step_prob = float(getattr(self, "input_step_noise_prob", 0.3) or 0.0)
+                    noise_deg = float(getattr(self, "teacher_rot_noise_deg", 0.0) or 0.0)
+                    noise_prob = float(getattr(self, "teacher_rot_noise_prob", 0.0) or 0.0)
+                    if step_prob > 0.0 and noise_deg > 1e-6 and noise_prob > 0.0:
+                        if _t.rand(1, device=motion.device).item() < step_prob:
+                            try:
+                                motion_raw_local = self._apply_rot_noise(
+                                    motion_raw_local,
+                                    rot6d_slice,
+                                    noise_prob=noise_prob,
+                                    noise_deg=noise_deg,
+                                    min_time_steps=1,
+                                )
+                                motion = self._diag_norm_x(motion_raw_local)
+                            except Exception:
+                                # 保守处理：噪声注入失败时回退到原始 motion
+                                pass
 
             with self._amp_context(amp_enabled):
                 ret = self.model(
@@ -480,13 +514,14 @@ class Trainer:
         return preds, last_attn
 
     def _maybe_apply_teacher_noise(self, state_seq: torch.Tensor) -> torch.Tensor:
-        return self._apply_rot_noise(
-            state_seq,
-            getattr(self, 'rot6d_x_slice', None),
-            noise_prob=float(getattr(self, 'teacher_rot_noise_prob', 0.0) or 0.0),
-            noise_deg=float(getattr(self, 'teacher_rot_noise_deg', 0.0) or 0.0),
-            min_time_steps=2,
-        )
+        """
+        Optionally inject noise into teacher inputs.
+
+        当前策略下我们只在自回归路径（mixed/train_free 模式）上做输入扰动，
+        teacher 阶段保持输入干净，避免影响单步诊断和基础收敛。
+        因此这里直接返回原始 state_seq。
+        """
+        return state_seq
 
     def _inject_pose_hist_noise(
         self,
@@ -586,6 +621,14 @@ class Trainer:
                              train_mode: bool = False, return_preds: bool = False,
                              cond_norm_mu: Optional[torch.Tensor] = None,
                              cond_norm_std: Optional[torch.Tensor] = None):
+        """
+        在给定时间窗口上运行一次 free-run（或 train_free）rollout，并计算对应的 loss。
+
+        注意:
+            - 这里的 base loss 完全复用 MotionJointLoss（局部/骨骼空间）。
+            - 额外在 freerun 模式下叠加“全局轨迹锚点”约束（root 位置）,
+              并对时间维度做显式加权，让模型更在意窗口末端的误差。
+        """
         if state_seq is None or gt_seq is None:
             return None
         T = state_seq.shape[1]
@@ -624,12 +667,72 @@ class Trainer:
             cond_norm_std=cond_norm_std,
         )
         preds_free = self._ensure_rot6d_delta(preds_free)
+        # 在 freerun 窗口内对旋转相关误差做时间递增加权：
+        # w_t 随 t 从 1 → w_max 线性增长，并归一化为均值 1，这样不会整体放大 loss，
+        # 但会让尾部步长的误差在梯度中占比更大。
         with self._amp_context(self.use_amp):
             out = self.loss_fn(preds_free, gt_sub, attn_weights=attn_free, batch=batch)
         if isinstance(out, tuple):
             free_loss, stats = out
         else:
             free_loss, stats = out, {}
+
+        # ---- Rotation time weighting (freerun 专用) ----
+        # 只对 freerun 窗口启用，teacher/mixed 主路径不受影响。
+        rot_time_weight = float(getattr(self, "freerun_rot_time_weight", 0.0) or 0.0)
+        if rot_time_weight > 0.0:
+            try:
+                import torch
+                # 仅当 rot_local / fk_pos 等旋转项开启时才尝试加权
+                w_fk = float(getattr(self.loss_fn, "w_fk_pos", 0.0) or 0.0)
+                w_loc = float(getattr(self.loss_fn, "w_rot_local", 0.0) or 0.0)
+                rot_slice = getattr(self, "rot6d_y_slice", None) or getattr(self, "rot6d_slice", None)
+                if (w_fk > 0.0 or w_loc > 0.0) and isinstance(rot_slice, slice):
+                    y_pred_norm = preds_free.get("out", None)
+                    if y_pred_norm is not None:
+                        # 反归一化得到 RAW rot6d
+                        y_pred_raw = self._denorm(y_pred_norm)[..., rot_slice]
+                        y_gt_raw = self._denorm(gt_sub)[..., rot_slice]
+                        B, T_win, Drot = y_pred_raw.shape
+                        J = Drot // 6
+                        if J > 0 and Drot % 6 == 0:
+                            from .geometry import rot6d_to_matrix, reproject_rot6d, geodesic_R, root_relative_matrices as _rrm
+                            pred_m = rot6d_to_matrix(reproject_rot6d(y_pred_raw).view(B, T_win, J, 6))
+                            gt_m   = rot6d_to_matrix(reproject_rot6d(y_gt_raw).view(B, T_win, J, 6))
+                            # root-relative（与 MotionJointLoss 一致）
+                            Rp_root = _rrm(pred_m)
+                            Rg_root = _rrm(gt_m)
+                            geo = geodesic_R(Rp_root, Rg_root)  # [B,T,J]
+                            # 时间权重 w_t: 1 → w_max，归一化为均值 1
+                            w_max = float(getattr(self, "freerun_rot_time_weight_max", 2.0) or 2.0)
+                            w_max = max(1.0, w_max)
+                            w_t = torch.linspace(1.0, w_max, steps=T_win, device=geo.device, dtype=geo.dtype)
+                            w_t = w_t / w_t.mean().clamp_min(1e-6)
+                            w_t = w_t.view(1, T_win, 1)
+                            geo_weighted = (geo * w_t).mean()
+                            # 用一个小系数叠加到自由运行 loss 上
+                            free_loss = free_loss + rot_time_weight * geo_weighted
+                            if isinstance(stats, dict):
+                                stats.setdefault("freerun/rot_time_weighted_deg", float((geo_weighted * (180.0 / _math.pi)).detach().cpu()))
+            except Exception:
+                pass
+
+        # ---- Trajectory anchor & temporal weighting (free-run 专用约束) ----
+        # 仅在配置开启时启用，避免影响已有训练配置。
+        traj_weight = float(getattr(self, "freerun_traj_weight", 0.0) or 0.0)
+        if traj_weight > 0.0:
+            traj_payload = self._freerun_traj_loss(state_sub, gt_sub, preds_free)
+            if traj_payload is not None:
+                traj_loss, traj_stats = traj_payload
+                if traj_loss is not None:
+                    free_loss = free_loss + traj_weight * traj_loss
+                    # 将轨迹相关统计并入现有 stats，便于监控
+                    try:
+                        stats = stats or {}
+                        stats.update(traj_stats)
+                    except Exception:
+                        pass
+
         if return_preds:
             return free_loss, stats or {}, preds_free, gt_sub
         return free_loss, stats or {}, None, None
@@ -741,14 +844,13 @@ class Trainer:
         if not isinstance(free_metrics, dict) or not free_metrics:
             return None
         noise = float(getattr(self, "teacher_rot_noise_deg", 2.0) or 2.0)
-        yaw_mean = float(free_metrics.get("YawAbsDeg", float("nan")))
-        yaw_slope = float(free_metrics.get("Diag/YawSlope", 0.0))
+        # 旧版本依赖 YawAbsDeg / YawSlope 进行判断，这里改为仅基于 GeoDeg / RootVelMAE / 梯度比率。
         geo = float(free_metrics.get("FreeRun/GeoDeg", free_metrics.get("GeoDeg", float("nan"))))
         root_vel = float(free_metrics.get("RootVelMAE", float("nan")))
         grad_ratio = float((grad_info or {}).get("ratio", 1.0))
 
-        plateau = (_math.isfinite(yaw_slope) and abs(yaw_slope) < 0.5) and (_math.isfinite(geo) and geo < 2.4)
-        unstable = (_math.isfinite(yaw_slope) and yaw_slope > 2.0) or (_math.isfinite(geo) and geo > 3.0) or (_math.isfinite(root_vel) and root_vel > 1.2)
+        plateau = (_math.isfinite(geo) and geo < 2.4) and (_math.isfinite(root_vel) and root_vel < 1.0)
+        unstable = (_math.isfinite(geo) and geo > 3.0) or (_math.isfinite(root_vel) and root_vel > 1.2)
         vanishing = grad_ratio < 1e-2
 
         if plateau and not unstable and not vanishing:
@@ -1781,6 +1883,12 @@ class Trainer:
         self.adaptive_loss_module = None
         self.hyperparam_scheduler: Optional[AdaptiveHyperparamScheduler] = None
         self.teacher_forcing_ratio: float = 1.0
+        # 自由运行时根部 yaw 的参考策略：
+        #   - 'trajectory': 使用 cond_dir 定义世界/轨迹坐标系的 yaw（推荐）
+        #   - 'skeleton' : 使用骨骼(pelvis)推断 yaw（旧行为，可能导致坐标系随误差漂移）
+        self.freerun_yaw_strategy: str = str(
+            getattr(args, 'freerun_yaw_strategy', _arg('freerun_yaw_strategy', 'trajectory')) or 'trajectory'
+        )
         # ---- Metrics buffering for in-process consumers ----
         self.metric_history: list[dict[str, Any]] = []
         self.metric_history_maxlen: int = 256
@@ -2157,19 +2265,11 @@ class Trainer:
                         _extra += f" | AngVelDirDeg={free_ang_dir:.2f}"
                     print(
                         f"[{log_prefix}@ep {ep:03d}] "
-                        f"MSEnormY={free_metrics.get('MSEnormY', float('nan')):.6f} | "
                         f"GeoDeg={free_metrics.get('GeoDeg', float('nan')):.3f}° | "
-                        f"YawAbsDeg={free_metrics.get('YawAbsDeg', float('nan')):.3f} | "
                         f"RootVelMAE={free_metrics.get('RootVelMAE', float('nan')):.5f} | "
                         f"AngVelMAE={free_metrics.get('AngVelMAE', float('nan')):.5f} rad/s | "
                         f"AngMagRel={free_metrics.get('AngVelMagRel', float('nan')):.3f}" + _extra
                     )
-                    # Stage1：仅在 yaw 爆炸时提示，减少解耦后的噪声
-                    if is_teacher_phase:
-                        yaw_mean = free_metrics.get('YawAbsDeg', float('nan'))
-                        yaw_slope = free_metrics.get('Diag/YawSlope', float('nan'))
-                        if (_math.isfinite(yaw_mean) and yaw_mean > 80.0) or (_math.isfinite(yaw_slope) and yaw_slope > 10.0):
-                            print(f"[{log_prefix}][ALERT] yaw drift high: YawAbsDeg={yaw_mean:.2f}, YawSlope={yaw_slope:.2f} (stage1, freerun_weight=0)")
                     return free_metrics
 
                 if is_teacher_phase:
@@ -2188,17 +2288,9 @@ class Trainer:
                         teacher_metrics = dict(self.eval_epoch(self.train_loader, mode='teacher', max_batches=max_t_batches) or {})
                         teacher_metrics.setdefault('phase', 'teacher')
                         teacher_metrics['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
-                    # 动态放大 teacher 噪声：若姿态已很优，则提前加大扰动以模拟 freerun
-                    try:
-                        geo_deg = float(teacher_metrics.get('GeoDeg', float('inf')))
-                        mse_y = float(teacher_metrics.get('MSEnormY', float('inf')))
-                        if geo_deg <= 1.2 and mse_y <= 0.12:
-                            self.teacher_noise_boost = 1.5
-                            print(f"[TeacherDiag] boosting teacher noise (x1.5) because GeoDeg={geo_deg:.3f}, MSEnormY={mse_y:.3f}")
-                        else:
-                            self.teacher_noise_boost = 1.0
-                    except Exception:
-                        self.teacher_noise_boost = 1.0
+                    # 动态放大 teacher 噪声：旧版本基于 GeoDeg + MSEnormY 调整。
+                    # 为避免 MSEnormY/YawAbsDeg 等复合指标干扰训练，这里固定为 1.0。
+                    self.teacher_noise_boost = 1.0
                     teacher_metrics.setdefault('phase', 'teacher')
                     # 在 stage1 仅保存 teacher 诊断快照（无 freerun）
                     base_debug_path = getattr(self, "freerun_debug_path", None)
@@ -2231,11 +2323,9 @@ class Trainer:
                     geo_deg = teacher_metrics.get('GeoDeg', float('nan'))
                     ang_mae = teacher_metrics.get('AngVelMAE', float('nan'))
                     ang_rel = teacher_metrics.get('AngVelMagRel', float('nan'))
-                    mse_y = teacher_metrics.get('MSEnormY', float('nan'))
                     print(
                         f"[ValTeacher@ep {ep:03d}] "
                         f"loss={loss_val:.6f} | "
-                        f"MSEnormY={mse_y:.6f} | "
                         f"GeoDeg={geo_deg:.3f}° | "
                         f"AngVelMAE={ang_mae:.5f} rad/s | "
                         f"AngMagRel={ang_rel:.3f}"
@@ -2271,8 +2361,7 @@ class Trainer:
                             f"[Gap@ep {ep:03d}] "
                             f"teach_loss={teacher_metrics_cached.get('loss', float('nan')):.6f} | "
                             f"GeoDeg={metrics_for_json.get('GeoDeg', float('nan')):.3f}° | "
-                            f"AngVelMAE={metrics_for_json.get('AngVelMAE', float('nan')):.5f} | "
-                            f"MSEnormY={metrics_for_json.get('MSEnormY', float('nan')):.6f}" + _gap_extra
+                            f"AngVelMAE={metrics_for_json.get('AngVelMAE', float('nan')):.5f}" + _gap_extra
                         )
 
                 forced_valfree_metrics = None
@@ -2305,9 +2394,10 @@ class Trainer:
                 self._maybe_finish_stage(ep, teacher_metrics_cached, tag='teacher')
                 self._dump_metrics_json(teacher_metrics_cached, tag='teacher', epoch=ep)
 
-            # --- 依据在线评估的 MSEnormY 记录最佳模型 ---
+            # --- 依据在线评估指标记录最佳模型（默认使用 GeoDeg） ---
             if _metrics is not None:
-                current = float(_metrics.get('MSEnormY', float('inf')))
+                # 优先使用 GeoDeg 作为主评估指标，避免 MSEnormY 干扰决策。
+                current = float(_metrics.get('GeoDeg', float('inf')))
                 if current < best_valfree - 1e-9:
                     best_valfree = current
                     if out_dir:
@@ -2425,6 +2515,10 @@ class Trainer:
             rot_next = compose_rot6d_delta(
                 y_prev_raw[..., rot_slice],
                 delta_raw[..., rot_slice],
+                # 训练路径上关闭基于 SVD 的投影，以避免在 MPS 后端引入不稳定的梯度。
+                # 自由运行诊断脚本（如 run_freerun_cycles）在 eval/no_grad 环境下
+                # 仍可显式启用 reproject_result=True 以做数值分析。
+                reproject_result=False,
             )
         except Exception as e:
             self._raise_norm_error("compose_rot6d_delta 失败", e)
@@ -2492,6 +2586,112 @@ class Trainer:
 
         return cond_reprojected
 
+    def _freerun_traj_loss(self, state_sub, gt_sub, preds_free):
+        """
+        在 free-run 窗口内对根部世界位置施加“轨迹锚点”约束，并做时间加权。
+
+        思路:
+            - 使用 normalizer 将 state_sub / gt_sub / preds_free['out'] 反归一化到 RAW 空间。
+            - 从 RAW 中提取 RootVelocity (Y 空间) 并在窗口内积分得到预测/GT 轨迹。
+            - 计算两条轨迹在每个时间步的 L2 位置误差，并对时间维度做线性升权。
+
+        要求:
+            - DataNormalizer 已配置 rootpos_x_slice / rootvel_y_slice。
+            - preds_free 必须是包含 'out' (Y-norm) 的 dict。
+        """
+        import torch, math
+
+        norm = getattr(self, "normalizer", None)
+        if norm is None:
+            return None
+
+        # RootPosition / RootVelocity 切片
+        rootpos_x_sl = getattr(self, "rootpos_x_slice", None)
+        rootvel_y_sl = getattr(self, "rootvel_slice", None)
+        if not (isinstance(rootpos_x_sl, slice) and isinstance(rootvel_y_sl, slice)):
+            return None
+
+        if not isinstance(preds_free, dict):
+            return None
+        y_pred_norm = preds_free.get("out", None)
+        if y_pred_norm is None:
+            return None
+
+        try:
+            # 反归一化到 RAW 空间
+            x_raw = norm.denorm_x(state_sub)
+            y_pred_raw = norm.denorm_y(y_pred_norm)
+            y_gt_raw = norm.denorm_y(gt_sub)
+        except Exception:
+            return None
+
+        # 形状对齐: [B, T, ...]
+        if x_raw.dim() != 3 or y_pred_raw.dim() != 3 or y_gt_raw.dim() != 3:
+            return None
+
+        B, T_x, _ = x_raw.shape
+        _, T_pred, _ = y_pred_raw.shape
+        _, T_gt, _ = y_gt_raw.shape
+        # 轨迹长度由 root_vel 的有效长度决定
+        T_vel = min(T_pred, T_gt)
+        if T_vel <= 0 or T_x <= 0:
+            return None
+
+        # 起点位置: 使用当前窗口的第一帧 X(raw) 的 RootPosition
+        try:
+            pos0 = x_raw[:, 0, rootpos_x_sl]  # [B, P]
+        except Exception:
+            return None
+
+        # RootVelocity (Y 空间)
+        try:
+            vel_pred = y_pred_raw[:, :T_vel, rootvel_y_sl]
+            vel_gt = y_gt_raw[:, :T_vel, rootvel_y_sl]
+        except Exception:
+            return None
+
+        if vel_pred.numel() == 0 or vel_gt.numel() == 0:
+            return None
+
+        # 仅使用与 RootPosition 维度匹配的前几个分量（通常是 XY 或 XYZ）
+        P = pos0.shape[-1]
+        vel_pred = vel_pred[..., :P]
+        vel_gt = vel_gt[..., :P]
+
+        dt = 1.0 / max(float(getattr(self, "bone_hz", 60.0) or 60.0), 1e-6)
+
+        # 通过积分 root velocity 得到预测/GT 轨迹
+        # pos_t = pos_{t-1} + v_t * dt
+        pos_pred = []
+        pos_gt = []
+        pos_pred_t = pos0
+        pos_gt_t = pos0
+        for t in range(T_vel):
+            pos_pred_t = pos_pred_t + vel_pred[:, t, :] * dt
+            pos_gt_t = pos_gt_t + vel_gt[:, t, :] * dt
+            pos_pred.append(pos_pred_t)
+            pos_gt.append(pos_gt_t)
+
+        pos_pred = torch.stack(pos_pred, dim=1)  # [B, T_vel, P]
+        pos_gt = torch.stack(pos_gt, dim=1)      # [B, T_vel, P]
+
+        # 每步位置误差范数
+        traj_err = torch.norm(pos_pred - pos_gt, dim=-1)  # [B, T_vel]
+
+        # 时间加权: 后期步数权重更大，强调长程一致性
+        # 如: w_t = linspace(1.0, w_max, T_vel)
+        w_max = float(getattr(self, "freerun_traj_time_weight_max", 2.0) or 2.0)
+        w_max = max(1.0, w_max)
+        time_weights = torch.linspace(1.0, w_max, steps=T_vel, device=traj_err.device, dtype=traj_err.dtype)
+        traj_loss = (traj_err * time_weights.unsqueeze(0)).mean()
+
+        stats = {
+            "freerun_traj_loss": float(traj_loss.detach().cpu()),
+            "freerun_traj_err_mean": float(traj_err.mean().detach().cpu()),
+            "freerun_traj_err_last": float(traj_err[:, -1].mean().detach().cpu()),
+        }
+        return traj_loss, stats
+
     def _apply_free_carry(self, x_prev, y_denorm, cond_next_raw=None):
         """
         将模型预测的 Y(raw) 写回下一帧的 X(raw)，并根据 cond 信息更新根部位置/速度。
@@ -2538,17 +2738,31 @@ class Trainer:
         yaw_cmd_vals = torch.atan2(torch.sin(yaw_cmd_world - offset), torch.cos(yaw_cmd_world - offset))
 
         # --- 2) 根部朝向（yaw） --- （若无 RootYaw 切片则跳过）
+        yaw_strategy = str(getattr(self, 'freerun_yaw_strategy', 'trajectory') or 'trajectory')
+        yaw_vals = None
+        yaw_write = None
         if isinstance(yaw_sl, slice):
-            yaw_pred_rot6d = self._infer_root_yaw_from_rot6d(y_denorm)
-            if yaw_pred_rot6d is not None:
-                yaw_pred_rot6d = torch.atan2(torch.sin(yaw_pred_rot6d), torch.cos(yaw_pred_rot6d))
-                if yaw_pred_rot6d.dim() == 1:
-                    yaw_pred_rot6d = yaw_pred_rot6d.unsqueeze(-1)
-                yaw_write = yaw_pred_rot6d.to(device=device, dtype=dtype)
-                x_next[..., yaw_sl] = yaw_write
-            elif not getattr(self, '_warned_no_yaw_slice', False):
-                self._warned_no_yaw_slice = True
-                print("[FreeCarry][WARN] yaw slice missing or cannot infer yaw; skip yaw write-back.")
+            if yaw_strategy == 'trajectory':
+                # 使用轨迹方向（cond_dir）定义世界/轨迹坐标系的 yaw
+                yaw_vals = yaw_cmd_vals
+                if yaw_vals.dim() == 1:
+                    yaw_write = yaw_vals.unsqueeze(-1)
+                else:
+                    yaw_write = yaw_vals
+                x_next[..., yaw_sl] = yaw_write.to(device=device, dtype=dtype)
+            else:
+                # 旧行为：从骨骼(pelvis)推断 yaw，坐标系随骨骼旋转
+                yaw_pred_rot6d = self._infer_root_yaw_from_rot6d(y_denorm)
+                if yaw_pred_rot6d is not None:
+                    yaw_vals = torch.atan2(torch.sin(yaw_pred_rot6d), torch.cos(yaw_pred_rot6d))
+                    if yaw_vals.dim() == 1:
+                        yaw_write = yaw_vals.unsqueeze(-1)
+                    else:
+                        yaw_write = yaw_vals
+                    x_next[..., yaw_sl] = yaw_write.to(device=device, dtype=dtype)
+                elif not getattr(self, '_warned_no_yaw_slice', False):
+                    self._warned_no_yaw_slice = True
+                    print("[FreeCarry][WARN] yaw slice missing or cannot infer yaw; skip yaw write-back.")
 
         # --- 3) 衍生角速度 ---
         av_sl = getattr(self, 'angvel_x_slice', None)
@@ -2592,16 +2806,25 @@ class Trainer:
                     sample = 0
                     rad2deg = 180.0 / math.pi
                     yaw_cmd_sample = float(yaw_cmd_vals.reshape(-1)[sample].detach().cpu() * rad2deg)
-                    yaw_pred_sample = float(yaw_vals.reshape(-1)[sample].detach().cpu() * rad2deg)
-                    yaw_after_carry_sample = float(yaw_write.reshape(-1)[sample].detach().cpu() * rad2deg)
-                    yaw_diff_deg = math.degrees(
-                        float(
-                            torch.atan2(
-                                torch.sin(yaw_vals.reshape(-1)[sample] - yaw_cmd_vals.reshape(-1)[sample]),
-                                torch.cos(yaw_vals.reshape(-1)[sample] - yaw_cmd_vals.reshape(-1)[sample]),
-                            ).item()
+                    if yaw_vals is not None:
+                        yaw_pred_sample = float(yaw_vals.reshape(-1)[sample].detach().cpu() * rad2deg)
+                    else:
+                        yaw_pred_sample = float('nan')
+                    if yaw_write is not None:
+                        yaw_after_carry_sample = float(yaw_write.reshape(-1)[sample].detach().cpu() * rad2deg)
+                    else:
+                        yaw_after_carry_sample = float('nan')
+                    if yaw_vals is not None:
+                        yaw_diff_deg = math.degrees(
+                            float(
+                                torch.atan2(
+                                    torch.sin(yaw_vals.reshape(-1)[sample] - yaw_cmd_vals.reshape(-1)[sample]),
+                                    torch.cos(yaw_vals.reshape(-1)[sample] - yaw_cmd_vals.reshape(-1)[sample]),
+                                ).item()
+                            )
                         )
-                    )
+                    else:
+                        yaw_diff_deg = float('nan')
                     rootvel_slice = x_next[sample, rootvel_sl].detach().cpu().tolist()
                     cond_speed_sample = float(cond_speed.reshape(-1)[sample].detach().cpu())
                     ortho_err = float('nan')
@@ -3890,6 +4113,10 @@ def train_entry():
                    help='启用梯度日志时，每隔多少个 batch 采样一次。')
     p.add_argument('--freerun_grad_ratio_alert', type=float, default=0.01,
                    help='若 stepH/step0 的梯度范数比低于该阈值则打印告警。')
+    p.add_argument('--freerun_rot_time_weight', type=float, default=0.0,
+                   help='自由滚动窗口内旋转误差的时间加权系数（0=关闭，建议 0.1~0.5）。')
+    p.add_argument('--freerun_rot_time_weight_max', type=float, default=2.0,
+                   help='自由滚动旋转时间权重的最大倍率（1=均匀，2=末步权重大约是首步的2倍）。')
     p.add_argument('--freerun_debug_steps', type=int, default=0,
                    help='>0 时，在 freerun 评估中打印前 N 个自回归步的 yaw/速度诊断')
     p.add_argument('--history_debug_steps', type=int, default=0,
@@ -4424,6 +4651,9 @@ def train_entry():
     trainer.history_dropout_prob = float(_arg('history_dropout_prob', 0.10) or 0.0)
     trainer.history_dropout_prob_min = 0.05
     trainer.history_dropout_prob_max = 0.30
+    # freerun 旋转时间权重：在短窗口内对后期步数给予更大权重，用于压 long-horizon drift
+    trainer.freerun_rot_time_weight = float(_arg('freerun_rot_time_weight', 0.0) or 0.0)
+    trainer.freerun_rot_time_weight_max = float(_arg('freerun_rot_time_weight_max', 2.0) or 2.0)
     _stage_spec = _arg('freerun_stage_schedule', None)
     try:
         trainer.freerun_stage_schedule = _parse_stage_schedule(_stage_spec)
