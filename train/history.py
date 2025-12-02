@@ -26,6 +26,7 @@ class AdaptiveHistoryModule(nn.Module):
         use_gate: bool = True,
         train_variable_history: bool = True,
         history_dropout_prob: float = 0.0,
+        use_trend_features: bool = False,
     ) -> None:
         super().__init__()
         if hidden_dim % num_heads != 0:
@@ -41,12 +42,16 @@ class AdaptiveHistoryModule(nn.Module):
         self.train_variable_history = bool(train_variable_history)
         self.use_gate = bool(use_gate)
         self.history_dropout_prob = float(history_dropout_prob)
+        self.use_trend_features = bool(use_trend_features)
 
         self.frame_proj = nn.Linear(self.pose_dim, self.hidden_dim)
         self.k_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.v_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.q_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.out_proj = nn.Linear(self.hidden_dim, self.pose_dim)
+        if self.use_trend_features:
+            self.trend_proj = nn.Linear(self.pose_dim * 2, self.hidden_dim)
+            self.trend_norm = nn.LayerNorm(self.hidden_dim)
         self.query_tokens = nn.Parameter(torch.randn(self.num_slots, self.hidden_dim))
         self.context_proj = nn.Linear(cond_dim, self.hidden_dim) if cond_dim > 0 else None
         self.gate_proj = nn.Linear(self.hidden_dim, self.hidden_dim) if self.use_gate else None
@@ -122,6 +127,20 @@ class AdaptiveHistoryModule(nn.Module):
         hist_slice = hist[:, -eff:, :]  # [B, eff, pose_dim]
 
         frame_embed = self.frame_proj(hist_slice)  # [B, eff, hidden]
+        trend_diag: Dict[str, torch.Tensor | float] = {}
+        if self.use_trend_features:
+            delta = hist_slice[:, 1:, :] - hist_slice[:, :-1, :]
+            zero_pad = torch.zeros(delta.shape[0], 1, delta.shape[2], device=delta.device, dtype=delta.dtype)
+            delta = torch.cat([zero_pad, delta], dim=1)
+            drift = hist_slice - hist_slice[:, :1, :]
+            trend_feat = torch.cat([delta, drift], dim=-1)
+            trend_embed = self.trend_proj(trend_feat)
+            frame_embed = frame_embed + self.trend_norm(trend_embed)
+            with torch.no_grad():
+                trend_diag = {
+                    "trend_delta_rms": float(delta.detach().pow(2).mean().sqrt().cpu()),
+                    "trend_drift_rms": float(drift.detach().pow(2).mean().sqrt().cpu()),
+                }
         queries = self.query_tokens.unsqueeze(0).expand(B, -1, -1)
         if self.context_proj is not None and context is not None:
             ctx = context
@@ -153,6 +172,8 @@ class AdaptiveHistoryModule(nn.Module):
             "frame_importance": attn.detach().mean(dim=1),  # [B, num_slots, eff]
             "dropout_applied": False,
         }
+        if trend_diag:
+            diag.update(trend_diag)
         self._last_diag = diag
         return out, diag
 

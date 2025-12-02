@@ -448,7 +448,7 @@ class MotionJointLoss(nn.Module):
         rot6d_spec: Dict[str, Any] = None,
         w_rot_ortho: float = 0.0,
         ignore_motion_groups: str = '',
-        w_rot_delta: float = 1.0,
+        w_rot_delta: float = 0.0,
         w_rot_delta_root: float = 0.0,
         meta: Optional[Dict[str, Any]] = None,
         w_fk_pos: float = 0.0,
