@@ -719,6 +719,13 @@ class Trainer:
         pred_raw: Optional[torch.Tensor],
         gt_raw: Optional[torch.Tensor],
     ) -> Optional[torch.Tensor]:
+        """
+        Compute per-joint geodesic rotation error (radians) between RAW motion
+        sequences, in a root-relative frame.
+
+        This is used by noisy-start contraction to measure how much a sequence
+        starting from a perturbed state drifts away from the ground-truth.
+        """
         if pred_raw is None or gt_raw is None:
             return None
         rot_slice = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
@@ -743,8 +750,10 @@ class Trainer:
             gt_block = reproject_rot6d(gt_chunk)
             pred_m = rot6d_to_matrix(pred_block)
             gt_m = rot6d_to_matrix(gt_block)
-            pred_rel = root_relative_matrices(pred_m)
-            gt_rel = root_relative_matrices(gt_m)
+            # Use the same root index as the main loss for consistency
+            root_idx = int(getattr(self.loss_fn, "root_idx", 0) or 0)
+            pred_rel = root_relative_matrices(pred_m, root_idx)
+            gt_rel = root_relative_matrices(gt_m, root_idx)
             geo = geodesic_R(pred_rel, gt_rel)
             return geo
         except Exception:
@@ -834,8 +843,9 @@ class Trainer:
                             pred_m = rot6d_to_matrix(reproject_rot6d(y_pred_raw).view(B, T_win, J, 6))
                             gt_m   = rot6d_to_matrix(reproject_rot6d(y_gt_raw).view(B, T_win, J, 6))
                             # root-relative（与 MotionJointLoss 一致）
-                            Rp_root = _rrm(pred_m)
-                            Rg_root = _rrm(gt_m)
+                            root_idx = int(getattr(self.loss_fn, "root_idx", 0) or 0)
+                            Rp_root = _rrm(pred_m, root_idx)
+                            Rg_root = _rrm(gt_m, root_idx)
                             geo = geodesic_R(Rp_root, Rg_root)  # [B,T,J]
                             # 时间权重 w_t: 1 → w_max，归一化为均值 1
                             w_max = float(getattr(self, "freerun_rot_time_weight_max", 2.0) or 2.0)
@@ -1901,6 +1911,75 @@ class Trainer:
         step_w = float(getattr(self, 'contraction_step_weight', 0.0) or 0.0)
         if step_w > 0.0:
             loss = loss + step_w * step_penalty
+
+        # Optional: add a position-drift contraction term based on FK positions.
+        # This encourages sequences that start from a noisy pose to converge
+        # back toward the ground-truth trajectory in *position* space, not
+        # just in local rotations.
+        fk_weight = float(getattr(self, 'contraction_fk_pos_weight', 0.0) or 0.0)
+        pos_stats = {}
+        if fk_weight > 0.0:
+            try:
+                rot_slice_y = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
+                if isinstance(rot_slice_y, slice):
+                    y_pred = pred_raw[..., rot_slice_y]
+                    y_gt = gt_raw[..., rot_slice_y]
+                    if y_pred.dim() == 2:
+                        # [B,D] -> [B,1,D]
+                        y_pred = y_pred.unsqueeze(1)
+                        y_gt = y_gt.unsqueeze(1)
+                    B_win, T_win, Drot = y_pred.shape
+                    if Drot > 0 and Drot % 6 == 0 and T_win > 0:
+                        J = Drot // 6
+                        from .geometry import rot6d_to_matrix, reproject_rot6d, root_relative_matrices as _rrm
+                        y_pred6 = reproject_rot6d(y_pred.view(B_win, T_win, J, 6))
+                        y_gt6 = reproject_rot6d(y_gt.view(B_win, T_win, J, 6))
+                        R_pred = rot6d_to_matrix(y_pred6)
+                        R_gt = rot6d_to_matrix(y_gt6)
+                        root_idx = int(getattr(self.loss_fn, "root_idx", 0) or 0)
+                        R_pred_root = _rrm(R_pred, root_idx)
+                        R_gt_root = _rrm(R_gt, root_idx)
+                        fk_pred = self._fk_positions(R_pred_root)
+                        fk_gt = self._fk_positions(R_gt_root)
+                        if fk_pred is not None and fk_gt is not None:
+                            # fk_pred / fk_gt: [B_win,T_win,J,3]
+                            pos_err = (fk_pred - fk_gt).norm(dim=-1)  # [B_win,T_win,J]
+                            weights = self._joint_weights(pos_err, pos_err.shape[-1])
+                            w = weights.view(1, 1, -1)
+                            pos_err_weighted = pos_err * w
+                            pos_err_seq = pos_err_weighted.mean(dim=-1)  # [B_win,T_win]
+                            pos_err0 = pos_err_seq[:, 0]
+                            pos_err_terminal = pos_err_seq[:, -1]
+                            pos_curve = pos_err_seq
+                            pos_err0_safe = pos_err0.clamp_min(1e-6)
+                            pos_ratio_penalty = torch.relu(pos_err_terminal - decay * pos_err0)
+                            if pos_curve.size(1) > 1:
+                                pos_step_penalty = torch.relu(pos_curve[:, 1:] - pos_curve[:, :-1]).mean()
+                            else:
+                                pos_step_penalty = torch.zeros((), device=pos_curve.device, dtype=pos_curve.dtype)
+
+                            pos_loss = torch.zeros((), device=loss.device, dtype=loss.dtype)
+                            if term_w > 0.0:
+                                pos_loss = pos_loss + term_w * pos_err_terminal.mean()
+                            if ratio_w > 0.0:
+                                pos_loss = pos_loss + ratio_w * pos_ratio_penalty.mean()
+                            if step_w > 0.0:
+                                pos_loss = pos_loss + step_w * pos_step_penalty
+
+                            loss = loss + fk_weight * pos_loss
+
+                            # For stats, report position errors in centimeters.
+                            cm = 100.0
+                            pos_stats = {
+                                "pos_err0_cm": float((pos_err0.mean() * cm).detach().cpu()),
+                                "pos_errK_cm": float((pos_err_terminal.mean() * cm).detach().cpu()),
+                                "pos_ratio": float((pos_err_terminal / pos_err0_safe).mean().detach().cpu()),
+                                "pos_step_up_cm": float((pos_step_penalty * cm).detach().cpu()),
+                            }
+            except Exception:
+                # If FK or geometry is unavailable, silently skip the position term.
+                pass
+
         if loss.numel() == 0:
             return None
 
@@ -1913,6 +1992,8 @@ class Trainer:
             "horizon": float(window),
             "step_up_deg": float((step_penalty * deg).detach().cpu()),
         }
+        if pos_stats:
+            stats.update(pos_stats)
         return loss, stats
 
     def test_gradient_connection(self, loader):
@@ -2147,6 +2228,7 @@ class Trainer:
         self.contraction_ratio_weight: float = 1.0
         self.contraction_step_weight: float = 0.0
         self.contraction_terminal_weight: float = 1.0
+        self.contraction_fk_pos_weight: float = 0.0
         self.contraction_noise_deg: float = 0.0
         self.contraction_noise_prob: float = 0.0
         self.contraction_noise_profile: Optional[list[dict[str, float]]] = None
@@ -4506,6 +4588,8 @@ def train_entry():
                    help='分步单调 penalty 的权重。')
     p.add_argument('--contraction_terminal_weight', type=float, default=1.0,
                    help='终点误差在 contraction loss 中的权重。')
+    p.add_argument('--contraction_fk_pos_weight', type=float, default=0.0,
+                   help='FK 位置 drift 在 contraction loss 中的相对权重（0 关闭位置分支）。')
     p.add_argument('--contraction_noise_deg', type=float, default=None,
                    help='noisy-start 注入的最大角度（度），留空则继承 teacher_rot_noise_deg。')
     p.add_argument('--contraction_noise_prob', type=float, default=None,
@@ -5084,6 +5168,7 @@ def train_entry():
     trainer.contraction_ratio_weight = float(_arg('contraction_ratio_weight', 1.0) or 0.0)
     trainer.contraction_step_weight = float(_arg('contraction_step_weight', 0.0) or 0.0)
     trainer.contraction_terminal_weight = float(_arg('contraction_terminal_weight', 1.0) or 0.0)
+    trainer.contraction_fk_pos_weight = float(_arg('contraction_fk_pos_weight', 0.0) or 0.0)
     _c_noise_deg = _arg('contraction_noise_deg', None)
     trainer.contraction_noise_deg = float(_c_noise_deg if _c_noise_deg is not None else trainer.teacher_rot_noise_deg)
     _c_noise_prob = _arg('contraction_noise_prob', None)
