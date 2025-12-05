@@ -25,30 +25,14 @@
   "eval_horizon": 14,
   "eval_warmup": 0,
   "width": 512,
-  "freerun_debug_steps": 14,
+  "freerun_debug_steps": 24,
   "yaw_forward_offset": 0,
   "history_debug_steps": 0,
   "history_use_trend_features": true,
   "teacher_rot_noise_deg": 1.5,
   "teacher_rot_noise_prob": 0.08,
   "input_step_noise_prob": 0.35,
-  "input_noise_deg_mix": [
-    {
-      "prob": 0.8,
-      "min": 3.0,
-      "max": 8.0
-    },
-    {
-      "prob": 0.15,
-      "min": 10.0,
-      "max": 20.0
-    },
-    {
-      "prob": 0.05,
-      "min": 20.0,
-      "max": 35.0
-    }
-  ],
+  "input_noise_deg_mix": "debug_output/noise_profile_empirical.json",
   "contraction_weight": 0.08,
   "contraction_horizon": 60,
   "contraction_prob": 0.35,
@@ -59,28 +43,12 @@
   "contraction_fk_pos_weight": 0.0,
   "contraction_noise_deg": 12.0,
   "contraction_noise_prob": 0.3,
-  "contraction_noise_deg_mix": [
-    {
-      "prob": 0.6,
-      "min": 6.0,
-      "max": 12.0
-    },
-    {
-      "prob": 0.3,
-      "min": 12.0,
-      "max": 22.0
-    },
-    {
-      "prob": 0.1,
-      "min": 22.0,
-      "max": 35.0
-    }
-  ],
+  "contraction_noise_deg_mix": "debug_output/noise_profile_empirical.json",
   "w_fk_pos": 0.07,
   "w_rot_local": 0.07,
   "w_root_vel": 0.05,
   "w_root_speed": 0.03,
-  "freerun_rot_time_weight": 0.4,
+  "freerun_rot_time_weight": 0.0,
   "freerun_rot_time_weight_max": 2.0,
   "freerun_stage_schedule": [
     {
@@ -140,9 +108,9 @@
       ],
       "label": "stage2_mixed_warmup",
       "trainer": {
-        "freerun_weight": 0.05,
-        "freerun_horizon": 8,
-        "eval_horizon": 8,
+        "freerun_weight": 0.08,
+        "freerun_horizon": 6,
+        "eval_horizon": 6,
         "freerun_traj_weight": 0.03,
         "freerun_traj_time_weight_max": 1.5,
         "teacher_rot_noise_deg_start": 0.5,
@@ -193,9 +161,9 @@
       ],
       "label": "stage2_mixed_ramp",
       "trainer": {
-        "freerun_weight": 0.12,
-        "freerun_horizon": 14,
-        "eval_horizon": 14,
+        "freerun_weight": 0.14,
+        "freerun_horizon": 12,
+        "eval_horizon": 12,
         "freerun_traj_weight": 0.06,
         "freerun_traj_time_weight_max": 2.0,
         "teacher_rot_noise_deg_start": 1.0,
@@ -246,11 +214,12 @@
       ],
       "label": "stage3_freerun",
       "trainer": {
-        "freerun_weight": 0.24,
+        "freerun_weight": 0.22,
         "freerun_horizon": 24,
         "eval_horizon": 24,
         "freerun_traj_weight": 0.10,
         "freerun_traj_time_weight_max": 2.5,
+        "freerun_rot_time_weight": 0.4,
         "teacher_rot_noise_deg_start": 1.5,
         "teacher_rot_noise_deg_end": 2.5,
         "teacher_rot_noise_prob_start": 0.10,

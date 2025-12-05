@@ -119,9 +119,27 @@ def _sanitize_noise_profile_spec(spec: Any) -> Optional[list[dict[str, float]]]:
     payload = spec
     if isinstance(payload, str):
         try:
+            # First, try to interpret as a JSON string.
             payload = json.loads(payload)
         except Exception:
-            return None
+            # If that fails, fall back to treating it as a filesystem path
+            # pointing to a JSON file (e.g. an empirical noise profile).
+            try:
+                from pathlib import Path as _Path
+                p = _Path(payload)
+                if p.is_file():
+                    with p.open("r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    # Allow top-level objects with a "buckets" field, as produced
+                    # by tools/build_noise_profile_from_diag.py
+                    if isinstance(loaded, Mapping) and "buckets" in loaded:
+                        payload = loaded["buckets"]
+                    else:
+                        payload = loaded
+                else:
+                    return None
+            except Exception:
+                return None
     if isinstance(payload, Mapping):
         payload = [payload]
     if not isinstance(payload, Sequence):
@@ -165,6 +183,7 @@ def _sanitize_noise_profile_spec(spec: Any) -> Optional[list[dict[str, float]]]:
 
 
 import os, json, math, glob, time, argparse
+from pathlib import Path
 
 from torch.utils.data import DataLoader
 try:
