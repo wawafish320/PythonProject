@@ -448,7 +448,7 @@ class MotionJointLoss(nn.Module):
         rot6d_spec: Dict[str, Any] = None,
         w_rot_ortho: float = 0.0,
         ignore_motion_groups: str = '',
-        w_rot_delta: float = 1.0,
+        w_rot_delta: float = 0.0,
         w_rot_delta_root: float = 0.0,
         meta: Optional[Dict[str, Any]] = None,
         w_fk_pos: float = 0.0,
@@ -1410,23 +1410,9 @@ class MotionJointLoss(nn.Module):
         else:
             stats = {}
 
-        if self.w_rot_delta > 0 and delta_pm is not None:
-            l_delta = self.compute_rot6d_delta_loss(delta_pm, gt_motion)
-            loss = loss + self.w_rot_delta * l_delta
-            self._accumulate_loss_contrib('rot_delta', l_delta, self.w_rot_delta, group='core')
-            stats['rot_delta'] = float(l_delta.detach().cpu())
-            self._register_component_loss('rot_delta', l_delta, self.w_rot_delta)
-        else:
-            stats.setdefault('rot_delta', 0.0)
-
-        if self.w_rot_delta_root > 0:
-            l_root_geo = self.compute_root_geodesic_loss(pm, gt_motion)
-            loss = loss + self.w_rot_delta_root * l_root_geo
-            self._accumulate_loss_contrib('rot_delta_root', l_root_geo, self.w_rot_delta_root, group='aux')
-            stats['rot_delta_root'] = float(l_root_geo.detach().cpu())
-            self._register_component_loss('rot_delta_root', l_root_geo, self.w_rot_delta_root)
-        else:
-            stats.setdefault('rot_delta_root', 0.0)
+        # DSM baseline: remove rot-delta losses entirely to avoid conflicting signals
+        stats['rot_delta'] = 0.0
+        stats['rot_delta_root'] = 0.0
 
         if self.w_rot_ortho > 0 and not delta_fallback:
             target_for_ortho = delta_pm if delta_pm is not None else pm
