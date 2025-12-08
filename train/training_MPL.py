@@ -2280,8 +2280,7 @@ class Trainer:
                 denoise_w = float(getattr(self, 'denoise_single_weight', 0.0) or 0.0)
                 rot_slice = getattr(self, 'rot6d_x_slice', None) or getattr(self, 'rot6d_slice', None)
                 if (
-                    self.training
-                    and denoise_enabled
+                    denoise_enabled
                     and denoise_w > 0.0
                     and isinstance(rot_slice, slice)
                     and gt_seq.dim() == 3
