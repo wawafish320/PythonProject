@@ -699,29 +699,103 @@ class Trainer:
         device,
         dtype,
     ) -> torch.Tensor:
+        """
+        Draw axis-angle magnitudes. If noise_profile 给出 bucket 分布且骨骼含左右对，
+        在左右成对关节上共用同一 bucket/种子，避免单侧高噪声导致左右失衡。
+        """
         import torch
         deg = max(float(noise_deg or 0.0), 0.0)
+
+        # 简单分支：无 profile 时保持旧逻辑
         if not noise_profile:
             if deg <= 0.0:
                 return torch.zeros(shape, device=device, dtype=dtype)
             mags = torch.rand(shape, device=device, dtype=dtype) * deg
+            signs = torch.where(torch.rand(shape, device=device, dtype=dtype) < 0.5, -1.0, 1.0)
+            return signs * mags * (_math.pi / 180.0)
+
+        # 下面走 profile 分支，并处理左右配对共享 bucket
+        probs = torch.tensor(
+            [max(0.0, float(bucket.get("prob", 0.0))) for bucket in noise_profile],
+            device=device,
+            dtype=dtype,
+        )
+        if probs.sum() <= 0:
+            # 退化为均匀噪声
+            if deg <= 0.0:
+                return torch.zeros(shape, device=device, dtype=dtype)
+            mags = torch.rand(shape, device=device, dtype=dtype) * deg
+            signs = torch.where(torch.rand(shape, device=device, dtype=dtype) < 0.5, -1.0, 1.0)
+            return signs * mags * (_math.pi / 180.0)
+
+        # --- 计算 CDF 供 bucket 采样 ---
+        cdf = torch.cumsum(probs, dim=0)
+        total = cdf[-1]
+        mins = torch.as_tensor([float(bucket["min_deg"]) for bucket in noise_profile], device=device, dtype=dtype)
+        maxs = torch.as_tensor([float(bucket["max_deg"]) for bucket in noise_profile], device=device, dtype=dtype)
+
+        # shape 通常是 [..., T, J]; 这里拿到 J 便于左右配对
+        # 如果维度不足 2（没有 J），回退旧逻辑
+        if len(shape) < 2:
+            samples = torch.rand(shape, device=device, dtype=dtype) * total
+            bucket_idx = torch.bucketize(samples, cdf, right=False).clamp(max=len(noise_profile) - 1)
+            min_sel = mins[bucket_idx]
+            max_sel = maxs[bucket_idx]
+            mags = min_sel + (max_sel - min_sel) * torch.rand(shape, device=device, dtype=dtype)
+            signs = torch.where(torch.rand(shape, device=device, dtype=dtype) < 0.5, -1.0, 1.0)
+            return signs * mags * (_math.pi / 180.0)
+
+        *prefix, J = shape  # prefix 包含 batch/时间维
+        prefix_shape = tuple(prefix)
+
+        # 构造左右配对索引（基于 bone_names，如不可用则回退）
+        bone_names = getattr(self, "_bone_names", None)
+        pair_groups = []
+        if bone_names and len(bone_names) == J:
+            name_to_idx = {str(n): i for i, n in enumerate(bone_names)}
+            for name, idx in name_to_idx.items():
+                s = str(name)
+                cand = None
+                if s.endswith(("_l", "_L")):  # 典型 left 后缀
+                    cand = s[:-2] + ("_r" if s.endswith("_l") else "_R")
+                elif "left" in s.lower():     # 包含 left 关键字
+                    cand = s.lower().replace("left", "right")
+                elif "_l" in s:               # 如 RUpArmTwist_l_01 / LCalfTwist_01_l 这种中间含 _l
+                    cand = s.replace("_l", "_r", 1)
+                if cand and cand in name_to_idx:
+                    pair = (idx, name_to_idx[cand])
+                    # 确保唯一
+                    if pair not in pair_groups and (pair[1], pair[0]) not in pair_groups:
+                        pair_groups.append(pair)
+
+        # 采样 bucket 索引
+        bucket_idx = torch.empty((*prefix_shape, J), device=device, dtype=torch.long)
+
+        if pair_groups:
+            # 先为每个 pair 采样一个 bucket，并赋给左右
+            base_samples = torch.rand(prefix_shape, device=device, dtype=dtype) * total
+            base_bucket = torch.bucketize(base_samples, cdf, right=False).clamp(max=len(noise_profile) - 1)
+            for l_idx, r_idx in pair_groups:
+                bucket_idx[..., l_idx] = base_bucket
+                bucket_idx[..., r_idx] = base_bucket
+            paired = set([i for pair in pair_groups for i in pair])
+            # 其余关节独立采样
+            for j_idx in range(J):
+                if j_idx in paired:
+                    continue
+                samples = torch.rand(prefix_shape, device=device, dtype=dtype) * total
+                bucket_idx[..., j_idx] = torch.bucketize(samples, cdf, right=False).clamp(max=len(noise_profile) - 1)
         else:
-            probs = torch.tensor([max(0.0, float(bucket.get("prob", 0.0))) for bucket in noise_profile], device=device, dtype=dtype)
-            if probs.sum() <= 0:
-                if deg <= 0.0:
-                    return torch.zeros(shape, device=device, dtype=dtype)
-                mags = torch.rand(shape, device=device, dtype=dtype) * deg
-            else:
-                cdf = torch.cumsum(probs, dim=0)
-                total = cdf[-1]
-                samples = torch.rand(shape, device=device, dtype=dtype) * total
-                bucket_idx = torch.bucketize(samples, cdf, right=False)
-                bucket_idx = torch.clamp(bucket_idx, max=len(noise_profile) - 1)
-                mins = torch.as_tensor([float(bucket["min_deg"]) for bucket in noise_profile], device=device, dtype=dtype)
-                maxs = torch.as_tensor([float(bucket["max_deg"]) for bucket in noise_profile], device=device, dtype=dtype)
-                min_sel = mins[bucket_idx]
-                max_sel = maxs[bucket_idx]
-                mags = min_sel + (max_sel - min_sel) * torch.rand(shape, device=device, dtype=dtype)
+            samples = torch.rand((*prefix_shape, J), device=device, dtype=dtype) * total
+            bucket_idx = torch.bucketize(samples, cdf, right=False).clamp(max=len(noise_profile) - 1)
+
+        min_sel = mins[bucket_idx]
+        max_sel = maxs[bucket_idx]
+        mags = min_sel + (max_sel - min_sel) * torch.rand((*prefix_shape, J), device=device, dtype=dtype)
+        # broadcast 回原 shape（与 mask 一致）
+        if len(shape) > len(mags.shape):
+            # shape 可能包含时间维（已在 prefix），这里简单 reshape
+            mags = mags.view(*shape)
         signs = torch.where(torch.rand(shape, device=device, dtype=dtype) < 0.5, -1.0, 1.0)
         return signs * mags * (_math.pi / 180.0)
 
@@ -1441,22 +1515,31 @@ class Trainer:
         for bi, batch in enumerate(loader):
             if bi >= max_batches:
                 break
-            if not isinstance(batch, dict):
-                continue
             with torch.no_grad():
-                state_seq = batch.get('motion', None)
-                gt_seq = batch.get('gt_motion', None)
+                # 支持 dict 或 (X, Y) tuple
+                state_seq = None
+                gt_seq = None
+                if isinstance(batch, dict):
+                    state_seq = batch.get('motion', None)
+                    gt_seq = batch.get('gt_motion', None)
+                elif isinstance(batch, (list, tuple)) and len(batch) >= 2:
+                    state_seq, gt_seq = batch[0], batch[1]
                 if state_seq is None or gt_seq is None:
                     continue
                 state_seq = state_seq.to(self.device).float()
                 gt_seq = gt_seq.to(self.device).float()
-                cond_seq = batch.get('cond_in')
+                cond_seq = None
+                cond_raw_seq = None
+                contacts_seq = None
+                angvel_seq = None
+                if isinstance(batch, dict):
+                    cond_seq = batch.get('cond_in')
+                    cond_raw_seq = batch.get('cond_tgt_raw')
+                    contacts_seq = batch.get('contacts')
+                    angvel_seq = batch.get('angvel')
                 cond_seq = cond_seq.to(self.device).float() if cond_seq is not None else None
-                cond_raw_seq = batch.get('cond_tgt_raw')
                 cond_raw_seq = cond_raw_seq.to(self.device).float() if cond_raw_seq is not None else None
-                contacts_seq = batch.get('contacts')
                 contacts_seq = contacts_seq.to(self.device).float() if contacts_seq is not None else None
-                angvel_seq = batch.get('angvel')
                 angvel_seq = angvel_seq.to(self.device).float() if angvel_seq is not None else None
 
                 for noise_deg in noise_levels:
@@ -2280,8 +2363,7 @@ class Trainer:
                 denoise_w = float(getattr(self, 'denoise_single_weight', 0.0) or 0.0)
                 rot_slice = getattr(self, 'rot6d_x_slice', None) or getattr(self, 'rot6d_slice', None)
                 if (
-                    self.training
-                    and denoise_enabled
+                    denoise_enabled
                     and denoise_w > 0.0
                     and isinstance(rot_slice, slice)
                     and gt_seq.dim() == 3
@@ -4366,6 +4448,8 @@ def train_entry():
                    help='启用 DSM Stage2 (ep 7-24) 线性插值调度 freerun/TF/denoise 参数。')
     p.add_argument('--disable_auto_tune_freerun', action='store_true', default=False,
                    help='关闭基于噪声/指标的 freerun 自动调度，完全使用阶段/插值配置。')
+    p.add_argument('--resume', type=str, default=None,
+                   help='可选：加载指定 ckpt 继续训练或仅用于评测 (--eval_contraction_only)。')
     p.add_argument('--eval_contraction_only', action='store_true', default=False,
                    help='仅运行收缩比评测后退出（需 --resume）。')
     p.add_argument('--contraction_noise_levels', type=str, default='1,2,3,4',
@@ -4542,6 +4626,21 @@ def train_entry():
         angvel_dim=getattr(ds_train, 'angvel_dim', 0),
         pose_hist_dim=pose_hist_dim_model,
     ).to(device)
+
+    # Optional resume
+    resume_path = _arg('resume', None)
+    if resume_path:
+        from pathlib import Path
+        rp = Path(resume_path).expanduser()
+        if rp.is_file():
+            ckpt = torch.load(str(rp), map_location=device)
+            state = ckpt.get('model', ckpt)
+            missing, unexpected = model.load_state_dict(state, strict=False)
+            print(f"[Resume] loaded ckpt: {rp}")
+            if missing or unexpected:
+                print(f"[Resume][WARN] missing={missing}, unexpected={unexpected}")
+        else:
+            print(f"[Resume][WARN] ckpt not found: {rp}")
     if history_export_frames > 0:
         if pose_hist_dim_raw <= 0 or pose_hist_len_raw <= 0:
             print("[AdaptiveHistory][WARN] pose history not available; adaptive history disabled.")
@@ -4915,10 +5014,11 @@ def train_entry():
         vloader = train_loader
         _mon_batches = int(_arg('monitor_batches', 8) or 8)
         _metrics = trainer.validate_autoreg_online(vloader, max_batches=_mon_batches)
-        print(f"[ValFree@last] MSEnormY={_metrics['MSEnormY']:.6f} "
-              f"GeoDeg={_metrics['GeoDeg']:.3f} "
-              f"YawAbsDeg={_metrics['YawAbsDeg']:.3f} "
-              f"RootVelMAE={_metrics['RootVelMAE']:.5f}"
+
+        print(f"[ValFree@last] "
+              f"GeoDeg={_metrics.get('GeoDeg', float('nan')):.3f} "
+              f"YawAbsDeg={_metrics.get('YawAbsDeg', float('nan')):.3f} "
+              f"RootVelMAE={_metrics.get('RootVelMAE', float('nan')):.5f}"
               f"AngVelMAE={_metrics.get('AngVelMAE', float('nan')):.5f} rad/s")
     except Exception as _e:
         print(f"[ValFree] skipped due to error: {_e}")

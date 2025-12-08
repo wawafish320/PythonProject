@@ -286,7 +286,17 @@ class EventMotionModel(nn.Module):
         if cond is not None:
             x_inputs.append(cond)
         x = torch.cat(x_inputs, dim=-1)
-        if not torch.isfinite(x).all():
+        # 导出/编译时跳过数据依赖的 guard，避免 torch.export 的 GuardOnDataDependentSymNode
+        _skip_guard = False
+        try:
+            _skip_guard = torch._dynamo.is_compiling()
+        except Exception:
+            pass
+        try:
+            _skip_guard = _skip_guard or torch.onnx.is_in_onnx_export()
+        except Exception:
+            pass
+        if not _skip_guard and not torch.isfinite(x).all():
             bad_mask = (~torch.isfinite(x))
             _nz = bad_mask.nonzero(as_tuple=False)
             bad = _nz[0].tolist() if _nz.numel() > 0 else []

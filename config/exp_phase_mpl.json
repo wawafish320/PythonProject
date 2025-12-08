@@ -31,7 +31,7 @@
   "history_use_trend_features": true,
   "teacher_rot_noise_deg": 0.0,
   "teacher_rot_noise_prob": 0.0,
-  "input_step_noise_prob": 0.35,
+  "input_step_noise_prob": 0.0,
   "input_noise_deg_mix": [],
   "w_fk_pos": 0.07,
   "w_rot_local": 0.07,
@@ -91,16 +91,32 @@
         "freerun_horizon": 1,
         "eval_horizon": 8,
         "teacher_rot_noise_prob": 1.0,
-        "teacher_rot_noise_deg": 2.5,
+        "teacher_rot_noise_deg": 2.0,
         "tf_max": 1.0,
         "tf_min": 1.0,
         "denoise_single_enabled": true,
         "denoise_single_weight": 0.2,
         "input_noise_profile": [
-          {"prob": 0.25, "min": 0, "max": 0.3},
-          {"prob": 0.35, "min": 0.5, "max": 1.5},
-          {"prob": 0.25, "min": 1.5, "max": 2.5},
-          {"prob": 0.15, "min": 2.5, "max": 4.0}
+          {
+            "prob": 0.30,
+            "min": 0,
+            "max": 0.3
+          },
+          {
+            "prob": 0.50,
+            "min": 0.5,
+            "max": 1.0
+          },
+          {
+            "prob": 0.15,
+            "min": 1.0,
+            "max": 2.0
+          },
+          {
+            "prob": 0.05,
+            "min": 2.0,
+            "max": 3.0
+          }
         ]
       },
       "loss_groups": {
@@ -117,67 +133,76 @@
       }
     },
     {
-      "range": [
-        7,
-        24
-      ],
-      "label": "stage2_interp",
+      "range": [7, 12],
+      "label": "stage2a_interp",
       "trainer": {
         "teacher_rot_noise_prob": 1.0,
-        "teacher_rot_noise_deg": 3.0,
+        "teacher_rot_noise_deg": 2.5,
         "input_noise_profile": [
-          {
-            "prob": 0.25,
-            "min": 0,
-            "max": 0.3
-          },
-          {
-            "prob": 0.35,
-            "min": 0.5,
-            "max": 1.5
-          },
-          {
-            "prob": 0.25,
-            "min": 1.5,
-            "max": 2.5
-          },
-          {
-            "prob": 0.15,
-            "min": 2.5,
-            "max": 4.0
-          }
+          {"prob": 0.45, "min": 0,   "max": 0.3},
+          {"prob": 0.35, "min": 0.5, "max": 1.5},
+          {"prob": 0.15, "min": 1.5, "max": 2.5},
+          {"prob": 0.05, "min": 2.5, "max": 4.0}
         ],
         "denoise_single_enabled": true,
         "denoise_single_weight": 0.25,
         "freerun_weight": 0.03,
         "freerun_horizon": 8,
         "tf_max": 0.95,
-        "tf_min": 0.85
+        "tf_min": 0.60
       },
-      "loss_groups": {}
+      "loss_groups": {
+        "core": {
+          "w_fk_pos": 0.12,
+          "w_rot_local": 0.14
+        }
+      }
     },
     {
-      "range": [
-        25,
-        30
-      ],
+      "range": [13, 18],
+      "label": "stage2b_interp",
+      "trainer": {
+        "teacher_rot_noise_prob": 0.8,
+        "teacher_rot_noise_deg": 2.0,
+        "input_noise_profile": [
+          {"prob": 0.45, "min": 0,   "max": 0.3},
+          {"prob": 0.35, "min": 0.5, "max": 1.5},
+          {"prob": 0.15, "min": 1.5, "max": 2.5},
+          {"prob": 0.05, "min": 2.5, "max": 4.0}
+        ],
+        "denoise_single_enabled": true,
+        "denoise_single_weight": 0.23,
+        "freerun_weight": 0.045,
+        "freerun_horizon": 10,
+        "tf_max": 0.90,
+        "tf_min": 0.40
+      },
+      "loss_groups": {
+        "core": {
+          "w_fk_pos": 0.12,
+          "w_rot_local": 0.14
+        }
+      }
+    },
+    {
+      "range": [19, 30],
       "label": "stage3_freerun",
       "trainer": {
-        "freerun_weight": 0.15,
-        "freerun_horizon": 18,
-        "eval_horizon": 18,
-        "teacher_rot_noise_prob": 1.0,
-        "teacher_rot_noise_deg": 3.0,
-        "tf_max": 0.7,
-        "tf_min": 0.5,
+        "freerun_weight": 0.10,
+        "freerun_horizon": 14,
+        "eval_horizon": 14,
+        "teacher_rot_noise_prob": 0.6,
+        "teacher_rot_noise_deg": 1.5,
+        "tf_max": 0.70,
+        "tf_min": 0.30,
         "denoise_single_enabled": true,
         "denoise_single_weight": 0.05,
         "freerun_noise_scale": 0.0,
         "input_noise_profile": [
-          {"prob": 0.25, "min": 0, "max": 0.3},
+          {"prob": 0.45, "min": 0,   "max": 0.3},
           {"prob": 0.35, "min": 0.5, "max": 1.5},
-          {"prob": 0.25, "min": 1.5, "max": 2.5},
-          {"prob": 0.15, "min": 2.5, "max": 4.0}
+          {"prob": 0.15, "min": 1.5, "max": 2.5},
+          {"prob": 0.05, "min": 2.5, "max": 4.0}
         ]
       },
       "loss_groups": {
@@ -189,8 +214,8 @@
         }
       },
       "tf": {
-        "max": 0.7,
-        "min": 0.5
+        "max": 0.70,
+        "min": 0.30
       }
     }
   ],

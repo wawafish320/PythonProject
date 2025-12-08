@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-import torch
+import torch  # ensure torch is bound before any inner scope uses it
 
 from train.training_MPL import MotionEventDataset, Trainer, geodesic_R, validate_and_fix_model_
 from train.geometry import rot6d_to_matrix, reproject_rot6d
