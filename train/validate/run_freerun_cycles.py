@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-import torch
+import torch  # ensure torch is bound before any inner scope uses it
 
 from train.training_MPL import MotionEventDataset, Trainer, geodesic_R, validate_and_fix_model_
 from train.geometry import rot6d_to_matrix, reproject_rot6d
@@ -680,9 +680,18 @@ def _run_freerun_cycles(
     if not predsY:
         raise RuntimeError("No predictions produced during free‑run.")
 
-    predY = torch.stack(predsY, dim=1)  # [B, free_steps, Dy]
-    free_steps = predY.shape[1]
-    gt_start = start_t
+    # Align predictions and GT strictly by one-step look-ahead:
+    #   at iteration t we predicted frame (t+1) based on history up to t.
+    # So we ignore the very last GT frame and compare:
+    #   predY[:, i]  vs  gt_seq[:, start_t+1+i]
+    predY_full = torch.stack(predsY, dim=1)  # [B, free_steps_raw, Dy]
+    free_steps_raw = predY_full.shape[1]
+    max_aligned = max(0, min(free_steps_raw, T_total - (start_t + 1)))
+    if max_aligned <= 0:
+        raise RuntimeError("Not enough frames for aligned free-run evaluation.")
+    predY = predY_full[:, :max_aligned]
+    free_steps = max_aligned
+    gt_start = start_t + 1
     gt_end = gt_start + free_steps
     gtY = gt_seq[:, gt_start:gt_end]
 
@@ -701,6 +710,23 @@ def _run_freerun_cycles(
         gt_raw_full = trainer._denorm(gtY.reshape(1, free_steps, -1))
 
     per_step: List[Dict[str, Any]] = []
+
+    # Optional: per-bone geodesic error for key bones (same set as training diag)
+    loss_fn = getattr(trainer, "loss_fn", None)
+    bone_names = getattr(loss_fn, "bone_names", []) if loss_fn is not None else []
+    if not bone_names:
+        key_bone_names: List[str] = []
+        key_indices: List[int] = []
+    else:
+        key_bone_names = getattr(loss_fn, "eval_key_bones", None) or [
+            "pelvis",
+            "upperarm_l", "lowerarm_l", "hand_l",
+            "upperarm_r", "lowerarm_r", "hand_r",
+            "thigh_l", "calf_l", "foot_l",
+            "thigh_r", "calf_r", "foot_r",
+        ]
+        idx_map = {name: idx for idx, name in enumerate(bone_names)}
+        key_indices = [idx_map[name] for name in key_bone_names if name in idx_map]
     # Per-step metrics across the whole free-run (helps locate drift frame)
     if width > 0 and width % 6 == 0:
         J = width // 6
@@ -715,17 +741,24 @@ def _run_freerun_cycles(
         geo_full = None
 
     for t in range(free_steps):
-        mse_t = float(torch.mean((predY[:, t] - gtY[:, t]) ** 2).item())
         geo_t = None
+        keybone_geo: Dict[str, float] = {}
         if geo_full is not None:
+            # Mean over all joints
             geo_t = float(geo_full[:, t].mean().item())
-        per_step.append(
-            {
-                "step": int(t),
-                "MSEnormY": mse_t,
-                "GeoDeg": geo_t,
-            }
-        )
+            # Per-key-bone geodesic errors
+            if key_indices:
+                per_joint = geo_full[0, t]  # [J]
+                for name, j_idx in zip(key_bone_names, key_indices):
+                    if 0 <= j_idx < per_joint.numel():
+                        keybone_geo[name] = float(per_joint[j_idx].item())
+        entry: Dict[str, Any] = {
+            "step": int(t),
+            "GeoDeg": geo_t,
+        }
+        if keybone_geo:
+            entry["KeyBoneGeoDeg"] = keybone_geo
+        per_step.append(entry)
 
     for r in range(rounds):
         t0 = r * T_cycle
@@ -736,13 +769,12 @@ def _run_freerun_cycles(
         pred_r = predY[:, t0:t1]  # [1, Tr, Dy]
         gt_r = gtY[:, t0:t1]
 
-        mse_norm = float(torch.mean((pred_r - gt_r) ** 2).item())
-
-        # GeoDeg for this round
+        # GeoDeg for this round (all joints)
         pr_raw = pred_raw_full[:, t0:t1, :]
         gt_raw = gt_raw_full[:, t0:t1, :]
         width = rot_slice.stop - rot_slice.start
         geo_deg_val: Optional[float] = None
+        keybone_geo_mean: Optional[float] = None
         if width > 0 and width % 6 == 0:
             J = width // 6
             pr6 = pr_raw[..., rot_slice]
@@ -753,17 +785,20 @@ def _run_freerun_cycles(
             Rg = rot6d_to_matrix(gt6).view(1, -1, J, 3, 3)
             geo = geodesic_R(Rp, Rg) * deg_factor  # [1, Tr, J]
             geo_deg_val = float(geo.mean().item())
+            if key_indices:
+                kb = geo[..., key_indices]  # [1, Tr, K]
+                keybone_geo_mean = float(kb.mean().item())
 
-        metrics_per_round.append(
-            {
-                "round": int(r),
-                "start_step": int(t0),
-                "end_step": int(t1 - 1),
-                "steps": int(t1 - t0),
-                "MSEnormY": mse_norm,
-                "GeoDeg": geo_deg_val,
-            }
-        )
+        round_entry: Dict[str, Any] = {
+            "round": int(r),
+            "start_step": int(t0),
+            "end_step": int(t1 - 1),
+            "steps": int(t1 - t0),
+            "GeoDeg": geo_deg_val,
+        }
+        if keybone_geo_mean is not None:
+            round_entry["KeyBoneGeoDegMean"] = keybone_geo_mean
+        metrics_per_round.append(round_entry)
 
     return metrics_per_round, per_step
 
