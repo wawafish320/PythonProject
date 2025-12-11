@@ -1508,8 +1508,26 @@ class MotionJointLoss(nn.Module):
                 pos_pred = self._fk_positions(Rp_root)
                 pos_gt = self._fk_positions(Rg_root)
                 if pos_pred is not None and pos_gt is not None:
-                    fk_res = F.smooth_l1_loss(pos_pred, pos_gt, reduction='none').mean(dim=-1)
-                    weights = self._joint_weight_vector(pos_pred.device, pos_pred.dtype, pos_pred.shape[-2])
+                    # pos_*: (..., J, 3) world positions from FK
+                    fk_res = F.smooth_l1_loss(pos_pred, pos_gt, reduction='none').mean(dim=-1)  # (..., J)
+                    joint_count = pos_pred.shape[-2]
+                    weights = self._joint_weight_vector(pos_pred.device, pos_pred.dtype, joint_count)
+
+                    # 只监督双脚位置（foot_l / foot_r），梯度通过 FK 链自然传递到大腿/小腿等
+                    foot_indices: list[int] = []
+                    if isinstance(self.bone_names, list) and self.bone_names:
+                        name_to_idx = {name: idx for idx, name in enumerate(self.bone_names[:joint_count])}
+                        for nm in ("foot_l", "foot_r"):
+                            idx = name_to_idx.get(nm)
+                            if isinstance(idx, int) and 0 <= idx < joint_count:
+                                foot_indices.append(idx)
+
+                    if foot_indices:
+                        import torch as _torch
+                        idx_tensor = _torch.as_tensor(foot_indices, device=pos_pred.device, dtype=_torch.long)
+                        fk_res = fk_res.index_select(-1, idx_tensor)
+                        weights = weights.index_select(0, idx_tensor)
+
                     w = weights.view(1, 1, -1)
                     fk_loss = (fk_res * w).mean()
                     loss = loss + self.w_fk_pos * fk_loss
