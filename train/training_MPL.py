@@ -760,8 +760,7 @@ class Trainer:
 
         注意:
             - 这里的 base loss 完全复用 MotionJointLoss（局部/骨骼空间）。
-            - 额外在 freerun 模式下叠加“全局轨迹锚点”约束（root 位置）,
-              并对时间维度做显式加权，让模型更在意窗口末端的误差。
+            - freerun 模式下可选叠加“全局轨迹锚点”约束（root 位置）。
         """
         if state_seq is None or gt_seq is None:
             return None
@@ -801,55 +800,12 @@ class Trainer:
             cond_norm_std=cond_norm_std,
         )
         preds_free = self._ensure_rot6d_delta(preds_free)
-        # 在 freerun 窗口内对旋转相关误差做时间递增加权：
-        # w_t 随 t 从 1 → w_max 线性增长，并归一化为均值 1，这样不会整体放大 loss，
-        # 但会让尾部步长的误差在梯度中占比更大。
         with self._amp_context(self.use_amp):
             out = self.loss_fn(preds_free, gt_sub, attn_weights=attn_free, batch=batch)
         if isinstance(out, tuple):
             free_loss, stats = out
         else:
             free_loss, stats = out, {}
-
-        # ---- Rotation time weighting (freerun 专用) ----
-        # 只对 freerun 窗口启用，teacher/mixed 主路径不受影响。
-        rot_time_weight = float(getattr(self, "freerun_rot_time_weight", 0.0) or 0.0)
-        if rot_time_weight > 0.0:
-            try:
-                import torch
-                # 仅当 rot_local / fk_pos 等旋转项开启时才尝试加权
-                w_fk = float(getattr(self.loss_fn, "w_fk_pos", 0.0) or 0.0)
-                w_loc = float(getattr(self.loss_fn, "w_rot_local", 0.0) or 0.0)
-                rot_slice = getattr(self, "rot6d_y_slice", None) or getattr(self, "rot6d_slice", None)
-                if (w_fk > 0.0 or w_loc > 0.0) and isinstance(rot_slice, slice):
-                    y_pred_norm = preds_free.get("out", None)
-                    if y_pred_norm is not None:
-                        # 反归一化得到 RAW rot6d
-                        y_pred_raw = self._denorm(y_pred_norm)[..., rot_slice]
-                        y_gt_raw = self._denorm(gt_sub)[..., rot_slice]
-                        B, T_win, Drot = y_pred_raw.shape
-                        J = Drot // 6
-                        if J > 0 and Drot % 6 == 0:
-                            from .geometry import rot6d_to_matrix, reproject_rot6d, geodesic_R, root_relative_matrices as _rrm
-                            pred_m = rot6d_to_matrix(reproject_rot6d(y_pred_raw).view(B, T_win, J, 6))
-                            gt_m   = rot6d_to_matrix(reproject_rot6d(y_gt_raw).view(B, T_win, J, 6))
-                            # root-relative（与 MotionJointLoss 一致）
-                            Rp_root = _rrm(pred_m)
-                            Rg_root = _rrm(gt_m)
-                            geo = geodesic_R(Rp_root, Rg_root)  # [B,T,J]
-                            # 时间权重 w_t: 1 → w_max，归一化为均值 1
-                            w_max = float(getattr(self, "freerun_rot_time_weight_max", 2.0) or 2.0)
-                            w_max = max(1.0, w_max)
-                            w_t = torch.linspace(1.0, w_max, steps=T_win, device=geo.device, dtype=geo.dtype)
-                            w_t = w_t / w_t.mean().clamp_min(1e-6)
-                            w_t = w_t.view(1, T_win, 1)
-                            geo_weighted = (geo * w_t).mean()
-                            # 用一个小系数叠加到自由运行 loss 上
-                            free_loss = free_loss + rot_time_weight * geo_weighted
-                            if isinstance(stats, dict):
-                                stats.setdefault("freerun/rot_time_weighted_deg", float((geo_weighted * (180.0 / _math.pi)).detach().cpu()))
-            except Exception:
-                pass
 
         # ---- Trajectory anchor & temporal weighting (free-run 专用约束) ----
         # 仅在配置开启时启用，避免影响已有训练配置。
@@ -966,73 +922,6 @@ class Trainer:
         progress = min(1.0, max(0.0, (epoch - 1) / ramp_epochs))
         upper = init_h + int(round((max_h - init_h) * progress))
         return max(min_h, min(upper, max_h))
-
-    def _auto_tune_freerun(self, free_metrics: dict[str, float] | None, grad_info=None):
-        """
-        Feedback controller for freerun knobs, coupled to teacher noise.
-        - noise is the single knob; horizon/weight follow a quadratic of noise.
-        - uses only generic signals (yaw drift, GeoDeg, grad_ratio) to stay task-agnostic.
-        - now also co-tunes history dropout to stage-wise difficulty.
-        """
-        if getattr(self, "disable_auto_tune_freerun", False):
-            return None
-        import math as _math
-        if not isinstance(free_metrics, dict) or not free_metrics:
-            return None
-        noise = float(getattr(self, "teacher_rot_noise_deg", 2.0) or 2.0)
-        # 旧版本依赖 YawAbsDeg / YawSlope 进行判断，这里改为仅基于 GeoDeg / RootVelMAE / 梯度比率。
-        geo = float(free_metrics.get("FreeRun/GeoDeg", free_metrics.get("GeoDeg", float("nan"))))
-        root_vel = float(free_metrics.get("RootVelMAE", float("nan")))
-        grad_ratio = float((grad_info or {}).get("ratio", 1.0))
-
-        plateau = (_math.isfinite(geo) and geo < 2.4) and (_math.isfinite(root_vel) and root_vel < 1.0)
-        unstable = (_math.isfinite(geo) and geo > 3.0) or (_math.isfinite(root_vel) and root_vel > 1.2)
-        vanishing = grad_ratio < 1e-2
-
-        if plateau and not unstable and not vanishing:
-            noise = min(3.0, noise + 0.1)     # gentle push
-        elif unstable or vanishing:
-            noise = max(1.0, noise - 0.2)     # pull back if drift or grad vanishes
-
-        k_h, k_w = 1.5, 0.04
-        # allow slightly longer diagnostic horizon in later stages (up to 20)
-        new_h = int(max(6, min(20, round(6 + k_h * noise * noise))))
-        new_w = float(max(0.08, min(0.30, 0.08 + k_w * noise * noise)))
-
-        # ---- Stage-aware history dropout scheduling ----
-        # We treat stages by epoch index to keep behaviour predictable:
-        #   - ep  1- 6 (stage1_teacher): 0.00 ~ 0.10
-        #   - ep  7-14 (stage2_mixed_warmup): 0.05 ~ 0.10
-        #   - ep 15-22 (stage2_mixed_ramp):   0.05 ~ 0.15
-        #   - ep 23+   (stage3_freerun):      0.10 ~ 0.25
-        ep = int(getattr(self, "cur_epoch", 1) or 1)
-        if ep <= 6:
-            drop_lo, drop_hi, target_base = 0.0, 0.10, 0.05
-        elif ep <= 14:
-            drop_lo, drop_hi, target_base = 0.05, 0.10, 0.075
-        elif ep <= 22:
-            drop_lo, drop_hi, target_base = 0.05, 0.15, 0.10
-        else:
-            drop_lo, drop_hi, target_base = 0.10, 0.25, 0.18
-
-        drop = float(getattr(self, "history_dropout_prob", 0.0) or 0.0)
-        # plateau → 可以稍微加一点难度；unstable/vanishing → 适当减一点
-        if plateau and not unstable and not vanishing:
-            drop = min(drop_hi, drop + 0.01)
-        elif unstable or vanishing:
-            drop = max(drop_lo, drop - 0.01)
-
-        # 将 noise 作为轻微调制，而不是唯一驱动力
-        rel = max(0.0, min(1.0, (noise - 1.0) / 2.0))  # noise∈[1,3] → rel∈[0,1]
-        target_drop = target_base + (drop_hi - target_base) * 0.5 * rel
-        target_drop = max(drop_lo, min(drop_hi, target_drop))
-        drop = 0.5 * drop + 0.5 * target_drop
-
-        self.teacher_rot_noise_deg = noise
-        self.freerun_horizon = new_h
-        self.freerun_weight = new_w
-        self.history_dropout_prob = drop
-        return {"noise": noise, "horizon": new_h, "weight": new_w, "history_dropout": drop}
 
     def _should_log_freerun_gradients(self, batch_idx: int) -> bool:
         if not bool(getattr(self, 'freerun_grad_log', False)):
@@ -1512,7 +1401,7 @@ class Trainer:
                 self.loss_fn.combine_space = str(loss_cfg["combine_space"])
                 self.loss_fn._invalidate_weight_cache()
 
-        # Handle loss_groups (e.g., "core" group with w_rot_delta_root)
+        # Handle loss_groups (e.g., "core" group weight overrides)
         loss_groups = stage.get("loss_groups", {})
         if hasattr(self, 'loss_fn') and self.loss_fn is not None:
             for group_name, group_weights in loss_groups.items():
@@ -1681,7 +1570,7 @@ class Trainer:
             return
         if not isinstance(free_stats, dict):
             return
-        keys = ('rot_geo', 'rot_delta', 'angvel_dir')
+        keys = ('rot_geo', 'angvel_dir')
         parts = []
         for key in keys:
             t = teacher_stats.get(key)
@@ -1764,158 +1653,6 @@ class Trainer:
             grad_monitor = self._collect_freerun_gradients(free_loss, preds_free, effective_h)
         self._freerun_active_horizon = effective_h
         return free_loss, stats or {}, grad_monitor, effective_h
-
-    def compute_contraction_loss(
-        self,
-        state_seq,
-        gt_seq,
-        cond_seq,
-        cond_raw_seq,
-        contacts_seq,
-        angvel_seq,
-        pose_hist_seq,
-        *,
-        cond_norm_mu=None,
-        cond_norm_std=None,
-    ):
-        import torch
-        weight = float(getattr(self, 'contraction_weight', 0.0) or 0.0)
-        horizon = int(getattr(self, 'contraction_horizon', 0) or 0)
-        prob = float(getattr(self, 'contraction_prob', 0.0) or 0.0)
-        if weight <= 0.0 or horizon <= 0:
-            return None
-        if state_seq is None or gt_seq is None:
-            return None
-        T = state_seq.shape[1]
-        if T < 2:
-            return None
-        prob = max(0.0, min(1.0, prob))
-        if prob < 1.0 and torch.rand(1, device=state_seq.device).item() > prob:
-            return None
-        window = min(horizon, T - 1 if T > 1 else T)
-        if window <= 0:
-            return None
-        max_start = max(0, T - window)
-        if max_start > 0:
-            start = int(torch.randint(0, max_start + 1, (1,), device=state_seq.device).item())
-        else:
-            start = 0
-        stop = start + window
-
-        def _slice_optional(tensor):
-            if tensor is None:
-                return None
-            if hasattr(tensor, 'dim') and tensor.dim() == 3 and tensor.size(1) >= stop:
-                return tensor[:, start:stop]
-            return tensor
-
-        state_sub = state_seq[:, start:stop]
-        gt_sub = gt_seq[:, start:stop]
-        if state_sub.shape[1] < window or gt_sub.shape[1] < window:
-            return None
-        cond_sub = _slice_optional(cond_seq)
-        cond_raw_sub = _slice_optional(cond_raw_seq)
-        contacts_sub = _slice_optional(contacts_seq)
-        angvel_sub = _slice_optional(angvel_seq)
-        pose_hist_sub = _slice_optional(pose_hist_seq)
-
-        try:
-            gt_state_raw = self.normalizer.denorm_x(state_sub[:, 0])
-        except Exception as exc:
-            self._raise_norm_error("normalizer.denorm_x 在 contraction 初始化失败", exc)
-            return None
-
-        state_noisy = state_sub.clone()
-        noise_deg = getattr(self, 'contraction_noise_deg', None)
-        if noise_deg is None:
-            noise_deg = float(getattr(self, 'teacher_rot_noise_deg', 0.0) or 0.0)
-        noise_prob = getattr(self, 'contraction_noise_prob', None)
-        if noise_prob is None:
-            noise_prob = float(getattr(self, 'teacher_rot_noise_prob', 0.0) or 0.0)
-        noise_profile = getattr(self, 'contraction_noise_profile', None) or getattr(self, 'input_noise_profile', None)
-        try:
-            state_raw_noisy = self._apply_rot_noise(
-                gt_state_raw,
-                getattr(self, 'rot6d_x_slice', None) or getattr(self, 'rot6d_slice', None),
-                noise_prob=noise_prob,
-                noise_deg=noise_deg,
-                min_time_steps=1,
-                noise_profile=noise_profile,
-            )
-        except Exception:
-            return None
-        try:
-            state_noisy[:, 0] = self._diag_norm_x(state_raw_noisy)
-        except Exception as exc:
-            self._raise_norm_error("normalizer.norm 在 contraction 写回失败", exc)
-            return None
-
-        err0_geo = self._rot_geo_from_raw_seq(state_raw_noisy.unsqueeze(1), gt_state_raw.unsqueeze(1))
-        if err0_geo is None:
-            return None
-        err0 = err0_geo.squeeze(1).mean(dim=-1)
-
-        preds_free, _ = self._rollout_sequence(
-            state_noisy,
-            cond_sub,
-            cond_raw_sub,
-            contacts_seq=contacts_sub,
-            angvel_seq=angvel_sub,
-            pose_hist_seq=pose_hist_sub,
-            gt_seq=gt_sub,
-            mode='train_free',
-            tf_ratio=0.0,
-            cond_norm_mu=cond_norm_mu,
-            cond_norm_std=cond_norm_std,
-        )
-        preds_free = self._ensure_rot6d_delta(preds_free)
-        pred_norm = preds_free.get('out')
-        if pred_norm is None:
-            return None
-        try:
-            pred_raw = self._denorm(pred_norm)
-            gt_raw = self._denorm(gt_sub)
-        except Exception as exc:
-            self._raise_norm_error("normalizer.denorm 在 contraction 序列失败", exc)
-            return None
-        geo_seq = self._rot_geo_from_raw_seq(pred_raw, gt_raw)
-        if geo_seq is None:
-            return None
-        err_seq = geo_seq.mean(dim=-1)
-        if err_seq.shape[1] <= 0:
-            return None
-        err_curve = torch.cat([err0.unsqueeze(-1), err_seq], dim=-1)
-        err_terminal = err_seq[:, -1]
-        decay = float(getattr(self, 'contraction_decay', 0.8) or 0.8)
-        ratio_penalty = torch.relu(err_terminal - decay * err0)
-        if err_curve.size(1) > 1:
-            step_penalty = torch.relu(err_curve[:, 1:] - err_curve[:, :-1]).mean()
-        else:
-            step_penalty = torch.zeros((), device=err_curve.device, dtype=err_curve.dtype)
-
-        loss = torch.zeros((), device=err_curve.device, dtype=err_curve.dtype)
-        term_w = float(getattr(self, 'contraction_terminal_weight', 1.0) or 0.0)
-        if term_w > 0.0:
-            loss = loss + term_w * err_terminal.mean()
-        ratio_w = float(getattr(self, 'contraction_ratio_weight', 1.0) or 0.0)
-        if ratio_w > 0.0:
-            loss = loss + ratio_w * ratio_penalty.mean()
-        step_w = float(getattr(self, 'contraction_step_weight', 0.0) or 0.0)
-        if step_w > 0.0:
-            loss = loss + step_w * step_penalty
-        if loss.numel() == 0:
-            return None
-
-        deg = 180.0 / _math.pi
-        err0_safe = err0.clamp_min(1e-6)
-        stats = {
-            "err0_deg": float((err0.mean() * deg).detach().cpu()),
-            "errK_deg": float((err_terminal.mean() * deg).detach().cpu()),
-            "ratio": float((err_terminal / err0_safe).mean().detach().cpu()),
-            "horizon": float(window),
-            "step_up_deg": float((step_penalty * deg).detach().cpu()),
-        }
-        return loss, stats
 
     def test_gradient_connection(self, loader):
         if getattr(self, '_grad_connection_checked', False):
@@ -2145,16 +1882,6 @@ class Trainer:
         self.pose_hist_std: Optional[torch.Tensor] = None
         self.input_step_noise_prob: float = 0.3
         self.input_noise_profile: Optional[list[dict[str, float]]] = None
-        self.contraction_weight: float = 0.0
-        self.contraction_horizon: int = 0
-        self.contraction_prob: float = 0.0
-        self.contraction_decay: float = 0.8
-        self.contraction_ratio_weight: float = 1.0
-        self.contraction_step_weight: float = 0.0
-        self.contraction_terminal_weight: float = 1.0
-        self.contraction_noise_deg: float = 0.0
-        self.contraction_noise_prob: float = 0.0
-        self.contraction_noise_profile: Optional[list[dict[str, float]]] = None
         self.teacher_noise_boost: float = 1.0
         self.nan_grad_reports: int = 0
         self.nan_grad_report_limit: int = 5
@@ -2423,31 +2150,6 @@ class Trainer:
                         self._maybe_print_grad_monitor(grad_monitor, ep, bi)
                     self._log_freerun_vs_teacher_stats(ep, bi, free_stats)
 
-                contraction_payload = self.compute_contraction_loss(
-                    state_seq,
-                    gt_seq,
-                    cond_seq,
-                    cond_raw_seq,
-                    contacts_seq,
-                    angvel_seq,
-                    pose_hist_seq,
-                    cond_norm_mu=cond_norm_mu,
-                    cond_norm_std=cond_norm_std,
-                )
-                if contraction_payload is not None:
-                    contraction_loss, contraction_stats = contraction_payload
-                    c_weight = float(getattr(self, 'contraction_weight', 0.0) or 0.0)
-                    if c_weight > 0.0:
-                        loss = loss + c_weight * contraction_loss
-                    stats['contraction_loss'] = float(contraction_loss.detach().cpu())
-                    stats['contraction/weight'] = float(c_weight)
-                    if isinstance(contraction_stats, dict):
-                        for ck, cv in contraction_stats.items():
-                            try:
-                                stats[f'contraction/{ck}'] = float(cv)
-                            except Exception:
-                                pass
-
                 if getattr(self, 'history_debug_steps', 0) > 1 and bi == 1:
                     try:
                         self._history_drift_debug(
@@ -2620,6 +2322,26 @@ class Trainer:
                     # 为避免 MSEnormY/YawAbsDeg 等复合指标干扰训练，这里固定为 1.0。
                     self.teacher_noise_boost = 1.0
                     teacher_metrics.setdefault('phase', 'teacher')
+                    # 基于 teacher 单帧指标执行 plateau LR 调度（只在 teacher 阶段）
+                    try:
+                        _plateau = getattr(self, "lr_plateau_scheduler", None)
+                        if _plateau is not None:
+                            keybone_mean = teacher_metrics.get("KeyBone/GeoDegMean")
+                            if keybone_mean is None:
+                                keybone_mean = teacher_metrics.get("GeoDeg")
+                            if keybone_mean is not None:
+                                _plateau.step(float(keybone_mean))
+                    except Exception as _pl_e:
+                        print(f"[LR-Plateau][WARN] scheduler step failed: {_pl_e}")
+
+                    # 根据 KeyBone GeoDeg 指标微调骨骼权重（error-driven per-bone reweighting）
+                    try:
+                        _bone_updater = getattr(self.loss_fn, "update_bone_weights_from_metrics", None)
+                        if callable(_bone_updater):
+                            _bone_updater(teacher_metrics, epoch=ep)
+                    except Exception as _bw_e:
+                        print(f"[AdaptiveBone][WARN] update failed: {_bw_e}")
+
                     # 在 stage1 仅保存 teacher 诊断快照（无 freerun）
                     base_debug_path = getattr(self, "freerun_debug_path", None)
                     if base_debug_path:
@@ -2664,13 +2386,6 @@ class Trainer:
                         metrics_for_json = free_metrics
                         metrics_tag = 'valfree'
                         _metrics = free_metrics
-                        try:
-                            grad_info = getattr(self, "_last_freerun_grad_info", None)
-                        except Exception:
-                            grad_info = None
-                        tuning = self._auto_tune_freerun(free_metrics, grad_info)
-                        if tuning:
-                            print(f"[AutoTune] ep{ep:03d} noise={tuning['noise']:.2f} hor={tuning['horizon']} w={tuning['weight']:.3f}")
                     teacher_metrics_cached = dict(self.eval_epoch(self.train_loader, mode='teacher') or {})
                     teacher_metrics_cached.setdefault('phase', 'teacher')
                     teacher_metrics_cached['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
@@ -4441,10 +4156,6 @@ def train_entry():
                    help='启用梯度日志时，每隔多少个 batch 采样一次。')
     p.add_argument('--freerun_grad_ratio_alert', type=float, default=0.01,
                    help='若 stepH/step0 的梯度范数比低于该阈值则打印告警。')
-    p.add_argument('--freerun_rot_time_weight', type=float, default=0.0,
-                   help='自由滚动窗口内旋转误差的时间加权系数（0=关闭，建议 0.1~0.5）。')
-    p.add_argument('--freerun_rot_time_weight_max', type=float, default=2.0,
-                   help='自由滚动旋转时间权重的最大倍率（1=均匀，2=末步权重大约是首步的2倍）。')
     p.add_argument('--freerun_debug_steps', type=int, default=0,
                    help='>0 时，在 freerun 评估中打印前 N 个自回归步的 yaw/速度诊断')
     p.add_argument('--history_debug_steps', type=int, default=0,
@@ -4473,7 +4184,7 @@ def train_entry():
                    help='DWA 策略温度，默认 2.0。')
     p.add_argument('--adaptive_loss_ema_beta', type=float, default=0.5,
                    help='自适应权重显示的 EMA 平滑系数（0 关闭；建议 0.3~0.7）。')
-    p.add_argument('--adaptive_loss_terms', type=str, default='fk_pos,rot_local,rot_ortho,root_vel,root_speed',
+    p.add_argument('--adaptive_loss_terms', type=str, default='fk_pos,rot_local',
                    help='需要自适应权重的 loss 名称，逗号分隔。留空则使用全部可用 loss。')
     p.add_argument('--adaptive_loss_tuning', action='store_true',
                    help='启用基于验证指标的自适应损失权重调整（StageMetricAdjuster）。')
@@ -4497,26 +4208,6 @@ def train_entry():
                    help='mixed/train_free 模式下，每个时间步注入自回归噪声的概率。')
     p.add_argument('--input_noise_deg_mix', type=str, default=None,
                    help='重尾噪声配置（JSON/List），格式为 [{"prob":0.8,"min":3,"max":8}, ...]。')
-    p.add_argument('--contraction_weight', type=float, default=0.0,
-                   help='noisy-start contraction loss 的训练权重。')
-    p.add_argument('--contraction_horizon', type=int, default=0,
-                   help='noisy-start contraction roll-out 的窗口长度（帧）。')
-    p.add_argument('--contraction_prob', type=float, default=0.0,
-                   help='每个 batch 触发 contraction regularizer 的概率。')
-    p.add_argument('--contraction_decay', type=float, default=0.8,
-                   help='期望 errK <= decay * err0 的比率约束。')
-    p.add_argument('--contraction_ratio_weight', type=float, default=1.0,
-                   help='收缩比率 penalty 的权重。')
-    p.add_argument('--contraction_step_weight', type=float, default=0.0,
-                   help='分步单调 penalty 的权重。')
-    p.add_argument('--contraction_terminal_weight', type=float, default=1.0,
-                   help='终点误差在 contraction loss 中的权重。')
-    p.add_argument('--contraction_noise_deg', type=float, default=None,
-                   help='noisy-start 注入的最大角度（度），留空则继承 teacher_rot_noise_deg。')
-    p.add_argument('--contraction_noise_prob', type=float, default=None,
-                   help='noisy-start 注入噪声的概率，留空继承 teacher_rot_noise_prob。')
-    p.add_argument('--contraction_noise_deg_mix', type=str, default=None,
-                   help='noisy-start 重尾噪声配置，格式同 input_noise_deg_mix。')
     p.add_argument('--tf_warmup_steps', type=int, default=5000)
     p.add_argument('--tf_total_steps', type=int, default=200000)
     p.add_argument('--width', type=int, default=512)
@@ -4526,10 +4217,6 @@ def train_entry():
     p.add_argument('--dropout', type=float, default=0.1)
     p.add_argument('--amp', action='store_true', help='启用自动混合精度 (torch.autocast)')
     p.add_argument('--w_rot_ortho', type=float, default=0.001)
-    p.add_argument('--w_rot_delta', type=float, default=0.0,
-                   help='旋转增量 loss 权重（默认关闭以避免与 DSM 梯度目标冲突）。')
-    p.add_argument('--w_rot_delta_root', type=float, default=0.0,
-                   help='根节点增量 geodesic 权重（默认关闭，与 DSM 对齐）。')
     p.add_argument('--w_fk_pos', type=float, default=0.0,
                    help='FK 末端位置损失权重（0 表示禁用）。')
     p.add_argument('--w_rot_local', type=float, default=0.0,
@@ -4572,8 +4259,6 @@ def train_entry():
     p.add_argument('--log_every', type=int, default=50)
     p.add_argument('--foot_contact_threshold', type=float, default=1.5, help='角速度阈值（rad/s），低于该值视为脚接触')
     p.add_argument('--monitor_batches', type=int, default=2, help='每个 epoch 在线指标采样的批次数')
-    p.add_argument('--disable_auto_tune_freerun', action='store_true', default=False,
-                   help='关闭 freerun 自动调优（噪音/horizon/weight），仅记录指标不改动超参')
     p.add_argument('--force_valfree_eval', action='store_true', default=False,
                    help='即使当前为纯 teacher 阶段，也强制执行一次 freerun 验证并写出 valfree 指标')
     p.add_argument('--teacher_eval_max_batches', type=int, default=None,
@@ -4839,7 +4524,6 @@ def train_entry():
     except Exception:
         pass
     fps_data = float(getattr(ds_train, 'fps', 60.0) or 60.0)
-    w_rot_delta = float(_arg('w_rot_delta', 0.0))
     w_fk_pos = float(_arg('w_fk_pos', 0.0) or 0.0)
     w_rot_local = float(_arg('w_rot_local', 0.0) or 0.0)
     w_root_vel = float(_arg('w_root_vel', 0.0) or 0.0)
@@ -4867,8 +4551,6 @@ def train_entry():
         output_layout=ds_train.output_layout,
         fps=fps_data,
         rot6d_spec=getattr(ds_train, 'rot6d_spec', {}),
-        w_rot_delta=w_rot_delta,
-        w_rot_delta_root=_arg('w_rot_delta_root', 0.0),
         w_rot_ortho=_arg('w_rot_ortho', 0.001),
         meta=getattr(ds_train, 'meta', None),
         w_fk_pos=w_fk_pos,
@@ -4908,8 +4590,6 @@ def train_entry():
 
     print(
         f"[LossWeights] "
-        f"w_rot_delta={loss_fn.w_rot_delta} "
-        f"w_rot_delta_root={loss_fn.w_rot_delta_root} "
         f"w_rot_ortho={loss_fn.w_rot_ortho} "
         f"w_fk_pos={loss_fn.w_fk_pos} "
         f"w_rot_local={loss_fn.w_rot_local} "
@@ -5010,9 +4690,6 @@ def train_entry():
     trainer.history_dropout_prob = float(_arg('history_dropout_prob', 0.10) or 0.0)
     trainer.history_dropout_prob_min = 0.05
     trainer.history_dropout_prob_max = 0.30
-    # freerun 旋转时间权重：在短窗口内对后期步数给予更大权重，用于压 long-horizon drift
-    trainer.freerun_rot_time_weight = float(_arg('freerun_rot_time_weight', 0.0) or 0.0)
-    trainer.freerun_rot_time_weight_max = float(_arg('freerun_rot_time_weight_max', 2.0) or 2.0)
     _stage_spec = _arg('freerun_stage_schedule', None)
     try:
         trainer.freerun_stage_schedule = _parse_stage_schedule(_stage_spec)
@@ -5086,18 +4763,6 @@ def train_entry():
     trainer.teacher_rot_noise_prob = float(_arg('teacher_rot_noise_prob', 0.0))
     trainer.input_step_noise_prob = float(_arg('input_step_noise_prob', trainer.input_step_noise_prob) or 0.0)
     trainer.input_noise_profile = _sanitize_noise_profile_spec(_arg('input_noise_deg_mix', None))
-    trainer.contraction_weight = float(_arg('contraction_weight', 0.0) or 0.0)
-    trainer.contraction_horizon = int(_arg('contraction_horizon', 0) or 0)
-    trainer.contraction_prob = float(_arg('contraction_prob', 0.0) or 0.0)
-    trainer.contraction_decay = float(_arg('contraction_decay', 0.8) or 0.8)
-    trainer.contraction_ratio_weight = float(_arg('contraction_ratio_weight', 1.0) or 0.0)
-    trainer.contraction_step_weight = float(_arg('contraction_step_weight', 0.0) or 0.0)
-    trainer.contraction_terminal_weight = float(_arg('contraction_terminal_weight', 1.0) or 0.0)
-    _c_noise_deg = _arg('contraction_noise_deg', None)
-    trainer.contraction_noise_deg = float(_c_noise_deg if _c_noise_deg is not None else trainer.teacher_rot_noise_deg)
-    _c_noise_prob = _arg('contraction_noise_prob', None)
-    trainer.contraction_noise_prob = float(_c_noise_prob if _c_noise_prob is not None else trainer.teacher_rot_noise_prob)
-    trainer.contraction_noise_profile = _sanitize_noise_profile_spec(_arg('contraction_noise_deg_mix', None)) or trainer.input_noise_profile
     trainer.disable_auto_tune_freerun = bool(_arg('disable_auto_tune_freerun', False))
     steps_per_epoch = max(1, len(train_loader))
     total_steps = max(1, _arg('epochs', 300) * steps_per_epoch)
@@ -5105,6 +4770,8 @@ def train_entry():
     base_lr = float(_arg('lr', 0.0001))
     min_lr = base_lr * float(max(1e-06, _arg('min_lr_ratio', 0.05)))
 
+    # ===== LR scheduling =====
+    # 1) step-based warmup + cosine decay（与原实现保持一致）
     def lr_lambda(step):
         # 关键：避免构造时把 LR 压到 1e-8 * base_lr
         if step <= 0:
@@ -5115,10 +4782,19 @@ def train_entry():
         t = min(1.0, max(0.0, t))
         return (min_lr / base_lr) + (1.0 - (min_lr / base_lr)) * 0.5 * (1.0 + math.cos(math.pi * t))
 
-
-    lam0 = (max(1e-08, 0.0 / float(max(1, effective_warmup))) if effective_warmup > 0 else 1.0)
-
     trainer.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(trainer.optimizer, lr_lambda=lr_lambda)
+
+    # 2) epoch-based plateau 调度：当单帧指标在瓶颈附近震荡时进一步衰减 LR
+    #    这里使用 teacher KeyBone/GeoDegMean 作为监控指标。
+    trainer.lr_plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        trainer.optimizer,
+        mode='min',
+        factor=0.5,
+        patience=2,
+        threshold=0.02,
+        threshold_mode='rel',
+        min_lr=min_lr,
+    )
     trainer.freerun_debug_path = _arg('freerun_debug_path', None)
     trainer.enable_grad_connection_test = not bool(_arg('no_grad_conn_test', False))
     trainer._current_run_name = run_name
@@ -5137,7 +4813,7 @@ def train_entry():
         vloader = train_loader
         _mon_batches = int(_arg('monitor_batches', 8) or 8)
         _metrics = trainer.validate_autoreg_online(vloader, max_batches=_mon_batches)
-        print(f"[ValFree@last] MSEnormY={_metrics['MSEnormY']:.6f} "
+        print(f"[ValFree@last] "
               f"GeoDeg={_metrics['GeoDeg']:.3f} "
               f"YawAbsDeg={_metrics['YawAbsDeg']:.3f} "
               f"RootVelMAE={_metrics['RootVelMAE']:.5f}"

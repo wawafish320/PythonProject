@@ -27,6 +27,7 @@
 
 > **2025-11-16 更新**：原先用于“前瞻”约束的 lookahead loss 已彻底移除，阶段调度仅围绕 freerun 及相关超参展开。下文的示例和配置都已改为 `freerun_*` 命名。
 > **2025-11-24 更新**：新增 AutoTune freerun 反馈控制。以 teacher 噪声为单一旋钮，按二次关系映射到 `freerun_weight` 与 `freerun_horizon`，并根据 freerun 指标（YawAbsDeg、Diag/YawSlope、GeoDeg、RootVelMAE）及梯度衰减自动加/减压，用于识别并突破平台期。
+> **2025-12-09 更新**：`w_rot_delta` / `w_rot_delta_root`、`freerun_rot_time_weight` 以及 `contraction_*` 已从代码与训练脚本中移除；文档中出现的相关示例仅作历史参考，可忽略。
 
 ### 核心模型架构
 
@@ -373,7 +374,6 @@ period_signal = extract_soft_period(soft_contacts)  # 从接触模式中推断
        w_fk_pos * loss_fk_pos +           # 位置损失
        w_rot_local * loss_rot_local +     # 旋转损失
        w_rot_geo * loss_rot_geo +         # 测地线约束
-       w_rot_delta * loss_rot_delta +     # 增量平滑
        # cond_yaw 已移除
        freerun_weight * loss_freerun
    )
@@ -397,7 +397,6 @@ loss = (
     w_fk_pos * loss_fk_pos +              # 前向运动学位置
     w_rot_local * loss_rot_local +        # 局部旋转
     w_rot_geo * loss_rot_geo +            # 测地线误差
-    w_rot_delta * loss_rot_delta +        # 平滑性
     # cond_yaw 已移除
     freerun_weight * loss_freerun         # 自由运行稳定性
 )
@@ -468,7 +467,6 @@ total_loss = (
     # === 核心运动损失 (MotionJointLoss) ===
     # Core组 (直接影响运动质量)
     w_rot_geo * loss_rot_geo +          # 旋转测地线误差
-    w_rot_delta * loss_rot_delta +      # 旋转增量损失
     w_rot_ortho * loss_rot_ortho +      # 旋转正交性
     # cond_yaw 已移除
     w_fk_pos * loss_fk_pos +            # FK位置误差
@@ -476,7 +474,6 @@ total_loss = (
 
     # Aux组 (辅助优化)
     w_attn_reg * loss_attn +            # 注意力正则化
-    w_rot_delta_root * loss_rot_delta_root +  # 根节点增量
     w_rot_log * loss_rot_log +          # SO(3)对数空间损失
     w_limb_geo * loss_limb_geo +        # 四肢旋转hinge损失
 
@@ -490,7 +487,7 @@ total_loss = (
 运动生成不是简单的回归问题，需要同时满足多个约束：
 1. **几何约束**：旋转矩阵正交性 (rot_ortho)、父子关节关系 (rot_local)
 2. **物理约束**：FK位置一致性 (fk_pos)、朝向控制 (cond_yaw)
-3. **平滑性约束**：旋转增量 (rot_delta)、四肢平滑 (limb_geo)
+3. **平滑性约束**：四肢平滑 (limb_geo)
 4. **一致性约束**：注意力 (attn_reg)
 5. **策略约束**：自由运行稳定性 (freerun)
 
@@ -526,7 +523,6 @@ total_loss = (
 w_fk_pos = 0.07        # 位置准确性
 w_rot_local = 0.07     # 旋转准确性
 w_rot_geo = 0.01       # 测地线距离
-w_rot_delta = 1.0      # 增量平滑性
 w_rot_ortho = 0.001    # 正交性约束
 
 # 第二优先级：Long组 (占总权重的20-30%)
@@ -647,7 +643,7 @@ core : aux : long ≈ 65% : 5% : 30%
 
 - [ ] **损失分组**：是否明确Core/Aux/Long三组的职责？
 - [ ] **组间平衡**：Core组占比是否在60-70%，Aux组<10%，Long组20-30%？
-- [ ] **关键损失**：`w_fk_pos`、`w_rot_local`、`w_rot_delta`是否已配置？
+- [ ] **关键损失**：`w_fk_pos`、`w_rot_local`是否已配置？
 - [ ] **显式约束**：是否添加了foot固定、IK约束、高度约束等？❌ 这些都不应该存在！
 
 #### 泛化性检查
@@ -692,8 +688,7 @@ core : aux : long ≈ 65% : 5% : 30%
 ```json
 {
   "w_fk_pos": 0.5,            // ❌ 过高！碾压其他损失
-  "w_rot_local": 0.01,        // ❌ 过低！旋转学不好
-  "w_rot_delta": 0.001        // ❌ 过低！运动不平滑
+  "w_rot_local": 0.01         // ❌ 过低！旋转学不好
 }
 // 问题：位置准确但姿态和平滑性很差
 ```
@@ -714,7 +709,7 @@ core : aux : long ≈ 65% : 5% : 30%
 **如果遇到问题**：
 1. **Teacher模式好，Free-Run差**：增加freerun_weight（必要时同时拉长 freerun_horizon）
 2. **整体损失不降**：检查Core组权重平衡，尝试贝叶斯优化
-3. **运动不平滑**：检查`w_rot_delta`是否足够高（推荐1.0）
+3. **运动不平滑**：提高`w_rot_local`或在limb子集上启用轻量`w_limb_geo`（<0.05）
 4. **脚滑动严重**：❌ 不要添加foot约束！→ ✅ 增加训练时间，检查soft_contacts标注质量
 5. **四肢姿态差**：可以启用`w_limb_geo`（权重<0.05），但优先检查`w_rot_local`
 

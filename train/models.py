@@ -296,32 +296,24 @@ class EventMotionModel(nn.Module):
             _skip_guard = _skip_guard or torch.onnx.is_in_onnx_export()
         except Exception:
             pass
-        if not _skip_guard and not torch.isfinite(x).all():
-            bad_mask = (~torch.isfinite(x))
-            _nz = bad_mask.nonzero(as_tuple=False)
-            bad = _nz[0].tolist() if _nz.numel() > 0 else []
-            s_ok = bool(torch.isfinite(state).all())
-            c_ok = True
-            if cond is not None and cond.is_floating_point():
-                c_ok = bool(torch.isfinite(cond).all())
-            raise RuntimeError(f'[Guard] x to shared_encoder has non-finite at {bad} | state_finite={s_ok} cond_finite={c_ok}')
-        _lin0 = self.shared_encoder[0]
-        _w_ok = bool(torch.isfinite(_lin0.weight).all())
-        _b_ok = _lin0.bias is None or bool(torch.isfinite(_lin0.bias).all())
-        if not _w_ok or not _b_ok:
-            raise RuntimeError('[Guard] shared_encoder.0 has non-finite params; refusing to auto-reinit in forward')
+        if not _skip_guard:
+            torch._assert(torch.isfinite(x).all(), "[Guard] x to shared_encoder must be finite")
+        lin0 = self.shared_encoder[0]
+        if not _skip_guard:
+            torch._assert(torch.isfinite(lin0.weight).all(), "[Guard] shared_encoder.0 weight must be finite")
+            if lin0.bias is not None:
+                torch._assert(torch.isfinite(lin0.bias).all(), "[Guard] shared_encoder.0 bias must be finite")
         x = torch.nan_to_num(x, nan=0.0, posinf=1000000.0, neginf=-1000000.0)
         clip_val = float(getattr(self, 'input_clip', 16.0) or 16.0)
         x = x.clamp(-clip_val, clip_val)
-        with torch.no_grad():
-            for _idx, _mod in enumerate(self.shared_encoder):
-                if isinstance(_mod, torch.nn.Linear):
-                    _ok_w = bool(torch.isfinite(_mod.weight).all())
-                    _ok_b = _mod.bias is None or bool(torch.isfinite(_mod.bias).all())
-                    if not _ok_w or not _ok_b:
-                        raise RuntimeError(f"[Guard] shared_encoder.{_idx} has non-finite params; refusing to auto-reinit in forward")
+        if not _skip_guard:
+            with torch.no_grad():
+                for _idx, _mod in enumerate(self.shared_encoder):
+                    if isinstance(_mod, torch.nn.Linear):
+                        torch._assert(torch.isfinite(_mod.weight).all(), f"[Guard] shared_encoder.{_idx} weight must be finite")
+                        if _mod.bias is not None:
+                            torch._assert(torch.isfinite(_mod.bias).all(), f"[Guard] shared_encoder.{_idx} bias must be finite")
 
-        lin0 = self.shared_encoder[0]
         act1 = self.shared_encoder[1]
         z0 = lin0(x)
         y1 = act1(z0)
@@ -458,8 +450,6 @@ class MotionJointLoss(nn.Module):
         rot6d_spec: Dict[str, Any] = None,
         w_rot_ortho: float = 0.0,
         ignore_motion_groups: str = '',
-        w_rot_delta: float = 0.0,
-        w_rot_delta_root: float = 0.0,
         meta: Optional[Dict[str, Any]] = None,
         w_fk_pos: float = 0.0,
         w_rot_local: float = 0.0,
@@ -480,8 +470,6 @@ class MotionJointLoss(nn.Module):
         self.meta = dict(meta) if isinstance(meta, dict) else {}
         self.w_attn_reg = float(w_attn_reg)
         self.w_rot_ortho = float(w_rot_ortho)
-        self.w_rot_delta = float(w_rot_delta)
-        self.w_rot_delta_root = float(w_rot_delta_root)
         self.w_fk_pos = float(w_fk_pos)
         self.w_rot_local = float(w_rot_local)
         self.w_root_vel = float(w_root_vel)
@@ -501,7 +489,9 @@ class MotionJointLoss(nn.Module):
         self._warned_bad_rot6d = False
         self.template_hint: Optional[str] = None
         self.bundle_hint: Optional[str] = None
+        # 缓存几何骨骼权重（按 device/dtype），以及可选的动态每关节缩放因子
         self._joint_weight_cache: dict[tuple, torch.Tensor] = {}
+        self._dynamic_bone_alpha_cpu: Optional[torch.Tensor] = None
         self.root_idx = 0
         self.bone_names: list[str] = []
         self.limb_monitor_names: list[str] = [
@@ -532,20 +522,19 @@ class MotionJointLoss(nn.Module):
                 except Exception:
                     self.bone_offsets = None
         self.has_fk = bool(self.parents and self.bone_offsets is not None)
+        # 参与 AdaptiveLossWeighting 的 component 项。
+        # 注意：
+        #   - rot_ortho 仅作为小正则，不参与自适应缩放；
+        #   - fk_pos 也保持固定权重，避免位置约束抢占过多自适应容量；
+        #   - 目前仅对 rot_local 使用 uncertainty/gradnorm 等策略。
         self._adaptive_loss_terms: Tuple[str, ...] = (
-            "fk_pos",
             "rot_local",
-            "rot_delta",
-            "rot_delta_root",
-            "rot_ortho",
         )
         self._reset_adaptive_tracking()
         self._loss_group_totals: Dict[str, float] = {}
         self._loss_group_alias = {
             'attn': 'aux',
             'rot_geo': 'core',
-            'rot_delta': 'core',
-            'rot_delta_root': 'aux',
             'rot_ortho': 'core',
             'fk_pos': 'core',
             'rot_local': 'core',
@@ -786,7 +775,18 @@ class MotionJointLoss(nn.Module):
         if key in cache:
             return cache[key]
 
+        # 基于几何的统一权重
         weights_cpu = self._compute_unified_weights_cpu(joint_count)
+
+        # 可选：叠加跨 epoch 的动态缩放（根据上一轮指标微调），保持均值为 1
+        alpha = getattr(self, "_dynamic_bone_alpha_cpu", None)
+        if alpha is not None and alpha.numel() >= joint_count:
+            a = alpha[:joint_count].detach().clone()
+            if a.numel() == weights_cpu.numel():
+                a = a / a.mean().clamp_min(1e-6)
+                weights_cpu = weights_cpu * a
+                weights_cpu = weights_cpu / weights_cpu.mean().clamp_min(1e-6)
+
         weights = weights_cpu.to(device=device, dtype=dtype)
         cache[key] = weights
         if not hasattr(self, '_weight_vector_logged'):
@@ -861,6 +861,132 @@ class MotionJointLoss(nn.Module):
             weights = weights / weights.mean().clamp_min(1e-6)
 
         return weights
+
+    # === Epoch-level dynamic bone reweighting (teacher metrics driven) ===
+    def update_bone_weights_from_metrics(
+        self,
+        metrics: Dict[str, Any],
+        *,
+        epoch: int | None = None,
+        alpha_min: float = 0.5,
+        alpha_max: float = 2.0,
+        ema_beta: float = 0.5,
+        warmup_epochs: int = 3,
+        ratio_gamma: float = 0.7,
+        alpha_step: float = 0.2,
+    ) -> None:
+        """
+        使用上一轮 teacher 评估的 KeyBone GeoDeg 指标，微调每个关节的动态权重 alpha。
+
+        完整逻辑（更平滑的目标驱动方式）:
+
+        - 取 KeyBone/GeoDegMean 的 EMA 作为全局参考 m_ema
+        - 对 limb_monitor_names 中的每个关键骨骼:
+            * 维护 GeoDeg(bone) 的 EMA: e_ema(bone)
+            * 计算相对误差 r = e_ema(bone) / m_ema
+            * 目标权重: alpha_target(bone) = clamp(r ** ratio_gamma, [alpha_min, alpha_max])
+        - 然后对所有关节做一次平滑更新:
+            alpha_new = (1 - alpha_step) * alpha_old + alpha_step * alpha_target
+          （未出现在目标列表中的骨骼 alpha_target = 1）
+        - 最后 clamp 到 [alpha_min, alpha_max] 并归一化使 mean(alpha)=1
+        """
+        import math
+        import torch
+
+        if not isinstance(metrics, dict):
+            return
+        # 需要骨骼名字映射
+        if not isinstance(self.bone_names, list) or not self.bone_names:
+            return
+
+        key_mean = metrics.get("KeyBone/GeoDegMean")
+        try:
+            key_mean_f = float(key_mean)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(key_mean_f) or key_mean_f <= 0.0:
+            return
+
+        J = len(self.bone_names)
+        if J <= 0:
+            return
+
+        # 早期 epoch 不做动态调节，避免训练初期抖动干扰
+        if epoch is not None and int(epoch) < int(warmup_epochs):
+            return
+
+        # 初始化 / 扩展 alpha
+        if self._dynamic_bone_alpha_cpu is None or self._dynamic_bone_alpha_cpu.numel() < J:
+            self._dynamic_bone_alpha_cpu = torch.ones(J, dtype=torch.float32)
+        alpha = self._dynamic_bone_alpha_cpu
+
+        # 维护 per-bone EMA 以平滑指标
+        if not hasattr(self, "_bone_geo_ema"):
+            self._bone_geo_ema: Dict[str, float] = {}
+        if not hasattr(self, "_bone_geo_mean_ema"):
+            self._bone_geo_mean_ema: float = float(key_mean_f)
+        # 更新全局 mean 的 EMA
+        m_prev = self._bone_geo_mean_ema
+        self._bone_geo_mean_ema = float(ema_beta * m_prev + (1.0 - ema_beta) * key_mean_f)
+        ref_mean = self._bone_geo_mean_ema
+        if ref_mean <= 0.0 or not math.isfinite(ref_mean):
+            ref_mean = key_mean_f
+
+        idx_map = {str(name): idx for idx, name in enumerate(self.bone_names)}
+        monitor_names = getattr(self, "limb_monitor_names", None) or []
+
+        # 目标 alpha，未监控骨骼默认为 1.0
+        alpha_target = torch.ones(J, dtype=torch.float32)
+        any_target = False
+
+        for bone_name in monitor_names:
+            key = f"KeyBone/{bone_name}/GeoDeg"
+            val = metrics.get(key)
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(v):
+                continue
+            # 更新该骨骼的 EMA
+            prev = float(self._bone_geo_ema.get(bone_name, v))
+            cur = ema_beta * prev + (1.0 - ema_beta) * v
+            self._bone_geo_ema[bone_name] = cur
+
+            ref = ref_mean
+            if ref <= 0.0 or not math.isfinite(ref):
+                ref = cur
+            if ref <= 0.0:
+                continue
+
+            idx = idx_map.get(bone_name)
+            if idx is None or idx < 0 or idx >= J:
+                continue
+
+            # 目标权重：相对误差的幂次映射
+            r = cur / ref
+            if not math.isfinite(r) or r <= 0.0:
+                continue
+            w_raw = float(r ** float(ratio_gamma))
+            w_raw = max(alpha_min, min(alpha_max, w_raw))
+            alpha_target[idx] = w_raw
+            any_target = True
+
+        if not any_target:
+            return
+
+        # 平滑更新 alpha：朝目标分布走一步
+        alpha_step = float(alpha_step)
+        alpha_step = max(0.0, min(1.0, alpha_step))
+        if alpha_step > 0.0:
+            alpha = (1.0 - alpha_step) * alpha + alpha_step * alpha_target
+
+        # 限幅 + 归一化，保持整体 loss 尺度稳定
+        alpha.clamp_(alpha_min, alpha_max)
+        alpha /= alpha.mean().clamp_min(1e-6)
+        self._dynamic_bone_alpha_cpu = alpha
+        # 权重改变后，丢弃缓存以便下次重新计算 joint_weight_vector
+        self._invalidate_weight_cache()
 
     @staticmethod
     def _apply_visual_importance(weights: torch.Tensor, bone_names) -> torch.Tensor:
@@ -946,7 +1072,6 @@ class MotionJointLoss(nn.Module):
         stats: Dict[str, float] = {
             'attn': float(l_attn.detach().cpu()),
             'rot_geo': float(l_geo.detach().cpu()),
-            'rot_delta': 0.0,
             'rot_ortho': 0.0,
             'rot_ortho_raw': 0.0,
         }
@@ -1303,81 +1428,6 @@ class MotionJointLoss(nn.Module):
             return None
         return aligned
 
-    def compute_rot6d_delta_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-        Z = lambda v: pred.new_tensor(float(v))
-        rot_delta = self._maybe_get_rot6d(pred)
-        if rot_delta is None:
-            return Z(0.0)
-        D = rot_delta.shape[-1]
-        if D % 6 != 0:
-            return Z(0.0)
-        J = D // 6
-
-        delta_proj = normalize_rot6d_delta(rot_delta, columns=("X", "Z"))
-        dRp = rot6d_to_matrix(delta_proj, columns=("X", "Z"))
-        if dRp.dim() < 5:
-            return Z(0.0)
-
-        Rg = self._rot6d_matrices(gt)
-        if Rg is None or Rg.dim() < 5:
-            return Z(0.0)
-
-        T_pred = dRp.shape[-4]
-        T_gt = Rg.shape[-4]
-        if T_gt < 2 or T_pred < 1:
-            return Z(0.0)
-
-        lead_pred = dRp.shape[:-4]
-        lead_gt = Rg.shape[:-4]
-        Bp = int(_math.prod(lead_pred)) if lead_pred else 1
-        Bg = int(_math.prod(lead_gt)) if lead_gt else 1
-        dRp = dRp.reshape(Bp, T_pred, J, 3, 3)
-        Rg = Rg.reshape(Bg, T_gt, J, 3, 3)
-
-        dRg = torch.matmul(Rg[:, 1:], Rg[:, :-1].transpose(-1, -2))
-
-        if dRp.shape[1] == dRg.shape[1] + 1:
-            dRp = dRp[:, 1:]
-        elif dRp.shape[1] != dRg.shape[1]:
-            L = min(dRp.shape[1], dRg.shape[1])
-            dRp = dRp[:, :L]
-            dRg = dRg[:, :L]
-
-        if dRp.shape[1] == 0:
-            return Z(0.0)
-
-        theta = geodesic_R(dRp, dRg)
-        theta = torch.nan_to_num(theta, nan=0.0, posinf=_math.pi, neginf=0.0)
-        # Bone weighting aligned with FK/local losses
-        weights = self._joint_weight_vector(theta.device, theta.dtype, theta.shape[-1])
-        w = weights.view(1, 1, -1)
-        return (theta * w).mean()
-
-    def compute_root_geodesic_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-        Z = lambda v: pred.new_tensor(float(v))
-        Rp = self._rot6d_matrices(pred)
-        Rg = self._rot6d_matrices(gt)
-        if Rp is None or Rg is None:
-            return Z(0.0)
-        if Rp.dim() < 4:
-            return Z(0.0)
-        if Rp.dim() < 5:
-            return Z(0.0)
-        T = int(Rp.shape[-4])
-        J = int(Rp.shape[-3])
-        if T <= 0 or J <= 0:
-            return Z(0.0)
-        Rp = Rp.reshape(-1, T, J, 3, 3)
-        Rg = Rg.reshape(-1, T, J, 3, 3)
-        root_idx = int(getattr(self, 'root_idx', 0))
-        root_idx = max(0, min(J - 1, root_idx))
-        Rp_root = Rp[:, :, root_idx]
-        Rg_root = Rg[:, :, root_idx]
-        theta = geodesic_R(Rp_root, Rg_root)
-        theta = torch.nan_to_num(theta, nan=0.0, posinf=_math.pi, neginf=0.0)
-        return theta.mean()
-
-
     def compute_rot6d_log_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
         Z = lambda v: pred.new_tensor(float(v))
         Rp = self._rot6d_matrices(pred)
@@ -1419,10 +1469,6 @@ class MotionJointLoss(nn.Module):
             stats = dict(stats)
         else:
             stats = {}
-
-        # DSM baseline: remove rot-delta losses entirely to avoid conflicting signals
-        stats['rot_delta'] = 0.0
-        stats['rot_delta_root'] = 0.0
 
         if self.w_rot_ortho > 0 and not delta_fallback:
             target_for_ortho = delta_pm if delta_pm is not None else pm
