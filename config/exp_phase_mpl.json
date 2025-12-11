@@ -74,40 +74,30 @@
       "range": [7, 12],
       "label": "stage2a_fine_convergence",
       "trainer": {
-        "freerun_weight": 0.02,
-        "freerun_horizon": 6,
+        "freerun_weight": 0.0,
+        "freerun_horizon": 0,
         "eval_horizon": 8,
-        "teacher_rot_noise_prob": 0.4,
-        "teacher_rot_noise_deg": 1.5,
-        "input_noise_profile": [
-          {"prob": 0.70, "min": 0.0, "max": 0.0},
-          {"prob": 0.15, "min": 0.0, "max": 0.5},
-          {"prob": 0.10, "min": 0.5, "max": 1.0},
-          {"prob": 0.05, "min": 1.0, "max": 1.5}
-        ],
+        "teacher_rot_noise_prob": 0.0,
+        "teacher_rot_noise_deg": 0.0,
+        "input_noise_profile": [],
         "tf_max": 1.0,
-        "tf_min": 0.95
+        "tf_min": 1.0
       },
       "params": {
-        "freerun_weight": 0.02,
-        "freerun_horizon": 6,
-        "teacher_rot_noise_prob": 0.4,
-        "teacher_rot_noise_deg": 1.5,
-        "input_noise_profile": [
-          {"prob": 0.70, "min": 0.0, "max": 0.0},
-          {"prob": 0.15, "min": 0.0, "max": 0.5},
-          {"prob": 0.10, "min": 0.5, "max": 1.0},
-          {"prob": 0.05, "min": 1.0, "max": 1.5}
-        ],
+        "freerun_weight": 0.0,
+        "freerun_horizon": 0,
+        "teacher_rot_noise_prob": 0.0,
+        "teacher_rot_noise_deg": 0.0,
+        "input_noise_profile": [],
         "tf_max": 1.0,
-        "tf_min": 0.95
+        "tf_min": 1.0
       },
       "loss_groups": {
         "core": {
           "w_fk_pos": 0.0,
           "w_rot_local": 0.18,
-          "w_root_vel": 0.05,
-          "w_root_speed": 0.03
+          "w_root_vel": 0.0,
+          "w_root_speed": 0.0
         }
       }
     },
