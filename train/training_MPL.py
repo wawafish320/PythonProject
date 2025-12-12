@@ -86,12 +86,6 @@ except ImportError:  # pragma: no cover - fallback for script execution
     )
 from .normalizers import VectorTanhNormalizerTorch
 
-try:
-    from .configuration import StageMetricAdjuster, load_val_metrics
-except ImportError:  # pragma: no cover - fallback for script execution
-    from train.configuration import StageMetricAdjuster, load_val_metrics
-
-
 import torch.nn as nn
 
 try:
@@ -1330,6 +1324,20 @@ class Trainer:
         except Exception:
             pass
         for key, value in params.items():
+            # Special-case stage-wise optimizer LR scheduling.
+            if key in ("opt_lr", "optimizer_lr"):
+                try:
+                    lr_val = float(value)
+                except Exception:
+                    lr_val = None
+                if lr_val is not None and hasattr(self, "optimizer") and self.optimizer is not None:
+                    try:
+                        for pg in self.optimizer.param_groups:
+                            pg["lr"] = lr_val
+                        overrides[key] = lr_val
+                    except Exception:
+                        pass
+                continue
             _assign(key, value)
 
         label = selected.get('label')
@@ -1818,28 +1826,6 @@ class Trainer:
         self._stage_goal_history: Dict[str, deque] = {}
         self._stage_pending_advance: bool = False
         self.args = args
-        self.enable_adaptive = bool(getattr(args, 'adaptive_loss_tuning', False)) if args is not None else bool(_arg('adaptive_loss_tuning', False))
-        self.adjuster = None
-        self.full_config = None
-        self._adaptive_config_path: Optional[Path] = None
-        if self.enable_adaptive:
-            # 仅使用显式传入的 config_path，避免 CLI fallback 干扰（路径已写入配置）
-            cfg_path = getattr(args, 'config_path', None) if args is not None else _arg('config_path', None)
-            if cfg_path:
-                cfg_file = Path(cfg_path).expanduser()
-                self._adaptive_config_path = cfg_file
-                if cfg_file.is_file():
-                    try:
-                        with open(cfg_file, 'r', encoding='utf-8') as f:
-                            self.full_config = json.load(f)
-                        self.adjuster = StageMetricAdjuster(self.full_config)
-                        print(f"[AdaptiveTuning] loaded config from {cfg_file}")
-                    except Exception as exc:
-                        print(f"[AdaptiveTuning][WARN] failed to load config {cfg_file}: {exc}")
-                else:
-                    print(f"[AdaptiveTuning][WARN] config_path not found: {cfg_file}")
-            else:
-                print("[AdaptiveTuning][WARN] adaptive tuning enabled but config_path is missing; disable or provide path.")
 
         self.grad_clip = float(grad_clip)
         self.tf_warmup_steps = int(tf_warmup_steps)
@@ -1974,14 +1960,52 @@ class Trainer:
         device_type = getattr(self.device, 'type', 'cpu')
         scaler = torch.amp.GradScaler('cuda' if device_type=='cuda' else 'cpu', enabled=(getattr(self, 'use_amp', False) and device_type in ('cuda', 'mps')))
         accum_steps = int(getattr(self, 'accum_steps', 1) or 1)
-        best_val, best_ckpt = float('inf'), None
-        best_valfree = float('inf')
+        # Track two best checkpoints:
+        # - best_teacher: min teacher GeoDeg (single-frame accuracy)
+        # - best_free: min freerun drift slope (error growth rate)
+        best_teacher_val, best_ckpt = float('inf'), None
+        best_teacher_ckpt = None
+        best_free_slope = float('inf')
+        best_free_ckpt = None
         history = {'train':[], 'val':[]}
         tf_mode = getattr(self, 'tf_mode', 'epoch_linear')
         tf_start = int(getattr(self, 'tf_start_epoch', 0))
         tf_end   = int(getattr(self, 'tf_end_epoch', 0))
         tf_max_base   = float(getattr(self, 'tf_max', 1.0))
         tf_min_base   = float(getattr(self, 'tf_min', 0.0))
+
+        def _compute_drift_slope(free_metrics: dict) -> float:
+            """Compute freerun drift slope from GeoDegCurve (deg/step).
+
+            Uses mean curve across monitored batches if needed.
+            """
+            curve = free_metrics.get("GeoDegCurve")
+            if not isinstance(curve, list) or not curve:
+                start = float(free_metrics.get("GeoDegStart", free_metrics.get("GeoDeg", float("inf"))))
+                end = float(free_metrics.get("GeoDegEnd", start))
+                h = int(free_metrics.get("eval_horizon", 0) or 0)
+                denom = max(1, h - 1)
+                return (end - start) / denom
+
+            # curve can be [H] or [B][H]
+            if isinstance(curve[0], (list, tuple)) and curve[0]:
+                H = len(curve[0])
+                mean_curve = []
+                for t in range(H):
+                    vals = []
+                    for b in curve:
+                        if isinstance(b, (list, tuple)) and t < len(b):
+                            v = b[t]
+                            if isinstance(v, (int, float)) and v == v:
+                                vals.append(float(v))
+                    mean_curve.append(sum(vals) / max(1, len(vals)))
+            else:
+                mean_curve = [float(v) for v in curve if isinstance(v, (int, float)) and v == v]
+
+            if len(mean_curve) < 2:
+                return float("inf")
+            start, end = mean_curve[0], mean_curve[-1]
+            return (end - start) / max(1, len(mean_curve) - 1)
 
         try:
             self.test_gradient_connection(train_loader)
@@ -2318,8 +2342,8 @@ class Trainer:
                         teacher_metrics = dict(self.eval_epoch(self.train_loader, mode='teacher', max_batches=max_t_batches) or {})
                         teacher_metrics.setdefault('phase', 'teacher')
                         teacher_metrics['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
-                    # 动态放大 teacher 噪声：旧版本基于 GeoDeg + MSEnormY 调整。
-                    # 为避免 MSEnormY/YawAbsDeg 等复合指标干扰训练，这里固定为 1.0。
+                    # 动态放大 teacher 噪声：旧版本基于 GeoDeg + MSEnormY 等复合指标调整。
+                    # 为避免这些复合指标干扰训练，这里固定为 1.0。
                     self.teacher_noise_boost = 1.0
                     teacher_metrics.setdefault('phase', 'teacher')
                     # 基于 teacher 单帧指标执行 plateau LR 调度（只在 teacher 阶段）
@@ -2437,31 +2461,47 @@ class Trainer:
                 self._maybe_finish_stage(ep, teacher_metrics_cached, tag='teacher')
                 self._dump_metrics_json(teacher_metrics_cached, tag='teacher', epoch=ep)
 
-            # --- 依据在线评估指标记录最佳模型（默认使用 GeoDeg） ---
-            if _metrics is not None:
-                # 优先使用 GeoDeg 作为主评估指标，避免 MSEnormY 干扰决策。
-                current = float(_metrics.get('GeoDeg', float('inf')))
-                if current < best_valfree - 1e-9:
-                    best_valfree = current
+            # --- 依据在线评估指标记录最佳模型 ---
+            # best_teacher: teacher 单帧 GeoDeg 最小（起点精度）
+            # best_free: freerun drift slope 最小（误差增长率）
+            teacher_source = None
+            if isinstance(teacher_metrics_cached, dict) and teacher_metrics_cached:
+                teacher_source = teacher_metrics_cached
+            elif isinstance(_metrics, dict) and str(_metrics.get('phase', '')) == 'teacher':
+                teacher_source = _metrics
+
+            if teacher_source is not None:
+                current_teacher = float(teacher_source.get('GeoDeg', float('inf')))
+                if current_teacher < best_teacher_val - 1e-9:
+                    best_teacher_val = current_teacher
                     if out_dir:
                         os.makedirs(out_dir, exist_ok=True)
-                        best_ckpt = os.path.join(out_dir, 'ckpt_best_' + str(run_name) + '.pth')
-                        torch.save({'model': self.model.state_dict()}, best_ckpt)
+                        best_teacher_ckpt = os.path.join(out_dir, 'ckpt_best_teacher_' + str(run_name) + '.pth')
+                        torch.save({'model': self.model.state_dict()}, best_teacher_ckpt)
+                        # Keep old return semantics: best_ckpt points to teacher-best.
+                        best_ckpt = best_teacher_ckpt
 
-            # --- Adaptive metric-driven tuning (post-epoch) ---
-            if getattr(self, 'adjuster', None) is not None and ep >= 3:
+            if metrics_tag == 'valfree' and isinstance(metrics_for_json, dict) and metrics_for_json:
                 try:
-                    metrics_dir = Path(getattr(self, 'out_dir', out_dir) or out_dir) / 'metrics'
-                    val_history = load_val_metrics(metrics_dir)
-                    changes = self.adjuster.apply(val_history)
-                    if changes:
-                        print(f"[AdaptiveTuning] Epoch {ep} adjustments:")
-                        for k, v in changes.items():
-                            print(f"  {k}: {v}")
-                        self._apply_config_changes(self.full_config)
-                        self._save_adjusted_config(ep)
-                except Exception as _adapt_e:
-                    print(f"[WARN] Adaptive tuning failed @ep{ep}: {_adapt_e}")
+                    drift_slope = float(_compute_drift_slope(metrics_for_json))
+                    metrics_for_json['GeoDriftSlope'] = drift_slope
+                except Exception:
+                    drift_slope = float('inf')
+
+                if drift_slope < best_free_slope - 1e-9:
+                    best_free_slope = drift_slope
+                    if out_dir:
+                        os.makedirs(out_dir, exist_ok=True)
+                        best_free_ckpt = os.path.join(out_dir, 'ckpt_best_free_' + str(run_name) + '.pth')
+                        torch.save({'model': self.model.state_dict()}, best_free_ckpt)
+
+        # Print final best checkpoint summary for convenience.
+        if best_teacher_ckpt is not None:
+            print(f"[BestTeacher] ckpt={best_teacher_ckpt} GeoDeg={best_teacher_val:.6f}°")
+        if best_free_ckpt is not None and best_free_slope < float('inf'):
+            print(f"[BestFree] ckpt={best_free_ckpt} GeoDriftSlope={best_free_slope:.6f} deg/step")
+
+
         if out_dir:
 
             import os, torch
@@ -4186,8 +4226,6 @@ def train_entry():
                    help='自适应权重显示的 EMA 平滑系数（0 关闭；建议 0.3~0.7）。')
     p.add_argument('--adaptive_loss_terms', type=str, default='fk_pos,rot_local',
                    help='需要自适应权重的 loss 名称，逗号分隔。留空则使用全部可用 loss。')
-    p.add_argument('--adaptive_loss_tuning', action='store_true',
-                   help='启用基于验证指标的自适应损失权重调整（StageMetricAdjuster）。')
     p.add_argument('--config_path', type=str, default=None,
                    help='完整配置 JSON 路径（包含阶段调度配置），用于自适应调整。')
     p.add_argument('--adaptive_scheduler', action='store_true',
@@ -4221,6 +4259,8 @@ def train_entry():
                    help='FK 末端位置损失权重（0 表示禁用）。')
     p.add_argument('--w_rot_local', type=float, default=0.0,
                    help='父子关节局部 geodesic 约束权重（0=关闭）。')
+    p.add_argument('--w_rot_chain', type=float, default=0.0,
+                   help='腿部链条平滑正则权重（thigh-calf-foot 的 local geodesic 差分）。')
     p.add_argument('--w_root_vel', type=float, default=0.0,
                    help='根速度向量 MSE 损失权重（输出包含 RootVelocity 时生效）。')
     p.add_argument('--w_root_speed', type=float, default=0.0,
@@ -4567,6 +4607,11 @@ def train_entry():
         max_weight_ratio=max_weight_ratio,
         weight_gamma=weight_gamma,
     )
+    # Optional leg-chain smoothness weight; if > 0, overrides default 0.1 * w_rot_local
+    try:
+        loss_fn.w_rot_chain = float(_arg('w_rot_chain', 0.0) or 0.0)
+    except Exception:
+        loss_fn.w_rot_chain = 0.0
     # Unified bone weight parameters (new scheme)
     loss_fn.unified_downstream_power = float(_arg('unified_downstream_power', 0.6) or 0.6)
     loss_fn.unified_self_scale = float(_arg('unified_self_scale', 1.5) or 1.5)
@@ -4764,37 +4809,7 @@ def train_entry():
     trainer.input_step_noise_prob = float(_arg('input_step_noise_prob', trainer.input_step_noise_prob) or 0.0)
     trainer.input_noise_profile = _sanitize_noise_profile_spec(_arg('input_noise_deg_mix', None))
     trainer.disable_auto_tune_freerun = bool(_arg('disable_auto_tune_freerun', False))
-    steps_per_epoch = max(1, len(train_loader))
-    total_steps = max(1, _arg('epochs', 300) * steps_per_epoch)
-    effective_warmup = min(_arg('warmup_steps', 1000), int(total_steps * 0.1))
-    base_lr = float(_arg('lr', 0.0001))
-    min_lr = base_lr * float(max(1e-06, _arg('min_lr_ratio', 0.05)))
 
-    # ===== LR scheduling =====
-    # 1) step-based warmup + cosine decay（与原实现保持一致）
-    def lr_lambda(step):
-        # 关键：避免构造时把 LR 压到 1e-8 * base_lr
-        if step <= 0:
-            return 1.0
-        if step < effective_warmup:
-            return step / float(max(1, effective_warmup))
-        t = (step - effective_warmup) / float(max(1, total_steps - effective_warmup))
-        t = min(1.0, max(0.0, t))
-        return (min_lr / base_lr) + (1.0 - (min_lr / base_lr)) * 0.5 * (1.0 + math.cos(math.pi * t))
-
-    trainer.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(trainer.optimizer, lr_lambda=lr_lambda)
-
-    # 2) epoch-based plateau 调度：当单帧指标在瓶颈附近震荡时进一步衰减 LR
-    #    这里使用 teacher KeyBone/GeoDegMean 作为监控指标。
-    trainer.lr_plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        trainer.optimizer,
-        mode='min',
-        factor=0.5,
-        patience=2,
-        threshold=0.02,
-        threshold_mode='rel',
-        min_lr=min_lr,
-    )
     trainer.freerun_debug_path = _arg('freerun_debug_path', None)
     trainer.enable_grad_connection_test = not bool(_arg('no_grad_conn_test', False))
     trainer._current_run_name = run_name
@@ -4814,9 +4829,8 @@ def train_entry():
         _mon_batches = int(_arg('monitor_batches', 8) or 8)
         _metrics = trainer.validate_autoreg_online(vloader, max_batches=_mon_batches)
         print(f"[ValFree@last] "
-              f"GeoDeg={_metrics['GeoDeg']:.3f} "
-              f"YawAbsDeg={_metrics['YawAbsDeg']:.3f} "
-              f"RootVelMAE={_metrics['RootVelMAE']:.5f}"
+              f"GeoDeg={_metrics.get('GeoDeg', float('nan')):.3f} "
+              f"RootVelMAE={_metrics.get('RootVelMAE', float('nan')):.5f} "
               f"AngVelMAE={_metrics.get('AngVelMAE', float('nan')):.5f} rad/s")
     except Exception as _e:
         print(f"[ValFree] skipped due to error: {_e}")

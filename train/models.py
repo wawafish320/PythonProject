@@ -474,6 +474,8 @@ class MotionJointLoss(nn.Module):
         self.w_rot_local = float(w_rot_local)
         self.w_root_vel = float(w_root_vel)
         self.w_root_speed = float(w_root_speed)
+        # Huber threshold for rot_chain regularizer (radians). Set <=0 to fall back to abs diff.
+        self.rot_chain_beta = 0.01
         self.angvel_eps = 1e-6
         self.fps = float(fps)
         self.output_layout = output_layout or {}
@@ -797,7 +799,7 @@ class MotionJointLoss(nn.Module):
                 f"power={getattr(self, 'unified_downstream_power', 0.6)} "
                 f"self_scale={getattr(self, 'unified_self_scale', 1.5)} "
                 f"min_w={getattr(self, 'unified_min_weight', 0.05)} "
-                f"visual={getattr(self, 'unified_use_visual_importance', True)}"
+                f"visual=False"
             )
         return weights
 
@@ -805,7 +807,6 @@ class MotionJointLoss(nn.Module):
         power = float(getattr(self, 'unified_downstream_power', 0.6))
         self_scale = float(getattr(self, 'unified_self_scale', 1.5))
         min_w = float(getattr(self, 'unified_min_weight', 0.05))
-        use_visual = bool(getattr(self, 'unified_use_visual_importance', True))
 
         if not self.parents or self.bone_offsets is None or len(self.parents) < joint_count:
             return torch.ones(joint_count, dtype=torch.float32)
@@ -855,10 +856,6 @@ class MotionJointLoss(nn.Module):
         weights = weights / weights.mean().clamp_min(1e-6)
         weights = torch.clamp(weights, min=min_w)
         weights = weights / weights.mean().clamp_min(1e-6)
-
-        if use_visual and getattr(self, 'bone_names', None):
-            weights = self._apply_visual_importance(weights, self.bone_names[:J])
-            weights = weights / weights.mean().clamp_min(1e-6)
 
         return weights
 
@@ -987,22 +984,6 @@ class MotionJointLoss(nn.Module):
         self._dynamic_bone_alpha_cpu = alpha
         # 权重改变后，丢弃缓存以便下次重新计算 joint_weight_vector
         self._invalidate_weight_cache()
-
-    @staticmethod
-    def _apply_visual_importance(weights: torch.Tensor, bone_names) -> torch.Tensor:
-        VISUAL = {
-            'hand': 1.5, 'finger': 1.3, 'thumb': 1.3, 'index': 1.3, 'middle': 1.3,
-            'ring': 1.3, 'pinky': 1.3, 'head': 1.2, 'upperarm': 1.1,
-            'foot': 0.8, 'calf': 0.9, 'toe': 0.5, 'ball': 0.5, 'twist': 0.7,
-        }
-        w = weights.clone()
-        for i, name in enumerate(bone_names):
-            n = str(name).lower()
-            for key, mul in VISUAL.items():
-                if key in n:
-                    w[i] = w[i] * mul
-                    break
-        return w
 
     def _fk_positions(self, R_seq: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
         if R_seq is None:
@@ -1549,6 +1530,58 @@ class MotionJointLoss(nn.Module):
                 self._accumulate_loss_contrib('rot_local', local_loss, self.w_rot_local, group='core')
                 stats['rot_local_deg'] = float((local_loss * (180.0 / math.pi)).detach().cpu())
                 self._register_component_loss('rot_local', local_loss, self.w_rot_local)
+
+                # --- Leg-chain smoothness: encourage consistent error along thigh–calf–foot chains ---
+                # This is a small structural regularizer on local geodesic errors:
+                # - Works in parent-relative space (rotation-only, style-agnostic)
+                # - Penalizes large differences of error between adjacent joints on the same leg
+                #   (e.g., thigh very accurate but foot very wrong), which tends to look like a "broken" chain.
+                try:
+                    # Allow explicit override via self.w_rot_chain; otherwise default to a small fraction of w_rot_local
+                    chain_weight = float(getattr(self, 'w_rot_chain', 0.0) or (0.1 * self.w_rot_local))
+                except Exception:
+                    chain_weight = 0.0
+
+                if chain_weight > 0.0 and isinstance(self.bone_names, list) and self.bone_names:
+                    try:
+                        import torch as _torch
+                        joint_count = geo_local.shape[-1]
+                        if joint_count > 1:
+                            name_to_idx = {name: idx for idx, name in enumerate(self.bone_names[:joint_count])}
+                            leg_chains = []
+                            for chain_names in (("thigh_l", "calf_l", "foot_l"),
+                                                ("thigh_r", "calf_r", "foot_r")):
+                                idxs = [name_to_idx.get(n) for n in chain_names]
+                                if all(isinstance(idx, int) and 0 <= idx < joint_count for idx in idxs):
+                                    leg_chains.append(_torch.as_tensor(idxs, device=geo_local.device, dtype=_torch.long))
+
+                            if leg_chains:
+                                diffs = []
+                                for idx_tensor in leg_chains:
+                                    # geo_chain: (..., K) for one leg
+                                    geo_chain = geo_local[..., idx_tensor]
+                                    # Smooth chain-difference penalty: use Huber (smooth L1) to avoid kinks at 0.
+                                    # Keeps scale close to |diff| for larger errors, but is quadratic near 0.
+                                    beta = float(getattr(self, 'rot_chain_beta', 0.01) or 0.01)
+                                    if beta <= 0:
+                                        diff = (geo_chain[..., 1:] - geo_chain[..., :-1]).abs()
+                                    else:
+                                        diff = F.smooth_l1_loss(
+                                            geo_chain[..., 1:], geo_chain[..., :-1],
+                                            beta=beta, reduction='none'
+                                        )
+                                    diffs.append(diff)
+                                # Aggregate over all legs and joints
+                                chain_diff = _torch.stack(diffs, dim=0).mean()
+                                chain_loss = chain_diff
+                                loss = loss + chain_weight * chain_loss
+                                self._accumulate_loss_contrib('rot_chain', chain_loss, chain_weight, group='core')
+                                stats['rot_chain_deg'] = float(
+                                    (chain_loss * (180.0 / math.pi)).detach().cpu()
+                                )
+                    except Exception:
+                        # 保守起见：链条平滑计算失败时直接跳过，不影响主 loss
+                        pass
         else:
             stats.setdefault('rot_local_deg', 0.0)
 
