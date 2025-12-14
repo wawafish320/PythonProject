@@ -974,145 +974,6 @@ class Trainer:
                 "考虑缩短 horizon 或引入 skip-connection/latent consistency。"
             )
 
-    def _should_log_fk_pos_gradients(self, batch_idx: int) -> bool:
-        if not bool(getattr(self, 'fk_grad_attrib_log', False)):
-            return False
-        interval = int(getattr(self, 'fk_grad_attrib_interval', 0) or 0)
-        if interval <= 0:
-            return int(batch_idx) == 1
-        interval = max(1, interval)
-        return (int(batch_idx) % interval) == 0
-
-    def _maybe_log_fk_pos_gradients(self, preds_dict, gt_seq, epoch: int, batch_idx: int) -> None:
-        if not self._should_log_fk_pos_gradients(batch_idx):
-            return
-        import torch
-        import torch.nn.functional as F
-
-        loss_fn = getattr(self, 'loss_fn', None)
-        if loss_fn is None or not isinstance(preds_dict, dict):
-            return
-        pm = preds_dict.get('out')
-        if pm is None or not torch.is_tensor(pm) or not pm.requires_grad:
-            return
-        if gt_seq is None or not torch.is_tensor(gt_seq):
-            return
-
-        rot_mats_fn = getattr(loss_fn, '_rot6d_matrices', None)
-        root_rel_fn = getattr(loss_fn, '_root_relative', None)
-        if not callable(rot_mats_fn) or not callable(root_rel_fn):
-            return
-
-        try:
-            Rp_world = rot_mats_fn(pm)
-            Rg_world = rot_mats_fn(gt_seq)
-        except Exception:
-            return
-        if Rp_world is None or Rg_world is None:
-            return
-
-        try:
-            Rp_root = root_rel_fn(Rp_world)
-            Rg_root = root_rel_fn(Rg_world)
-        except Exception:
-            return
-
-        Rp_fk_root = Rp_root
-        fk_stop = getattr(loss_fn, 'fk_stopgrad_bones', None) or []
-        if fk_stop:
-            try:
-                joint_count_fk = int(Rp_world.shape[-3])
-                stop_idx = loss_fn._resolve_fk_stopgrad_indices(joint_count_fk)
-                if stop_idx:
-                    Rp_fk_world = loss_fn._apply_stopgrad_mats(Rp_world, stop_idx)
-                    Rp_fk_root = root_rel_fn(Rp_fk_world)
-            except Exception:
-                Rp_fk_root = Rp_root
-
-        pos_pred = self._fk_positions(Rp_fk_root)
-        pos_gt = self._fk_positions(Rg_root)
-        if pos_pred is None or pos_gt is None:
-            return
-
-        fk_res = F.smooth_l1_loss(pos_pred, pos_gt, reduction='none').mean(dim=-1)  # (..., J)
-        joint_count = int(pos_pred.shape[-2])
-        weights = self._joint_weights(pos_pred, joint_count)
-
-        # mirror MotionJointLoss: only supervise feet if present
-        foot_indices: list[int] = []
-        bone_names = getattr(loss_fn, 'bone_names', None) or getattr(self, '_bone_names', None) or []
-        if isinstance(bone_names, (list, tuple)) and bone_names:
-            name_to_idx = {str(nm): idx for idx, nm in enumerate(bone_names[:joint_count])}
-            for nm in ("foot_l", "foot_r"):
-                idx = name_to_idx.get(nm)
-                if isinstance(idx, int) and 0 <= idx < joint_count:
-                    foot_indices.append(idx)
-        if foot_indices:
-            idx_tensor = torch.as_tensor(foot_indices, device=pos_pred.device, dtype=torch.long)
-            fk_res = fk_res.index_select(-1, idx_tensor)
-            weights = weights.index_select(0, idx_tensor)
-
-        w = weights.view(1, 1, -1)
-        fk_loss = (fk_res * w).mean()
-
-        grad = torch.autograd.grad(
-            fk_loss,
-            pm,
-            retain_graph=True,
-            allow_unused=True,
-        )[0]
-        if grad is None:
-            return
-
-        group_slices = getattr(loss_fn, 'group_slices', None)
-        rot_slice = group_slices.get('BoneRotations6D') if isinstance(group_slices, dict) else None
-        if not isinstance(rot_slice, slice):
-            rot_slice = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
-        if not isinstance(rot_slice, slice):
-            return
-
-        g = grad[..., rot_slice]
-        D = int(g.shape[-1])
-        if D <= 0 or (D % 6) != 0:
-            return
-        J = D // 6
-        g = g.view(g.shape[0], g.shape[1], J, 6)
-        per_joint = g.norm(dim=-1).mean(dim=(0, 1))  # (J,)
-
-        bone_names = [str(x) for x in bone_names[:J]] if isinstance(bone_names, (list, tuple)) else []
-        idx_map = {name: idx for idx, name in enumerate(bone_names)} if bone_names else {}
-
-        picks = ("pelvis", "Bip001", "thigh_l", "calf_l", "foot_l", "thigh_r", "calf_r", "foot_r")
-        parts = []
-        for nm in picks:
-            idx = idx_map.get(nm)
-            if idx is None:
-                continue
-            try:
-                parts.append(f"{nm}={float(per_joint[idx].detach().cpu()):.3e}")
-            except Exception:
-                continue
-
-        top_txt = ""
-        topk = int(getattr(self, 'fk_grad_attrib_topk', 0) or 0)
-        if bone_names and topk > 0:
-            topk = max(1, min(topk, len(bone_names)))
-            try:
-                vals, idxs = torch.topk(per_joint.detach(), k=topk)
-                top_parts = []
-                for v, idx in zip(vals.detach().cpu().tolist(), idxs.detach().cpu().tolist()):
-                    nm = bone_names[idx] if 0 <= idx < len(bone_names) else str(idx)
-                    top_parts.append(f"{nm}={float(v):.3e}")
-                top_txt = " | top: " + ", ".join(top_parts)
-            except Exception:
-                top_txt = ""
-
-        stop_txt = f" stopgrad={fk_stop}" if fk_stop else ""
-        if parts:
-            print(f"[FKGrad][ep {int(epoch):03d}][bi {int(batch_idx):04d}] " + " ".join(parts) + top_txt + stop_txt)
-        else:
-            print(f"[FKGrad][ep {int(epoch):03d}][bi {int(batch_idx):04d}]" + top_txt + stop_txt)
-
     def _history_drift_debug(
         self,
         state_seq,
@@ -2284,7 +2145,6 @@ class Trainer:
                     loss, stats = out, {}
                 if not isinstance(stats, dict):
                     stats = {} if stats is None else dict(stats)
-                self._maybe_log_fk_pos_gradients(preds_dict, gt_seq, ep, bi)
 
                 loss, stats = self._maybe_apply_adaptive_loss(loss, stats)
 
@@ -4344,12 +4204,6 @@ def train_entry():
                    help='启用梯度日志时，每隔多少个 batch 采样一次。')
     p.add_argument('--freerun_grad_ratio_alert', type=float, default=0.01,
                    help='若 stepH/step0 的梯度范数比低于该阈值则打印告警。')
-    p.add_argument('--fk_grad_attrib_log', action='store_true',
-                   help='打印 fk_pos 对各关节 rot6d 的梯度归因（用于验证 pelvis stop-grad 是否生效）。')
-    p.add_argument('--fk_grad_attrib_interval', type=int, default=0,
-                   help='fk_grad_attrib_log 时生效：0=每个 epoch 仅首个 batch；>0=每 N 个 batch 打印一次。')
-    p.add_argument('--fk_grad_attrib_topk', type=int, default=6,
-                   help='fk_grad_attrib_log 时打印 top-k 骨骼梯度条目数。')
     p.add_argument('--freerun_debug_steps', type=int, default=0,
                    help='>0 时，在 freerun 评估中打印前 N 个自回归步的 yaw/速度诊断')
     p.add_argument('--history_debug_steps', type=int, default=0,
@@ -4411,19 +4265,18 @@ def train_entry():
     p.add_argument('--w_rot_ortho', type=float, default=0.001)
     p.add_argument('--w_fk_pos', type=float, default=0.0,
                    help='FK 末端位置损失权重（0 表示禁用）。')
+    p.add_argument(
+        '--fk_pos_bones',
+        type=str,
+        default='foot_l,foot_r',
+        help='FK position loss 监督的骨骼名称（逗号分隔）。默认只监督 foot_l/foot_r；用 "all" 或 "*" 表示监督全部关节。',
+    )
     p.add_argument('--w_rot_local', type=float, default=0.0,
                    help='父子关节局部 geodesic 约束权重（0=关闭）。')
     p.add_argument('--w_root_vel', type=float, default=0.0,
                    help='根速度向量 MSE 损失权重（输出包含 RootVelocity 时生效）。')
     p.add_argument('--w_root_speed', type=float, default=0.0,
                    help='根速度模长 MAE 损失权重（输出包含 RootVelocity 时生效）。')
-    p.add_argument(
-        '--fk_stopgrad_bones',
-        type=str,
-        default='',
-        help='仅对 FK 位置损失(fk_pos)生效：对指定骨骼的旋转 stop-grad，避免 pelvis/root 吃掉梯度。'
-             '格式：逗号分隔 bone_name 或 joint_index，例如 "pelvis" 或 "pelvis,0"。',
-    )
     p.add_argument('--adaptive_bone_weights', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
                    help='是否根据骨骼运动幅度自适应权重（默认开启）。')
     p.add_argument('--use_hierarchy_weights', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
@@ -4756,7 +4609,6 @@ def train_entry():
         w_rot_local=w_rot_local,
         w_root_vel=w_root_vel,
         w_root_speed=w_root_speed,
-        fk_stopgrad_bones=_arg('fk_stopgrad_bones', ''),
 
         adaptive_bone_weights=adaptive_bone_weights,
         bone_prior_stds=bone_prior_stds,
@@ -4767,6 +4619,13 @@ def train_entry():
         max_weight_ratio=max_weight_ratio,
         weight_gamma=weight_gamma,
     )
+    # FK position supervision targets
+    try:
+        fk_pos_bones_arg = str(_arg('fk_pos_bones', 'foot_l,foot_r') or '').strip()
+        if fk_pos_bones_arg:
+            loss_fn.fk_pos_bone_names = [s.strip() for s in fk_pos_bones_arg.split(',') if s.strip()]
+    except Exception:
+        pass
     # Unified bone weight parameters (new scheme)
     loss_fn.unified_downstream_power = float(_arg('unified_downstream_power', 0.6) or 0.6)
     loss_fn.unified_self_scale = float(_arg('unified_self_scale', 1.5) or 1.5)
@@ -4793,7 +4652,6 @@ def train_entry():
         f"w_rot_ortho={loss_fn.w_rot_ortho} "
         f"w_fk_pos={loss_fn.w_fk_pos} "
         f"w_rot_local={loss_fn.w_rot_local} "
-        f"fk_stopgrad_bones={getattr(loss_fn, 'fk_stopgrad_bones', [])} "
         f"adaptive_bone_weights={loss_fn.use_adaptive_weights} "
         f"use_hierarchy_weights={loss_fn.use_hierarchy_weights} "
         f"hier_mode={loss_fn.hierarchy_mode} "
@@ -4930,9 +4788,6 @@ def train_entry():
     trainer.freerun_grad_log = bool(_arg('freerun_grad_log', False))
     trainer.freerun_grad_log_interval = int(_arg('freerun_grad_log_interval', 50) or 50)
     trainer.freerun_grad_ratio_alert = float(_arg('freerun_grad_ratio_alert', 0.01) or 0.01)
-    trainer.fk_grad_attrib_log = bool(_arg('fk_grad_attrib_log', False))
-    trainer.fk_grad_attrib_interval = int(_arg('fk_grad_attrib_interval', 0) or 0)
-    trainer.fk_grad_attrib_topk = int(_arg('fk_grad_attrib_topk', 6) or 6)
     adaptive_loss_method = str(_arg('adaptive_loss_method', 'none') or 'none').lower()
     adaptive_loss_terms = [
         term.strip()

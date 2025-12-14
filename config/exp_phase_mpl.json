@@ -103,7 +103,7 @@
       },
       "loss_groups": {
         "core": {
-          "w_fk_pos": 0.06,
+          "w_fk_pos": 0.08,
           "w_rot_local": 0.18,
           "w_root_vel": 0.0,
           "w_root_speed": 0.0
@@ -120,59 +120,27 @@
         "freerun_weight": 0.0,
         "freerun_horizon": 0,
         "eval_horizon": 8,
-        "teacher_rot_noise_prob": 0.1,
-        "teacher_rot_noise_deg": 0.8,
-        "input_noise_profile": [
-          {
-            "prob": 0.85,
-            "min": 0.0,
-            "max": 0.0
-          },
-          {
-            "prob": 0.1,
-            "min": 0.0,
-            "max": 0.5
-          },
-          {
-            "prob": 0.05,
-            "min": 0.5,
-            "max": 1.0
-          }
-        ],
+        "teacher_rot_noise_prob": 0.0,
+        "teacher_rot_noise_deg": 0.0,
+        "input_noise_profile": [],
         "tf_max": 1.0,
         "tf_min": 1.0
       },
       "params": {
         "freerun_weight": 0.0,
         "freerun_horizon": 0,
-        "teacher_rot_noise_prob": 0.1,
-        "teacher_rot_noise_deg": 0.8,
-        "input_noise_profile": [
-          {
-            "prob": 0.85,
-            "min": 0.0,
-            "max": 0.0
-          },
-          {
-            "prob": 0.1,
-            "min": 0.0,
-            "max": 0.5
-          },
-          {
-            "prob": 0.05,
-            "min": 0.5,
-            "max": 1.0
-          }
-        ],
+        "teacher_rot_noise_prob": 0.0,
+        "teacher_rot_noise_deg": 0.0,
+        "input_noise_profile": [],
         "tf_max": 1.0,
         "tf_min": 1.0,
         "eval_horizon": 8,
-        "opt_lr": 0.0007
+        "opt_lr": 0.0005
       },
       "loss_groups": {
         "core": {
-          "w_fk_pos": 0.07,
-          "w_rot_local": 0.18,
+          "w_fk_pos": 0.08,
+          "w_rot_local": 0.22,
           "w_root_vel": 0.0,
           "w_root_speed": 0.0
         }
@@ -188,58 +156,26 @@
         "freerun_weight": 0.0,
         "freerun_horizon": 0,
         "eval_horizon": 8,
-        "teacher_rot_noise_prob": 0.15,
-        "teacher_rot_noise_deg": 0.8,
-        "input_noise_profile": [
-          {
-            "prob": 0.85,
-            "min": 0.0,
-            "max": 0.0
-          },
-          {
-            "prob": 0.1,
-            "min": 0.0,
-            "max": 0.5
-          },
-          {
-            "prob": 0.05,
-            "min": 0.5,
-            "max": 1.0
-          }
-        ],
+        "teacher_rot_noise_prob": 0.0,
+        "teacher_rot_noise_deg": 0.0,
+        "input_noise_profile": [],
         "tf_max": 1.0,
         "tf_min": 1.0
       },
       "params": {
         "freerun_weight": 0.0,
         "freerun_horizon": 0,
-        "teacher_rot_noise_prob": 0.15,
-        "teacher_rot_noise_deg": 0.8,
-        "input_noise_profile": [
-          {
-            "prob": 0.85,
-            "min": 0.0,
-            "max": 0.0
-          },
-          {
-            "prob": 0.1,
-            "min": 0.0,
-            "max": 0.5
-          },
-          {
-            "prob": 0.05,
-            "min": 0.5,
-            "max": 1.0
-          }
-        ],
+        "teacher_rot_noise_prob": 0.0,
+        "teacher_rot_noise_deg": 0.0,
+        "input_noise_profile": [],
         "tf_max": 1.0,
         "tf_min": 1.0,
         "eval_horizon": 8,
-        "opt_lr": 0.0006
+        "opt_lr": 0.0005
       },
       "loss_groups": {
         "core": {
-          "w_fk_pos": 0.075,
+          "w_fk_pos": 0.1,
           "w_rot_local": 0.18,
           "w_root_vel": 0.0,
           "w_root_speed": 0.0
@@ -256,59 +192,27 @@
         "freerun_weight": 0.0,
         "freerun_horizon": 0,
         "eval_horizon": 8,
-        "teacher_rot_noise_prob": 0.2,
-        "teacher_rot_noise_deg": 0.8,
-        "input_noise_profile": [
-          {
-            "prob": 0.85,
-            "min": 0.0,
-            "max": 0.0
-          },
-          {
-            "prob": 0.1,
-            "min": 0.0,
-            "max": 0.5
-          },
-          {
-            "prob": 0.05,
-            "min": 0.5,
-            "max": 1.0
-          }
-        ],
+        "teacher_rot_noise_prob": 0.0,
+        "teacher_rot_noise_deg": 0.0,
+        "input_noise_profile": [],
         "tf_max": 1.0,
         "tf_min": 1.0
       },
       "params": {
         "freerun_weight": 0.0,
         "freerun_horizon": 0,
-        "teacher_rot_noise_prob": 0.2,
-        "teacher_rot_noise_deg": 0.8,
-        "input_noise_profile": [
-          {
-            "prob": 0.85,
-            "min": 0.0,
-            "max": 0.0
-          },
-          {
-            "prob": 0.1,
-            "min": 0.0,
-            "max": 0.5
-          },
-          {
-            "prob": 0.05,
-            "min": 0.5,
-            "max": 1.0
-          }
-        ],
+        "teacher_rot_noise_prob": 0.0,
+        "teacher_rot_noise_deg": 0.0,
+        "input_noise_profile": [],
         "tf_max": 1.0,
         "tf_min": 1.0,
         "eval_horizon": 8,
-        "opt_lr": 0.0005
+        "opt_lr": 0.0003
       },
       "loss_groups": {
         "core": {
-          "w_fk_pos": 0.08,
-          "w_rot_local": 0.18,
+          "w_fk_pos": 0.1,
+          "w_rot_local": 0.2,
           "w_root_vel": 0.0,
           "w_root_speed": 0.0
         }
@@ -342,7 +246,7 @@
       },
       "loss_groups": {
         "core": {
-          "w_fk_pos": 0.09,
+          "w_fk_pos": 0.08,
           "w_rot_local": 0.18,
           "w_root_vel": 0.05,
           "w_root_speed": 0.03
@@ -377,7 +281,7 @@
       },
       "loss_groups": {
         "core": {
-          "w_fk_pos": 0.1,
+          "w_fk_pos": 0.08,
           "w_rot_local": 0.18,
           "w_root_vel": 0.05,
           "w_root_speed": 0.03

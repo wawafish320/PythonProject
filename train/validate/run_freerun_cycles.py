@@ -36,7 +36,7 @@ import numpy as np
 import torch  # ensure torch is bound before any inner scope uses it
 
 from train.training_MPL import MotionEventDataset, Trainer, geodesic_R, validate_and_fix_model_
-from train.geometry import rot6d_to_matrix, reproject_rot6d
+from train.geometry import rot6d_to_matrix, reproject_rot6d, root_relative_matrices
 from train.models import EventMotionModel, MotionJointLoss
 from train.layout import LayoutCenter, DataNormalizer
 from train.geometry import compose_rot6d_delta
@@ -458,10 +458,24 @@ def _run_freerun_cycles(
     sample: Dict[str, torch.Tensor],
     rounds: int,
     device: torch.device,
-) -> List[Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Core free‑run loop: autoregress over `rounds * T` steps without reset,
-    then compute per‑round diagnostics (MSEnormY, GeoDeg).
+    then compute per‑round diagnostics.
+
+    Note:
+        GeoDeg (global/world) will be affected by root drift and thus can
+        "couple" root deviation into all joint errors if rotations are global.
+        We additionally report:
+            - RootGeoDeg: root joint geodesic error (deg)
+            - GeoLocalDeg: root-relative geodesic error (deg), decoupled from root (unweighted mean)
+            - GeoLocalDegWeighted: root-relative geodesic error (deg) with Trainer joint weights
+            - RootPosErr / RootVelMAE (if X has RootPosition/RootVelocity)
+
+        Training/online diagnostics may apply a constant "root0 alignment" (align predicted
+        root at the first step to GT root, then measure drift). This script reports both:
+            - GeoDeg / RootGeoDeg: raw (no alignment)
+            - GeoDegAligned0 / RootGeoDegAligned0: constant aligned at step 0
     """
     if rounds <= 0:
         raise ValueError("rounds must be > 0")
@@ -680,20 +694,49 @@ def _run_freerun_cycles(
     if not predsY:
         raise RuntimeError("No predictions produced during free‑run.")
 
-    # Align predictions and GT strictly by one-step look-ahead:
-    #   at iteration t we predicted frame (t+1) based on history up to t.
-    # So we ignore the very last GT frame and compare:
-    #   predY[:, i]  vs  gt_seq[:, start_t+1+i]
+    # Align predictions and GT (match train/eval_utils.evaluate_freerun):
+    # Dataset Y is already aligned to the "next frame" during conversion
+    # (see MotionEventDataset.__getitem__: "Y 已在转换阶段对齐到 下一帧"),
+    # and free-run evaluation compares predY[t] vs gtY[t] starting at start_t.
     predY_full = torch.stack(predsY, dim=1)  # [B, free_steps_raw, Dy]
     free_steps_raw = predY_full.shape[1]
-    max_aligned = max(0, min(free_steps_raw, T_total - (start_t + 1)))
+    max_aligned = max(0, min(free_steps_raw, T_total - start_t))
     if max_aligned <= 0:
         raise RuntimeError("Not enough frames for aligned free-run evaluation.")
     predY = predY_full[:, :max_aligned]
     free_steps = max_aligned
-    gt_start = start_t + 1
+    gt_start = start_t
     gt_end = gt_start + free_steps
     gtY = gt_seq[:, gt_start:gt_end]
+
+    # Align predicted X (state) to GT for root drift metrics.
+    predX_full = torch.stack(predsX, dim=1) if predsX else None  # [B, free_steps_raw, Dx] (next-state sequence)
+    predX = predX_full[:, :max_aligned] if predX_full is not None else None  # [B, free_steps, Dx]
+    # predsX[t] is the carried state after predicting predY[t], so align it to GT state at t+1.
+    gtX = state_seq[:, gt_start + 1:gt_end + 1]  # [B, free_steps, Dx]
+
+    predX_raw = None
+    gtX_raw = None
+    root_pos_err: Optional[torch.Tensor] = None  # [free_steps]
+    root_vel_mae: Optional[torch.Tensor] = None  # [free_steps]
+    if predX is not None and getattr(trainer, "normalizer", None) is not None:
+        try:
+            with torch.no_grad():
+                predX_raw = trainer.normalizer.denorm_x(predX.reshape(-1, predX.shape[-1])).view_as(predX)
+                gtX_raw = trainer.normalizer.denorm_x(gtX.reshape(-1, gtX.shape[-1])).view_as(gtX)
+            rootpos_sl = getattr(trainer, "rootpos_x_slice", None)
+            if isinstance(rootpos_sl, slice):
+                diff = predX_raw[..., rootpos_sl] - gtX_raw[..., rootpos_sl]
+                root_pos_err = torch.norm(diff, dim=-1).mean(dim=0)  # [free_steps]
+            rootvel_sl = getattr(trainer, "rootvel_x_slice", None)
+            if isinstance(rootvel_sl, slice):
+                diff = predX_raw[..., rootvel_sl] - gtX_raw[..., rootvel_sl]
+                root_vel_mae = diff.abs().mean(dim=-1).mean(dim=0)  # [free_steps]
+        except Exception:
+            predX_raw = None
+            gtX_raw = None
+            root_pos_err = None
+            root_vel_mae = None
 
     # ---- Per‑round metrics ---------------------------------------------------
     # Shared slices for rotations
@@ -713,7 +756,14 @@ def _run_freerun_cycles(
 
     # Optional: per-bone geodesic error for key bones (same set as training diag)
     loss_fn = getattr(trainer, "loss_fn", None)
-    bone_names = getattr(loss_fn, "bone_names", []) if loss_fn is not None else []
+    bone_names = getattr(loss_fn, "bone_names", None) if loss_fn is not None else None
+    if not bone_names:
+        bone_names = getattr(trainer, "_bone_names", None)
+    if not bone_names:
+        bundle_meta = getattr(trainer, "_bundle_meta", None)
+        if isinstance(bundle_meta, dict):
+            bone_names = bundle_meta.get("bone_names") or bundle_meta.get("skeleton", {}).get("bone_names")
+    bone_names = [str(b) for b in bone_names] if isinstance(bone_names, (list, tuple)) else []
     if not bone_names:
         key_bone_names: List[str] = []
         key_indices: List[int] = []
@@ -730,6 +780,8 @@ def _run_freerun_cycles(
     # Per-step metrics across the whole free-run (helps locate drift frame)
     if width > 0 and width % 6 == 0:
         J = width // 6
+        root_idx = int(getattr(trainer, "eval_root_idx", 0) or 0)
+        root_idx = max(0, min(J - 1, root_idx))
         pr6_full = pred_raw_full[..., rot_slice].view(1, free_steps, J, 6)
         gt6_full = gt_raw_full[..., rot_slice].view(1, free_steps, J, 6)
         pr6_full = reproject_rot6d(pr6_full)
@@ -737,27 +789,98 @@ def _run_freerun_cycles(
         Rp_full = rot6d_to_matrix(pr6_full)  # [1, free_steps, J, 3, 3]
         Rg_full = rot6d_to_matrix(gt6_full)
         geo_full = geodesic_R(Rp_full, Rg_full) * deg_factor  # [1, free_steps, J]
+        geo_full_aligned0 = None
+        # Constant root0 alignment (mirrors Trainer._diagnose_free_run_impl behavior for GeoDeg).
+        # This suppresses the initial global frame mismatch and focuses on drift.
+        if free_steps > 0:
+            try:
+                Rpr0 = Rp_full[:, 0, root_idx]  # [1,3,3]
+                Rgr0 = Rg_full[:, 0, root_idx]
+                R_align = torch.matmul(Rgr0, Rpr0.transpose(-1, -2))  # [1,3,3]
+                Rp_aligned = torch.matmul(
+                    R_align.view(1, 1, 1, 3, 3).expand_as(Rp_full),
+                    Rp_full,
+                )
+                geo_full_aligned0 = geodesic_R(Rp_aligned, Rg_full) * deg_factor
+            except Exception:
+                geo_full_aligned0 = None
+        # Root-relative geodesic (decouples global root drift from pose).
+        Rp_local_full = root_relative_matrices(Rp_full, root_idx)
+        Rg_local_full = root_relative_matrices(Rg_full, root_idx)
+        geo_local_full = geodesic_R(Rp_local_full, Rg_local_full) * deg_factor  # [1, free_steps, J]
+        # Training diagnostics use joint weights (unified/hierarchy weights) for GeoLocalDeg.
+        # Keep both:
+        #   - GeoLocalDeg: unweighted mean over all joints (debug-friendly)
+        #   - GeoLocalDegWeighted: weighted mean matching Trainer._diagnose_free_run_impl
+        joint_weights = None
+        weights_sum = None
+        w_joint = None
+        try:
+            joint_weights = trainer._joint_weights(Rp_local_full, J)  # [J]
+            weights_sum = joint_weights.sum().clamp_min(1e-6)
+            w_joint = joint_weights.view(1, 1, -1)  # [1,1,J]
+        except Exception:
+            joint_weights = None
+            weights_sum = None
+            w_joint = None
     else:
+        root_idx = 0
         geo_full = None
+        geo_full_aligned0 = None
+        geo_local_full = None
+        joint_weights = None
+        weights_sum = None
+        w_joint = None
 
     for t in range(free_steps):
         geo_t = None
+        geo_local_t = None
+        geo_local_weighted_t = None
+        root_geo_t = None
+        geo_aligned0_t = None
+        root_geo_aligned0_t = None
         keybone_geo: Dict[str, float] = {}
+        keybone_geo_local: Dict[str, float] = {}
         if geo_full is not None:
             # Mean over all joints
             geo_t = float(geo_full[:, t].mean().item())
+            root_geo_t = float(geo_full[:, t, root_idx].mean().item())
             # Per-key-bone geodesic errors
             if key_indices:
                 per_joint = geo_full[0, t]  # [J]
                 for name, j_idx in zip(key_bone_names, key_indices):
                     if 0 <= j_idx < per_joint.numel():
                         keybone_geo[name] = float(per_joint[j_idx].item())
+        if geo_full_aligned0 is not None:
+            geo_aligned0_t = float(geo_full_aligned0[:, t].mean().item())
+            root_geo_aligned0_t = float(geo_full_aligned0[:, t, root_idx].mean().item())
+        if geo_local_full is not None:
+            geo_local_t = float(geo_local_full[:, t].mean().item())
+            if key_indices:
+                per_joint_local = geo_local_full[0, t]
+                for name, j_idx in zip(key_bone_names, key_indices):
+                    if 0 <= j_idx < per_joint_local.numel():
+                        keybone_geo_local[name] = float(per_joint_local[j_idx].item())
+            if geo_local_full is not None and w_joint is not None and weights_sum is not None:
+                # Weighted GeoLocalDeg (matches Trainer)
+                geo_local_weighted_t = float(
+                    ((geo_local_full[:, t] * w_joint).sum(dim=-1) / weights_sum).mean().item()
+                )
         entry: Dict[str, Any] = {
             "step": int(t),
             "GeoDeg": geo_t,
+            "GeoDegAligned0": geo_aligned0_t,
+            "GeoLocalDeg": geo_local_t,
+            "GeoLocalDegWeighted": geo_local_weighted_t,
+            "RootGeoDeg": root_geo_t,
+            "RootGeoDegAligned0": root_geo_aligned0_t,
+            "RootPosErr": float(root_pos_err[t].item()) if root_pos_err is not None else None,
+            "RootVelMAE": float(root_vel_mae[t].item()) if root_vel_mae is not None else None,
         }
         if keybone_geo:
             entry["KeyBoneGeoDeg"] = keybone_geo
+        if keybone_geo_local:
+            entry["KeyBoneGeoLocalDeg"] = keybone_geo_local
         per_step.append(entry)
 
     for r in range(rounds):
@@ -766,28 +889,56 @@ def _run_freerun_cycles(
         if t1 <= t0:
             continue
 
-        pred_r = predY[:, t0:t1]  # [1, Tr, Dy]
-        gt_r = gtY[:, t0:t1]
-
-        # GeoDeg for this round (all joints)
-        pr_raw = pred_raw_full[:, t0:t1, :]
-        gt_raw = gt_raw_full[:, t0:t1, :]
-        width = rot_slice.stop - rot_slice.start
         geo_deg_val: Optional[float] = None
+        geo_local_deg_val: Optional[float] = None
+        geo_local_deg_weighted_val: Optional[float] = None
+        root_geo_deg_val: Optional[float] = None
+        root_geo_deg_aligned0_val: Optional[float] = None
         keybone_geo_mean: Optional[float] = None
-        if width > 0 and width % 6 == 0:
-            J = width // 6
-            pr6 = pr_raw[..., rot_slice]
-            gt6 = gt_raw[..., rot_slice]
-            pr6 = reproject_rot6d(pr6.view(-1, J, 6))
-            gt6 = reproject_rot6d(gt6.view(-1, J, 6))
-            Rp = rot6d_to_matrix(pr6).view(1, -1, J, 3, 3)
-            Rg = rot6d_to_matrix(gt6).view(1, -1, J, 3, 3)
-            geo = geodesic_R(Rp, Rg) * deg_factor  # [1, Tr, J]
-            geo_deg_val = float(geo.mean().item())
+        keybone_geo_local_mean: Optional[float] = None
+        root_pos_err_mean: Optional[float] = None
+        root_pos_err_start: Optional[float] = None
+        root_pos_err_end: Optional[float] = None
+        root_vel_mae_mean: Optional[float] = None
+        root_vel_mae_start: Optional[float] = None
+        root_vel_mae_end: Optional[float] = None
+
+        if geo_full is not None:
+            geo_seg = geo_full[:, t0:t1]  # [B, Tr, J]
+            geo_deg_val = float(geo_seg.mean().item())
+            root_geo_deg_val = float(geo_seg[..., root_idx].mean().item())
             if key_indices:
-                kb = geo[..., key_indices]  # [1, Tr, K]
+                kb = geo_seg[..., key_indices]
                 keybone_geo_mean = float(kb.mean().item())
+        geo_deg_aligned0_val: Optional[float] = None
+        if geo_full_aligned0 is not None:
+            geo_align_seg = geo_full_aligned0[:, t0:t1]
+            geo_deg_aligned0_val = float(geo_align_seg.mean().item())
+            root_geo_deg_aligned0_val = float(geo_align_seg[..., root_idx].mean().item())
+
+        if geo_local_full is not None:
+            geo_local_seg = geo_local_full[:, t0:t1]
+            geo_local_deg_val = float(geo_local_seg.mean().item())
+            if w_joint is not None and weights_sum is not None:
+                geo_local_deg_weighted_val = float(
+                    (geo_local_seg * w_joint).sum().item()
+                    / (weights_sum.item() * geo_local_seg.shape[0] * geo_local_seg.shape[1])
+                )
+            if key_indices:
+                kb_local = geo_local_seg[..., key_indices]
+                keybone_geo_local_mean = float(kb_local.mean().item())
+
+        if root_pos_err is not None:
+            seg = root_pos_err[t0:t1]
+            root_pos_err_mean = float(seg.mean().item())
+            root_pos_err_start = float(seg[0].item()) if seg.numel() > 0 else None
+            root_pos_err_end = float(seg[-1].item()) if seg.numel() > 0 else None
+
+        if root_vel_mae is not None:
+            seg = root_vel_mae[t0:t1]
+            root_vel_mae_mean = float(seg.mean().item())
+            root_vel_mae_start = float(seg[0].item()) if seg.numel() > 0 else None
+            root_vel_mae_end = float(seg[-1].item()) if seg.numel() > 0 else None
 
         round_entry: Dict[str, Any] = {
             "round": int(r),
@@ -795,9 +946,22 @@ def _run_freerun_cycles(
             "end_step": int(t1 - 1),
             "steps": int(t1 - t0),
             "GeoDeg": geo_deg_val,
+            "GeoDegAligned0": geo_deg_aligned0_val,
+            "GeoLocalDeg": geo_local_deg_val,
+            "GeoLocalDegWeighted": geo_local_deg_weighted_val,
+            "RootGeoDeg": root_geo_deg_val,
+            "RootGeoDegAligned0": root_geo_deg_aligned0_val,
+            "RootPosErrMean": root_pos_err_mean,
+            "RootPosErrStart": root_pos_err_start,
+            "RootPosErrEnd": root_pos_err_end,
+            "RootVelMAEMean": root_vel_mae_mean,
+            "RootVelMAEStart": root_vel_mae_start,
+            "RootVelMAEEnd": root_vel_mae_end,
         }
         if keybone_geo_mean is not None:
             round_entry["KeyBoneGeoDegMean"] = keybone_geo_mean
+        if keybone_geo_local_mean is not None:
+            round_entry["KeyBoneGeoLocalDegMean"] = keybone_geo_local_mean
         metrics_per_round.append(round_entry)
 
     return metrics_per_round, per_step

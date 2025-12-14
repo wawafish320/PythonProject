@@ -455,7 +455,6 @@ class MotionJointLoss(nn.Module):
         w_rot_local: float = 0.0,
         w_root_vel: float = 0.0,
         w_root_speed: float = 0.0,
-        fk_stopgrad_bones: Any = None,
 
         # ===== Adaptive bone weighting =====
         adaptive_bone_weights: bool = False,
@@ -475,9 +474,6 @@ class MotionJointLoss(nn.Module):
         self.w_rot_local = float(w_rot_local)
         self.w_root_vel = float(w_root_vel)
         self.w_root_speed = float(w_root_speed)
-        self.fk_stopgrad_bones = self._normalize_name_list(fk_stopgrad_bones)
-        self._fk_stopgrad_idx_cache: Dict[int, list[int]] = {}
-        self._warned_fk_stopgrad_missing: bool = False
         self.angvel_eps = 1e-6
         self.fps = float(fps)
         self.output_layout = output_layout or {}
@@ -493,6 +489,10 @@ class MotionJointLoss(nn.Module):
         self._warned_bad_rot6d = False
         self.template_hint: Optional[str] = None
         self.bundle_hint: Optional[str] = None
+        # FK position supervision target bones (comma-separated from CLI, or list[str]).
+        # Default keeps backward-compatible behavior: only supervise feet.
+        self.fk_pos_bone_names: list[str] = ['foot_l', 'foot_r']
+        self._warned_fk_pos_bones_missing = False
         # 缓存几何骨骼权重（按 device/dtype），以及可选的动态每关节缩放因子
         self._joint_weight_cache: dict[tuple, torch.Tensor] = {}
         self._dynamic_bone_alpha_cpu: Optional[torch.Tensor] = None
@@ -563,85 +563,6 @@ class MotionJointLoss(nn.Module):
 
         # skeleton parents may be set later via set_skeleton; avoid early fallback here
 
-    @staticmethod
-    def _normalize_name_list(value: Any) -> list[str]:
-        if value is None:
-            return []
-        if isinstance(value, str):
-            return [tok.strip() for tok in value.split(',') if tok.strip()]
-        if isinstance(value, (list, tuple)):
-            out: list[str] = []
-            for item in value:
-                if item is None:
-                    continue
-                txt = str(item).strip()
-                if txt:
-                    out.append(txt)
-            return out
-        txt = str(value).strip()
-        return [txt] if txt else []
-
-    def _resolve_fk_stopgrad_indices(self, joint_count: int) -> list[int]:
-        if joint_count <= 0:
-            return []
-        cached = self._fk_stopgrad_idx_cache.get(int(joint_count))
-        if cached is not None:
-            return cached
-        names = getattr(self, 'fk_stopgrad_bones', None) or []
-        if not names:
-            self._fk_stopgrad_idx_cache[int(joint_count)] = []
-            return []
-        if not isinstance(self.bone_names, list) or not self.bone_names:
-            self._fk_stopgrad_idx_cache[int(joint_count)] = []
-            return []
-
-        name_to_idx = {str(nm): idx for idx, nm in enumerate(self.bone_names[:joint_count])}
-        lower_to_idx = {str(nm).lower(): idx for idx, nm in enumerate(self.bone_names[:joint_count])}
-        indices: list[int] = []
-        missing: list[str] = []
-        for token in names:
-            raw = str(token).strip()
-            if not raw:
-                continue
-            if raw.lstrip('-').isdigit():
-                idx = int(raw)
-                if 0 <= idx < joint_count:
-                    indices.append(idx)
-                else:
-                    missing.append(raw)
-                continue
-            idx = name_to_idx.get(raw)
-            if idx is None:
-                idx = lower_to_idx.get(raw.lower())
-            if idx is None:
-                missing.append(raw)
-            else:
-                indices.append(int(idx))
-
-        indices = sorted(set(i for i in indices if 0 <= i < joint_count))
-        if missing and not self._warned_fk_stopgrad_missing:
-            self._warned_fk_stopgrad_missing = True
-            print(f"[Loss][WARN] fk_stopgrad_bones unresolved: {', '.join(missing)}")
-        self._fk_stopgrad_idx_cache[int(joint_count)] = indices
-        return indices
-
-    @staticmethod
-    def _apply_stopgrad_mats(R: torch.Tensor, indices: Sequence[int]) -> torch.Tensor:
-        import torch
-        if not indices:
-            return R
-        if not torch.is_tensor(R) or R.dim() < 3:
-            return R
-        J = int(R.shape[-3])
-        idx = [int(i) for i in indices if 0 <= int(i) < J]
-        if not idx:
-            return R
-        mask = torch.zeros(J, device=R.device, dtype=torch.bool)
-        mask[idx] = True
-        view_shape = (1,) * (R.dim() - 3) + (J, 1, 1)
-        mask = mask.view(view_shape)
-        return torch.where(mask, R.detach(), R)
-
     def _format_template_hint(self, prefix: str) -> str:
         hints: list[str] = []
         if isinstance(self.template_hint, str) and self.template_hint:
@@ -668,7 +589,6 @@ class MotionJointLoss(nn.Module):
         self._limb_mask_cache = None
         self._torso_mask_cache = None
         self._limb_mask_joint_count = None
-        self._fk_stopgrad_idx_cache = {}
         # reset fk caches when bone count changes
         self._parents_tensor = None
 
@@ -1568,14 +1488,7 @@ class MotionJointLoss(nn.Module):
 
         if self.w_fk_pos > 0.0 and self.has_fk:
             if Rp_root is not None and Rg_root is not None:
-                Rp_fk_root = Rp_root
-                if Rp_world is not None and self.fk_stopgrad_bones:
-                    joint_count_fk = int(Rp_world.shape[-3])
-                    stop_idx = self._resolve_fk_stopgrad_indices(joint_count_fk)
-                    if stop_idx:
-                        Rp_fk_world = self._apply_stopgrad_mats(Rp_world, stop_idx)
-                        Rp_fk_root = self._root_relative(Rp_fk_world)
-                pos_pred = self._fk_positions(Rp_fk_root)
+                pos_pred = self._fk_positions(Rp_root)
                 pos_gt = self._fk_positions(Rg_root)
                 if pos_pred is not None and pos_gt is not None:
                     # pos_*: (..., J, 3) world positions from FK
@@ -1583,20 +1496,43 @@ class MotionJointLoss(nn.Module):
                     joint_count = pos_pred.shape[-2]
                     weights = self._joint_weight_vector(pos_pred.device, pos_pred.dtype, joint_count)
 
-                    # 只监督双脚位置（foot_l / foot_r），梯度通过 FK 链自然传递到大腿/小腿等
-                    foot_indices: list[int] = []
-                    if isinstance(self.bone_names, list) and self.bone_names:
+                    # FK position loss: optionally supervise a subset of joints (default = feet).
+                    # Note: knee/ankle usually correspond to bone origins, e.g. calf_* (knee) / foot_* (ankle) in this rig.
+                    target_names = getattr(self, 'fk_pos_bone_names', None)
+                    if isinstance(target_names, str):
+                        target_names = [s.strip() for s in target_names.split(',') if s.strip()]
+                    elif isinstance(target_names, (list, tuple)):
+                        target_names = [str(s).strip() for s in target_names if str(s).strip()]
+                    else:
+                        target_names = list(self.fk_pos_bone_names)
+
+                    # Special tokens: "all" / "*" -> supervise all joints (no filtering)
+                    if target_names and any(s.lower() in ('all', '*') for s in target_names):
+                        target_names = []
+
+                    if target_names and isinstance(self.bone_names, list) and self.bone_names:
                         name_to_idx = {name: idx for idx, name in enumerate(self.bone_names[:joint_count])}
-                        for nm in ("foot_l", "foot_r"):
+                        target_indices: list[int] = []
+                        for nm in target_names:
                             idx = name_to_idx.get(nm)
                             if isinstance(idx, int) and 0 <= idx < joint_count:
-                                foot_indices.append(idx)
+                                target_indices.append(idx)
 
-                    if foot_indices:
-                        import torch as _torch
-                        idx_tensor = _torch.as_tensor(foot_indices, device=pos_pred.device, dtype=_torch.long)
-                        fk_res = fk_res.index_select(-1, idx_tensor)
-                        weights = weights.index_select(0, idx_tensor)
+                        # De-dup while keeping order
+                        if target_indices:
+                            seen = set()
+                            target_indices = [i for i in target_indices if not (i in seen or seen.add(i))]
+
+                        if target_indices:
+                            import torch as _torch
+                            idx_tensor = _torch.as_tensor(target_indices, device=pos_pred.device, dtype=_torch.long)
+                            fk_res = fk_res.index_select(-1, idx_tensor)
+                            weights = weights.index_select(0, idx_tensor)
+                        elif not self._warned_fk_pos_bones_missing:
+                            self._warned_fk_pos_bones_missing = True
+                            print(
+                                f"[Loss][WARN] fk_pos_bone_names={target_names} not found in bone_names; fallback to supervise all joints."
+                            )
 
                     w = weights.view(1, 1, -1)
                     fk_loss = (fk_res * w).mean()
