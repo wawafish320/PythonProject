@@ -455,6 +455,7 @@ class MotionJointLoss(nn.Module):
         w_rot_local: float = 0.0,
         w_root_vel: float = 0.0,
         w_root_speed: float = 0.0,
+        fk_stopgrad_bones: Any = None,
 
         # ===== Adaptive bone weighting =====
         adaptive_bone_weights: bool = False,
@@ -474,8 +475,9 @@ class MotionJointLoss(nn.Module):
         self.w_rot_local = float(w_rot_local)
         self.w_root_vel = float(w_root_vel)
         self.w_root_speed = float(w_root_speed)
-        # Huber threshold for rot_chain regularizer (radians). Set <=0 to fall back to abs diff.
-        self.rot_chain_beta = 0.01
+        self.fk_stopgrad_bones = self._normalize_name_list(fk_stopgrad_bones)
+        self._fk_stopgrad_idx_cache: Dict[int, list[int]] = {}
+        self._warned_fk_stopgrad_missing: bool = False
         self.angvel_eps = 1e-6
         self.fps = float(fps)
         self.output_layout = output_layout or {}
@@ -561,6 +563,85 @@ class MotionJointLoss(nn.Module):
 
         # skeleton parents may be set later via set_skeleton; avoid early fallback here
 
+    @staticmethod
+    def _normalize_name_list(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [tok.strip() for tok in value.split(',') if tok.strip()]
+        if isinstance(value, (list, tuple)):
+            out: list[str] = []
+            for item in value:
+                if item is None:
+                    continue
+                txt = str(item).strip()
+                if txt:
+                    out.append(txt)
+            return out
+        txt = str(value).strip()
+        return [txt] if txt else []
+
+    def _resolve_fk_stopgrad_indices(self, joint_count: int) -> list[int]:
+        if joint_count <= 0:
+            return []
+        cached = self._fk_stopgrad_idx_cache.get(int(joint_count))
+        if cached is not None:
+            return cached
+        names = getattr(self, 'fk_stopgrad_bones', None) or []
+        if not names:
+            self._fk_stopgrad_idx_cache[int(joint_count)] = []
+            return []
+        if not isinstance(self.bone_names, list) or not self.bone_names:
+            self._fk_stopgrad_idx_cache[int(joint_count)] = []
+            return []
+
+        name_to_idx = {str(nm): idx for idx, nm in enumerate(self.bone_names[:joint_count])}
+        lower_to_idx = {str(nm).lower(): idx for idx, nm in enumerate(self.bone_names[:joint_count])}
+        indices: list[int] = []
+        missing: list[str] = []
+        for token in names:
+            raw = str(token).strip()
+            if not raw:
+                continue
+            if raw.lstrip('-').isdigit():
+                idx = int(raw)
+                if 0 <= idx < joint_count:
+                    indices.append(idx)
+                else:
+                    missing.append(raw)
+                continue
+            idx = name_to_idx.get(raw)
+            if idx is None:
+                idx = lower_to_idx.get(raw.lower())
+            if idx is None:
+                missing.append(raw)
+            else:
+                indices.append(int(idx))
+
+        indices = sorted(set(i for i in indices if 0 <= i < joint_count))
+        if missing and not self._warned_fk_stopgrad_missing:
+            self._warned_fk_stopgrad_missing = True
+            print(f"[Loss][WARN] fk_stopgrad_bones unresolved: {', '.join(missing)}")
+        self._fk_stopgrad_idx_cache[int(joint_count)] = indices
+        return indices
+
+    @staticmethod
+    def _apply_stopgrad_mats(R: torch.Tensor, indices: Sequence[int]) -> torch.Tensor:
+        import torch
+        if not indices:
+            return R
+        if not torch.is_tensor(R) or R.dim() < 3:
+            return R
+        J = int(R.shape[-3])
+        idx = [int(i) for i in indices if 0 <= int(i) < J]
+        if not idx:
+            return R
+        mask = torch.zeros(J, device=R.device, dtype=torch.bool)
+        mask[idx] = True
+        view_shape = (1,) * (R.dim() - 3) + (J, 1, 1)
+        mask = mask.view(view_shape)
+        return torch.where(mask, R.detach(), R)
+
     def _format_template_hint(self, prefix: str) -> str:
         hints: list[str] = []
         if isinstance(self.template_hint, str) and self.template_hint:
@@ -587,6 +668,7 @@ class MotionJointLoss(nn.Module):
         self._limb_mask_cache = None
         self._torso_mask_cache = None
         self._limb_mask_joint_count = None
+        self._fk_stopgrad_idx_cache = {}
         # reset fk caches when bone count changes
         self._parents_tensor = None
 
@@ -1486,7 +1568,14 @@ class MotionJointLoss(nn.Module):
 
         if self.w_fk_pos > 0.0 and self.has_fk:
             if Rp_root is not None and Rg_root is not None:
-                pos_pred = self._fk_positions(Rp_root)
+                Rp_fk_root = Rp_root
+                if Rp_world is not None and self.fk_stopgrad_bones:
+                    joint_count_fk = int(Rp_world.shape[-3])
+                    stop_idx = self._resolve_fk_stopgrad_indices(joint_count_fk)
+                    if stop_idx:
+                        Rp_fk_world = self._apply_stopgrad_mats(Rp_world, stop_idx)
+                        Rp_fk_root = self._root_relative(Rp_fk_world)
+                pos_pred = self._fk_positions(Rp_fk_root)
                 pos_gt = self._fk_positions(Rg_root)
                 if pos_pred is not None and pos_gt is not None:
                     # pos_*: (..., J, 3) world positions from FK
@@ -1530,58 +1619,6 @@ class MotionJointLoss(nn.Module):
                 self._accumulate_loss_contrib('rot_local', local_loss, self.w_rot_local, group='core')
                 stats['rot_local_deg'] = float((local_loss * (180.0 / math.pi)).detach().cpu())
                 self._register_component_loss('rot_local', local_loss, self.w_rot_local)
-
-                # --- Leg-chain smoothness: encourage consistent error along thigh–calf–foot chains ---
-                # This is a small structural regularizer on local geodesic errors:
-                # - Works in parent-relative space (rotation-only, style-agnostic)
-                # - Penalizes large differences of error between adjacent joints on the same leg
-                #   (e.g., thigh very accurate but foot very wrong), which tends to look like a "broken" chain.
-                try:
-                    # Allow explicit override via self.w_rot_chain; otherwise default to a small fraction of w_rot_local
-                    chain_weight = float(getattr(self, 'w_rot_chain', 0.0) or (0.1 * self.w_rot_local))
-                except Exception:
-                    chain_weight = 0.0
-
-                if chain_weight > 0.0 and isinstance(self.bone_names, list) and self.bone_names:
-                    try:
-                        import torch as _torch
-                        joint_count = geo_local.shape[-1]
-                        if joint_count > 1:
-                            name_to_idx = {name: idx for idx, name in enumerate(self.bone_names[:joint_count])}
-                            leg_chains = []
-                            for chain_names in (("thigh_l", "calf_l", "foot_l"),
-                                                ("thigh_r", "calf_r", "foot_r")):
-                                idxs = [name_to_idx.get(n) for n in chain_names]
-                                if all(isinstance(idx, int) and 0 <= idx < joint_count for idx in idxs):
-                                    leg_chains.append(_torch.as_tensor(idxs, device=geo_local.device, dtype=_torch.long))
-
-                            if leg_chains:
-                                diffs = []
-                                for idx_tensor in leg_chains:
-                                    # geo_chain: (..., K) for one leg
-                                    geo_chain = geo_local[..., idx_tensor]
-                                    # Smooth chain-difference penalty: use Huber (smooth L1) to avoid kinks at 0.
-                                    # Keeps scale close to |diff| for larger errors, but is quadratic near 0.
-                                    beta = float(getattr(self, 'rot_chain_beta', 0.01) or 0.01)
-                                    if beta <= 0:
-                                        diff = (geo_chain[..., 1:] - geo_chain[..., :-1]).abs()
-                                    else:
-                                        diff = F.smooth_l1_loss(
-                                            geo_chain[..., 1:], geo_chain[..., :-1],
-                                            beta=beta, reduction='none'
-                                        )
-                                    diffs.append(diff)
-                                # Aggregate over all legs and joints
-                                chain_diff = _torch.stack(diffs, dim=0).mean()
-                                chain_loss = chain_diff
-                                loss = loss + chain_weight * chain_loss
-                                self._accumulate_loss_contrib('rot_chain', chain_loss, chain_weight, group='core')
-                                stats['rot_chain_deg'] = float(
-                                    (chain_loss * (180.0 / math.pi)).detach().cpu()
-                                )
-                    except Exception:
-                        # 保守起见：链条平滑计算失败时直接跳过，不影响主 loss
-                        pass
         else:
             stats.setdefault('rot_local_deg', 0.0)
 

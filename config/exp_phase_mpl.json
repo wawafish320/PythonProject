@@ -3,7 +3,7 @@
   "bundle_json": "./raw_data/processed_data/norm_template.json",
   "out": "./models/exp_phase_e2e_sc",
   "run_name": "exp_phase_MLP",
-  "epochs": 30,
+  "epochs": 18,
   "batch": 16,
   "lr": 0.001,
   "seq_len": 60,
@@ -34,9 +34,8 @@
   "teacher_rot_noise_prob": 0.0,
   "input_step_noise_prob": 0.0,
   "input_noise_deg_mix": [],
-  "w_fk_pos": 0.08,
+  "w_fk_pos": 0.05,
   "w_rot_local": 0.14,
-  "w_rot_chain": 0.02,
   "w_root_vel": 0.05,
   "w_root_speed": 0.03,
   "freerun_stage_schedule": [
@@ -68,11 +67,10 @@
       },
       "loss_groups": {
         "core": {
-          "w_fk_pos": 0.08,
+          "w_fk_pos": 0.05,
           "w_rot_local": 0.14,
           "w_root_vel": 0.0,
-          "w_root_speed": 0.0,
-          "w_rot_chain": -1.0
+          "w_root_speed": 0.0
         }
       }
     },
@@ -105,11 +103,10 @@
       },
       "loss_groups": {
         "core": {
-          "w_fk_pos": 0.08,
+          "w_fk_pos": 0.06,
           "w_rot_local": 0.18,
           "w_root_vel": 0.0,
-          "w_root_speed": 0.0,
-          "w_rot_chain": 0.005
+          "w_root_speed": 0.0
         }
       }
     },
@@ -123,18 +120,50 @@
         "freerun_weight": 0.0,
         "freerun_horizon": 0,
         "eval_horizon": 8,
-        "teacher_rot_noise_prob": 0.0,
-        "teacher_rot_noise_deg": 0.0,
-        "input_noise_profile": [],
+        "teacher_rot_noise_prob": 0.1,
+        "teacher_rot_noise_deg": 0.8,
+        "input_noise_profile": [
+          {
+            "prob": 0.85,
+            "min": 0.0,
+            "max": 0.0
+          },
+          {
+            "prob": 0.1,
+            "min": 0.0,
+            "max": 0.5
+          },
+          {
+            "prob": 0.05,
+            "min": 0.5,
+            "max": 1.0
+          }
+        ],
         "tf_max": 1.0,
         "tf_min": 1.0
       },
       "params": {
         "freerun_weight": 0.0,
         "freerun_horizon": 0,
-        "teacher_rot_noise_prob": 0.0,
-        "teacher_rot_noise_deg": 0.0,
-        "input_noise_profile": [],
+        "teacher_rot_noise_prob": 0.1,
+        "teacher_rot_noise_deg": 0.8,
+        "input_noise_profile": [
+          {
+            "prob": 0.85,
+            "min": 0.0,
+            "max": 0.0
+          },
+          {
+            "prob": 0.1,
+            "min": 0.0,
+            "max": 0.5
+          },
+          {
+            "prob": 0.05,
+            "min": 0.5,
+            "max": 1.0
+          }
+        ],
         "tf_max": 1.0,
         "tf_min": 1.0,
         "eval_horizon": 8,
@@ -142,11 +171,10 @@
       },
       "loss_groups": {
         "core": {
-          "w_fk_pos": 0.08,
+          "w_fk_pos": 0.07,
           "w_rot_local": 0.18,
           "w_root_vel": 0.0,
-          "w_root_speed": 0.0,
-          "w_rot_chain": 0.007
+          "w_root_speed": 0.0
         }
       }
     },
@@ -160,18 +188,50 @@
         "freerun_weight": 0.0,
         "freerun_horizon": 0,
         "eval_horizon": 8,
-        "teacher_rot_noise_prob": 0.0,
-        "teacher_rot_noise_deg": 0.0,
-        "input_noise_profile": [],
+        "teacher_rot_noise_prob": 0.15,
+        "teacher_rot_noise_deg": 0.8,
+        "input_noise_profile": [
+          {
+            "prob": 0.85,
+            "min": 0.0,
+            "max": 0.0
+          },
+          {
+            "prob": 0.1,
+            "min": 0.0,
+            "max": 0.5
+          },
+          {
+            "prob": 0.05,
+            "min": 0.5,
+            "max": 1.0
+          }
+        ],
         "tf_max": 1.0,
         "tf_min": 1.0
       },
       "params": {
         "freerun_weight": 0.0,
         "freerun_horizon": 0,
-        "teacher_rot_noise_prob": 0.0,
-        "teacher_rot_noise_deg": 0.0,
-        "input_noise_profile": [],
+        "teacher_rot_noise_prob": 0.15,
+        "teacher_rot_noise_deg": 0.8,
+        "input_noise_profile": [
+          {
+            "prob": 0.85,
+            "min": 0.0,
+            "max": 0.0
+          },
+          {
+            "prob": 0.1,
+            "min": 0.0,
+            "max": 0.5
+          },
+          {
+            "prob": 0.05,
+            "min": 0.5,
+            "max": 1.0
+          }
+        ],
         "tf_max": 1.0,
         "tf_min": 1.0,
         "eval_horizon": 8,
@@ -179,11 +239,10 @@
       },
       "loss_groups": {
         "core": {
-          "w_fk_pos": 0.08,
+          "w_fk_pos": 0.075,
           "w_rot_local": 0.18,
           "w_root_vel": 0.0,
-          "w_root_speed": 0.0,
-          "w_rot_chain": 0.009
+          "w_root_speed": 0.0
         }
       }
     },
@@ -197,18 +256,50 @@
         "freerun_weight": 0.0,
         "freerun_horizon": 0,
         "eval_horizon": 8,
-        "teacher_rot_noise_prob": 0.0,
-        "teacher_rot_noise_deg": 0.0,
-        "input_noise_profile": [],
+        "teacher_rot_noise_prob": 0.2,
+        "teacher_rot_noise_deg": 0.8,
+        "input_noise_profile": [
+          {
+            "prob": 0.85,
+            "min": 0.0,
+            "max": 0.0
+          },
+          {
+            "prob": 0.1,
+            "min": 0.0,
+            "max": 0.5
+          },
+          {
+            "prob": 0.05,
+            "min": 0.5,
+            "max": 1.0
+          }
+        ],
         "tf_max": 1.0,
         "tf_min": 1.0
       },
       "params": {
         "freerun_weight": 0.0,
         "freerun_horizon": 0,
-        "teacher_rot_noise_prob": 0.0,
-        "teacher_rot_noise_deg": 0.0,
-        "input_noise_profile": [],
+        "teacher_rot_noise_prob": 0.2,
+        "teacher_rot_noise_deg": 0.8,
+        "input_noise_profile": [
+          {
+            "prob": 0.85,
+            "min": 0.0,
+            "max": 0.0
+          },
+          {
+            "prob": 0.1,
+            "min": 0.0,
+            "max": 0.5
+          },
+          {
+            "prob": 0.05,
+            "min": 0.5,
+            "max": 1.0
+          }
+        ],
         "tf_max": 1.0,
         "tf_min": 1.0,
         "eval_horizon": 8,
@@ -219,17 +310,16 @@
           "w_fk_pos": 0.08,
           "w_rot_local": 0.18,
           "w_root_vel": 0.0,
-          "w_root_speed": 0.0,
-          "w_rot_chain": 0.01
+          "w_root_speed": 0.0
         }
       }
     },
     {
       "range": [
         13,
-        18
+        15
       ],
-      "label": "stage2b_maintain_expose",
+      "label": "stage2b_maintain_expose_a",
       "trainer": {
         "freerun_weight": 0.04,
         "freerun_horizon": 6,
@@ -238,7 +328,7 @@
         "teacher_rot_noise_deg": 0.0,
         "input_noise_profile": [],
         "tf_max": 0.95,
-        "tf_min": 0.85
+        "tf_min": 0.9
       },
       "params": {
         "freerun_weight": 0.04,
@@ -248,15 +338,49 @@
         "input_noise_profile": [],
         "tf_max": 0.95,
         "tf_min": 0.85,
-        "opt_lr": 0.0005
+        "opt_lr": 0.0004
       },
       "loss_groups": {
         "core": {
-          "w_fk_pos": 0.08,
+          "w_fk_pos": 0.09,
           "w_rot_local": 0.18,
           "w_root_vel": 0.05,
-          "w_root_speed": 0.03,
-          "w_rot_chain": 0.02
+          "w_root_speed": 0.03
+        }
+      }
+    },
+    {
+      "range": [
+        16,
+        18
+      ],
+      "label": "stage2b_maintain_expose_b_finetune",
+      "trainer": {
+        "freerun_weight": 0.04,
+        "freerun_horizon": 6,
+        "eval_horizon": 10,
+        "teacher_rot_noise_prob": 0.0,
+        "teacher_rot_noise_deg": 0.0,
+        "input_noise_profile": [],
+        "tf_max": 0.95,
+        "tf_min": 0.9
+      },
+      "params": {
+        "freerun_weight": 0.04,
+        "freerun_horizon": 6,
+        "teacher_rot_noise_prob": 0.0,
+        "teacher_rot_noise_deg": 0.0,
+        "input_noise_profile": [],
+        "tf_max": 0.95,
+        "tf_min": 0.9,
+        "opt_lr": 0.0003
+      },
+      "loss_groups": {
+        "core": {
+          "w_fk_pos": 0.1,
+          "w_rot_local": 0.18,
+          "w_root_vel": 0.05,
+          "w_root_speed": 0.03
         }
       }
     },
@@ -350,11 +474,10 @@
       },
       "loss_groups": {
         "core": {
-          "w_fk_pos": 0.08,
+          "w_fk_pos": 0.1,
           "w_rot_local": 0.18,
           "w_root_vel": 0.05,
-          "w_root_speed": 0.03,
-          "w_rot_chain": 0.02
+          "w_root_speed": 0.03
         }
       }
     },
@@ -448,11 +571,10 @@
       },
       "loss_groups": {
         "core": {
-          "w_fk_pos": 0.08,
+          "w_fk_pos": 0.1,
           "w_rot_local": 0.18,
           "w_root_vel": 0.05,
-          "w_root_speed": 0.03,
-          "w_rot_chain": 0.02
+          "w_root_speed": 0.03
         }
       }
     }
