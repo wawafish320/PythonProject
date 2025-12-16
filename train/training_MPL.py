@@ -4494,6 +4494,8 @@ def train_entry():
         contact_dim=getattr(ds_train, 'contact_dim', 0),
         angvel_dim=getattr(ds_train, 'angvel_dim', 0),
         pose_hist_dim=pose_hist_dim_model,
+        bone_names=getattr(ds_train, 'bone_names', None),
+        output_layout=getattr(ds_train, 'output_layout', None),
     ).to(device)
     if history_export_frames > 0:
         if pose_hist_dim_raw <= 0 or pose_hist_len_raw <= 0:

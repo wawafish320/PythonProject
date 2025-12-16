@@ -99,7 +99,7 @@
         "tf_max": 1.0,
         "tf_min": 1.0,
         "eval_horizon": 8,
-        "opt_lr": 0.0007
+        "opt_lr": 0.0008
       },
       "loss_groups": {
         "core": {
@@ -135,7 +135,7 @@
         "tf_max": 1.0,
         "tf_min": 1.0,
         "eval_horizon": 8,
-        "opt_lr": 0.0005
+        "opt_lr": 0.0007
       },
       "loss_groups": {
         "core": {
@@ -171,7 +171,7 @@
         "tf_max": 1.0,
         "tf_min": 1.0,
         "eval_horizon": 8,
-        "opt_lr": 0.0005
+        "opt_lr": 0.0006
       },
       "loss_groups": {
         "core": {
@@ -207,7 +207,7 @@
         "tf_max": 1.0,
         "tf_min": 1.0,
         "eval_horizon": 8,
-        "opt_lr": 0.0003
+        "opt_lr": 0.0005
       },
       "loss_groups": {
         "core": {

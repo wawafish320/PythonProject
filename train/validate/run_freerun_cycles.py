@@ -235,6 +235,8 @@ class FreeRunCycleRunner:
             contact_dim=self.contact_dim,
             angvel_dim=self.angvel_dim,
             pose_hist_dim=self.pose_hist_dim,
+            bone_names=getattr(ds, "bone_names", None),
+            output_layout=getattr(ds, "output_layout", None),
         ).to(self.device)
         # Validate basic shapes then load weights (allow extra frozen encoder keys).
         validate_and_fix_model_(model, Dx, Dc)
@@ -1046,7 +1048,11 @@ def parse_args() -> argparse.Namespace:
         "--depth",
         type=int,
         default=2,
-        help="Nominal model depth (kept for compatibility; EventMotionModel uses two linear blocks).",
+        help=(
+            "Encoder depth used during training (must match checkpoint). "
+            "depth<=2 uses the original MLP encoder; depth>2 enables a residual encoder "
+            "(2-layer stem + (depth-2) residual blocks)."
+        ),
     )
     parser.add_argument(
         "--rounds",

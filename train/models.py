@@ -120,6 +120,71 @@ class _CondFiLM(nn.Module):
         return (g, b)
 
 
+class _ResidualMLPBlock(nn.Module):
+
+    def __init__(
+        self,
+        dim: int,
+        *,
+        activation: type[nn.Module] = nn.ReLU,
+        dropout: float = 0.0,
+        use_layer_norm: bool = True,
+        zero_init_last: bool = True,
+    ) -> None:
+        super().__init__()
+        self.norm = nn.LayerNorm(dim) if use_layer_norm else nn.Identity()
+        self.fc1 = nn.Linear(dim, dim)
+        self.act = activation()
+        self.drop1 = nn.Dropout(float(dropout)) if float(dropout) > 0 else nn.Identity()
+        self.fc2 = nn.Linear(dim, dim)
+        self.drop2 = nn.Dropout(float(dropout)) if float(dropout) > 0 else nn.Identity()
+
+        if zero_init_last:
+            nn.init.zeros_(self.fc2.weight)
+            if self.fc2.bias is not None:
+                nn.init.zeros_(self.fc2.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.norm(x)
+        h = self.fc1(h)
+        h = self.act(h)
+        h = self.drop1(h)
+        h = self.fc2(h)
+        h = self.drop2(h)
+        return x + h
+
+
+class _BoneSliceResidualAdapter(nn.Module):
+
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        *,
+        hidden_dim: int = 128,
+        dropout: float = 0.0,
+        activation: type[nn.Module] = nn.ReLU,
+        alpha_mode: str = "tanh",  # "tanh" | "linear"
+    ) -> None:
+        super().__init__()
+        self.net = build_mlp(
+            in_dim,
+            int(hidden_dim),
+            num_layers=1,
+            activation=activation,
+            dropout=float(dropout),
+            final_dim=int(out_dim),
+        )
+        self.alpha = nn.Parameter(torch.zeros(()))
+        self.alpha_mode = str(alpha_mode)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        a = self.alpha
+        if self.alpha_mode == "tanh":
+            a = torch.tanh(a)
+        return a * self.net(x)
+
+
 import os, json, math, glob, time, argparse
 
 from torch.utils.data import DataLoader
@@ -153,6 +218,11 @@ class EventMotionModel(nn.Module):
         contact_dim: int = 0,
         angvel_dim: int = 0,
         pose_hist_dim: int = 0,
+        bone_names: Optional[Sequence[str]] = None,
+        output_layout: Optional[Dict[str, Any]] = None,
+        residual_adapter_bones: Optional[Sequence[str]] = None,
+        residual_adapter_hidden: int = 128,
+        residual_adapter_dropout: Optional[float] = None,
     ):
         super().__init__()
         self.in_state_dim = int(in_state_dim)
@@ -172,14 +242,38 @@ class EventMotionModel(nn.Module):
         self._adaptive_history_device: Optional[torch.device] = None
 
         input_dim = self.in_state_dim + self.cond_dim
-        self.shared_encoder = build_mlp(
-            input_dim,
-            hidden_dim,
-            num_layers=2,
-            activation=nn.ReLU,
-            dropout=dropout,
-            use_layer_norm=use_layer_norm,
-        )
+        enc_depth = max(1, int(num_layers))
+        self._encoder_residual = bool(enc_depth > 2)
+        if not self._encoder_residual:
+            self.shared_encoder = build_mlp(
+                input_dim,
+                hidden_dim,
+                num_layers=max(1, enc_depth),
+                activation=nn.ReLU,
+                dropout=dropout,
+                use_layer_norm=use_layer_norm,
+            )
+        else:
+            stem = build_mlp(
+                input_dim,
+                hidden_dim,
+                num_layers=2,  # keep baseline encoder as the stem
+                activation=nn.ReLU,
+                dropout=dropout,
+                use_layer_norm=use_layer_norm,
+            )
+            enc_layers = list(stem)
+            for _ in range(max(1, enc_depth - 2)):
+                enc_layers.append(
+                    _ResidualMLPBlock(
+                        hidden_dim,
+                        activation=nn.ReLU,
+                        dropout=dropout,
+                        use_layer_norm=use_layer_norm,
+                        zero_init_last=True,
+                    )
+                )
+            self.shared_encoder = nn.Sequential(*enc_layers)
         self.residual_proj = nn.Linear(input_dim, hidden_dim) if input_dim != hidden_dim else nn.Identity()
 
         self._pasa_heads = max(1, int(num_heads))
@@ -205,11 +299,72 @@ class EventMotionModel(nn.Module):
         )
         self.period_encoder = nn.Linear(self.period_dim, hidden_dim) if self.period_dim > 0 else None
 
+        # Low-risk per-bone residual adapters (α init = 0 ⇒ initial behavior == baseline).
+        default_bones = ('thigh_l', 'calf_l', 'foot_l', 'thigh_r', 'calf_r', 'foot_r')
+        adapter_bones = list(residual_adapter_bones) if residual_adapter_bones is not None else list(default_bones)
+        self._bone_adapter_slices: list[slice] = []
+        self._bone_adapter_names: list[str] = []
+        self._bone_adapters = nn.ModuleList()
+        try:
+            self._init_bone_residual_adapters(
+                bone_names=bone_names,
+                output_layout=output_layout,
+                target_bones=adapter_bones,
+                hidden_dim=int(residual_adapter_hidden),
+                dropout=float(dropout if residual_adapter_dropout is None else residual_adapter_dropout),
+            )
+        except Exception:
+            # Keep adapters disabled if metadata is missing/mismatched.
+            self._bone_adapter_slices = []
+            self._bone_adapter_names = []
+            self._bone_adapters = nn.ModuleList()
+
         # Optional frozen encoder from预训练，用于提供 soft period 提示
         self.frozen_encoder: Optional['MotionEncoder'] = None
         self.frozen_period_head: Optional['PeriodHead'] = None
         self._encoder_meta: dict[str, Any] = {}
         self._frozen_hidden_dim: Optional[int] = None
+
+    def _init_bone_residual_adapters(
+        self,
+        *,
+        bone_names: Optional[Sequence[str]],
+        output_layout: Optional[Dict[str, Any]],
+        target_bones: Sequence[str],
+        hidden_dim: int,
+        dropout: float,
+    ) -> None:
+        if not bone_names or not isinstance(bone_names, (list, tuple)) or not target_bones:
+            return
+        if not isinstance(output_layout, dict):
+            output_layout = {}
+        rot_sl = parse_layout_entry(output_layout.get('BoneRotations6D'), 'BoneRotations6D', self.out_motion_dim)
+        if rot_sl is None:
+            rot_sl = slice(0, min(self.out_motion_dim, int(len(bone_names) * 6)))
+        if rot_sl.start is None or rot_sl.stop is None:
+            return
+
+        name_to_idx = {str(n): int(i) for i, n in enumerate(bone_names)}
+        for name in target_bones:
+            if name not in name_to_idx:
+                continue
+            j = name_to_idx[name]
+            st = int(rot_sl.start) + j * 6
+            ed = st + 6
+            if ed > int(rot_sl.stop) or ed > self.out_motion_dim:
+                continue
+            self._bone_adapter_slices.append(slice(st, ed))
+            self._bone_adapter_names.append(str(name))
+            self._bone_adapters.append(
+                _BoneSliceResidualAdapter(
+                    in_dim=self.hidden_dim,
+                    out_dim=6,
+                    hidden_dim=int(hidden_dim),
+                    dropout=float(dropout),
+                    activation=nn.ReLU,
+                    alpha_mode="tanh",
+                )
+            )
 
     def _target_device(self) -> torch.device:
         try:
@@ -361,6 +516,11 @@ class EventMotionModel(nn.Module):
 
         hidden_out = h_final
         out = self.motion_head(h_final)
+        if self._bone_adapters and self._bone_adapter_slices:
+            delta_full = torch.zeros_like(out)
+            for sl, adapter in zip(self._bone_adapter_slices, self._bone_adapters):
+                delta_full[..., sl] = adapter(h_final)
+            out = out + delta_full
         if is_single:
             out = out.squeeze(1)
             hidden_out = hidden_out.squeeze(1)

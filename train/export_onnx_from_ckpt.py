@@ -85,7 +85,11 @@ def parse_args() -> argparse.Namespace:
         "--depth",
         type=int,
         default=2,
-        help="Model depth used during training (must match checkpoint).",
+        help=(
+            "Encoder depth used during training (must match checkpoint). "
+            "depth<=2 uses the original MLP encoder; depth>2 enables a residual encoder "
+            "(2-layer stem + (depth-2) residual blocks)."
+        ),
     )
     p.add_argument(
         "--num-heads",
@@ -164,6 +168,8 @@ def main() -> None:
         contact_dim=getattr(ds_train, "contact_dim", 0),
         angvel_dim=getattr(ds_train, "angvel_dim", 0),
         pose_hist_dim=getattr(ds_train, "pose_hist_dim", 0),
+        bone_names=getattr(ds_train, "bone_names", None),
+        output_layout=getattr(ds_train, "output_layout", None),
     )
 
     # ---- Load checkpoint weights ----
@@ -195,4 +201,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
