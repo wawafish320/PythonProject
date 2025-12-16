@@ -165,6 +165,8 @@ class _BoneSliceResidualAdapter(nn.Module):
         dropout: float = 0.0,
         activation: type[nn.Module] = nn.ReLU,
         alpha_mode: str = "tanh",  # "tanh" | "linear"
+        alpha_init: float = 0.05,
+        zero_init_last: bool = True,
     ) -> None:
         super().__init__()
         self.net = build_mlp(
@@ -175,8 +177,22 @@ class _BoneSliceResidualAdapter(nn.Module):
             dropout=float(dropout),
             final_dim=int(out_dim),
         )
-        self.alpha = nn.Parameter(torch.zeros(()))
+        # NOTE:
+        # - alpha=0 makes the adapter output exactly 0, but also blocks gradients to `net`.
+        # - We keep initial behavior == baseline by zero-initializing the last Linear layer
+        #   while setting alpha to a small non-zero so the adapter can start learning.
+        self.alpha = nn.Parameter(torch.as_tensor(float(alpha_init)).reshape(()))
         self.alpha_mode = str(alpha_mode)
+        if zero_init_last:
+            last_linear = None
+            for mod in reversed(self.net):
+                if isinstance(mod, nn.Linear):
+                    last_linear = mod
+                    break
+            if last_linear is not None:
+                nn.init.zeros_(last_linear.weight)
+                if last_linear.bias is not None:
+                    nn.init.zeros_(last_linear.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         a = self.alpha
@@ -299,7 +315,9 @@ class EventMotionModel(nn.Module):
         )
         self.period_encoder = nn.Linear(self.period_dim, hidden_dim) if self.period_dim > 0 else None
 
-        # Low-risk per-bone residual adapters (α init = 0 ⇒ initial behavior == baseline).
+        # Low-risk per-bone residual adapters:
+        # - initial adapter output == 0 (zero-init last Linear) so behavior matches baseline;
+        # - α starts small-but-nonzero so the adapter branch can receive gradients immediately.
         default_bones = ('thigh_l', 'calf_l', 'foot_l', 'thigh_r', 'calf_r', 'foot_r')
         adapter_bones = list(residual_adapter_bones) if residual_adapter_bones is not None else list(default_bones)
         self._bone_adapter_slices: list[slice] = []
