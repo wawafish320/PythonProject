@@ -1,2426 +1,0 @@
-
-pytorch2.9.1:ﬁÍ
-‡
-state
-val_0	unsqueezenode_unsqueeze"	UnsqueezeJõ
-	namespaceç: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/unsqueeze: aten.unsqueeze.defaultJß
-pkg.torch.onnx.class_hierarchyÑ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.unsqueeze.default']Jé
-pkg.torch.onnx.fx_nodet%unsqueeze : [num_users=1] = call_function[target=torch.ops.aten.unsqueeze.default](args = (%state, 1), kwargs = {})J7
-pkg.torch.onnx.name_scopes['', 'core', 'unsqueeze']Jó
-pkg.torch.onnx.stack_trace¯File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 239, in forward
-    state = state.unsqueeze(1)
-Ê
-cond
-val_0unsqueeze_1node_unsqueeze_1"	UnsqueezeJù
-	namespaceè: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/unsqueeze_1: aten.unsqueeze.defaultJß
-pkg.torch.onnx.class_hierarchyÑ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.unsqueeze.default']Jè
-pkg.torch.onnx.fx_nodeu%unsqueeze_1 : [num_users=1] = call_function[target=torch.ops.aten.unsqueeze.default](args = (%cond, 1), kwargs = {})J9
-pkg.torch.onnx.name_scopes['', 'core', 'unsqueeze_1']Jï
-pkg.torch.onnx.stack_traceˆFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 241, in forward
-    cond = cond.unsqueeze(1)
-ˆ
-contacts
-val_0unsqueeze_2node_unsqueeze_2"	UnsqueezeJù
-	namespaceè: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/unsqueeze_2: aten.unsqueeze.defaultJß
-pkg.torch.onnx.class_hierarchyÑ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.unsqueeze.default']Jì
-pkg.torch.onnx.fx_nodey%unsqueeze_2 : [num_users=1] = call_function[target=torch.ops.aten.unsqueeze.default](args = (%contacts, 1), kwargs = {})J9
-pkg.torch.onnx.name_scopes['', 'core', 'unsqueeze_2']Jù
-pkg.torch.onnx.stack_trace˛File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 243, in forward
-    contacts = contacts.unsqueeze(1)
-Ó
-angvel
-val_0unsqueeze_3node_unsqueeze_3"	UnsqueezeJù
-	namespaceè: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/unsqueeze_3: aten.unsqueeze.defaultJß
-pkg.torch.onnx.class_hierarchyÑ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.unsqueeze.default']Jë
-pkg.torch.onnx.fx_nodew%unsqueeze_3 : [num_users=1] = call_function[target=torch.ops.aten.unsqueeze.default](args = (%angvel, 1), kwargs = {})J9
-pkg.torch.onnx.name_scopes['', 'core', 'unsqueeze_3']Jô
-pkg.torch.onnx.stack_trace˙File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 245, in forward
-    angvel = angvel.unsqueeze(1)
-Ä
-	pose_hist
-val_0unsqueeze_4node_unsqueeze_4"	UnsqueezeJù
-	namespaceè: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/unsqueeze_4: aten.unsqueeze.defaultJß
-pkg.torch.onnx.class_hierarchyÑ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.unsqueeze.default']Jî
-pkg.torch.onnx.fx_nodez%unsqueeze_4 : [num_users=1] = call_function[target=torch.ops.aten.unsqueeze.default](args = (%pose_hist, 1), kwargs = {})J9
-pkg.torch.onnx.name_scopes['', 'core', 'unsqueeze_4']J•
-pkg.torch.onnx.stack_traceÜFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 247, in forward
-    pose_history = pose_history.unsqueeze(1)
-≤
-unsqueeze_2
-unsqueeze_3
-unsqueeze_4catnode_cat"Concat*
-axisˇˇˇˇˇˇˇˇˇ†Jè
-	namespaceÅ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/cat: aten.cat.defaultJ†
-pkg.torch.onnx.class_hierarchy~['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.cat.default']J®
-pkg.torch.onnx.fx_nodeç%cat : [num_users=1] = call_function[target=torch.ops.aten.cat.default](args = ([%unsqueeze_2, %unsqueeze_3, %unsqueeze_4], -1), kwargs = {})J1
-pkg.torch.onnx.name_scopes['', 'core', 'cat']J»
-pkg.torch.onnx.stack_trace©File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 283, in forward
-    encoder_input = torch.cat(encoder_feats, dim=-1) if encoder_feats else None
-
-	unsqueeze
-unsqueeze_1cat_1
-node_cat_1"Concat*
-axisˇˇˇˇˇˇˇˇˇ†Jë
-	namespaceÉ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/cat_1: aten.cat.defaultJ†
-pkg.torch.onnx.class_hierarchy~['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.cat.default']Jô
-pkg.torch.onnx.fx_node%cat_1 : [num_users=4] = call_function[target=torch.ops.aten.cat.default](args = ([%unsqueeze, %unsqueeze_1], -1), kwargs = {})J3
-pkg.torch.onnx.name_scopes['', 'core', 'cat_1']Jú
-pkg.torch.onnx.stack_trace˝File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 288, in forward
-    x = torch.cat(x_inputs, dim=-1)
-÷
-cat_1isnann0"IsNaNJì
-	namespaceÖ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/isnan: aten.isnan.defaultJ£
-pkg.torch.onnx.class_hierarchyÄ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.isnan.default']JÑ
-pkg.torch.onnx.fx_nodej%isnan : [num_users=1] = call_function[target=torch.ops.aten.isnan.default](args = (%cat_1,), kwargs = {})J3
-pkg.torch.onnx.name_scopes['', 'core', 'isnan']J¬
-pkg.torch.onnx.stack_trace£File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 306, in forward
-    x = torch.nan_to_num(x, nan=0.0, posinf=1000000.0, neginf=-1000000.0)
-˚
-isnan
-val_1
-cat_1wheren0_2"WhereJñ
-	namespaceà: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/where: aten.where.ScalarSelfJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.where.ScalarSelf']Jì
-pkg.torch.onnx.fx_nodey%where : [num_users=1] = call_function[target=torch.ops.aten.where.ScalarSelf](args = (%isnan, 0.0, %cat_1), kwargs = {})J3
-pkg.torch.onnx.name_scopes['', 'core', 'where']J¬
-pkg.torch.onnx.stack_trace£File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 306, in forward
-    x = torch.nan_to_num(x, nan=0.0, posinf=1000000.0, neginf=-1000000.0)
-Ï
-cat_1
-val_1tmpn3"LessJô
-	namespaceã: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/isneginf: aten.isneginf.defaultJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.isneginf.default']Jä
-pkg.torch.onnx.fx_nodep%isneginf : [num_users=1] = call_function[target=torch.ops.aten.isneginf.default](args = (%cat_1,), kwargs = {})J6
-pkg.torch.onnx.name_scopes['', 'core', 'isneginf']J¬
-pkg.torch.onnx.stack_trace£File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 306, in forward
-    x = torch.nan_to_num(x, nan=0.0, posinf=1000000.0, neginf=-1000000.0)
-Ë
-cat_1tmp_1n4"IsInfJô
-	namespaceã: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/isneginf: aten.isneginf.defaultJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.isneginf.default']Jä
-pkg.torch.onnx.fx_nodep%isneginf : [num_users=1] = call_function[target=torch.ops.aten.isneginf.default](args = (%cat_1,), kwargs = {})J6
-pkg.torch.onnx.name_scopes['', 'core', 'isneginf']J¬
-pkg.torch.onnx.stack_trace£File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 306, in forward
-    x = torch.nan_to_num(x, nan=0.0, posinf=1000000.0, neginf=-1000000.0)
-Ó
-tmp
-tmp_1isneginfn5"AndJô
-	namespaceã: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/isneginf: aten.isneginf.defaultJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.isneginf.default']Jä
-pkg.torch.onnx.fx_nodep%isneginf : [num_users=1] = call_function[target=torch.ops.aten.isneginf.default](args = (%cat_1,), kwargs = {})J6
-pkg.torch.onnx.name_scopes['', 'core', 'isneginf']J¬
-pkg.torch.onnx.stack_trace£File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 306, in forward
-    x = torch.nan_to_num(x, nan=0.0, posinf=1000000.0, neginf=-1000000.0)
-ë
-isneginf
-val_2
-wherewhere_1n0_4"WhereJò
-	namespaceä: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/where_1: aten.where.ScalarSelfJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.where.ScalarSelf']J†
-pkg.torch.onnx.fx_nodeÖ%where_1 : [num_users=1] = call_function[target=torch.ops.aten.where.ScalarSelf](args = (%isneginf, -1000000.0, %where), kwargs = {})J5
-pkg.torch.onnx.name_scopes['', 'core', 'where_1']J¬
-pkg.torch.onnx.stack_trace£File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 306, in forward
-    x = torch.nan_to_num(x, nan=0.0, posinf=1000000.0, neginf=-1000000.0)
-Û
-cat_1
-val_1tmp_2n3_2"GreaterJô
-	namespaceã: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/isposinf: aten.isposinf.defaultJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.isposinf.default']Jä
-pkg.torch.onnx.fx_nodep%isposinf : [num_users=1] = call_function[target=torch.ops.aten.isposinf.default](args = (%cat_1,), kwargs = {})J6
-pkg.torch.onnx.name_scopes['', 'core', 'isposinf']J¬
-pkg.torch.onnx.stack_trace£File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 306, in forward
-    x = torch.nan_to_num(x, nan=0.0, posinf=1000000.0, neginf=-1000000.0)
-Ú
-tmp_2
-tmp_1isposinfn5_2"AndJô
-	namespaceã: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/isposinf: aten.isposinf.defaultJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.isposinf.default']Jä
-pkg.torch.onnx.fx_nodep%isposinf : [num_users=1] = call_function[target=torch.ops.aten.isposinf.default](args = (%cat_1,), kwargs = {})J6
-pkg.torch.onnx.name_scopes['', 'core', 'isposinf']J¬
-pkg.torch.onnx.stack_trace£File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 306, in forward
-    x = torch.nan_to_num(x, nan=0.0, posinf=1000000.0, neginf=-1000000.0)
-î
-isposinf
-val_3
-where_1where_2n0_6"WhereJò
-	namespaceä: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/where_2: aten.where.ScalarSelfJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.where.ScalarSelf']J°
-pkg.torch.onnx.fx_nodeÜ%where_2 : [num_users=1] = call_function[target=torch.ops.aten.where.ScalarSelf](args = (%isposinf, 1000000.0, %where_1), kwargs = {})J5
-pkg.torch.onnx.name_scopes['', 'core', 'where_2']J¬
-pkg.torch.onnx.stack_trace£File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 306, in forward
-    x = torch.nan_to_num(x, nan=0.0, posinf=1000000.0, neginf=-1000000.0)
-÷
-where_2
-val_5
-val_7clamp
-node_clamp"ClipJì
-	namespaceÖ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/clamp: aten.clamp.defaultJ£
-pkg.torch.onnx.class_hierarchyÄ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.clamp.default']Jí
-pkg.torch.onnx.fx_nodex%clamp : [num_users=2] = call_function[target=torch.ops.aten.clamp.default](args = (%where_2, -16.0, 16.0), kwargs = {})J3
-pkg.torch.onnx.name_scopes['', 'core', 'clamp']Jù
-pkg.torch.onnx.stack_trace˛File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 308, in forward
-    x = x.clamp(-clip_val, clip_val)
-ö	
-clamp
-val_8val_9node_MatMul_9"MatMulJÀ
-	namespaceΩ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.shared_encoder.0: torch.nn.modules.linear.Linear/linear: aten.linear.defaultJ∆
-pkg.torch.onnx.class_hierarchy£['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J∆
-pkg.torch.onnx.fx_node´%linear : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%clamp, %p_core_shared_encoder_0_weight, %p_core_shared_encoder_0_bias), kwargs = {})JM
-pkg.torch.onnx.name_scopes/['', 'core', 'core.shared_encoder.0', 'linear']Jº
-pkg.torch.onnx.stack_traceùFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 318, in forward
-    z0 = lin0(x)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-´	
-val_9
-core.shared_encoder.0.biaslinearnode_linear"AddJÀ
-	namespaceΩ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.shared_encoder.0: torch.nn.modules.linear.Linear/linear: aten.linear.defaultJ∆
-pkg.torch.onnx.class_hierarchy£['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J∆
-pkg.torch.onnx.fx_node´%linear : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%clamp, %p_core_shared_encoder_0_weight, %p_core_shared_encoder_0_bias), kwargs = {})JM
-pkg.torch.onnx.name_scopes/['', 'core', 'core.shared_encoder.0', 'linear']Jº
-pkg.torch.onnx.stack_traceùFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 318, in forward
-    z0 = lin0(x)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-ø
-
-linear
-core.shared_encoder.1.weight
-core.shared_encoder.1.bias
-layer_normnode_layer_norm"LayerNormalization*
-
-stash_type†*
-epsilon¨≈'7†*
-axisˇˇˇˇˇˇˇˇˇ†J›
-	namespaceœ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.shared_encoder.1: torch.nn.modules.normalization.LayerNorm/layer_norm: aten.layer_norm.defaultJ‘
-pkg.torch.onnx.class_hierarchy±['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.normalization.LayerNorm', 'aten.layer_norm.default']J÷
-pkg.torch.onnx.fx_nodeª%layer_norm : [num_users=1] = call_function[target=torch.ops.aten.layer_norm.default](args = (%linear, [512], %p_core_shared_encoder_1_weight, %p_core_shared_encoder_1_bias), kwargs = {})JQ
-pkg.torch.onnx.name_scopes3['', 'core', 'core.shared_encoder.1', 'layer_norm']J™
-pkg.torch.onnx.stack_traceãFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 319, in forward
-    y1 = act1(z0)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/normalization.py", line 229, in forward
-    return F.layer_norm(
-⁄
-cat
-val_13view	node_view"Reshape*
-	allowzero†J¡
-	namespace≥: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/view: aten.view.defaultJ¿
-pkg.torch.onnx.class_hierarchyù['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'aten.view.default']Jâ
-pkg.torch.onnx.fx_nodeo%view : [num_users=1] = call_function[target=torch.ops.aten.view.default](args = (%cat, [1, 968]), kwargs = {})JI
-pkg.torch.onnx.name_scopes+['', 'core', 'core.frozen_encoder', 'view']J¿
-pkg.torch.onnx.stack_trace°File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 83, in forward
-    flat = x.reshape(B * T, D)
-ˇ
-view
- core.frozen_encoder.mlp.0.weight
-core.frozen_encoder.mlp.0.biaslinear_1node_linear_1"Gemm*
-beta  Ä?†*
-transB†*
-alpha  Ä?†*
-transA †J¿
-	namespace≤: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.0: torch.nn.modules.linear.Linear/linear_1: aten.linear.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.linear.Linear', 'aten.linear.default']Jœ
-pkg.torch.onnx.fx_node¥%linear_1 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%view, %p_core_frozen_encoder_mlp_0_weight, %p_core_frozen_encoder_mlp_0_bias), kwargs = {})JÖ
-pkg.torch.onnx.name_scopesg['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.0', 'linear_1']J©
-pkg.torch.onnx.stack_traceäFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-ª
-linear_1
-val_14val_15node_Div_13"DivJº
-	namespaceÆ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.1: torch.nn.modules.activation.GELU/gelu: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']JÖ
-pkg.torch.onnx.fx_nodek%gelu : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_1,), kwargs = {})JÅ
-pkg.torch.onnx.name_scopesc['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.1', 'gelu']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-±
-val_15val_16node_Erf_14"ErfJº
-	namespaceÆ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.1: torch.nn.modules.activation.GELU/gelu: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']JÖ
-pkg.torch.onnx.fx_nodek%gelu : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_1,), kwargs = {})JÅ
-pkg.torch.onnx.name_scopesc['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.1', 'gelu']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-π
-val_16
-val_17val_18node_Add_16"AddJº
-	namespaceÆ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.1: torch.nn.modules.activation.GELU/gelu: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']JÖ
-pkg.torch.onnx.fx_nodek%gelu : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_1,), kwargs = {})JÅ
-pkg.torch.onnx.name_scopesc['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.1', 'gelu']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-π
-val_19
-val_18val_20node_Mul_18"MulJº
-	namespaceÆ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.1: torch.nn.modules.activation.GELU/gelu: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']JÖ
-pkg.torch.onnx.fx_nodek%gelu : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_1,), kwargs = {})JÅ
-pkg.torch.onnx.name_scopesc['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.1', 'gelu']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-∑
-linear_1
-val_20gelu	node_gelu"MulJº
-	namespaceÆ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.1: torch.nn.modules.activation.GELU/gelu: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']JÖ
-pkg.torch.onnx.fx_nodek%gelu : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_1,), kwargs = {})JÅ
-pkg.torch.onnx.name_scopesc['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.1', 'gelu']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-Ä
-gelu
- core.frozen_encoder.mlp.3.weight
-core.frozen_encoder.mlp.3.biaslinear_2node_linear_2"Gemm*
-beta  Ä?†*
-transB†*
-alpha  Ä?†*
-transA †J¿
-	namespace≤: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.3: torch.nn.modules.linear.Linear/linear_2: aten.linear.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J–
-pkg.torch.onnx.fx_nodeµ%linear_2 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%clone, %p_core_frozen_encoder_mlp_3_weight, %p_core_frozen_encoder_mlp_3_bias), kwargs = {})JÖ
-pkg.torch.onnx.name_scopesg['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.3', 'linear_2']J©
-pkg.torch.onnx.stack_traceäFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-¡
-linear_2
-val_14val_22node_Div_20"DivJæ
-	namespace∞: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.4: torch.nn.modules.activation.GELU/gelu_1: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_1 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_2,), kwargs = {})JÉ
-pkg.torch.onnx.name_scopese['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.4', 'gelu_1']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-∑
-val_22val_23node_Erf_21"ErfJæ
-	namespace∞: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.4: torch.nn.modules.activation.GELU/gelu_1: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_1 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_2,), kwargs = {})JÉ
-pkg.torch.onnx.name_scopese['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.4', 'gelu_1']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-ø
-val_23
-val_17val_25node_Add_23"AddJæ
-	namespace∞: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.4: torch.nn.modules.activation.GELU/gelu_1: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_1 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_2,), kwargs = {})JÉ
-pkg.torch.onnx.name_scopese['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.4', 'gelu_1']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-ø
-val_19
-val_25val_27node_Mul_25"MulJæ
-	namespace∞: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.4: torch.nn.modules.activation.GELU/gelu_1: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_1 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_2,), kwargs = {})JÉ
-pkg.torch.onnx.name_scopese['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.4', 'gelu_1']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-¡
-linear_2
-val_27gelu_1node_gelu_1"MulJæ
-	namespace∞: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.4: torch.nn.modules.activation.GELU/gelu_1: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_1 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_2,), kwargs = {})JÉ
-pkg.torch.onnx.name_scopese['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.4', 'gelu_1']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-Ñ
-gelu_1
- core.frozen_encoder.mlp.6.weight
-core.frozen_encoder.mlp.6.biaslinear_3node_linear_3"Gemm*
-beta  Ä?†*
-transB†*
-alpha  Ä?†*
-transA †J¿
-	namespace≤: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.6: torch.nn.modules.linear.Linear/linear_3: aten.linear.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J“
-pkg.torch.onnx.fx_node∑%linear_3 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%clone_1, %p_core_frozen_encoder_mlp_6_weight, %p_core_frozen_encoder_mlp_6_bias), kwargs = {})JÖ
-pkg.torch.onnx.name_scopesg['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.6', 'linear_3']J©
-pkg.torch.onnx.stack_traceäFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-¡
-linear_3
-val_14val_29node_Div_27"DivJæ
-	namespace∞: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.7: torch.nn.modules.activation.GELU/gelu_2: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_2 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_3,), kwargs = {})JÉ
-pkg.torch.onnx.name_scopese['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.7', 'gelu_2']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-∑
-val_29val_30node_Erf_28"ErfJæ
-	namespace∞: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.7: torch.nn.modules.activation.GELU/gelu_2: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_2 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_3,), kwargs = {})JÉ
-pkg.torch.onnx.name_scopese['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.7', 'gelu_2']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-ø
-val_30
-val_17val_32node_Add_30"AddJæ
-	namespace∞: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.7: torch.nn.modules.activation.GELU/gelu_2: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_2 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_3,), kwargs = {})JÉ
-pkg.torch.onnx.name_scopese['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.7', 'gelu_2']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-ø
-val_19
-val_32val_34node_Mul_32"MulJæ
-	namespace∞: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.7: torch.nn.modules.activation.GELU/gelu_2: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_2 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_3,), kwargs = {})JÉ
-pkg.torch.onnx.name_scopese['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.7', 'gelu_2']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-¡
-linear_3
-val_34gelu_2node_gelu_2"MulJæ
-	namespace∞: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/core.frozen_encoder.mlp: torch.nn.modules.container.Sequential/core.frozen_encoder.mlp.7: torch.nn.modules.activation.GELU/gelu_2: aten.gelu.defaultJç
-pkg.torch.onnx.class_hierarchyÍ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.GELU', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_2 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_3,), kwargs = {})JÉ
-pkg.torch.onnx.name_scopese['', 'core', 'core.frozen_encoder', 'core.frozen_encoder.mlp', 'core.frozen_encoder.mlp.7', 'gelu_2']J±
-pkg.torch.onnx.stack_traceíFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 816, in forward
-    return F.gelu(input, approximate=self.approximate)
-á	
-gelu_2
-val_36view_1node_view_1"Reshape*
-	allowzero†J√
-	namespaceµ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_encoder: train.models.MotionEncoder/view_1: aten.view.defaultJ¿
-pkg.torch.onnx.class_hierarchyù['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.MotionEncoder', 'aten.view.default']Jí
-pkg.torch.onnx.fx_nodex%view_1 : [num_users=1] = call_function[target=torch.ops.aten.view.default](args = (%clone_2, [1, 1, 256]), kwargs = {})JK
-pkg.torch.onnx.name_scopes-['', 'core', 'core.frozen_encoder', 'view_1']JŸ
-pkg.torch.onnx.stack_trace∫File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 329, in forward
-    enc_hidden = self.frozen_encoder(encoder_input, return_summary=False)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 84, in forward
-    enc = self.mlp(flat).reshape(B, T, self.hidden_dim)
-«
-view_1
-val_37val_38node_MatMul_36"MatMulJÉ
-	namespaceı: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_period_head: train.models.PeriodHead/core.frozen_period_head.fc: torch.nn.modules.linear.Linear/linear_4: aten.linear.defaultJ·
-pkg.torch.onnx.class_hierarchyæ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.PeriodHead', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J”
-pkg.torch.onnx.fx_node∏%linear_4 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%view_1, %p_core_frozen_period_head_fc_weight, %p_core_frozen_period_head_fc_bias), kwargs = {})Jo
-pkg.torch.onnx.name_scopesQ['', 'core', 'core.frozen_period_head', 'core.frozen_period_head.fc', 'linear_4']J„
-pkg.torch.onnx.stack_traceƒFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 333, in forward
-    soft_period = torch.tanh(self.frozen_period_head(enc_hidden))
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 104, in forward
-    return self.fc(h)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-ﬁ
-val_38
-core.frozen_period_head.fc.biaslinear_4node_linear_4"AddJÉ
-	namespaceı: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.frozen_period_head: train.models.PeriodHead/core.frozen_period_head.fc: torch.nn.modules.linear.Linear/linear_4: aten.linear.defaultJ·
-pkg.torch.onnx.class_hierarchyæ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models.PeriodHead', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J”
-pkg.torch.onnx.fx_node∏%linear_4 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%view_1, %p_core_frozen_period_head_fc_weight, %p_core_frozen_period_head_fc_bias), kwargs = {})Jo
-pkg.torch.onnx.name_scopesQ['', 'core', 'core.frozen_period_head', 'core.frozen_period_head.fc', 'linear_4']J„
-pkg.torch.onnx.stack_traceƒFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 333, in forward
-    soft_period = torch.tanh(self.frozen_period_head(enc_hidden))
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 104, in forward
-    return self.fc(h)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-“
-linear_4tanh	node_tanh"TanhJë
-	namespaceÉ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/tanh: aten.tanh.defaultJ°
-pkg.torch.onnx.class_hierarchy['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.tanh.default']JÖ
-pkg.torch.onnx.fx_nodek%tanh : [num_users=1] = call_function[target=torch.ops.aten.tanh.default](args = (%linear_4,), kwargs = {})J2
-pkg.torch.onnx.name_scopes['', 'core', 'tanh']J∫
-pkg.torch.onnx.stack_traceõFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 333, in forward
-    soft_period = torch.tanh(self.frozen_period_head(enc_hidden))
-∫	
-tanh
-val_39val_40node_MatMul_38"MatMulJÀ
-	namespaceΩ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.period_encoder: torch.nn.modules.linear.Linear/linear_5: aten.linear.defaultJ∆
-pkg.torch.onnx.class_hierarchy£['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J√
-pkg.torch.onnx.fx_node®%linear_5 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%tanh, %p_core_period_encoder_weight, %p_core_period_encoder_bias), kwargs = {})JM
-pkg.torch.onnx.name_scopes/['', 'core', 'core.period_encoder', 'linear_5']J›
-pkg.torch.onnx.stack_traceæFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 335, in forward
-    period_emb = self.period_encoder(soft_period)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-Ã	
-val_40
-core.period_encoder.biaslinear_5node_linear_5"AddJÀ
-	namespaceΩ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.period_encoder: torch.nn.modules.linear.Linear/linear_5: aten.linear.defaultJ∆
-pkg.torch.onnx.class_hierarchy£['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J√
-pkg.torch.onnx.fx_node®%linear_5 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%tanh, %p_core_period_encoder_weight, %p_core_period_encoder_bias), kwargs = {})JM
-pkg.torch.onnx.name_scopes/['', 'core', 'core.period_encoder', 'linear_5']J›
-pkg.torch.onnx.stack_traceæFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 335, in forward
-    period_emb = self.period_encoder(soft_period)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-µ
-
-layer_norm
-linear_5addnode_add"AddJé
-	namespaceÄ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/add: aten.add.TensorJü
-pkg.torch.onnx.class_hierarchy}['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.add.Tensor']Jé
-pkg.torch.onnx.fx_nodet%add : [num_users=1] = call_function[target=torch.ops.aten.add.Tensor](args = (%layer_norm, %linear_5), kwargs = {})J1
-pkg.torch.onnx.name_scopes['', 'core', 'add']Jë
-pkg.torch.onnx.stack_traceÚFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 336, in forward
-    y1 = y1 + period_emb
-	
-addrelu	node_relu"ReluJ…
-	namespaceª: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.shared_encoder.2: torch.nn.modules.activation.ReLU/relu: aten.relu.defaultJ∆
-pkg.torch.onnx.class_hierarchy£['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.activation.ReLU', 'aten.relu.default']JÄ
-pkg.torch.onnx.fx_nodef%relu : [num_users=1] = call_function[target=torch.ops.aten.relu.default](args = (%add,), kwargs = {})JK
-pkg.torch.onnx.name_scopes-['', 'core', 'core.shared_encoder.2', 'relu']JÏ
-pkg.torch.onnx.stack_traceÕFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 338, in forward
-    h = self.shared_encoder[2:](y1)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 144, in forward
-    return F.relu(input, inplace=self.inplace)
-‘
-
-relu
-val_41val_42node_MatMul_40"MatMulJÕ
-	namespaceø: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.shared_encoder.4: torch.nn.modules.linear.Linear/linear_6: aten.linear.defaultJ∆
-pkg.torch.onnx.class_hierarchy£['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J 
-pkg.torch.onnx.fx_nodeØ%linear_6 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%clone_3, %p_core_shared_encoder_4_weight, %p_core_shared_encoder_4_bias), kwargs = {})JO
-pkg.torch.onnx.name_scopes1['', 'core', 'core.shared_encoder.4', 'linear_6']JÏ
-pkg.torch.onnx.stack_traceÕFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 338, in forward
-    h = self.shared_encoder[2:](y1)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-Ë
-
-val_42
-core.shared_encoder.4.biaslinear_6node_linear_6"AddJÕ
-	namespaceø: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.shared_encoder.4: torch.nn.modules.linear.Linear/linear_6: aten.linear.defaultJ∆
-pkg.torch.onnx.class_hierarchy£['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J 
-pkg.torch.onnx.fx_nodeØ%linear_6 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%clone_3, %p_core_shared_encoder_4_weight, %p_core_shared_encoder_4_bias), kwargs = {})JO
-pkg.torch.onnx.name_scopes1['', 'core', 'core.shared_encoder.4', 'linear_6']JÏ
-pkg.torch.onnx.stack_traceÕFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 338, in forward
-    h = self.shared_encoder[2:](y1)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-¸
-linear_6
-core.shared_encoder.5.weight
-core.shared_encoder.5.biaslayer_norm_1node_layer_norm_1"LayerNormalization*
-
-stash_type†*
-epsilon¨≈'7†*
-axisˇˇˇˇˇˇˇˇˇ†Jﬂ
-	namespace—: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.shared_encoder.5: torch.nn.modules.normalization.LayerNorm/layer_norm_1: aten.layer_norm.defaultJ‘
-pkg.torch.onnx.class_hierarchy±['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.normalization.LayerNorm', 'aten.layer_norm.default']J⁄
-pkg.torch.onnx.fx_nodeø%layer_norm_1 : [num_users=1] = call_function[target=torch.ops.aten.layer_norm.default](args = (%linear_6, [512], %p_core_shared_encoder_5_weight, %p_core_shared_encoder_5_bias), kwargs = {})JS
-pkg.torch.onnx.name_scopes5['', 'core', 'core.shared_encoder.5', 'layer_norm_1']JŸ
-pkg.torch.onnx.stack_trace∫File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 338, in forward
-    h = self.shared_encoder[2:](y1)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/normalization.py", line 229, in forward
-    return F.layer_norm(
-å
-
-layer_norm_1relu_1node_relu_1"ReluJÀ
-	namespaceΩ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.shared_encoder.6: torch.nn.modules.activation.ReLU/relu_1: aten.relu.defaultJ∆
-pkg.torch.onnx.class_hierarchy£['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.activation.ReLU', 'aten.relu.default']Jã
-pkg.torch.onnx.fx_nodeq%relu_1 : [num_users=1] = call_function[target=torch.ops.aten.relu.default](args = (%layer_norm_1,), kwargs = {})JM
-pkg.torch.onnx.name_scopes/['', 'core', 'core.shared_encoder.6', 'relu_1']JÏ
-pkg.torch.onnx.stack_traceÕFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 338, in forward
-    h = self.shared_encoder[2:](y1)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 144, in forward
-    return F.relu(input, inplace=self.inplace)
-±	
-clamp
-val_45val_46node_MatMul_42"MatMulJ 
-	namespaceº: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.residual_proj: torch.nn.modules.linear.Linear/linear_7: aten.linear.defaultJ∆
-pkg.torch.onnx.class_hierarchy£['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J¬
-pkg.torch.onnx.fx_nodeß%linear_7 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%clamp, %p_core_residual_proj_weight, %p_core_residual_proj_bias), kwargs = {})JL
-pkg.torch.onnx.name_scopes.['', 'core', 'core.residual_proj', 'linear_7']J÷
-pkg.torch.onnx.stack_trace∑File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 339, in forward
-    h_temporal = h + self.residual_proj(x)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-¡	
-val_46
-core.residual_proj.biaslinear_7node_linear_7"AddJ 
-	namespaceº: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.residual_proj: torch.nn.modules.linear.Linear/linear_7: aten.linear.defaultJ∆
-pkg.torch.onnx.class_hierarchy£['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J¬
-pkg.torch.onnx.fx_nodeß%linear_7 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%clamp, %p_core_residual_proj_weight, %p_core_residual_proj_bias), kwargs = {})JL
-pkg.torch.onnx.name_scopes.['', 'core', 'core.residual_proj', 'linear_7']J÷
-pkg.torch.onnx.stack_trace∑File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 339, in forward
-    h_temporal = h + self.residual_proj(x)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
- 
-relu_1
-linear_7add_1
-node_add_1"AddJê
-	namespaceÇ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/add_1: aten.add.TensorJü
-pkg.torch.onnx.class_hierarchy}['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.add.Tensor']Jç
-pkg.torch.onnx.fx_nodes%add_1 : [num_users=4] = call_function[target=torch.ops.aten.add.Tensor](args = (%clone_4, %linear_7), kwargs = {})J3
-pkg.torch.onnx.name_scopes['', 'core', 'add_1']J£
-pkg.torch.onnx.stack_traceÑFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 339, in forward
-    h_temporal = h + self.residual_proj(x)
-á
-add_1isnan_1n0_7"IsNaNJï
-	namespaceá: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/isnan_1: aten.isnan.defaultJ£
-pkg.torch.onnx.class_hierarchyÄ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.isnan.default']JÜ
-pkg.torch.onnx.fx_nodel%isnan_1 : [num_users=1] = call_function[target=torch.ops.aten.isnan.default](args = (%add_1,), kwargs = {})J5
-pkg.torch.onnx.name_scopes['', 'core', 'isnan_1']JÈ
-pkg.torch.onnx.stack_trace File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 340, in forward
-    h_temporal = torch.nan_to_num(h_temporal, nan=0.0, posinf=1000000.0, neginf=-1000000.0).clamp(-100.0, 100.0)
-Æ
-isnan_1
-val_1
-add_1where_3n0_8"WhereJò
-	namespaceä: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/where_3: aten.where.ScalarSelfJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.where.ScalarSelf']Jó
-pkg.torch.onnx.fx_node}%where_3 : [num_users=1] = call_function[target=torch.ops.aten.where.ScalarSelf](args = (%isnan_1, 0.0, %add_1), kwargs = {})J5
-pkg.torch.onnx.name_scopes['', 'core', 'where_3']JÈ
-pkg.torch.onnx.stack_trace File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 340, in forward
-    h_temporal = torch.nan_to_num(h_temporal, nan=0.0, posinf=1000000.0, neginf=-1000000.0).clamp(-100.0, 100.0)
-ù
-add_1
-val_1tmp_3n3_3"LessJõ
-	namespaceç: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/isneginf_1: aten.isneginf.defaultJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.isneginf.default']Jå
-pkg.torch.onnx.fx_noder%isneginf_1 : [num_users=1] = call_function[target=torch.ops.aten.isneginf.default](args = (%add_1,), kwargs = {})J8
-pkg.torch.onnx.name_scopes['', 'core', 'isneginf_1']JÈ
-pkg.torch.onnx.stack_trace File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 340, in forward
-    h_temporal = torch.nan_to_num(h_temporal, nan=0.0, posinf=1000000.0, neginf=-1000000.0).clamp(-100.0, 100.0)
-ô
-add_1tmp_1_3n4_3"IsInfJõ
-	namespaceç: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/isneginf_1: aten.isneginf.defaultJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.isneginf.default']Jå
-pkg.torch.onnx.fx_noder%isneginf_1 : [num_users=1] = call_function[target=torch.ops.aten.isneginf.default](args = (%add_1,), kwargs = {})J8
-pkg.torch.onnx.name_scopes['', 'core', 'isneginf_1']JÈ
-pkg.torch.onnx.stack_trace File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 340, in forward
-    h_temporal = torch.nan_to_num(h_temporal, nan=0.0, posinf=1000000.0, neginf=-1000000.0).clamp(-100.0, 100.0)
-£
-tmp_3
-tmp_1_3
-isneginf_1n5_3"AndJõ
-	namespaceç: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/isneginf_1: aten.isneginf.defaultJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.isneginf.default']Jå
-pkg.torch.onnx.fx_noder%isneginf_1 : [num_users=1] = call_function[target=torch.ops.aten.isneginf.default](args = (%add_1,), kwargs = {})J8
-pkg.torch.onnx.name_scopes['', 'core', 'isneginf_1']JÈ
-pkg.torch.onnx.stack_trace File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 340, in forward
-    h_temporal = torch.nan_to_num(h_temporal, nan=0.0, posinf=1000000.0, neginf=-1000000.0).clamp(-100.0, 100.0)
-¡
-
-isneginf_1
-val_2
-where_3where_4n0_10"WhereJò
-	namespaceä: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/where_4: aten.where.ScalarSelfJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.where.ScalarSelf']J§
-pkg.torch.onnx.fx_nodeâ%where_4 : [num_users=1] = call_function[target=torch.ops.aten.where.ScalarSelf](args = (%isneginf_1, -1000000.0, %where_3), kwargs = {})J5
-pkg.torch.onnx.name_scopes['', 'core', 'where_4']JÈ
-pkg.torch.onnx.stack_trace File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 340, in forward
-    h_temporal = torch.nan_to_num(h_temporal, nan=0.0, posinf=1000000.0, neginf=-1000000.0).clamp(-100.0, 100.0)
-†
-add_1
-val_1tmp_4n3_4"GreaterJõ
-	namespaceç: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/isposinf_1: aten.isposinf.defaultJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.isposinf.default']Jå
-pkg.torch.onnx.fx_noder%isposinf_1 : [num_users=1] = call_function[target=torch.ops.aten.isposinf.default](args = (%add_1,), kwargs = {})J8
-pkg.torch.onnx.name_scopes['', 'core', 'isposinf_1']JÈ
-pkg.torch.onnx.stack_trace File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 340, in forward
-    h_temporal = torch.nan_to_num(h_temporal, nan=0.0, posinf=1000000.0, neginf=-1000000.0).clamp(-100.0, 100.0)
-£
-tmp_4
-tmp_1_3
-isposinf_1n5_4"AndJõ
-	namespaceç: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/isposinf_1: aten.isposinf.defaultJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.isposinf.default']Jå
-pkg.torch.onnx.fx_noder%isposinf_1 : [num_users=1] = call_function[target=torch.ops.aten.isposinf.default](args = (%add_1,), kwargs = {})J8
-pkg.torch.onnx.name_scopes['', 'core', 'isposinf_1']JÈ
-pkg.torch.onnx.stack_trace File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 340, in forward
-    h_temporal = torch.nan_to_num(h_temporal, nan=0.0, posinf=1000000.0, neginf=-1000000.0).clamp(-100.0, 100.0)
-¿
-
-isposinf_1
-val_3
-where_4where_5n0_12"WhereJò
-	namespaceä: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/where_5: aten.where.ScalarSelfJ¶
-pkg.torch.onnx.class_hierarchyÉ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.where.ScalarSelf']J£
-pkg.torch.onnx.fx_nodeà%where_5 : [num_users=1] = call_function[target=torch.ops.aten.where.ScalarSelf](args = (%isposinf_1, 1000000.0, %where_4), kwargs = {})J5
-pkg.torch.onnx.name_scopes['', 'core', 'where_5']JÈ
-pkg.torch.onnx.stack_trace File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 340, in forward
-    h_temporal = torch.nan_to_num(h_temporal, nan=0.0, posinf=1000000.0, neginf=-1000000.0).clamp(-100.0, 100.0)
-∞
-where_5
-val_48
-val_50clamp_1node_clamp_1"ClipJï
-	namespaceá: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/clamp_1: aten.clamp.defaultJ£
-pkg.torch.onnx.class_hierarchyÄ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.clamp.default']Jñ
-pkg.torch.onnx.fx_node|%clamp_1 : [num_users=4] = call_function[target=torch.ops.aten.clamp.default](args = (%where_5, -100.0, 100.0), kwargs = {})J5
-pkg.torch.onnx.name_scopes['', 'core', 'clamp_1']JÈ
-pkg.torch.onnx.stack_trace File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 340, in forward
-    h_temporal = torch.nan_to_num(h_temporal, nan=0.0, posinf=1000000.0, neginf=-1000000.0).clamp(-100.0, 100.0)
-Ä
-zeros
-core._pasa_film.fc1.weight
-core._pasa_film.fc1.biaslinear_8node_linear_8"Gemm*
-beta  Ä?†*
-transB†*
-alpha  Ä?†*
-transA †JÛ
-	namespaceÂ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_film: train.models._CondFiLM/core._pasa_film.fc1: torch.nn.modules.linear.Linear/linear_8: aten.linear.defaultJ‡
-pkg.torch.onnx.class_hierarchyΩ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models._CondFiLM', 'torch.nn.modules.linear.Linear', 'aten.linear.default']Jƒ
-pkg.torch.onnx.fx_node©%linear_8 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%zeros, %p_core__pasa_film_fc1_weight, %p_core__pasa_film_fc1_bias), kwargs = {})J`
-pkg.torch.onnx.name_scopesB['', 'core', 'core._pasa_film', 'core._pasa_film.fc1', 'linear_8']J‡
-pkg.torch.onnx.stack_trace¡File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 352, in forward
-    g, b = self._pasa_film(cond_in)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 116, in forward
-    h = torch.nn.functional.gelu(self.fc1(cond))
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-¨
-linear_8
-val_14val_56node_Div_52"DivJª
-	namespace≠: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_film: train.models._CondFiLM/gelu_3: aten.gelu.defaultJº
-pkg.torch.onnx.class_hierarchyô['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models._CondFiLM', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_3 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_8,), kwargs = {})JG
-pkg.torch.onnx.name_scopes)['', 'core', 'core._pasa_film', 'gelu_3']J≠
-pkg.torch.onnx.stack_traceéFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 352, in forward
-    g, b = self._pasa_film(cond_in)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 116, in forward
-    h = torch.nn.functional.gelu(self.fc1(cond))
-¢
-val_56val_57node_Erf_53"ErfJª
-	namespace≠: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_film: train.models._CondFiLM/gelu_3: aten.gelu.defaultJº
-pkg.torch.onnx.class_hierarchyô['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models._CondFiLM', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_3 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_8,), kwargs = {})JG
-pkg.torch.onnx.name_scopes)['', 'core', 'core._pasa_film', 'gelu_3']J≠
-pkg.torch.onnx.stack_traceéFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 352, in forward
-    g, b = self._pasa_film(cond_in)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 116, in forward
-    h = torch.nn.functional.gelu(self.fc1(cond))
-™
-val_57
-val_17val_59node_Add_55"AddJª
-	namespace≠: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_film: train.models._CondFiLM/gelu_3: aten.gelu.defaultJº
-pkg.torch.onnx.class_hierarchyô['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models._CondFiLM', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_3 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_8,), kwargs = {})JG
-pkg.torch.onnx.name_scopes)['', 'core', 'core._pasa_film', 'gelu_3']J≠
-pkg.torch.onnx.stack_traceéFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 352, in forward
-    g, b = self._pasa_film(cond_in)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 116, in forward
-    h = torch.nn.functional.gelu(self.fc1(cond))
-™
-val_19
-val_59val_61node_Mul_57"MulJª
-	namespace≠: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_film: train.models._CondFiLM/gelu_3: aten.gelu.defaultJº
-pkg.torch.onnx.class_hierarchyô['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models._CondFiLM', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_3 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_8,), kwargs = {})JG
-pkg.torch.onnx.name_scopes)['', 'core', 'core._pasa_film', 'gelu_3']J≠
-pkg.torch.onnx.stack_traceéFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 352, in forward
-    g, b = self._pasa_film(cond_in)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 116, in forward
-    h = torch.nn.functional.gelu(self.fc1(cond))
-¨
-linear_8
-val_61gelu_3node_gelu_3"MulJª
-	namespace≠: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_film: train.models._CondFiLM/gelu_3: aten.gelu.defaultJº
-pkg.torch.onnx.class_hierarchyô['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models._CondFiLM', 'aten.gelu.default']Já
-pkg.torch.onnx.fx_nodem%gelu_3 : [num_users=1] = call_function[target=torch.ops.aten.gelu.default](args = (%linear_8,), kwargs = {})JG
-pkg.torch.onnx.name_scopes)['', 'core', 'core._pasa_film', 'gelu_3']J≠
-pkg.torch.onnx.stack_traceéFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 352, in forward
-    g, b = self._pasa_film(cond_in)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 116, in forward
-    h = torch.nn.functional.gelu(self.fc1(cond))
-˘
-gelu_3
-core._pasa_film.fc2.weight
-core._pasa_film.fc2.biaslinear_9node_linear_9"Gemm*
-beta  Ä?†*
-transB†*
-alpha  Ä?†*
-transA †JÛ
-	namespaceÂ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_film: train.models._CondFiLM/core._pasa_film.fc2: torch.nn.modules.linear.Linear/linear_9: aten.linear.defaultJ‡
-pkg.torch.onnx.class_hierarchyΩ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models._CondFiLM', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J≈
-pkg.torch.onnx.fx_node™%linear_9 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%gelu_3, %p_core__pasa_film_fc2_weight, %p_core__pasa_film_fc2_bias), kwargs = {})J`
-pkg.torch.onnx.name_scopesB['', 'core', 'core._pasa_film', 'core._pasa_film.fc2', 'linear_9']J◊
-pkg.torch.onnx.stack_trace∏File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 352, in forward
-    g, b = self._pasa_film(cond_in)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 117, in forward
-    g, b = self.fc2(h).chunk(2, dim=-1)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-`
-linear_9split_split_0split_split_1node_Split_112"Split*
-axis†*
-num_outputs†
-ö
-split_split_0tanh_1node_tanh_1"TanhJª
-	namespace≠: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_film: train.models._CondFiLM/tanh_1: aten.tanh.defaultJº
-pkg.torch.onnx.class_hierarchyô['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models._CondFiLM', 'aten.tanh.default']JÜ
-pkg.torch.onnx.fx_nodel%tanh_1 : [num_users=1] = call_function[target=torch.ops.aten.tanh.default](args = (%getitem,), kwargs = {})JG
-pkg.torch.onnx.name_scopes)['', 'core', 'core._pasa_film', 'tanh_1']Jû
-pkg.torch.onnx.stack_traceˇFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 352, in forward
-    g, b = self._pasa_film(cond_in)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 118, in forward
-    g = 1.0 + 0.5 * torch.tanh(g)
-à
-tanh_1
-val_19mulnode_mul"MulJ∂
-	namespace®: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_film: train.models._CondFiLM/mul: aten.mul.TensorJ∫
-pkg.torch.onnx.class_hierarchyó['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models._CondFiLM', 'aten.mul.Tensor']JÑ
-pkg.torch.onnx.fx_nodej%mul : [num_users=1] = call_function[target=torch.ops.aten.mul.Tensor](args = (%tanh_1, 0.5), kwargs = {})JD
-pkg.torch.onnx.name_scopes&['', 'core', 'core._pasa_film', 'mul']Jû
-pkg.torch.onnx.stack_traceˇFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 352, in forward
-    g, b = self._pasa_film(cond_in)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 118, in forward
-    g = 1.0 + 0.5 * torch.tanh(g)
-å
-mul
-val_17add_2
-node_add_2"AddJ∏
-	namespace™: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_film: train.models._CondFiLM/add_2: aten.add.TensorJ∫
-pkg.torch.onnx.class_hierarchyó['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models._CondFiLM', 'aten.add.Tensor']JÉ
-pkg.torch.onnx.fx_nodei%add_2 : [num_users=1] = call_function[target=torch.ops.aten.add.Tensor](args = (%mul, 1.0), kwargs = {})JF
-pkg.torch.onnx.name_scopes(['', 'core', 'core._pasa_film', 'add_2']Jû
-pkg.torch.onnx.stack_traceˇFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 352, in forward
-    g, b = self._pasa_film(cond_in)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 118, in forward
-    g = 1.0 + 0.5 * torch.tanh(g)
-ñ
-split_split_1tanh_2node_tanh_2"TanhJª
-	namespace≠: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_film: train.models._CondFiLM/tanh_2: aten.tanh.defaultJº
-pkg.torch.onnx.class_hierarchyô['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models._CondFiLM', 'aten.tanh.default']Jà
-pkg.torch.onnx.fx_noden%tanh_2 : [num_users=1] = call_function[target=torch.ops.aten.tanh.default](args = (%getitem_1,), kwargs = {})JG
-pkg.torch.onnx.name_scopes)['', 'core', 'core._pasa_film', 'tanh_2']Jò
-pkg.torch.onnx.stack_trace˘File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 352, in forward
-    g, b = self._pasa_film(cond_in)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 119, in forward
-    b = 0.5 * torch.tanh(b)
-å
-tanh_2
-val_19mul_1
-node_mul_1"MulJ∏
-	namespace™: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_film: train.models._CondFiLM/mul_1: aten.mul.TensorJ∫
-pkg.torch.onnx.class_hierarchyó['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'train.models._CondFiLM', 'aten.mul.Tensor']JÜ
-pkg.torch.onnx.fx_nodel%mul_1 : [num_users=1] = call_function[target=torch.ops.aten.mul.Tensor](args = (%tanh_2, 0.5), kwargs = {})JF
-pkg.torch.onnx.name_scopes(['', 'core', 'core._pasa_film', 'mul_1']Jò
-pkg.torch.onnx.stack_trace˘File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 352, in forward
-    g, b = self._pasa_film(cond_in)
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 119, in forward
-    b = 0.5 * torch.tanh(b)
-µ
-
-clamp_1
-core._pasa_lnq.weight
-core._pasa_lnq.biaslayer_norm_2node_layer_norm_2"LayerNormalization*
-
-stash_type†*
-epsilon¨≈'7†*
-axisˇˇˇˇˇˇˇˇˇ†Jÿ
-	namespace : __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_lnq: torch.nn.modules.normalization.LayerNorm/layer_norm_2: aten.layer_norm.defaultJ‘
-pkg.torch.onnx.class_hierarchy±['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.normalization.LayerNorm', 'aten.layer_norm.default']JÀ
-pkg.torch.onnx.fx_node∞%layer_norm_2 : [num_users=1] = call_function[target=torch.ops.aten.layer_norm.default](args = (%clamp_1, [512], %p_core__pasa_lnq_weight, %p_core__pasa_lnq_bias), kwargs = {})JL
-pkg.torch.onnx.name_scopes.['', 'core', 'core._pasa_lnq', 'layer_norm_2']Jæ
-pkg.torch.onnx.stack_traceüFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 353, in forward
-    q_in = self._pasa_lnq(h_temporal)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/normalization.py", line 229, in forward
-    return F.layer_norm(
-π	
-layer_norm_2
-val_69	linear_10node_linear_10"MatMulJ≈
-	namespace∑: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_q: torch.nn.modules.linear.Linear/linear_10: aten.linear.defaultJ∆
-pkg.torch.onnx.class_hierarchy£['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J®
-pkg.torch.onnx.fx_nodeç%linear_10 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%layer_norm_2, %p_core__pasa_q_weight), kwargs = {})JG
-pkg.torch.onnx.name_scopes)['', 'core', 'core._pasa_q', 'linear_10']J¯
-pkg.torch.onnx.stack_traceŸFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 354, in forward
-    Q = self._pasa_q(q_in).view(B, Tq, self._pasa_heads, Dh).transpose(1, 2)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-ï
-	linear_10
-val_71view_2node_view_2"Reshape*
-	allowzero†Jì
-	namespaceÖ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/view_2: aten.view.defaultJ°
-pkg.torch.onnx.class_hierarchy['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.view.default']Jó
-pkg.torch.onnx.fx_node}%view_2 : [num_users=1] = call_function[target=torch.ops.aten.view.default](args = (%linear_10, [1, 1, 4, 128]), kwargs = {})J4
-pkg.torch.onnx.name_scopes['', 'core', 'view_2']J≈
-pkg.torch.onnx.stack_trace¶File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 354, in forward
-    Q = self._pasa_q(q_in).view(B, Tq, self._pasa_heads, Dh).transpose(1, 2)
-ì
-view_2	transposenode_transpose"	Transpose*
-perm@ @@@†Jó
-	namespaceâ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/transpose: aten.transpose.intJ£
-pkg.torch.onnx.class_hierarchyÄ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.transpose.int']Jé
-pkg.torch.onnx.fx_nodet%transpose : [num_users=1] = call_function[target=torch.ops.aten.transpose.int](args = (%view_2, 1, 2), kwargs = {})J7
-pkg.torch.onnx.name_scopes['', 'core', 'transpose']J≈
-pkg.torch.onnx.stack_trace¶File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 354, in forward
-    Q = self._pasa_q(q_in).view(B, Tq, self._pasa_heads, Dh).transpose(1, 2)
-π	
-clamp_1
-val_72	linear_11node_linear_11"MatMulJ≈
-	namespace∑: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_k: torch.nn.modules.linear.Linear/linear_11: aten.linear.defaultJ∆
-pkg.torch.onnx.class_hierarchy£['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J£
-pkg.torch.onnx.fx_nodeà%linear_11 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%clamp_1, %p_core__pasa_k_weight), kwargs = {})JG
-pkg.torch.onnx.name_scopes)['', 'core', 'core._pasa_k', 'linear_11']JÇ
-pkg.torch.onnx.stack_trace„File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 355, in forward
-    K = self._pasa_k(h_temporal).view(B, Tq, self._pasa_heads, Dh).permute(0, 2, 1, 3)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-ü
-	linear_11
-val_71view_3node_view_3"Reshape*
-	allowzero†Jì
-	namespaceÖ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/view_3: aten.view.defaultJ°
-pkg.torch.onnx.class_hierarchy['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.view.default']Jó
-pkg.torch.onnx.fx_node}%view_3 : [num_users=1] = call_function[target=torch.ops.aten.view.default](args = (%linear_11, [1, 1, 4, 128]), kwargs = {})J4
-pkg.torch.onnx.name_scopes['', 'core', 'view_3']Jœ
-pkg.torch.onnx.stack_trace∞File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 355, in forward
-    K = self._pasa_k(h_temporal).view(B, Tq, self._pasa_heads, Dh).permute(0, 2, 1, 3)
-π	
-clamp_1
-val_74	linear_12node_linear_12"MatMulJ≈
-	namespace∑: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_v: torch.nn.modules.linear.Linear/linear_12: aten.linear.defaultJ∆
-pkg.torch.onnx.class_hierarchy£['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J£
-pkg.torch.onnx.fx_nodeà%linear_12 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%clamp_1, %p_core__pasa_v_weight), kwargs = {})JG
-pkg.torch.onnx.name_scopes)['', 'core', 'core._pasa_v', 'linear_12']JÇ
-pkg.torch.onnx.stack_trace„File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 356, in forward
-    V = self._pasa_v(h_temporal).view(B, Tq, self._pasa_heads, Dh).permute(0, 2, 1, 3)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-ü
-	linear_12
-val_71view_4node_view_4"Reshape*
-	allowzero†Jì
-	namespaceÖ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/view_4: aten.view.defaultJ°
-pkg.torch.onnx.class_hierarchy['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.view.default']Jó
-pkg.torch.onnx.fx_node}%view_4 : [num_users=1] = call_function[target=torch.ops.aten.view.default](args = (%linear_12, [1, 1, 4, 128]), kwargs = {})J4
-pkg.torch.onnx.name_scopes['', 'core', 'view_4']Jœ
-pkg.torch.onnx.stack_trace∞File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 356, in forward
-    V = self._pasa_v(h_temporal).view(B, Tq, self._pasa_heads, Dh).permute(0, 2, 1, 3)
-´
-view_4	permute_1node_permute_1"	Transpose*
-perm@ @@@†Jô
-	namespaceã: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/permute_1: aten.permute.defaultJ•
-pkg.torch.onnx.class_hierarchyÇ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.permute.default']Jò
-pkg.torch.onnx.fx_node~%permute_1 : [num_users=1] = call_function[target=torch.ops.aten.permute.default](args = (%view_4, [0, 2, 1, 3]), kwargs = {})J7
-pkg.torch.onnx.name_scopes['', 'core', 'permute_1']Jœ
-pkg.torch.onnx.stack_trace∞File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 356, in forward
-    V = self._pasa_v(h_temporal).view(B, Tq, self._pasa_heads, Dh).permute(0, 2, 1, 3)
-Ó
-	transpose
-val_76mul_2
-node_mul_2"MulJê
-	namespaceÇ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/mul_2: aten.mul.TensorJü
-pkg.torch.onnx.class_hierarchy}['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.mul.Tensor']Jô
-pkg.torch.onnx.fx_node%mul_2 : [num_users=1] = call_function[target=torch.ops.aten.mul.Tensor](args = (%transpose, 0.08838834764831843), kwargs = {})J3
-pkg.torch.onnx.name_scopes['', 'core', 'mul_2']J∫
-pkg.torch.onnx.stack_traceõFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 357, in forward
-    attn = torch.softmax(Q * scale @ K.transpose(-1, -2), dim=-1)
-G
-view_3transpose_1node_Transpose_131"	Transpose*
-perm@ @@@†
-˘
-mul_2
-transpose_1matmulnode_matmul"MatMulJï
-	namespaceá: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/matmul: aten.matmul.defaultJ§
-pkg.torch.onnx.class_hierarchyÅ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.matmul.default']Jì
-pkg.torch.onnx.fx_nodey%matmul : [num_users=1] = call_function[target=torch.ops.aten.matmul.default](args = (%mul_2, %transpose_1), kwargs = {})J4
-pkg.torch.onnx.name_scopes['', 'core', 'matmul']J∫
-pkg.torch.onnx.stack_traceõFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 357, in forward
-    attn = torch.softmax(Q * scale @ K.transpose(-1, -2), dim=-1)
-ˆ
-matmulsoftmaxnode_softmax"Softmax*
-axisˇˇˇˇˇˇˇˇˇ†Jì
-	namespaceÖ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/softmax: aten.softmax.intJ†
-pkg.torch.onnx.class_hierarchy~['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.softmax.int']Jà
-pkg.torch.onnx.fx_noden%softmax : [num_users=1] = call_function[target=torch.ops.aten.softmax.int](args = (%matmul, -1), kwargs = {})J5
-pkg.torch.onnx.name_scopes['', 'core', 'softmax']J∫
-pkg.torch.onnx.stack_traceõFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 357, in forward
-    attn = torch.softmax(Q * scale @ K.transpose(-1, -2), dim=-1)
-É
-softmax
-	permute_1matmul_1node_matmul_1"MatMulJó
-	namespaceâ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/matmul_1: aten.matmul.defaultJ§
-pkg.torch.onnx.class_hierarchyÅ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.matmul.default']Jï
-pkg.torch.onnx.fx_node{%matmul_1 : [num_users=1] = call_function[target=torch.ops.aten.matmul.default](args = (%softmax, %permute_1), kwargs = {})J6
-pkg.torch.onnx.name_scopes['', 'core', 'matmul_1']J∫
-pkg.torch.onnx.stack_traceõFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 358, in forward
-    ctx = (attn @ V).transpose(1, 2).contiguous().view(B, Tq, -1)
-ñ
-matmul_1transpose_2node_transpose_2"	Transpose*
-perm@ @@@†Jô
-	namespaceã: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/transpose_2: aten.transpose.intJ£
-pkg.torch.onnx.class_hierarchyÄ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.transpose.int']Jí
-pkg.torch.onnx.fx_nodex%transpose_2 : [num_users=1] = call_function[target=torch.ops.aten.transpose.int](args = (%matmul_1, 1, 2), kwargs = {})J9
-pkg.torch.onnx.name_scopes['', 'core', 'transpose_2']J∫
-pkg.torch.onnx.stack_traceõFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 358, in forward
-    ctx = (attn @ V).transpose(1, 2).contiguous().view(B, Tq, -1)
-ä
-transpose_2
-val_78view_5node_view_5"Reshape*
-	allowzero†Jì
-	namespaceÖ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/view_5: aten.view.defaultJ°
-pkg.torch.onnx.class_hierarchy['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.view.default']Jï
-pkg.torch.onnx.fx_node{%view_5 : [num_users=1] = call_function[target=torch.ops.aten.view.default](args = (%transpose_2, [1, 1, -1]), kwargs = {})J4
-pkg.torch.onnx.name_scopes['', 'core', 'view_5']J∫
-pkg.torch.onnx.stack_traceõFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 358, in forward
-    ctx = (attn @ V).transpose(1, 2).contiguous().view(B, Tq, -1)
-Å	
-view_5
-val_79	linear_13node_linear_13"MatMulJ≈
-	namespace∑: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core._pasa_o: torch.nn.modules.linear.Linear/linear_13: aten.linear.defaultJ∆
-pkg.torch.onnx.class_hierarchy£['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J¢
-pkg.torch.onnx.fx_nodeá%linear_13 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%view_5, %p_core__pasa_o_weight), kwargs = {})JG
-pkg.torch.onnx.name_scopes)['', 'core', 'core._pasa_o', 'linear_13']JÃ
-pkg.torch.onnx.stack_trace≠File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 359, in forward
-    attn_out = self._pasa_o(ctx)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-Ñ
-clamp_1
-	linear_13add_3
-node_add_3"AddJê
-	namespaceÇ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/add_3: aten.add.TensorJü
-pkg.torch.onnx.class_hierarchy}['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.add.Tensor']Jé
-pkg.torch.onnx.fx_nodet%add_3 : [num_users=1] = call_function[target=torch.ops.aten.add.Tensor](args = (%clamp_1, %linear_13), kwargs = {})J3
-pkg.torch.onnx.name_scopes['', 'core', 'add_3']J⁄
-pkg.torch.onnx.stack_traceªFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 360, in forward
-    h_final = self.coupling_norm((h_temporal + attn_out) * (1 + g).unsqueeze(1) + b.unsqueeze(1))
-â
-add_2
-val_17add_4
-node_add_4"AddJê
-	namespaceÇ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/add_4: aten.add.TensorJü
-pkg.torch.onnx.class_hierarchy}['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.add.Tensor']Jò
-pkg.torch.onnx.fx_node~%add_4 : [num_users=1] = call_function[target=torch.ops.aten.add.Tensor](args = (%add_2, %scalar_tensor_default), kwargs = {})J3
-pkg.torch.onnx.name_scopes['', 'core', 'add_4']J⁄
-pkg.torch.onnx.stack_traceªFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 360, in forward
-    h_final = self.coupling_norm((h_temporal + attn_out) * (1 + g).unsqueeze(1) + b.unsqueeze(1))
-≠
-add_4
-val_0unsqueeze_5node_unsqueeze_5"	UnsqueezeJù
-	namespaceè: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/unsqueeze_5: aten.unsqueeze.defaultJß
-pkg.torch.onnx.class_hierarchyÑ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.unsqueeze.default']Jê
-pkg.torch.onnx.fx_nodev%unsqueeze_5 : [num_users=1] = call_function[target=torch.ops.aten.unsqueeze.default](args = (%add_4, 1), kwargs = {})J9
-pkg.torch.onnx.name_scopes['', 'core', 'unsqueeze_5']J⁄
-pkg.torch.onnx.stack_traceªFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 360, in forward
-    h_final = self.coupling_norm((h_temporal + attn_out) * (1 + g).unsqueeze(1) + b.unsqueeze(1))
-Ñ
-add_3
-unsqueeze_5mul_3
-node_mul_3"MulJê
-	namespaceÇ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/mul_3: aten.mul.TensorJü
-pkg.torch.onnx.class_hierarchy}['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.mul.Tensor']Jé
-pkg.torch.onnx.fx_nodet%mul_3 : [num_users=1] = call_function[target=torch.ops.aten.mul.Tensor](args = (%add_3, %unsqueeze_5), kwargs = {})J3
-pkg.torch.onnx.name_scopes['', 'core', 'mul_3']J⁄
-pkg.torch.onnx.stack_traceªFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 360, in forward
-    h_final = self.coupling_norm((h_temporal + attn_out) * (1 + g).unsqueeze(1) + b.unsqueeze(1))
-≠
-mul_1
-val_0unsqueeze_6node_unsqueeze_6"	UnsqueezeJù
-	namespaceè: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/unsqueeze_6: aten.unsqueeze.defaultJß
-pkg.torch.onnx.class_hierarchyÑ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.unsqueeze.default']Jê
-pkg.torch.onnx.fx_nodev%unsqueeze_6 : [num_users=1] = call_function[target=torch.ops.aten.unsqueeze.default](args = (%mul_1, 1), kwargs = {})J9
-pkg.torch.onnx.name_scopes['', 'core', 'unsqueeze_6']J⁄
-pkg.torch.onnx.stack_traceªFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 360, in forward
-    h_final = self.coupling_norm((h_temporal + attn_out) * (1 + g).unsqueeze(1) + b.unsqueeze(1))
-Ñ
-mul_3
-unsqueeze_6add_5
-node_add_5"AddJê
-	namespaceÇ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/add_5: aten.add.TensorJü
-pkg.torch.onnx.class_hierarchy}['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.add.Tensor']Jé
-pkg.torch.onnx.fx_nodet%add_5 : [num_users=1] = call_function[target=torch.ops.aten.add.Tensor](args = (%mul_3, %unsqueeze_6), kwargs = {})J3
-pkg.torch.onnx.name_scopes['', 'core', 'add_5']J⁄
-pkg.torch.onnx.stack_traceªFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 360, in forward
-    h_final = self.coupling_norm((h_temporal + attn_out) * (1 + g).unsqueeze(1) + b.unsqueeze(1))
-Ö
-add_5
-core.coupling_norm.weight
-core.coupling_norm.biaslayer_norm_3node_layer_norm_3"LayerNormalization*
-
-stash_type†*
-epsilon¨≈'7†*
-axisˇˇˇˇˇˇˇˇˇ†J‹
-	namespaceŒ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.coupling_norm: torch.nn.modules.normalization.LayerNorm/layer_norm_3: aten.layer_norm.defaultJ‘
-pkg.torch.onnx.class_hierarchy±['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.normalization.LayerNorm', 'aten.layer_norm.default']J—
-pkg.torch.onnx.fx_node∂%layer_norm_3 : [num_users=1] = call_function[target=torch.ops.aten.layer_norm.default](args = (%add_5, [512], %p_core_coupling_norm_weight, %p_core_coupling_norm_bias), kwargs = {})JP
-pkg.torch.onnx.name_scopes2['', 'core', 'core.coupling_norm', 'layer_norm_3']J˙
-pkg.torch.onnx.stack_trace€File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 360, in forward
-    h_final = self.coupling_norm((h_temporal + attn_out) * (1 + g).unsqueeze(1) + b.unsqueeze(1))
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/normalization.py", line 229, in forward
-    return F.layer_norm(
-Õ
-layer_norm_3
-val_82val_83node_MatMul_75"MatMulJÉ
-	namespaceı: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.motion_head: torch.nn.modules.container.Sequential/core.motion_head.0: torch.nn.modules.linear.Linear/linear_14: aten.linear.defaultJÔ
-pkg.torch.onnx.class_hierarchyÃ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J 
-pkg.torch.onnx.fx_nodeØ%linear_14 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%layer_norm_3, %p_core_motion_head_0_weight, %p_core_motion_head_0_bias), kwargs = {})Ja
-pkg.torch.onnx.name_scopesC['', 'core', 'core.motion_head', 'core.motion_head.0', 'linear_14']JÏ
-pkg.torch.onnx.stack_traceÕFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 363, in forward
-    out = self.motion_head(h_final)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-ÿ
-val_83
-core.motion_head.0.bias	linear_14node_linear_14"AddJÉ
-	namespaceı: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.motion_head: torch.nn.modules.container.Sequential/core.motion_head.0: torch.nn.modules.linear.Linear/linear_14: aten.linear.defaultJÔ
-pkg.torch.onnx.class_hierarchyÃ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J 
-pkg.torch.onnx.fx_nodeØ%linear_14 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%layer_norm_3, %p_core_motion_head_0_weight, %p_core_motion_head_0_bias), kwargs = {})Ja
-pkg.torch.onnx.name_scopesC['', 'core', 'core.motion_head', 'core.motion_head.0', 'linear_14']JÏ
-pkg.torch.onnx.stack_traceÕFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 363, in forward
-    out = self.motion_head(h_final)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-ı
-
-	linear_14relu_2node_relu_2"ReluJÄ
-	namespaceÚ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.motion_head: torch.nn.modules.container.Sequential/core.motion_head.1: torch.nn.modules.activation.ReLU/relu_2: aten.relu.defaultJÔ
-pkg.torch.onnx.class_hierarchyÃ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.activation.ReLU', 'aten.relu.default']Jà
-pkg.torch.onnx.fx_noden%relu_2 : [num_users=1] = call_function[target=torch.ops.aten.relu.default](args = (%linear_14,), kwargs = {})J^
-pkg.torch.onnx.name_scopes@['', 'core', 'core.motion_head', 'core.motion_head.1', 'relu_2']JÏ
-pkg.torch.onnx.stack_traceÕFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 363, in forward
-    out = self.motion_head(h_final)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/activation.py", line 144, in forward
-    return F.relu(input, inplace=self.inplace)
-¬
-relu_2
-val_84val_85node_MatMul_77"MatMulJÉ
-	namespaceı: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.motion_head: torch.nn.modules.container.Sequential/core.motion_head.3: torch.nn.modules.linear.Linear/linear_15: aten.linear.defaultJÔ
-pkg.torch.onnx.class_hierarchyÃ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J≈
-pkg.torch.onnx.fx_node™%linear_15 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%clone_5, %p_core_motion_head_3_weight, %p_core_motion_head_3_bias), kwargs = {})Ja
-pkg.torch.onnx.name_scopesC['', 'core', 'core.motion_head', 'core.motion_head.3', 'linear_15']JÏ
-pkg.torch.onnx.stack_traceÕFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 363, in forward
-    out = self.motion_head(h_final)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-”
-val_85
-core.motion_head.3.bias	linear_15node_linear_15"AddJÉ
-	namespaceı: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/core.motion_head: torch.nn.modules.container.Sequential/core.motion_head.3: torch.nn.modules.linear.Linear/linear_15: aten.linear.defaultJÔ
-pkg.torch.onnx.class_hierarchyÃ['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'torch.nn.modules.container.Sequential', 'torch.nn.modules.linear.Linear', 'aten.linear.default']J≈
-pkg.torch.onnx.fx_node™%linear_15 : [num_users=1] = call_function[target=torch.ops.aten.linear.default](args = (%clone_5, %p_core_motion_head_3_weight, %p_core_motion_head_3_bias), kwargs = {})Ja
-pkg.torch.onnx.name_scopesC['', 'core', 'core.motion_head', 'core.motion_head.3', 'linear_15']JÏ
-pkg.torch.onnx.stack_traceÕFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 363, in forward
-    out = self.motion_head(h_final)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/container.py", line 250, in forward
-    input = module(input)
-  File "/Users/xingzhaorui/miniconda3/envs/train/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 134, in forward
-    return F.linear(input, self.weight, self.bias)
-«
-	linear_15
-val_0motion_prednode_squeeze"SqueezeJì
-	namespaceÖ: __main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper/core: train.models.EventMotionModel/squeeze: aten.squeeze.dimJ†
-pkg.torch.onnx.class_hierarchy~['__main__.export_onnx_step_stateful_nophase.<locals>._StatelessWrapper', 'train.models.EventMotionModel', 'aten.squeeze.dim']Jä
-pkg.torch.onnx.fx_nodep%squeeze : [num_users=1] = call_function[target=torch.ops.aten.squeeze.dim](args = (%linear_15, 1), kwargs = {})J5
-pkg.torch.onnx.name_scopes['', 'core', 'squeeze']Jë
-pkg.torch.onnx.stack_traceÚFile "/Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py", line 5000, in forward
-    out = self.core(
-  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py", line 365, in forward
-    out = out.squeeze(1)
-main_graph*òÄBcore.shared_encoder.0.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset4696j
-length2048p*öÄBcore.shared_encoder.1.weightjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset6744j
-length2048p*òÄBcore.shared_encoder.1.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset8792j
-length2048p*ôÄBcore.shared_encoder.4.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset10840j
-length2048p*õÄBcore.shared_encoder.5.weightjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset12888j
-length2048p*ôÄBcore.shared_encoder.5.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset14936j
-length2048p*ñÄBcore.residual_proj.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset16984j
-length2048p*îÄBcore._pasa_lnq.weightjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset19032j
-length2048p*íÄBcore._pasa_lnq.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset21080j
-length2048p*õÄBcore._pasa_film.fc1.weightjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset31320j
-length3584p*íÄBcore._pasa_film.fc1.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset0j
-length512p*üÄÄBcore._pasa_film.fc2.weightjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset661592j
-length524288p*óÄBcore._pasa_film.fc2.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset34904j
-length4096p*òÄBcore.coupling_norm.weightjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset23128j
-length2048p*ñÄBcore.coupling_norm.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset25176j
-length2048p*ñÄBcore.motion_head.0.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset27224j
-length2048p*ïñBcore.motion_head.3.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset3584j
-length1112p*¶Ä»B core.frozen_encoder.mlp.0.weightjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset3500120j
-length991232p*õÄBcore.frozen_encoder.mlp.0.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset512j
-length1024p*•ÄÄB core.frozen_encoder.mlp.3.weightjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset137304j
-length262144p*úÄBcore.frozen_encoder.mlp.3.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset1536j
-length1024p*•ÄÄB core.frozen_encoder.mlp.6.weightjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset399448j
-length262144p*úÄBcore.frozen_encoder.mlp.6.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset2560j
-length1024p*® Bcore.frozen_period_head.fc.biasJÄØ∆Ω},Í<L )Ωö"Ôº–D`<+ˆKªuç6=IÄöºê=ç‰“ºDéZº\õ,º’'ÜΩ(ZΩ"≥±º,≠∏º_Ωz:Ωl‰<⁄Ú_=8Œj=ÉèçΩñÓºNhºπÓE=©¥0=
-ûºjÉ¯<>√]Ω„IÚ<˛,X=‹˛f=*óÄBcore.period_encoder.biasjS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset29272j
-length2048p*Bval_0J       *Bval_1J    *Bval_2J $t…*Bval_3J $tI*Bval_5J  Ä¡*Bval_7J  ÄA*ã™ÄBval_8jS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset1755224j
-length872448p*Bval_13J       »      *Bval_14JÛµ?*Bval_17J  Ä?*Bval_19J   ?*&Bval_36J                     *àÄ Bval_37jS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset39000j
-length32768p*à ÄBval_39jS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset71768j
-length65536p*çÄÄBval_41jS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset4491352j
-length1048576p*å™ÄBval_45jS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset2627672j
-length872448p*Bval_48J  »¬*Bval_50J  »B*+BzerosJ                            *çÄÄBval_69jS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset5539928j
-length1048576p*.Bval_71J                      Ä       *çÄÄBval_72jS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset6588504j
-length1048576p*çÄÄBval_74jS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset7637080j
-length1048576p*Bval_76JÛµ=*&Bval_78J              ˇˇˇˇˇˇˇˇ*çÄÄBval_79jS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset8685656j
-length1048576p*çÄÄBval_82jS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset9734232j
-length1048576p*åÄñBval_84jS
-locationGexp_phase_MLPL2_uncertainty_fk08c02_v10_step_stateful_nophase.onnx.dataj
-offset1185880j
-length569344pZ¬
-state
-	
-
-£"=
-/pkg.torch.export.graph_signature.InputSpec.kind
-USER_INPUT"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"*
-!pkg.torch.onnx.original_node_namestateZø
-cond
-
-
-"=
-/pkg.torch.export.graph_signature.InputSpec.kind
-USER_INPUT"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone")
-!pkg.torch.onnx.original_node_namecondZ«
-contacts
-
-
-"=
-/pkg.torch.export.graph_signature.InputSpec.kind
-USER_INPUT"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"-
-!pkg.torch.onnx.original_node_namecontactsZƒ
-angvel
-	
-
-ä"=
-/pkg.torch.export.graph_signature.InputSpec.kind
-USER_INPUT"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"+
-!pkg.torch.onnx.original_node_nameangvelZ 
-	pose_hist
-	
-
-º"=
-/pkg.torch.export.graph_signature.InputSpec.kind
-USER_INPUT"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone".
-!pkg.torch.onnx.original_node_name	pose_histbç
-motion_pred
-	
-
-ñ"?
-0pkg.torch.export.graph_signature.OutputSpec.kindUSER_OUTPUT",
-!pkg.torch.onnx.original_node_namesqueezejÈ
-core.shared_encoder.0.bias
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"A
-!pkg.torch.onnx.original_node_namep_core_shared_encoder_0_biasjÌ
-core.shared_encoder.1.weight
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"C
-!pkg.torch.onnx.original_node_namep_core_shared_encoder_1_weightjÈ
-core.shared_encoder.1.bias
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"A
-!pkg.torch.onnx.original_node_namep_core_shared_encoder_1_biasjÈ
-core.shared_encoder.4.bias
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"A
-!pkg.torch.onnx.original_node_namep_core_shared_encoder_4_biasjÌ
-core.shared_encoder.5.weight
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"C
-!pkg.torch.onnx.original_node_namep_core_shared_encoder_5_weightjÈ
-core.shared_encoder.5.bias
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"A
-!pkg.torch.onnx.original_node_namep_core_shared_encoder_5_biasj„
-core.residual_proj.bias
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone">
-!pkg.torch.onnx.original_node_namep_core_residual_proj_biasjﬂ
-core._pasa_lnq.weight
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"<
-!pkg.torch.onnx.original_node_namep_core__pasa_lnq_weightj€
-core._pasa_lnq.bias
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone":
-!pkg.torch.onnx.original_node_namep_core__pasa_lnq_biasjÌ
-core._pasa_film.fc1.weight
-	
-Ä
-"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"A
-!pkg.torch.onnx.original_node_namep_core__pasa_film_fc1_weightjÂ
-core._pasa_film.fc1.bias
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"?
-!pkg.torch.onnx.original_node_namep_core__pasa_film_fc1_biasjÓ
-core._pasa_film.fc2.weight
-
-
-Ä
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"A
-!pkg.torch.onnx.original_node_namep_core__pasa_film_fc2_weightjÂ
-core._pasa_film.fc2.bias
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"?
-!pkg.torch.onnx.original_node_namep_core__pasa_film_fc2_biasjÁ
-core.coupling_norm.weight
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"@
-!pkg.torch.onnx.original_node_namep_core_coupling_norm_weightj„
-core.coupling_norm.bias
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone">
-!pkg.torch.onnx.original_node_namep_core_coupling_norm_biasj„
-core.motion_head.0.bias
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone">
-!pkg.torch.onnx.original_node_namep_core_motion_head_0_biasj„
-core.motion_head.3.bias
-	
-ñ"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone">
-!pkg.torch.onnx.original_node_namep_core_motion_head_3_biasj˙
- core.frozen_encoder.mlp.0.weight
-
-
-Ä
-»"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"G
-!pkg.torch.onnx.original_node_name"p_core_frozen_encoder_mlp_0_weightjÒ
-core.frozen_encoder.mlp.0.bias
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"E
-!pkg.torch.onnx.original_node_name p_core_frozen_encoder_mlp_0_biasj˙
- core.frozen_encoder.mlp.3.weight
-
-
-Ä
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"G
-!pkg.torch.onnx.original_node_name"p_core_frozen_encoder_mlp_3_weightjÒ
-core.frozen_encoder.mlp.3.bias
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"E
-!pkg.torch.onnx.original_node_name p_core_frozen_encoder_mlp_3_biasj˙
- core.frozen_encoder.mlp.6.weight
-
-
-Ä
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"G
-!pkg.torch.onnx.original_node_name"p_core_frozen_encoder_mlp_6_weightjÒ
-core.frozen_encoder.mlp.6.bias
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"E
-!pkg.torch.onnx.original_node_name p_core_frozen_encoder_mlp_6_biasjÚ
-core.frozen_period_head.fc.bias
-
-
- "<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"F
-!pkg.torch.onnx.original_node_name!p_core_frozen_period_head_fc_biasjÂ
-core.period_encoder.bias
-	
-Ä"<
-/pkg.torch.export.graph_signature.InputSpec.kind	PARAMETER"=
-5pkg.torch.export.graph_signature.InputSpec.persistentNone"?
-!pkg.torch.onnx.original_node_namep_core_period_encoder_biasj
-val_0
-
-
-j
-val_1
- j
-val_2
- j
-val_3
- j
-val_5
- j
-val_7
- j
-val_8
-
-
-™
-Äj
-val_13
-
-
-j
-val_14
- j
-val_17
- j
-val_19
- j
-val_36
-
-
-j
-val_37
-	
-Ä
- j
-val_39
-	
- 
-Äj
-val_41
-
-
-Ä
-Äj
-val_45
-
-
-™
-Äj
-val_48
- j
-val_50
- j
-zeros
-
-
-j
-val_69
-
-
-Ä
-Äj
-val_71
-
-
-j
-val_72
-
-
-Ä
-Äj
-val_74
-
-
-Ä
-Äj
-val_76
- j
-val_78
-
-
-j
-val_79
-
-
-Ä
-Äj
-val_82
-
-
-Ä
-Äj
-val_84
-
-
-Ä
-ñj 
-	unsqueeze
-
-
-
-£j!
-unsqueeze_1
-
-
-
-j!
-unsqueeze_2
-
-
-
-j"
-unsqueeze_3
-
-
-
-äj"
-unsqueeze_4
-
-
-
-ºj
-cat
-
-
-
-»j
-cat_1
-
-
-
-™j
-isnan
-	
-
-
-™j
-where
-
-
-
-™j
-tmp
-	
-
-
-™j
-tmp_1
-	
-
-
-™j
-isneginf
-	
-
-
-™j
-where_1
-
-
-
-™j
-tmp_2
-	
-
-
-™j
-isposinf
-	
-
-
-™j
-where_2
-
-
-
-™j
-clamp
-
-
-
-™j
-val_9
-
-
-
-Äj
-linear
-
-
-
-Äj!
-
-layer_norm
-
-
-
-Äj
-view
-	
-
-»j
-linear_1
-	
-
-Äj
-val_15
-	
-
-Äj
-val_16
-	
-
-Äj
-val_18
-	
-
-Äj
-val_20
-	
-
-Äj
-gelu
-	
-
-Äj
-linear_2
-	
-
-Äj
-val_22
-	
-
-Äj
-val_23
-	
-
-Äj
-val_25
-	
-
-Äj
-val_27
-	
-
-Äj
-gelu_1
-	
-
-Äj
-linear_3
-	
-
-Äj
-val_29
-	
-
-Äj
-val_30
-	
-
-Äj
-val_32
-	
-
-Äj
-val_34
-	
-
-Äj
-gelu_2
-	
-
-Äj
-view_1
-
-
-
-Äj
-val_38
-
-
-
- j
-linear_4
-
-
-
- j
-tanh
-
-
-
- j
-val_40
-
-
-
-Äj
-linear_5
-
-
-
-Äj
-add
-
-
-
-Äj
-relu
-
-
-
-Äj
-val_42
-
-
-
-Äj
-linear_6
-
-
-
-Äj#
-layer_norm_1
-
-
-
-Äj
-relu_1
-
-
-
-Äj
-val_46
-
-
-
-Äj
-linear_7
-
-
-
-Äj
-add_1
-
-
-
-Äj
-isnan_1
-	
-
-
-Äj
-where_3
-
-
-
-Äj
-tmp_3
-	
-
-
-Äj
-tmp_1_3
-	
-
-
-Äj!
-
-isneginf_1
-	
-
-
-Äj
-where_4
-
-
-
-Äj
-tmp_4
-	
-
-
-Äj!
-
-isposinf_1
-	
-
-
-Äj
-where_5
-
-
-
-Äj
-clamp_1
-
-
-
-Äj
-linear_8
-	
-
-Äj
-val_56
-	
-
-Äj
-val_57
-	
-
-Äj
-val_59
-	
-
-Äj
-val_61
-	
-
-Äj
-gelu_3
-	
-
-Äj
-linear_9
-	
-
-Äj 
-split_split_0
-	
-
-Äj 
-split_split_1
-	
-
-Äj
-tanh_1
-	
-
-Äj
-mul
-	
-
-Äj
-add_2
-	
-
-Äj
-tanh_2
-	
-
-Äj
-mul_1
-	
-
-Äj#
-layer_norm_2
-
-
-
-Äj 
-	linear_10
-
-
-
-Äj!
-view_2
-
-
-
-
-Äj$
-	transpose
-
-
-
-
-Äj 
-	linear_11
-
-
-
-Äj!
-view_3
-
-
-
-
-Äj 
-	linear_12
-
-
-
-Äj!
-view_4
-
-
-
-
-Äj$
-	permute_1
-
-
-
-
-Äj 
-mul_2
-
-
-
-
-Äj&
-transpose_1
-
-
-
-Ä
-j 
-matmul
-
-
-
-
-j!
-softmax
-
-
-
-
-j#
-matmul_1
-
-
-
-
-Äj&
-transpose_2
-
-
-
-
-Äj
-view_5
-
-
-
-Äj 
-	linear_13
-
-
-
-Äj
-add_3
-
-
-
-Äj
-add_4
-	
-
-Äj"
-unsqueeze_5
-
-
-
-Äj
-mul_3
-
-
-
-Äj"
-unsqueeze_6
-
-
-
-Äj
-add_5
-
-
-
-Äj#
-layer_norm_3
-
-
-
-Äj
-val_83
-
-
-
-Äj 
-	linear_14
-
-
-
-Äj
-relu_2
-
-
-
-Äj
-val_85
-
-
-
-ñj 
-	linear_15
-
-
-
-ñÇ†
-0pkg.torch.export.ExportedProgram.graph_signatureÎ
-# inputs
-p_core_shared_encoder_0_weight: PARAMETER target='core.shared_encoder.0.weight'
-p_core_shared_encoder_0_bias: PARAMETER target='core.shared_encoder.0.bias'
-p_core_shared_encoder_1_weight: PARAMETER target='core.shared_encoder.1.weight'
-p_core_shared_encoder_1_bias: PARAMETER target='core.shared_encoder.1.bias'
-p_core_shared_encoder_4_weight: PARAMETER target='core.shared_encoder.4.weight'
-p_core_shared_encoder_4_bias: PARAMETER target='core.shared_encoder.4.bias'
-p_core_shared_encoder_5_weight: PARAMETER target='core.shared_encoder.5.weight'
-p_core_shared_encoder_5_bias: PARAMETER target='core.shared_encoder.5.bias'
-p_core_residual_proj_weight: PARAMETER target='core.residual_proj.weight'
-p_core_residual_proj_bias: PARAMETER target='core.residual_proj.bias'
-p_core__pasa_q_weight: PARAMETER target='core._pasa_q.weight'
-p_core__pasa_k_weight: PARAMETER target='core._pasa_k.weight'
-p_core__pasa_v_weight: PARAMETER target='core._pasa_v.weight'
-p_core__pasa_o_weight: PARAMETER target='core._pasa_o.weight'
-p_core__pasa_lnq_weight: PARAMETER target='core._pasa_lnq.weight'
-p_core__pasa_lnq_bias: PARAMETER target='core._pasa_lnq.bias'
-p_core__pasa_film_fc1_weight: PARAMETER target='core._pasa_film.fc1.weight'
-p_core__pasa_film_fc1_bias: PARAMETER target='core._pasa_film.fc1.bias'
-p_core__pasa_film_fc2_weight: PARAMETER target='core._pasa_film.fc2.weight'
-p_core__pasa_film_fc2_bias: PARAMETER target='core._pasa_film.fc2.bias'
-p_core_coupling_norm_weight: PARAMETER target='core.coupling_norm.weight'
-p_core_coupling_norm_bias: PARAMETER target='core.coupling_norm.bias'
-p_core_motion_head_0_weight: PARAMETER target='core.motion_head.0.weight'
-p_core_motion_head_0_bias: PARAMETER target='core.motion_head.0.bias'
-p_core_motion_head_3_weight: PARAMETER target='core.motion_head.3.weight'
-p_core_motion_head_3_bias: PARAMETER target='core.motion_head.3.bias'
-p_core_frozen_encoder_mlp_0_weight: PARAMETER target='core.frozen_encoder.mlp.0.weight'
-p_core_frozen_encoder_mlp_0_bias: PARAMETER target='core.frozen_encoder.mlp.0.bias'
-p_core_frozen_encoder_mlp_3_weight: PARAMETER target='core.frozen_encoder.mlp.3.weight'
-p_core_frozen_encoder_mlp_3_bias: PARAMETER target='core.frozen_encoder.mlp.3.bias'
-p_core_frozen_encoder_mlp_6_weight: PARAMETER target='core.frozen_encoder.mlp.6.weight'
-p_core_frozen_encoder_mlp_6_bias: PARAMETER target='core.frozen_encoder.mlp.6.bias'
-p_core_frozen_encoder_summary_head_weight: PARAMETER target='core.frozen_encoder.summary_head.weight'
-p_core_frozen_encoder_summary_head_bias: PARAMETER target='core.frozen_encoder.summary_head.bias'
-p_core_frozen_period_head_fc_weight: PARAMETER target='core.frozen_period_head.fc.weight'
-p_core_frozen_period_head_fc_bias: PARAMETER target='core.frozen_period_head.fc.bias'
-p_core_period_encoder_weight: PARAMETER target='core.period_encoder.weight'
-p_core_period_encoder_bias: PARAMETER target='core.period_encoder.bias'
-state: USER_INPUT
-cond: USER_INPUT
-contacts: USER_INPUT
-angvel: USER_INPUT
-pose_hist: USER_INPUT
-
-# outputs
-squeeze: USER_OUTPUT
-Ç√
-2pkg.torch.export.ExportedProgram.range_constraintså{s80: VR[0, int_oo], s59: VR[0, int_oo], s15: VR[0, int_oo], s93: VR[0, int_oo], s21: VR[0, int_oo], s70: VR[0, int_oo], s51: VR[0, int_oo]}B
- 

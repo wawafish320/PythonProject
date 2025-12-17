@@ -358,11 +358,13 @@ def geodesic_R(R_pred: torch.Tensor, R_gt: torch.Tensor, *, reduce=None) -> torc
     """
     assert R_pred.shape[-2:] == (3, 3) and R_gt.shape[-2:] == (3, 3)
     Rt = torch.matmul(R_pred.transpose(-1, -2), R_gt)  # (..., J, 3, 3)
-    # Clamp trace for numerical stability
     trace = Rt[..., 0, 0] + Rt[..., 1, 1] + Rt[..., 2, 2]
-    cos = (trace - 1.) * 0.5
-    cos = cos.clamp(-1.0 + 1e-6, 1.0 - 1e-6)
-    ang = torch.acos(cos)  # radians
+    cos = (trace - 1.0) * 0.5
+    cos = cos.clamp(-1.0, 1.0)
+    skew = Rt - Rt.transpose(-1, -2)
+    vec = torch.stack([skew[..., 2, 1], skew[..., 0, 2], skew[..., 1, 0]], dim=-1) * 0.5
+    sin = vec.norm(dim=-1)
+    ang = torch.atan2(sin, cos)  # radians in [0, pi]
     if reduce == "mean":
         return ang.mean()
     if reduce == "sum":

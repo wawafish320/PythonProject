@@ -242,7 +242,7 @@
         "input_noise_profile": [],
         "tf_max": 0.95,
         "tf_min": 0.85,
-        "opt_lr": 0.0004
+        "opt_lr": 0.0005
       },
       "loss_groups": {
         "core": {
@@ -277,7 +277,7 @@
         "input_noise_profile": [],
         "tf_max": 0.95,
         "tf_min": 0.9,
-        "opt_lr": 0.0003
+        "opt_lr": 0.0004
       },
       "loss_groups": {
         "core": {
