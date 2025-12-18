@@ -1,8 +1,7 @@
 {
   "epoch": 12,
-  "phase": "teacher",
-  "tf_ratio": 1.0,
-  "freerun_weight": 0.0,
+  "tag": "teacher",
+  "timestamp": "2025-12-19T00:20:35",
   "metrics": {
     "period_abs_mean": 0.7039917945861817,
     "period_abs_std": 0.2918121039867401,
@@ -5605,7 +5604,7 @@
     "KeyBone/pelvis/GeoLocalDeg": 6.512614341043499e-14,
     "KeyBone/pelvis/AngVelMAE": 2.6470592414513072e-14,
     "KeyBone/pelvis/AngVelMagMAE": 4.8230792596510795e-14,
-    "KeyBone/pelvis/AngVelMagRel": NaN,
+    "KeyBone/pelvis/AngVelMagRel": null,
     "KeyBone/pelvis/AngVelDirDeg": 6.512614341043499e-14,
     "KeyBone/upperarm_l/GeoDeg": 0.649683928489685,
     "KeyBone/upperarm_l/GeoLocalDeg": 0.7017404556274414,
@@ -6009,7 +6008,7 @@
         "GeoLocalDeg": 6.512614341043499e-14,
         "AngVelMAE": 2.6470592414513072e-14,
         "AngVelMagMAE": 4.8230792596510795e-14,
-        "AngVelMagRel": NaN,
+        "AngVelMagRel": null,
         "AngVelDirDeg": 6.512614341043499e-14
       },
       "upperarm_l": {

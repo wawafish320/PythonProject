@@ -652,6 +652,11 @@ class MotionJointLoss(nn.Module):
         self.w_rot_local = float(w_rot_local)
         self.w_root_vel = float(w_root_vel)
         self.w_root_speed = float(w_root_speed)
+        # Tail-risk regularization for per-bone rotation errors (CVaR / top-k style).
+        # When enabled, adds an extra term on the worst bones (by mean GeoLocalDeg),
+        # which reduces whack-a-mole without requiring explicit per-bone weight tables.
+        self.rot_local_tail_weight = float(getattr(self, 'rot_local_tail_weight', 0.0) or 0.0)
+        self.rot_local_tail_k = int(getattr(self, 'rot_local_tail_k', 0) or 0)
         self.angvel_eps = 1e-6
         self.fps = float(fps)
         self.output_layout = output_layout or {}
@@ -1733,6 +1738,25 @@ class MotionJointLoss(nn.Module):
                 self._accumulate_loss_contrib('rot_local', local_loss, self.w_rot_local, group='core')
                 stats['rot_local_deg'] = float((local_loss * (180.0 / math.pi)).detach().cpu())
                 self._register_component_loss('rot_local', local_loss, self.w_rot_local)
+
+                # Optional tail loss on worst bones (unweighted selection; gradients flow to selected bones).
+                tail_w = float(getattr(self, 'rot_local_tail_weight', 0.0) or 0.0)
+                tail_k = int(getattr(self, 'rot_local_tail_k', 0) or 0)
+                J = int(geo_local.shape[-1])
+                if tail_w > 0.0 and tail_k > 0 and J > 0:
+                    k = min(max(1, tail_k), J)
+                    # Select by per-bone mean (detach for stable selection).
+                    per_bone = torch.nanmean(geo_local.detach(), dim=tuple(range(geo_local.dim() - 1)))  # (J,)
+                    try:
+                        _, idx = torch.topk(per_bone, k=k, largest=True, sorted=False)
+                        tail_loss = torch.nanmean(geo_local.index_select(-1, idx))
+                        loss = loss + tail_w * tail_loss
+                        self._accumulate_loss_contrib('rot_local_tail', tail_loss, tail_w, group='core')
+                        stats['rot_local_tail_deg'] = float((tail_loss * (180.0 / math.pi)).detach().cpu())
+                        stats['rot_local_tail_k'] = float(k)
+                        self._register_component_loss('rot_local_tail', tail_loss, tail_w)
+                    except Exception:
+                        pass
         else:
             stats.setdefault('rot_local_deg', 0.0)
 

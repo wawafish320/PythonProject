@@ -1834,6 +1834,9 @@ class Trainer:
         self._stage_goal_history: Dict[str, deque] = {}
         self._stage_pending_advance: bool = False
         self.args = args
+        # Stage-schedule/CLI switch to disable teacher-metric-driven bone reweighting
+        # (useful when experimenting with tail-risk loss instead).
+        self.disable_bone_metric_reweight: bool = False
 
         self.grad_clip = float(grad_clip)
         self.tf_warmup_steps = int(tf_warmup_steps)
@@ -2369,7 +2372,8 @@ class Trainer:
                     # 根据 KeyBone GeoDeg 指标微调骨骼权重（error-driven per-bone reweighting）
                     try:
                         _bone_updater = getattr(self.loss_fn, "update_bone_weights_from_metrics", None)
-                        if callable(_bone_updater):
+                        disable = bool(getattr(self, 'disable_bone_metric_reweight', False)) or bool(_arg('disable_bone_metric_reweight', False))
+                        if (not disable) and callable(_bone_updater):
                             _bone_updater(teacher_metrics, epoch=ep)
                     except Exception as _bw_e:
                         print(f"[AdaptiveBone][WARN] update failed: {_bw_e}")
@@ -4302,6 +4306,12 @@ def train_entry():
                    help='自身长度放大系数')
     p.add_argument('--unified_min_weight', type=float, default=0.05,
                    help='权重保底（相对均值）')
+    p.add_argument('--rot_local_tail_weight', type=float, default=0.0,
+                   help='rot_local 额外 tail loss 权重（CVaR/top-k，越大越压最差骨骼）。0=关闭。')
+    p.add_argument('--rot_local_tail_k', type=int, default=0,
+                   help='rot_local tail loss 的 top-k 骨骼数量（例如 13 骨骼取 3）。0=关闭。')
+    p.add_argument('--disable_bone_metric_reweight', action='store_true', default=False,
+                   help='关闭基于 teacher KeyBone 指标的跨 epoch 动态骨骼权重更新（减少 whack-a-mole）。')
     p.add_argument('--seq_len', type=int, default=120)
     p.add_argument('--yaw_aug_deg', type=float, default=0.0)
     p.add_argument('--normalize_c', action='store_true')
@@ -4632,6 +4642,8 @@ def train_entry():
     loss_fn.unified_downstream_power = float(_arg('unified_downstream_power', 0.6) or 0.6)
     loss_fn.unified_self_scale = float(_arg('unified_self_scale', 1.5) or 1.5)
     loss_fn.unified_min_weight = float(_arg('unified_min_weight', 0.05) or 0.05)
+    loss_fn.rot_local_tail_weight = float(_arg('rot_local_tail_weight', 0.0) or 0.0)
+    loss_fn.rot_local_tail_k = int(_arg('rot_local_tail_k', 0) or 0)
     # Visual importance调制先禁用，如需开启再暴露参数
     loss_fn.unified_use_visual_importance = False
     if getattr(ds_train, 'bone_names', None):
@@ -4654,6 +4666,8 @@ def train_entry():
         f"w_rot_ortho={loss_fn.w_rot_ortho} "
         f"w_fk_pos={loss_fn.w_fk_pos} "
         f"w_rot_local={loss_fn.w_rot_local} "
+        f"rot_local_tail_weight={getattr(loss_fn, 'rot_local_tail_weight', 0.0)} "
+        f"rot_local_tail_k={getattr(loss_fn, 'rot_local_tail_k', 0)} "
         f"adaptive_bone_weights={loss_fn.use_adaptive_weights} "
         f"use_hierarchy_weights={loss_fn.use_hierarchy_weights} "
         f"hier_mode={loss_fn.hierarchy_mode} "
