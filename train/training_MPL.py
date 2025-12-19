@@ -4310,6 +4310,8 @@ def train_entry():
                    help='rot_local 额外 tail loss 权重（CVaR/top-k，越大越压最差骨骼）。0=关闭。')
     p.add_argument('--rot_local_tail_k', type=int, default=0,
                    help='rot_local tail loss 的 top-k 骨骼数量（例如 13 骨骼取 3）。0=关闭。')
+    p.add_argument('--rot_local_tail_scope', type=str, default='all', choices=['all', 'limbs', 'keybones'],
+                   help="tail loss 选择范围：all=全骨骼；limbs=limb_monitor_names；keybones=pelvis+limb_monitor_names。")
     p.add_argument('--disable_bone_metric_reweight', action='store_true', default=False,
                    help='关闭基于 teacher KeyBone 指标的跨 epoch 动态骨骼权重更新（减少 whack-a-mole）。')
     p.add_argument('--seq_len', type=int, default=120)
@@ -4644,6 +4646,7 @@ def train_entry():
     loss_fn.unified_min_weight = float(_arg('unified_min_weight', 0.05) or 0.05)
     loss_fn.rot_local_tail_weight = float(_arg('rot_local_tail_weight', 0.0) or 0.0)
     loss_fn.rot_local_tail_k = int(_arg('rot_local_tail_k', 0) or 0)
+    loss_fn.rot_local_tail_scope = str(_arg('rot_local_tail_scope', 'all') or 'all')
     # Visual importance调制先禁用，如需开启再暴露参数
     loss_fn.unified_use_visual_importance = False
     if getattr(ds_train, 'bone_names', None):
@@ -4668,6 +4671,7 @@ def train_entry():
         f"w_rot_local={loss_fn.w_rot_local} "
         f"rot_local_tail_weight={getattr(loss_fn, 'rot_local_tail_weight', 0.0)} "
         f"rot_local_tail_k={getattr(loss_fn, 'rot_local_tail_k', 0)} "
+        f"rot_local_tail_scope={getattr(loss_fn, 'rot_local_tail_scope', 'all')} "
         f"adaptive_bone_weights={loss_fn.use_adaptive_weights} "
         f"use_hierarchy_weights={loss_fn.use_hierarchy_weights} "
         f"hier_mode={loss_fn.hierarchy_mode} "

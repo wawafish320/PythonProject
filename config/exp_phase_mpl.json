@@ -100,7 +100,7 @@
         "tf_min": 1.0,
         "eval_horizon": 8,
         "disable_bone_metric_reweight": true,
-        "opt_lr": 0.0008
+        "opt_lr": 0.0007
       },
       "loss_groups": {
         "core": {
@@ -108,6 +108,7 @@
           "w_rot_local": 0.22,
           "rot_local_tail_weight": 0.2,
           "rot_local_tail_k": 3,
+          "rot_local_tail_scope": "keybones",
           "w_root_vel": 0.0,
           "w_root_speed": 0.0
         }
@@ -147,6 +148,7 @@
           "w_rot_local": 0.22,
           "rot_local_tail_weight": 0.2,
           "rot_local_tail_k": 3,
+          "rot_local_tail_scope": "keybones",
           "w_root_vel": 0.0,
           "w_root_speed": 0.0
         }
@@ -186,6 +188,7 @@
           "w_rot_local": 0.22,
           "rot_local_tail_weight": 0.2,
           "rot_local_tail_k": 3,
+          "rot_local_tail_scope": "keybones",
           "w_root_vel": 0.0,
           "w_root_speed": 0.0
         }
@@ -225,6 +228,7 @@
           "w_rot_local": 0.22,
           "rot_local_tail_weight": 0.2,
           "rot_local_tail_k": 3,
+          "rot_local_tail_scope": "keybones",
           "w_root_vel": 0.0,
           "w_root_speed": 0.0
         }
@@ -263,6 +267,7 @@
           "w_rot_local": 0.26,
           "rot_local_tail_weight": 0.2,
           "rot_local_tail_k": 3,
+          "rot_local_tail_scope": "keybones",
           "w_root_vel": 0.05,
           "w_root_speed": 0.03
         }
@@ -301,6 +306,7 @@
           "w_rot_local": 0.26,
           "rot_local_tail_weight": 0.2,
           "rot_local_tail_k": 3,
+          "rot_local_tail_scope": "keybones",
           "w_root_vel": 0.05,
           "w_root_speed": 0.03
         }

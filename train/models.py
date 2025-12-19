@@ -657,6 +657,7 @@ class MotionJointLoss(nn.Module):
         # which reduces whack-a-mole without requiring explicit per-bone weight tables.
         self.rot_local_tail_weight = float(getattr(self, 'rot_local_tail_weight', 0.0) or 0.0)
         self.rot_local_tail_k = int(getattr(self, 'rot_local_tail_k', 0) or 0)
+        self.rot_local_tail_scope = str(getattr(self, 'rot_local_tail_scope', 'all') or 'all')
         self.angvel_eps = 1e-6
         self.fps = float(fps)
         self.output_layout = output_layout or {}
@@ -1742,18 +1743,43 @@ class MotionJointLoss(nn.Module):
                 # Optional tail loss on worst bones (unweighted selection; gradients flow to selected bones).
                 tail_w = float(getattr(self, 'rot_local_tail_weight', 0.0) or 0.0)
                 tail_k = int(getattr(self, 'rot_local_tail_k', 0) or 0)
+                tail_scope = str(getattr(self, 'rot_local_tail_scope', 'all') or 'all').lower()
                 J = int(geo_local.shape[-1])
                 if tail_w > 0.0 and tail_k > 0 and J > 0:
                     k = min(max(1, tail_k), J)
+
+                    # Candidate bones for tail selection
+                    cand_idx = None
+                    if tail_scope in ('keybones', 'key_bones', 'limbs', 'limb'):
+                        names = getattr(self, 'bone_names', None)
+                        if isinstance(names, list) and names:
+                            name_to_idx = {str(nm): i for i, nm in enumerate(names[:J])}
+                            monitor = list(getattr(self, 'limb_monitor_names', None) or [])
+                            if tail_scope in ('keybones', 'key_bones'):
+                                monitor = ['pelvis'] + monitor
+                            idxs = [name_to_idx[nm] for nm in monitor if nm in name_to_idx]
+                            if idxs:
+                                # de-dup preserving order
+                                seen = set()
+                                idxs = [i for i in idxs if not (i in seen or seen.add(i))]
+                                cand_idx = torch.as_tensor(idxs, device=geo_local.device, dtype=torch.long)
+                                k = min(k, int(cand_idx.numel()))
+
                     # Select by per-bone mean (detach for stable selection).
                     per_bone = torch.nanmean(geo_local.detach(), dim=tuple(range(geo_local.dim() - 1)))  # (J,)
                     try:
-                        _, idx = torch.topk(per_bone, k=k, largest=True, sorted=False)
+                        if cand_idx is not None and cand_idx.numel() > 0:
+                            vals = per_bone.index_select(0, cand_idx)
+                            _, sel = torch.topk(vals, k=k, largest=True, sorted=False)
+                            idx = cand_idx.index_select(0, sel)
+                        else:
+                            _, idx = torch.topk(per_bone, k=k, largest=True, sorted=False)
                         tail_loss = torch.nanmean(geo_local.index_select(-1, idx))
                         loss = loss + tail_w * tail_loss
                         self._accumulate_loss_contrib('rot_local_tail', tail_loss, tail_w, group='core')
                         stats['rot_local_tail_deg'] = float((tail_loss * (180.0 / math.pi)).detach().cpu())
                         stats['rot_local_tail_k'] = float(k)
+                        stats['rot_local_tail_scope'] = float({'all': 0.0, 'limbs': 1.0, 'keybones': 2.0}.get(tail_scope, 0.0))
                         self._register_component_loss('rot_local_tail', tail_loss, tail_w)
                     except Exception:
                         pass
