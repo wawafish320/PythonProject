@@ -102,16 +102,16 @@
         "disable_bone_metric_reweight": true,
         "opt_lr": 0.0007
       },
-      "loss_groups": {
-        "core": {
-          "w_fk_pos": 0.0,
-          "w_rot_local": 0.22,
-          "rot_local_tail_weight": 0.2,
-          "rot_local_tail_k": 3,
-          "rot_local_tail_scope": "keybones",
-          "w_root_vel": 0.0,
-          "w_root_speed": 0.0
-        }
+	      "loss_groups": {
+	        "core": {
+	          "w_fk_pos": 0.0,
+	          "w_rot_local": 0.22,
+		          "rot_local_tail_weight": 0.2,
+	          "rot_local_tail_k": 3,
+	          "rot_local_tail_scope": "keybones",
+	          "w_root_vel": 0.0,
+	          "w_root_speed": 0.0
+	        }
       }
     },
     {
@@ -142,16 +142,16 @@
         "disable_bone_metric_reweight": true,
         "opt_lr": 0.0003
       },
-      "loss_groups": {
-        "core": {
-          "w_fk_pos": 0.0,
-          "w_rot_local": 0.22,
-          "rot_local_tail_weight": 0.2,
-          "rot_local_tail_k": 3,
-          "rot_local_tail_scope": "keybones",
-          "w_root_vel": 0.0,
-          "w_root_speed": 0.0
-        }
+	      "loss_groups": {
+	        "core": {
+	          "w_fk_pos": 0.0,
+	          "w_rot_local": 0.22,
+	          "rot_local_tail_weight": 0.15,
+	          "rot_local_tail_k": 3,
+	          "rot_local_tail_scope": "keybones",
+	          "w_root_vel": 0.0,
+	          "w_root_speed": 0.0
+	        }
       }
     },
     {
@@ -182,16 +182,16 @@
         "disable_bone_metric_reweight": true,
         "opt_lr": 0.0003
       },
-      "loss_groups": {
-        "core": {
-          "w_fk_pos": 0.0,
-          "w_rot_local": 0.22,
-          "rot_local_tail_weight": 0.2,
-          "rot_local_tail_k": 3,
-          "rot_local_tail_scope": "keybones",
-          "w_root_vel": 0.0,
-          "w_root_speed": 0.0
-        }
+	      "loss_groups": {
+	        "core": {
+	          "w_fk_pos": 0.0,
+	          "w_rot_local": 0.22,
+	          "rot_local_tail_weight": 0.15,
+	          "rot_local_tail_k": 3,
+	          "rot_local_tail_scope": "keybones",
+	          "w_root_vel": 0.0,
+	          "w_root_speed": 0.0
+	        }
       }
     },
     {
@@ -222,28 +222,28 @@
         "disable_bone_metric_reweight": true,
         "opt_lr": 0.0003
       },
-      "loss_groups": {
-        "core": {
-          "w_fk_pos": 0.0,
-          "w_rot_local": 0.22,
-          "rot_local_tail_weight": 0.2,
-          "rot_local_tail_k": 3,
-          "rot_local_tail_scope": "keybones",
-          "w_root_vel": 0.0,
-          "w_root_speed": 0.0
-        }
+	      "loss_groups": {
+	        "core": {
+	          "w_fk_pos": 0.0,
+	          "w_rot_local": 0.22,
+	          "rot_local_tail_weight": 0.15,
+	          "rot_local_tail_k": 3,
+	          "rot_local_tail_scope": "keybones",
+	          "w_root_vel": 0.0,
+	          "w_root_speed": 0.0
+	        }
       }
     },
-    {
-      "range": [
-        13,
-        15
-      ],
-      "label": "stage2b_maintain_expose_a",
-      "trainer": {
-        "freerun_weight": 0.04,
-        "freerun_horizon": 6,
-        "eval_horizon": 10,
+	    {
+	      "range": [
+	        13,
+	        13
+	      ],
+	      "label": "stage2b_maintain_expose_a_warmup",
+	      "trainer": {
+	        "freerun_weight": 0.04,
+	        "freerun_horizon": 6,
+	        "eval_horizon": 10,
         "teacher_rot_noise_prob": 0.0,
         "teacher_rot_noise_deg": 0.0,
         "input_noise_profile": [],
@@ -256,27 +256,66 @@
         "teacher_rot_noise_prob": 0.0,
         "teacher_rot_noise_deg": 0.0,
         "input_noise_profile": [],
-        "tf_max": 0.95,
-        "tf_min": 0.9,
-        "disable_bone_metric_reweight": true,
-        "opt_lr": 0.0004
-      },
-      "loss_groups": {
-        "core": {
-          "w_fk_pos": 0.0,
-          "w_rot_local": 0.26,
-          "rot_local_tail_weight": 0.2,
-          "rot_local_tail_k": 3,
-          "rot_local_tail_scope": "keybones",
-          "w_root_vel": 0.05,
-          "w_root_speed": 0.03
-        }
-      }
-    },
-    {
-      "range": [
-        16,
-        18
+	        "tf_max": 0.95,
+	        "tf_min": 0.9,
+	        "disable_bone_metric_reweight": true,
+	        "opt_lr": 0.00035
+	      },
+	      "loss_groups": {
+	        "core": {
+	          "w_fk_pos": 0.0,
+	          "w_rot_local": 0.26,
+	          "rot_local_tail_weight": 0.15,
+	          "rot_local_tail_k": 3,
+	          "rot_local_tail_scope": "keybones",
+	          "w_root_vel": 0.05,
+	          "w_root_speed": 0.03
+	        }
+	      }
+	    },
+	    {
+	      "range": [
+	        14,
+	        15
+	      ],
+	      "label": "stage2b_maintain_expose_a_stable",
+	      "trainer": {
+	        "freerun_weight": 0.04,
+	        "freerun_horizon": 6,
+	        "eval_horizon": 10,
+	        "teacher_rot_noise_prob": 0.0,
+	        "teacher_rot_noise_deg": 0.0,
+	        "input_noise_profile": [],
+	        "tf_max": 0.95,
+	        "tf_min": 0.9
+	      },
+	      "params": {
+	        "freerun_weight": 0.04,
+	        "freerun_horizon": 6,
+	        "teacher_rot_noise_prob": 0.0,
+	        "teacher_rot_noise_deg": 0.0,
+	        "input_noise_profile": [],
+	        "tf_max": 0.95,
+	        "tf_min": 0.9,
+	        "disable_bone_metric_reweight": true,
+	        "opt_lr": 0.00025
+	      },
+	      "loss_groups": {
+	        "core": {
+	          "w_fk_pos": 0.0,
+	          "w_rot_local": 0.26,
+	          "rot_local_tail_weight": 0.15,
+	          "rot_local_tail_k": 3,
+	          "rot_local_tail_scope": "keybones",
+	          "w_root_vel": 0.05,
+	          "w_root_speed": 0.03
+	        }
+	      }
+	    },
+	    {
+	      "range": [
+	        16,
+	        18
       ],
       "label": "stage2b_maintain_expose_b_finetune",
       "trainer": {

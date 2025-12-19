@@ -1059,13 +1059,13 @@ class MotionJointLoss(nn.Module):
         alpha_step: float = 0.2,
     ) -> None:
         """
-        使用上一轮 teacher 评估的 KeyBone GeoDeg 指标，微调每个关节的动态权重 alpha。
+        使用上一轮 teacher 评估的 KeyBone GeoLocalDeg 指标（root 对齐），微调每个关节的动态权重 alpha。
 
         完整逻辑（更平滑的目标驱动方式）:
 
-        - 取 KeyBone/GeoDegMean 的 EMA 作为全局参考 m_ema
+        - 取 KeyBone/GeoLocalDegMean 的 EMA 作为全局参考 m_ema（无 root 干扰）
         - 对 limb_monitor_names 中的每个关键骨骼:
-            * 维护 GeoDeg(bone) 的 EMA: e_ema(bone)
+            * 维护 GeoLocalDeg(bone) 的 EMA: e_ema(bone)
             * 计算相对误差 r = e_ema(bone) / m_ema
             * 目标权重: alpha_target(bone) = clamp(r ** ratio_gamma, [alpha_min, alpha_max])
         - 然后对所有关节做一次平滑更新:
@@ -1082,7 +1082,9 @@ class MotionJointLoss(nn.Module):
         if not isinstance(self.bone_names, list) or not self.bone_names:
             return
 
-        key_mean = metrics.get("KeyBone/GeoDegMean")
+        # Prefer root-aligned (geo_local) metrics to avoid global root interference.
+        # Fallback to world-space GeoDeg for backward compatibility.
+        key_mean = metrics.get("KeyBone/GeoLocalDegMean", metrics.get("KeyBone/GeoDegMean"))
         try:
             key_mean_f = float(key_mean)
         except (TypeError, ValueError):
@@ -1123,8 +1125,9 @@ class MotionJointLoss(nn.Module):
         any_target = False
 
         for bone_name in monitor_names:
-            key = f"KeyBone/{bone_name}/GeoDeg"
-            val = metrics.get(key)
+            # Use root-aligned geodesic; fall back to world GeoDeg if old logs are passed in.
+            key = f"KeyBone/{bone_name}/GeoLocalDeg"
+            val = metrics.get(key, metrics.get(f"KeyBone/{bone_name}/GeoDeg"))
             try:
                 v = float(val)
             except (TypeError, ValueError):
