@@ -989,8 +989,7 @@ class Trainer:
         cond_norm_mu=None,
         cond_norm_std=None,
     ) -> None:
-        # Disabled: no-op stub kept for compatibility.
-        return
+        steps = int(getattr(self, 'history_debug_steps', 0) or 0)
         if steps <= 1:
             return
         steps = min(steps, state_seq.shape[1])
@@ -1972,7 +1971,7 @@ class Trainer:
         scaler = torch.amp.GradScaler('cuda' if device_type=='cuda' else 'cpu', enabled=(getattr(self, 'use_amp', False) and device_type in ('cuda', 'mps')))
         accum_steps = int(getattr(self, 'accum_steps', 1) or 1)
         # Track two best checkpoints:
-        # - best_teacher: min teacher GeoDeg (single-frame accuracy)
+        # - best_teacher: min teacher GeoLocalDeg (root-aligned single-frame accuracy)
         # - best_free: min freerun drift slope (error growth rate)
         best_teacher_val, best_ckpt = float('inf'), None
         best_teacher_ckpt = None
@@ -2358,10 +2357,15 @@ class Trainer:
                     self.teacher_noise_boost = 1.0
                     teacher_metrics.setdefault('phase', 'teacher')
                     # 基于 teacher 单帧指标执行 plateau LR 调度（只在 teacher 阶段）
+                    # Prefer GeoLocalDeg (root-aligned) to avoid root drift interference.
                     try:
                         _plateau = getattr(self, "lr_plateau_scheduler", None)
                         if _plateau is not None:
-                            keybone_mean = teacher_metrics.get("KeyBone/GeoDegMean")
+                            keybone_mean = teacher_metrics.get("KeyBone/GeoLocalDegMean")
+                            if keybone_mean is None:
+                                keybone_mean = teacher_metrics.get("KeyBone/GeoDegMean")
+                            if keybone_mean is None:
+                                keybone_mean = teacher_metrics.get("GeoLocalDeg")
                             if keybone_mean is None:
                                 keybone_mean = teacher_metrics.get("GeoDeg")
                             if keybone_mean is not None:
@@ -2407,12 +2411,14 @@ class Trainer:
                     metrics_tag = 'teacher'
                     loss_val = teacher_metrics.get('loss', float('nan'))
                     geo_deg = teacher_metrics.get('GeoDeg', float('nan'))
+                    geo_local_deg = teacher_metrics.get('GeoLocalDeg', float('nan'))
                     ang_mae = teacher_metrics.get('AngVelMAE', float('nan'))
                     ang_rel = teacher_metrics.get('AngVelMagRel', float('nan'))
                     print(
                         f"[ValTeacher@ep {ep:03d}] "
                         f"loss={loss_val:.6f} | "
                         f"GeoDeg={geo_deg:.3f}° | "
+                        f"GeoLocalDeg={geo_local_deg:.3f}° | "
                         f"AngVelMAE={ang_mae:.5f} rad/s | "
                         f"AngMagRel={ang_rel:.3f}"
                     )
@@ -2474,7 +2480,7 @@ class Trainer:
                 self._dump_metrics_json(teacher_metrics_cached, tag='teacher', epoch=ep)
 
             # --- 依据在线评估指标记录最佳模型 ---
-            # best_teacher: teacher 单帧 GeoDeg 最小（起点精度）
+            # best_teacher: teacher 单帧 GeoLocalDeg 最小（root 对齐的起点精度）
             # best_free: freerun drift slope 最小（误差增长率）
             teacher_source = None
             if isinstance(teacher_metrics_cached, dict) and teacher_metrics_cached:
@@ -2483,7 +2489,14 @@ class Trainer:
                 teacher_source = _metrics
 
             if teacher_source is not None:
-                current_teacher = float(teacher_source.get('GeoDeg', float('inf')))
+                current_teacher = teacher_source.get('KeyBone/GeoLocalDegMean')
+                if current_teacher is None:
+                    current_teacher = teacher_source.get('GeoLocalDeg')
+                if current_teacher is None:
+                    current_teacher = teacher_source.get('KeyBone/GeoDegMean')
+                if current_teacher is None:
+                    current_teacher = teacher_source.get('GeoDeg')
+                current_teacher = float(current_teacher if current_teacher is not None else float('inf'))
                 if current_teacher < best_teacher_val - 1e-9:
                     best_teacher_val = current_teacher
                     if out_dir:
@@ -2509,7 +2522,7 @@ class Trainer:
 
         # Print final best checkpoint summary for convenience.
         if best_teacher_ckpt is not None:
-            print(f"[BestTeacher] ckpt={best_teacher_ckpt} GeoDeg={best_teacher_val:.6f}°")
+            print(f"[BestTeacher] ckpt={best_teacher_ckpt} GeoLocalDeg={best_teacher_val:.6f}°")
         if best_free_ckpt is not None and best_free_slope < float('inf'):
             print(f"[BestFree] ckpt={best_free_ckpt} GeoDriftSlope={best_free_slope:.6f} deg/step")
 
@@ -3737,13 +3750,7 @@ def _diagnose_free_run_impl(
                     # Be robust to any diagnostics failure; do not break training/eval.
                     pass
 
-                # -------- Soft-period diagnostic: map ang-vel to phase bins and compare pred vs GT soft period --------
-                def _phase_from_vec(vec: torch.Tensor) -> Optional[torch.Tensor]:
-                    """vec [..., D]; expects D>=2 (cos,sin). Returns phase in [-pi, pi]."""
-                    if vec is None or not torch.is_tensor(vec) or vec.shape[-1] < 2:
-                        return None
-                    return torch.atan2(vec[..., 1], vec[..., 0])
-
+                # -------- Soft-hint diagnostic: compare predicted vs frozen embedding --------
                 period_pred = None
                 if period_seq_pred:
                     try:
@@ -3771,8 +3778,7 @@ def _diagnose_free_run_impl(
                     except Exception:
                         period_gt = None
 
-                # --- Embedding-level comparison (works even for non-periodic motion) ---
-                mag_threshold = float(getattr(self, 'period_mag_threshold', 0.1) or 0.1)
+                # --- Embedding-level comparison (works for periodic & non-periodic motion) ---
                 embed_l2 = embed_cos = None
                 if period_pred is not None and period_gt is not None and period_pred.shape == period_gt.shape:
                     try:
@@ -3787,78 +3793,27 @@ def _diagnose_free_run_impl(
                     except Exception:
                         pass
 
-                # --- Phase diagnostics: only when both embeddings carry sufficient magnitude ---
-                phi_pred = _phase_from_vec(period_pred)
-                phi_gt = _phase_from_vec(period_gt)
-                mag_pred = period_pred.norm(dim=-1) if period_pred is not None else None
-                mag_gt = period_gt.norm(dim=-1) if period_gt is not None else None
-                mag_ok = False
+                # --- Contact-hint diagnostics (tanh): first 2 dims should match (2*contacts-1). ---
                 try:
-                    if mag_pred is not None and mag_gt is not None:
-                        mag_ok = (mag_pred.mean() > mag_threshold) and (mag_gt.mean() > mag_threshold)
+                    tgt = contacts_seq if torch.is_tensor(contacts_seq) else None
+                    if tgt is not None and tgt.shape[-1] >= 2:
+                        tgt = tgt[..., :2]
+                        ref = period_pred if period_pred is not None else (period_gt if period_gt is not None else tgt)
+                        tgt = tgt.to(ref.device).to(ref.dtype)
+                        tgt = tgt * 2.0 - 1.0
+                        if period_pred is not None and period_pred.shape[:2] == tgt.shape[:2] and period_pred.shape[-1] >= 2:
+                            pred_hint = period_pred[..., :2]
+                            _record_metric('Period/ContactHintMAE', float((pred_hint - tgt).abs().mean().item()))
+                        if period_gt is not None and period_gt.shape[:2] == tgt.shape[:2] and period_gt.shape[-1] >= 2:
+                            gt_hint = period_gt[..., :2]
+                            _record_metric('Period/ContactHintGTMAE', float((gt_hint - tgt).abs().mean().item()))
                 except Exception:
-                    mag_ok = False
+                    pass
 
-                if mag_ok and phi_pred is not None and phi_gt is not None and phi_pred.shape[:2] == phi_gt.shape[:2]:
-                    try:
-                        phase_diff = torch.atan2(torch.sin(phi_pred - phi_gt), torch.cos(phi_pred - phi_gt))
-                        _record_metric('Period/PhaseMAE', float(phase_diff.abs().mean().item()))
-                        cos_sim = torch.cos(phi_pred - phi_gt).mean()
-                        _record_metric('Period/PhaseCosSim', float(cos_sim.item()))
+                # Phase metrics are deprecated; keep flag for backward-compatible logs.
+                result['Period/PhaseSkipped'] = True
 
-                        bins = int(getattr(self, 'period_phase_bins', 16) or 16)
-                        bin_edges = torch.linspace(-_math.pi, _math.pi, bins + 1, device=phi_gt.device, dtype=phi_gt.dtype)
-                        phase_targets = {}
-                        for name in ('foot_l', 'foot_r', 'ball_l', 'ball_r'):
-                            idx = idx_map.get(name, None)
-                            if idx is not None:
-                                phase_targets[name] = idx
-
-                        def _phase_curve(values: torch.Tensor, phase: torch.Tensor) -> Optional[torch.Tensor]:
-                            curves = values.new_full((bins,), float('nan'))
-                            for i in range(bins):
-                                mask = (phase >= bin_edges[i]) & (phase < bin_edges[i + 1])
-                                if mask.any():
-                                    curves[i] = values[mask].mean()
-                            return curves if torch.isfinite(curves).any() else None
-
-                        for fname, j_idx in phase_targets.items():
-                            if j_idx is None or j_idx >= w_pred.shape[2]:
-                                continue
-                            w_p = w_pred[..., j_idx, :]
-                            w_g = w_gt[..., j_idx, :]
-                            mag_p = w_p.norm(dim=-1)
-                            mag_g = w_g.norm(dim=-1)
-
-                            curve_p = _phase_curve(mag_p, phi_pred)
-                            curve_g = _phase_curve(mag_g, phi_gt)
-                            if curve_p is not None:
-                                result[f'Foot/{fname}/Phase/AngVelMagPred'] = curve_p.detach().cpu().tolist()
-                            if curve_g is not None:
-                                result[f'Foot/{fname}/Phase/AngVelMagGT'] = curve_g.detach().cpu().tolist()
-                            if curve_p is not None and curve_g is not None:
-                                mask = torch.isfinite(curve_p) & torch.isfinite(curve_g)
-                                if mask.any():
-                                    l1 = (curve_p[mask] - curve_g[mask]).abs().mean()
-                                    _record_metric(f'Foot/{fname}/Phase/AngVelMagL1', float(l1.item()))
-
-                            eps = 1e-6
-                            dir_p = w_p / (mag_p.unsqueeze(-1) + eps)
-                            dir_g = w_g / (mag_g.unsqueeze(-1) + eps)
-                            dot = (dir_p * dir_g).sum(dim=-1).clamp(-1.0, 1.0)
-                            ang = torch.acos(dot) * deg
-                            curve_ang = _phase_curve(ang, phi_gt)
-                            if curve_ang is not None:
-                                result[f'Foot/{fname}/Phase/AngVelDirDeg'] = curve_ang.detach().cpu().tolist()
-                                ang_mean = torch.nanmean(curve_ang) if torch.isfinite(curve_ang).any() else None
-                                if ang_mean is not None:
-                                    _record_metric(f'Foot/{fname}/Phase/AngVelDirDegMean', float(ang_mean.item()))
-                    except Exception:
-                        pass
-                else:
-                    # 标记未做相位诊断（适用于非周期或低置信度情况）
-                    result['Period/PhaseSkipped'] = True
-
+                if True:
 
                     # -------- Foot sliding diagnostics (position based, FK) --------
                     try:
@@ -4540,7 +4495,7 @@ def train_entry():
     validate_and_fix_model_(model, Dx, Dc)
     validate_and_fix_model_(model)
 
-    # Attach frozen MotionEncoder (optional, used for soft period hints)
+    # Attach frozen MotionEncoder (optional, used for soft hint embedding)
     encoder_path_cfg = _arg('encoder_path', '')
     resolved_bundle = None
     if encoder_path_cfg:

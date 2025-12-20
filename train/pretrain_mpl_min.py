@@ -292,43 +292,10 @@ def _build_angvel_norm_spec(in_glob: str, save_path: str, pose_hist_len: int = 3
     print(f"[SelfBuild] wrote pretrain template: {save_path} | J={J} dim={J*3}")
     return spec
 
-
-def _compute_soft_period_vectors(soft_contacts: np.ndarray, threshold: float = 0.50) -> np.ndarray:
-    """
-    依据左右脚软接触得分估算“软周期”向量：
-      - 识别 soft_contact_score 从低 → 高 的上升沿（阈值 threshold）
-      - 以上升沿为周期起点，线性插值得到相位 θ ∈ [0, 2π)
-      - 输出 [sin(θ_L), cos(θ_L), sin(θ_R), cos(θ_R)]
-    若缺乏足够上升沿，则退化为随时间均匀递增的相位。
-    """
-    T = int(soft_contacts.shape[0])
-    if T <= 0:
-        return np.zeros((0, 4), dtype=np.float32)
-
-    phases = np.zeros((T, 2), dtype=np.float32)
-    two_pi = 2.0 * np.pi
-    for foot in range(2):
-        scores = soft_contacts[:, foot]
-        high = scores > threshold
-        rising = np.where(np.logical_and(high[1:], np.logical_not(high[:-1])))[0] + 1  # 上升沿索引
-        if rising.size == 0:
-            phases[:, foot] = np.linspace(0.0, two_pi, T, endpoint=False, dtype=np.float32)
-            continue
-
-        phase = np.zeros(T, dtype=np.float32)
-        for i, start in enumerate(rising):
-            end = rising[i + 1] if i + 1 < rising.size else T
-            seg_len = max(1, end - start)
-            ramp = np.linspace(0.0, two_pi, seg_len, endpoint=False, dtype=np.float32)
-            phase[start:end] = ramp
-        first = rising[0]
-        if first > 0:
-            ramp = np.linspace(-two_pi, 0.0, first, endpoint=False, dtype=np.float32)
-            phase[:first] = ramp
-        phases[:, foot] = phase
-
-    sincos = np.concatenate([np.sin(phases), np.cos(phases)], axis=1)
-    return sincos.astype(np.float32)
+def _contacts_to_tanh(soft_contacts: np.ndarray) -> np.ndarray:
+    """Map soft contacts in [0,1] to tanh-friendly range [-1,1] (linear rescale)."""
+    sc = np.asarray(soft_contacts, dtype=np.float32)
+    return (2.0 * sc - 1.0).astype(np.float32, copy=False)
 
 
 class YAngvelContactsDataset(Dataset):
@@ -370,8 +337,7 @@ class YAngvelContactsDataset(Dataset):
         if norm_spec is None:
             raise RuntimeError("norm_spec must be provided (self-build, no JSON)")
         self.tpl_path = "<in-memory>"
-        self.period_threshold = float(event_thresh)
-        self.period_dim = 4
+        self.period_dim = 2
 
         # probe J from first npz
         with np.load(self.files[0], allow_pickle=True) as z0:
@@ -522,8 +488,7 @@ class YAngvelContactsDataset(Dataset):
 
         # 目标与差分对齐到 Frames[1:]
         contact_seq = tgt_full[1:].astype(np.float32)        # [T-1, 2]
-        period_full = _compute_soft_period_vectors(tgt_full, threshold=self.period_threshold)
-        period = period_full[1:].astype(np.float32)          # [T-1, 4]
+        period = _contacts_to_tanh(contact_seq)              # [T-1, 2] in [-1,1]
 
         pose_seq = y_t.cpu().numpy().astype(np.float32)      # [T, J*6]
         pose_target_raw = pose_seq[1:]                       # [T-1, J*6]
@@ -1685,13 +1650,13 @@ def main():
     ap.add_argument("--pose_hist_len", type=int, default=3,
                     help="输入时纳入的历史姿态帧数（只含过去帧，不含当前帧）。")
     ap.add_argument("--period_dim", type=int, default=32,
-                    help="软周期高维向量的维度。")
+                    help="预训练 hint embedding（soft_hint）的维度。")
     ap.add_argument("--w_pose", type=float, default=1.0,
                     help="姿态重建损失的权重。")
     ap.add_argument("--w_contact", type=float, default=0.25,
                     help="接触 BCE 辅助损失权重。")
     ap.add_argument("--w_period_hint", type=float, default=0.1,
-                    help="软周期前 4 维对齐 sin/cos 提示的权重。")
+                    help="对齐 hint 的权重：hint=soft_contacts(线性映射到[-1,1])。")
     ap.add_argument("--w_amp_rank", type=float, default=0.6,
                     help="相对幅度排序对比损失权重。")
     ap.add_argument("--w_amp_rel", type=float, default=0.05,
@@ -1701,9 +1666,9 @@ def main():
     ap.add_argument("--w_period_inv", type=float, default=0.2,
                     help="缩放增强时 soft_period 保持不变的正则权重。")
     ap.add_argument("--w_phase_energy", type=float, default=0.0,
-                    help="软周期能量底线正则权重。")
+                    help="soft_hint embedding 能量底线正则权重。")
     ap.add_argument("--phase_energy_eps", type=float, default=0.05,
-                    help="软周期能量下限（若 w_phase_energy>0 生效）。")
+                    help="soft_hint embedding 能量下限（若 w_phase_energy>0 生效）。")
     ap.add_argument("--amp_tau", type=float, default=0.25,
                     help="排序对比损失的温度系数 τ。")
     ap.add_argument("--amp_pairs", type=int, default=6,
@@ -1939,6 +1904,8 @@ def main():
                 "pose_dim": pose_dim,
                 "ang_dim": ang_dim,
                 "period_dim": period_latent_dim,
+                "period_hint_mode": "contacts_tanh",
+                "period_hint_dim": 2,
                 "bidirectional": bool(args.bidirectional),
                 "hidden_dim": args.hidden_dim,
                 "z_dim": args.z_dim,

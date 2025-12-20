@@ -660,8 +660,6 @@ class MotionEventDataset(Dataset):
         else:
             self.C_mu, self.C_std = (None, None)
 
-        self._inject_root_yaw_from_rot6d()
-
     @staticmethod
     def _window_with_edge_pad(arr: np.ndarray, start: int, length: int) -> np.ndarray:
         end = start + length
@@ -693,10 +691,6 @@ class MotionEventDataset(Dataset):
         std = np.nan_to_num(std, nan=1e-06, posinf=1e-06, neginf=1e-06).astype(np.float32, copy=False)
         std = np.clip(std, 1e-06, None)
         return (mu.reshape(1, -1), std.reshape(1, -1))
-
-    def _inject_root_yaw_from_rot6d(self):
-        """RootYaw 已废弃，保持空实现以兼容旧调用。"""
-        return
 
     @staticmethod
     def _compute_root_yaw_from_rot6d(rot6d_arr: np.ndarray, forward_axis: int, up_axis: int, offset: float) -> Optional[np.ndarray]:

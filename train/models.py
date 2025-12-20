@@ -94,7 +94,7 @@ class MotionEncoder(nn.Module):
 
 
 class PeriodHead(nn.Module):
-    """Lightweight linear head used during pretraining to predict soft period hints."""
+    """Lightweight linear head used during pretraining to predict a soft hint embedding (contact-hint in first dims)."""
 
     def __init__(self, hidden_dim: int, out_dim: int, bidirectional: bool = False):
         super().__init__()
@@ -337,7 +337,7 @@ class EventMotionModel(nn.Module):
             self._bone_adapter_names = []
             self._bone_adapters = nn.ModuleList()
 
-        # Optional frozen encoder from预训练，用于提供 soft period 提示
+        # Optional frozen encoder from预训练，用于提供 soft hint（接触提示 embedding）
         self.frozen_encoder: Optional['MotionEncoder'] = None
         self.frozen_period_head: Optional['PeriodHead'] = None
         self._encoder_meta: dict[str, Any] = {}
@@ -491,7 +491,7 @@ class EventMotionModel(nn.Module):
         z0 = lin0(x)
         y1 = act1(z0)
 
-        # Inject soft period embedding from frozen encoder (if available)
+        # Inject soft hint embedding from frozen encoder (if available)
         enc_hidden = None
         soft_period = None
         if (
@@ -557,7 +557,7 @@ class EventMotionModel(nn.Module):
 
     def attach_motion_encoder(self, bundle, *, map_location: str | torch.device = 'cpu'):
         """
-        加载并冻结预训练的 MotionEncoder + PeriodHead，用于提供 soft period 提示。
+        加载并冻结预训练的 MotionEncoder + PeriodHead，用于提供 soft hint（接触提示 embedding）。
         """
         if isinstance(bundle, (str, os.PathLike)):
             payload = torch.load(bundle, map_location=map_location)
@@ -572,6 +572,11 @@ class EventMotionModel(nn.Module):
             raise KeyError("Bundle missing 'encoder' or 'period_head' state_dict.")
 
         meta = dict(payload.get('meta', {}))
+        hint_mode = meta.get("period_hint_mode")
+        if hint_mode is None:
+            print("[WARN] MotionEncoder bundle meta missing 'period_hint_mode' (expected 'contacts_tanh'); bundle may be legacy.")
+        elif str(hint_mode) != "contacts_tanh":
+            print(f"[WARN] MotionEncoder bundle period_hint_mode={hint_mode!r} (expected 'contacts_tanh').")
         weight0 = encoder_state.get('mlp.0.weight')
         if weight0 is None:
             for key, val in encoder_state.items():

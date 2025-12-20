@@ -645,6 +645,9 @@ ep12: 所有骨骼都在[0.3°, 1.1°]区间，钟摆幅度收敛
 3. **p90-p10 (GeoLocalDeg)**：应该下降（尾部压缩效果）
 4. **std (GeoLocalDeg)**：应该下降（分布更集中）
 
+**实现对齐说明（code-level）**：
+- 训练内的关键决策（如 LR plateau 与 best-teacher checkpoint 选择）也应当优先基于 `GeoLocalDeg` / `KeyBone/GeoLocalDegMean`，以避免 root drift 对误差判断的干扰。
+
 **实验v16的成功标志：**
 - ep12: mean↓15%, max↓22%, p90-p10↓34%
 
