@@ -481,8 +481,7 @@ ep12: 所有骨骼都在[0.3°, 1.1°]区间，钟摆幅度收敛
       "range": [1, 6],
       "label": "stage1_pure_convergence",
       "params": {
-        "opt_lr": 0.001,
-        "disable_bone_metric_reweight": false
+        "opt_lr": 0.001
       },
       "loss_groups": {
         "core": {
@@ -496,15 +495,16 @@ ep12: 所有骨骼都在[0.3°, 1.1°]区间，钟摆幅度收敛
       "range": [7, 9],
       "label": "stage2_tail_activation",
       "params": {
-        "opt_lr": 0.0007,
-        "disable_bone_metric_reweight": true  // 关闭metric-driven reweight
+        "opt_lr": 0.0007
       },
       "loss_groups": {
         "core": {
           "w_rot_local": 0.22,
           "rot_local_tail_weight": 0.2,  // 启用tail loss
           "rot_local_tail_k": 3,
-          "rot_local_tail_scope": "keybones"  // 限制到keybones
+          "rot_local_tail_scope": "keybones",  // 限制到keybones
+          "rot_local_tail_select": "ema",      // 用EMA做top-k选择，更平滑
+          "rot_local_tail_ema_beta": 0.9
         }
       }
     },
@@ -512,15 +512,16 @@ ep12: 所有骨骼都在[0.3°, 1.1°]区间，钟摆幅度收敛
       "range": [10, 12],
       "label": "stage3_fine_convergence",
       "params": {
-        "opt_lr": 0.0003,  // 降低lr，稳定优化
-        "disable_bone_metric_reweight": true
+        "opt_lr": 0.0003  // 降低lr，稳定优化
       },
       "loss_groups": {
         "core": {
           "w_rot_local": 0.22,
           "rot_local_tail_weight": 0.2,
           "rot_local_tail_k": 3,
-          "rot_local_tail_scope": "keybones"
+          "rot_local_tail_scope": "keybones",
+          "rot_local_tail_select": "ema",
+          "rot_local_tail_ema_beta": 0.9
         }
       }
     }
@@ -542,19 +543,20 @@ ep12: 所有骨骼都在[0.3°, 1.1°]区间，钟摆幅度收敛
 - ep10+：lr=0.0003（精细收敛）
   - 降低lr缓解"钟摆冲击"
 
-**3. 禁用metric-driven reweight**
-```json
-"disable_bone_metric_reweight": true
-```
-- 避免与tail loss的机制冲突
-- tail loss本身就是自适应的，不需要额外权重调整
-
-**4. 限制到keybones**
+**3. 限制到keybones**
 ```json
 "rot_local_tail_scope": "keybones"
 ```
 - 避免全骨骼的稀释效应
 - 聚焦视觉重要骨骼
+
+**4. 用EMA做top-k选择（更平滑）**
+```json
+"rot_local_tail_select": "ema",
+"rot_local_tail_ema_beta": 0.9
+```
+- `batch` 选择会让 top-k 在 batch 间频繁跳，容易“钟摆”
+- `ema` 让 tail 骨骼选择更稳定，梯度更连续
 
 ### 超参数调优建议
 
@@ -563,6 +565,8 @@ ep12: 所有骨骼都在[0.3°, 1.1°]区间，钟摆幅度收敛
 | `tail_weight` | 0.2 | 如果mean上升→降低到0.15<br>如果p90-p10仍大→提高到0.25 | mean, p90-p10 |
 | `tail_k` | 3 | 13个骨骼中固定3个（23%分位）<br>一般不需要调整 | - |
 | `tail_scope` | keybones | 固定使用keybones<br>不建议改为all | - |
+| `tail_select` | ema | `batch`更敏捷但更抖<br>`ema`更稳更适合长尾压制 | tail骨骼是否频繁切换 |
+| `tail_ema_beta` | 0.9 | 越大越平滑（0.8~0.98）<br>过大可能反应慢 | tail切换频率/收敛速度 |
 
 ---
 

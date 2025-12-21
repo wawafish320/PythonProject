@@ -176,8 +176,7 @@ python train_configurator.py \
   "tf_min": 0.0,                  // 最小teacher forcing比例
 
   // 损失权重
-  "w_fk_pos": 0.07,               // FK位置损失权重
-  "w_rot_local": 0.07,            // 局部旋转损失权重
+  "w_rot_local": 0.07,            // 局部旋转损失权重（父子相对旋转）
   "w_cond_yaw": 0,                // 已弃用：cond yaw 损失关闭
   "w_rot_log": 0.2,               // 旋转增量对数域损失
   "w_limb_geo": 0.0,              // 四肢辅助损失
@@ -192,7 +191,7 @@ python train_configurator.py \
         "freerun_horizon": 8
       },
       "loss_groups": {
-        "core": {"w_fk_pos": 0.07, "w_rot_local": 0.07},
+        "core": {"w_rot_local": 0.07},
         "aux": {"w_limb_geo": 0.0}
       }
     },
@@ -204,7 +203,7 @@ python train_configurator.py \
         "freerun_horizon": 8
       },
       "loss_groups": {
-        "core": {"w_fk_pos": 0.2275, "w_rot_local": 0.2275},
+        "core": {"w_rot_local": 0.2275},
         "aux": {"w_limb_geo": 0.05}
       }
     },
@@ -216,7 +215,7 @@ python train_configurator.py \
         "freerun_horizon": 16
       },
       "loss_groups": {
-        "core": {"w_fk_pos": 0.4025, "w_rot_local": 0.4025},
+        "core": {"w_rot_local": 0.4025},
         "aux": {"w_limb_geo": 0.08}
       }
     }
@@ -369,7 +368,6 @@ contact_hint = 2.0 * soft_contacts - 1.0
    ```python
    # 多个损失项会互相"抢夺"梯度权重
    total_loss = (
-       w_fk_pos * loss_fk_pos +           # 位置损失
        w_rot_local * loss_rot_local +     # 旋转损失
        w_rot_geo * loss_rot_geo +         # 测地线约束
        # cond_yaw 已移除
@@ -392,7 +390,6 @@ contact_hint = 2.0 * soft_contacts - 1.0
 ```python
 # ✅ 好的做法：让模型学习软接触和物理一致的运动
 loss = (
-    w_fk_pos * loss_fk_pos +              # 前向运动学位置
     w_rot_local * loss_rot_local +        # 局部旋转
     w_rot_geo * loss_rot_geo +            # 测地线误差
     # cond_yaw 已移除
@@ -467,7 +464,6 @@ total_loss = (
     w_rot_geo * loss_rot_geo +          # 旋转测地线误差
     w_rot_ortho * loss_rot_ortho +      # 旋转正交性
     # cond_yaw 已移除
-    w_fk_pos * loss_fk_pos +            # FK位置误差
     w_rot_local * loss_rot_local +      # 父子相对旋转
 
     # Aux组 (辅助优化)
@@ -518,7 +514,6 @@ total_loss = (
 
 ```python
 # 第一优先级：Core组 (占总权重的60-70%)
-w_fk_pos = 0.07        # 位置准确性
 w_rot_local = 0.07     # 旋转准确性
 w_rot_geo = 0.01       # 测地线距离
 w_rot_ortho = 0.001    # 正交性约束
@@ -565,19 +560,19 @@ core : aux : long ≈ 65% : 5% : 30%
 #### 示例阶段1：训练初期（Epoch 1-9, Teacher Forcing主导）
 
 - Trainer：`freerun_weight=0`、`freerun_horizon=8`。
-- Loss 组：`core` 以 `w_fk_pos=0.07`、`w_rot_local=0.07` 为主，`aux` 中 `w_limb_geo` 关闭；全局 `w_cond_yaw=0.1` 不变。
+- Loss 组：`core` 以 `w_rot_local=0.07` 为主，`aux` 中 `w_limb_geo` 关闭；全局 `w_cond_yaw=0.1` 不变。
 - 目的：让模型通过高 teacher forcing 比例稳定学习基本姿态，仅做最小化的 freerun 状态同步。
 
 #### 示例阶段2：训练中期（Epoch 10-21, Mixed模式）
 
 - Trainer：`freerun_weight=0.175`、`freerun_horizon=14`。
-- Loss 组：`core` 动态放大至 `w_fk_pos=0.2275`、`w_rot_local=0.2275`，`aux` 打开 `w_limb_geo=0.05`，让四肢姿态更平滑。
+- Loss 组：`core` 动态放大至 `w_rot_local=0.2275`，`aux` 打开 `w_limb_geo=0.05`，让四肢姿态更平滑。
 - 目的：在 teacher/free 混合模式下训练，逐渐降低 teacher forcing（`tf_max` 变为 0.75），同时让 freerun 损失开始发挥作用。
 
 #### 示例阶段3：训练后期（Epoch 22-30, Free Run主导）
 
 - Trainer：`freerun_weight=0.325`、`freerun_horizon=18`。
-- Loss 组：`core` 提升至 `w_fk_pos=0.4025`、`w_rot_local=0.4025`，`aux` 中 `w_limb_geo=0.08` 维持稳定正则；teacher forcing 最终衰减到 0。
+- Loss 组：`core` 提升至 `w_rot_local=0.4025`，`aux` 中 `w_limb_geo=0.08` 维持稳定正则；teacher forcing 最终衰减到 0。
 - 目的：完全聚焦自由运行表现，确保长序列稳定性成为主要训练信号。
 
 **关键提示**
@@ -641,7 +636,7 @@ core : aux : long ≈ 65% : 5% : 30%
 
 - [ ] **损失分组**：是否明确Core/Aux/Long三组的职责？
 - [ ] **组间平衡**：Core组占比是否在60-70%，Aux组<10%，Long组20-30%？
-- [ ] **关键损失**：`w_fk_pos`、`w_rot_local`是否已配置？
+- [ ] **关键损失**：`w_rot_local`（以及可选的`rot_local_tail_*`）是否已配置？
 - [ ] **显式约束**：是否添加了foot固定、IK约束、高度约束等？❌ 这些都不应该存在！
 
 #### 泛化性检查
@@ -685,10 +680,10 @@ core : aux : long ≈ 65% : 5% : 30%
 **❌ 错误示例3：Core组权重失衡**
 ```json
 {
-  "w_fk_pos": 0.5,            // ❌ 过高！碾压其他损失
-  "w_rot_local": 0.01         // ❌ 过低！旋转学不好
+  "w_rot_local": 0.5,         // ❌ 过高！碾压其他损失
+  "w_rot_ortho": 0.0          // ❌ 正交性完全不管，rot6d可能发散
 }
-// 问题：位置准确但姿态和平滑性很差
+// 问题：短期看起来收敛，但姿态/泛化/稳定性会变差
 ```
 
 #### ✅ 正确的训练设计
@@ -830,7 +825,7 @@ python train_configurator.py \
 
 优化的参数包括：
 - 学习率 (lr)
-- 损失权重 (w_fk_pos, w_rot_local等)
+- 损失权重 (w_rot_local、rot_local_tail_weight等)
 - 训练策略 (freerun_weight、freerun_horizon)
 - Teacher forcing参数
 
@@ -852,7 +847,7 @@ python train_configurator.py \
 调整逻辑：
 - `YawAbsDeg` 偏高 → 自动提高 `freerun_weight`、`freerun_horizon`
 - `RootVelMAE` 偏高 → 增加 `freerun_weight`
-- `InputRotGeoDeg` 偏高 → 主要升高 `w_fk_pos`、`w_rot_local`（latent consistency 已移除）
+- `InputRotGeoDeg` 偏高 → 主要升高 `w_rot_local`（可选提高 `rot_local_tail_weight`）
 
 ### 3. 自适应损失权重
 
@@ -1149,7 +1144,7 @@ python train_configurator.py \
    - 如果 > 10度，增加 `w_rot_local`
 
 3. **位置准确性**: RootVelMAE < 0.02
-   - 如果过高，增加 `w_fk_pos`
+   - 如果过高，增加 `w_root_vel` / `w_root_speed`
 
 4. **Free-Run稳定性**: Valfree指标不应该远高于Teacher
    - 如果差距 > 2x，延长Stage 1训练

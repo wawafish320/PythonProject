@@ -181,15 +181,6 @@ class Trainer:
                 return R
         return R
 
-    def _fk_positions(self, R):
-        fn = getattr(self.loss_fn, '_fk_positions', None)
-        if callable(fn):
-            try:
-                return fn(R)
-            except Exception:
-                return None
-        return None
-
     def _joint_weights(self, ref_tensor, joint_count):
         fn = getattr(self.loss_fn, '_joint_weight_vector', None)
         if callable(fn):
@@ -1045,13 +1036,6 @@ class Trainer:
                 stats['rot_local_mean_deg'] = float(geo_local_mean.item())
                 stats['rot_local_step_deg'] = ((geo_local * w).sum(dim=-1) / weights_sum).mean(dim=0).detach().cpu().tolist()
                 stats['_geo_local_rad'] = geo_local_rad.detach()
-                fk_pred = self._fk_positions(pred_root)
-                fk_gt = self._fk_positions(gt_root)
-                if fk_pred is not None and fk_gt is not None:
-                    fk_err = (fk_pred - fk_gt).norm(dim=-1)
-                    fk_cm = fk_err * 100.0
-                    stats['fk_pos_cm'] = float(((fk_cm * w).sum() / (weights_sum * fk_cm.shape[0] * fk_cm.shape[1])).item())
-                    stats['fk_pos_step_cm'] = (((fk_cm * w).sum(dim=-1) / weights_sum).mean(dim=0)).detach().cpu().tolist()
         geo_local_tensor_rad = stats.get('_geo_local_rad')
         limb_summary = {}
         collect_fn = getattr(self.loss_fn, '_collect_limb_geo_stats', None)
@@ -1073,10 +1057,6 @@ class Trainer:
                     extra += f" limb={limb_raw:.2f}°"
                 if _math.isfinite(limb_weighted):
                     extra += f" limb/torso={limb_weighted:.2f}"
-            fk_val = stats.get('fk_pos_cm')
-            fk_extra = ""
-            if isinstance(fk_val, (float, int)) and _math.isfinite(fk_val):
-                fk_extra = f" fk_cm={fk_val:.2f}"
             local_val = stats.get('rot_local_mean_deg', float('nan'))
             local_extra = ""
             if isinstance(local_val, (float, int)) and _math.isfinite(local_val):
@@ -1085,17 +1065,15 @@ class Trainer:
                 "[HistDrift]"
                 f"[ep {int(epoch):03d}]"
                 f"[bi {int(batch_idx):04d}] "
-                f"rot_geo={geo_val:.2f}° ang_dir={ang_val:.2f}° steps={steps}{extra}{local_extra}{fk_extra}"
+                f"rot_geo={geo_val:.2f}° ang_dir={ang_val:.2f}° steps={steps}{extra}{local_extra}"
             )
             geo_curve = stats.get('rot_geo_step_deg')
             local_curve = stats.get('rot_local_step_deg')
-            fk_curve = stats.get('fk_pos_step_cm')
             geo_local_tensor_rad = stats.get('_geo_local_rad')
             if isinstance(geo_curve, list):
                 for idx, val in enumerate(geo_curve, start=1):
                     ang_val_step = local_curve[idx - 1] if isinstance(local_curve, list) and idx - 1 < len(local_curve) else float('nan')
                     local_val_step = ang_val_step
-                    fk_val_step = fk_curve[idx - 1] if isinstance(fk_curve, list) and idx - 1 < len(fk_curve) else float('nan')
                     summary_txt = ""
                     if isinstance(geo_local_tensor_rad, torch.Tensor) and geo_local_tensor_rad.shape[1] >= idx and callable(collect_fn):
                         try:
@@ -1115,8 +1093,6 @@ class Trainer:
                         extra_txt = ""
                         if not (_math.isnan(local_val_step) or local_val_step in (float('inf'), float('-inf'))):
                             extra_txt += f" local={local_val_step:.2f}°"
-                        if not (_math.isnan(fk_val_step) or fk_val_step in (float('inf'), float('-inf'))):
-                            extra_txt += f" fk_cm={fk_val_step:.2f}"
                         print(
                             "[HistDrift]"
                             f"[ep {int(epoch):03d}]"
@@ -1390,8 +1366,6 @@ class Trainer:
                 self.eval_settings.horizon = int(trainer_cfg["eval_horizon"])
 
         if hasattr(self, 'loss_fn') and self.loss_fn is not None:
-            if "w_fk_pos" in loss_cfg:
-                self.loss_fn.w_fk_pos = float(loss_cfg["w_fk_pos"])
             if "w_rot_local" in loss_cfg:
                 self.loss_fn.w_rot_local = float(loss_cfg["w_rot_local"])
             if "adaptive_bone_weights" in loss_cfg:
@@ -1833,9 +1807,6 @@ class Trainer:
         self._stage_goal_history: Dict[str, deque] = {}
         self._stage_pending_advance: bool = False
         self.args = args
-        # Stage-schedule/CLI switch to disable teacher-metric-driven bone reweighting
-        # (useful when experimenting with tail-risk loss instead).
-        self.disable_bone_metric_reweight: bool = False
 
         self.grad_clip = float(grad_clip)
         self.tf_warmup_steps = int(tf_warmup_steps)
@@ -2372,15 +2343,6 @@ class Trainer:
                                 _plateau.step(float(keybone_mean))
                     except Exception as _pl_e:
                         print(f"[LR-Plateau][WARN] scheduler step failed: {_pl_e}")
-
-                    # 根据 KeyBone GeoDeg 指标微调骨骼权重（error-driven per-bone reweighting）
-                    try:
-                        _bone_updater = getattr(self.loss_fn, "update_bone_weights_from_metrics", None)
-                        disable = bool(getattr(self, 'disable_bone_metric_reweight', False)) or bool(_arg('disable_bone_metric_reweight', False))
-                        if (not disable) and callable(_bone_updater):
-                            _bone_updater(teacher_metrics, epoch=ep)
-                    except Exception as _bw_e:
-                        print(f"[AdaptiveBone][WARN] update failed: {_bw_e}")
 
                     # 在 stage1 仅保存 teacher 诊断快照（无 freerun）
                     base_debug_path = getattr(self, "freerun_debug_path", None)
@@ -3680,6 +3642,11 @@ def _diagnose_free_run_impl(
                         summary = {}
                     if summary:
                         _record_metric('AngVelDirDegRaw', summary.get('raw', float('nan')))
+                        _record_metric('AngVelDirDegWeighted', summary.get('weighted', float('nan')))
+                        _record_metric('AngVelDirDegSmooth', summary.get('smooth', float('nan')))
+                        _record_metric('AngVelDirDegTorso', summary.get('torso', float('nan')))
+                        _record_metric('AngVelDirDegProximal', summary.get('proximal', float('nan')))
+                        _record_metric('AngVelDirDegDistal', summary.get('distal', float('nan')))
 
                     # -------- Foot contact-phase ang-vel stats (GT mask, no heuristic thresholds) --------
                     foot_names = ('foot_l', 'foot_r')
@@ -3812,60 +3779,6 @@ def _diagnose_free_run_impl(
 
                 # Phase metrics are deprecated; keep flag for backward-compatible logs.
                 result['Period/PhaseSkipped'] = True
-
-                if True:
-
-                    # -------- Foot sliding diagnostics (position based, FK) --------
-                    try:
-                        pos_pred = self._fk_positions(Rp_root)
-                        pos_gt = self._fk_positions(Rg_root)
-                    except Exception:
-                        pos_pred = pos_gt = None
-                    if pos_pred is not None and pos_gt is not None and pos_pred.shape[:3] == pos_gt.shape[:3]:
-                        Bp, Tp, Jp, _ = pos_pred.shape
-                        fps_diag = fps_eval
-                        pos_pred = pos_pred[:, :Tp]
-                        pos_gt = pos_gt[:, :Tp]
-                        idx_map_fk = idx_map
-                        def _foot_speed(pos):
-                            vel = pos[:, 1:] - pos[:, :-1]
-                            return vel.norm(dim=-1) * fps_diag  # m/s
-
-                        for fname in foot_names:
-                            j_idx = idx_map_fk.get(fname)
-                            if j_idx is None or j_idx >= Jp:
-                                continue
-                            sp = _foot_speed(pos_pred[..., j_idx, :])
-                            sg = _foot_speed(pos_gt[..., j_idx, :])
-                            # 全时段平均
-                            _record_metric(f'Foot/{fname}/SlideSpeed', float(sp.mean().item()))
-                            # GT 接触期（若有 contacts_seq）
-                            contact_mask = None
-                            if torch.is_tensor(contacts_seq) and contacts_seq.dim() >= 3 and contacts_seq.shape[1] >= sp.shape[1]:
-                                # assume contacts_seq [..., left, right]
-                                foot_idx = 0 if fname.endswith('_l') else 1
-                                if foot_idx < contacts_seq.shape[-1]:
-                                    contact_mask = contacts_seq[:, :sp.shape[1], foot_idx] > 0.5
-                            if contact_mask is not None:
-                                if contact_mask.any():
-                                    _record_metric(
-                                        f'Foot/{fname}/SlideSpeedContact',
-                                        float(sp[contact_mask].mean().item())
-                                    )
-                                    # 滑移总距离（接触窗口内 XY）
-                                    pos_xy = pos_pred[:, :, j_idx, :2]
-                                    # mask per-frame -> cumulative distance over contact frames
-                                    slide_dist = (pos_xy[:, 1:] - pos_xy[:, :-1]).norm(dim=-1)
-                                    slide_contact = slide_dist * contact_mask[:, 1:]
-                                    _record_metric(
-                                        f'Foot/{fname}/SlideDistContact',
-                                        float(slide_contact.sum().item())
-                                    )
-                        _record_metric('AngVelDirDegWeighted', summary.get('weighted', float('nan')))
-                        _record_metric('AngVelDirDegSmooth', summary.get('smooth', float('nan')))
-                        _record_metric('AngVelDirDegTorso', summary.get('torso', float('nan')))
-                        _record_metric('AngVelDirDegProximal', summary.get('proximal', float('nan')))
-                        _record_metric('AngVelDirDegDistal', summary.get('distal', float('nan')))
             except Exception:
                 pass
 
@@ -4191,7 +4104,7 @@ def train_entry():
                    help='DWA 策略温度，默认 2.0。')
     p.add_argument('--adaptive_loss_ema_beta', type=float, default=0.5,
                    help='自适应权重显示的 EMA 平滑系数（0 关闭；建议 0.3~0.7）。')
-    p.add_argument('--adaptive_loss_terms', type=str, default='fk_pos,rot_local',
+    p.add_argument('--adaptive_loss_terms', type=str, default='rot_local,rot_ortho,root_vel,root_speed',
                    help='需要自适应权重的 loss 名称，逗号分隔。留空则使用全部可用 loss。')
     p.add_argument('--config_path', type=str, default=None,
                    help='完整配置 JSON 路径（包含阶段调度配置），用于自适应调整。')
@@ -4222,14 +4135,6 @@ def train_entry():
     p.add_argument('--dropout', type=float, default=0.1)
     p.add_argument('--amp', action='store_true', help='启用自动混合精度 (torch.autocast)')
     p.add_argument('--w_rot_ortho', type=float, default=0.001)
-    p.add_argument('--w_fk_pos', type=float, default=0.0,
-                   help='FK 末端位置损失权重（0 表示禁用）。')
-    p.add_argument(
-        '--fk_pos_bones',
-        type=str,
-        default='foot_l,foot_r',
-        help='FK position loss 监督的骨骼名称（逗号分隔）。默认只监督 foot_l/foot_r；用 "all" 或 "*" 表示监督全部关节。',
-    )
     p.add_argument('--w_rot_local', type=float, default=0.0,
                    help='父子关节局部 geodesic 约束权重（0=关闭）。')
     p.add_argument('--w_root_vel', type=float, default=0.0,
@@ -4266,9 +4171,11 @@ def train_entry():
     p.add_argument('--rot_local_tail_k', type=int, default=0,
                    help='rot_local tail loss 的 top-k 骨骼数量（例如 13 骨骼取 3）。0=关闭。')
     p.add_argument('--rot_local_tail_scope', type=str, default='all', choices=['all', 'limbs', 'keybones'],
-                   help="tail loss 选择范围：all=全骨骼；limbs=limb_monitor_names；keybones=pelvis+limb_monitor_names。")
-    p.add_argument('--disable_bone_metric_reweight', action='store_true', default=False,
-                   help='关闭基于 teacher KeyBone 指标的跨 epoch 动态骨骼权重更新（减少 whack-a-mole）。')
+                   help="tail loss 选择范围：all=全骨骼；limbs=limb_monitor_names（若缺失则用skeleton leaves回退）；keybones=pelvis+limb_monitor_names（并用leaves补全）。")
+    p.add_argument('--rot_local_tail_select', type=str, default='batch', choices=['batch', 'ema'],
+                   help='tail loss top-k 选择打分：batch=当前batch均值；ema=跨batch EMA（更平滑、减少whack-a-mole）。')
+    p.add_argument('--rot_local_tail_ema_beta', type=float, default=0.9,
+                   help='rot_local_tail_select=ema 时的 EMA beta（越大越平滑）。')
     p.add_argument('--seq_len', type=int, default=120)
     p.add_argument('--yaw_aug_deg', type=float, default=0.0)
     p.add_argument('--normalize_c', action='store_true')
@@ -4545,7 +4452,6 @@ def train_entry():
     except Exception:
         pass
     fps_data = float(getattr(ds_train, 'fps', 60.0) or 60.0)
-    w_fk_pos = float(_arg('w_fk_pos', 0.0) or 0.0)
     w_rot_local = float(_arg('w_rot_local', 0.0) or 0.0)
     w_root_vel = float(_arg('w_root_vel', 0.0) or 0.0)
     w_root_speed = float(_arg('w_root_speed', 0.0) or 0.0)
@@ -4574,7 +4480,6 @@ def train_entry():
         rot6d_spec=getattr(ds_train, 'rot6d_spec', {}),
         w_rot_ortho=_arg('w_rot_ortho', 0.001),
         meta=getattr(ds_train, 'meta', None),
-        w_fk_pos=w_fk_pos,
         w_rot_local=w_rot_local,
         w_root_vel=w_root_vel,
         w_root_speed=w_root_speed,
@@ -4588,13 +4493,6 @@ def train_entry():
         max_weight_ratio=max_weight_ratio,
         weight_gamma=weight_gamma,
     )
-    # FK position supervision targets
-    try:
-        fk_pos_bones_arg = str(_arg('fk_pos_bones', 'foot_l,foot_r') or '').strip()
-        if fk_pos_bones_arg:
-            loss_fn.fk_pos_bone_names = [s.strip() for s in fk_pos_bones_arg.split(',') if s.strip()]
-    except Exception:
-        pass
     # Unified bone weight parameters (new scheme)
     loss_fn.unified_downstream_power = float(_arg('unified_downstream_power', 0.6) or 0.6)
     loss_fn.unified_self_scale = float(_arg('unified_self_scale', 1.5) or 1.5)
@@ -4602,6 +4500,8 @@ def train_entry():
     loss_fn.rot_local_tail_weight = float(_arg('rot_local_tail_weight', 0.0) or 0.0)
     loss_fn.rot_local_tail_k = int(_arg('rot_local_tail_k', 0) or 0)
     loss_fn.rot_local_tail_scope = str(_arg('rot_local_tail_scope', 'all') or 'all')
+    loss_fn.rot_local_tail_select = str(_arg('rot_local_tail_select', 'batch') or 'batch')
+    loss_fn.rot_local_tail_ema_beta = float(_arg('rot_local_tail_ema_beta', 0.9) or 0.9)
     # Visual importance调制先禁用，如需开启再暴露参数
     loss_fn.unified_use_visual_importance = False
     if getattr(ds_train, 'bone_names', None):
@@ -4622,11 +4522,12 @@ def train_entry():
     print(
         f"[LossWeights] "
         f"w_rot_ortho={loss_fn.w_rot_ortho} "
-        f"w_fk_pos={loss_fn.w_fk_pos} "
         f"w_rot_local={loss_fn.w_rot_local} "
         f"rot_local_tail_weight={getattr(loss_fn, 'rot_local_tail_weight', 0.0)} "
         f"rot_local_tail_k={getattr(loss_fn, 'rot_local_tail_k', 0)} "
         f"rot_local_tail_scope={getattr(loss_fn, 'rot_local_tail_scope', 'all')} "
+        f"rot_local_tail_select={getattr(loss_fn, 'rot_local_tail_select', 'batch')} "
+        f"rot_local_tail_ema_beta={getattr(loss_fn, 'rot_local_tail_ema_beta', 0.9)} "
         f"adaptive_bone_weights={loss_fn.use_adaptive_weights} "
         f"use_hierarchy_weights={loss_fn.use_hierarchy_weights} "
         f"hier_mode={loss_fn.hierarchy_mode} "
@@ -4766,7 +4667,7 @@ def train_entry():
     adaptive_loss_method = str(_arg('adaptive_loss_method', 'none') or 'none').lower()
     adaptive_loss_terms = [
         term.strip()
-        for term in str(_arg('adaptive_loss_terms', 'fk_pos,rot_local,rot_ortho,root_vel,root_speed') or '').split(',')
+        for term in str(_arg('adaptive_loss_terms', 'rot_local,rot_ortho,root_vel,root_speed') or '').split(',')
         if term.strip()
     ]
     if not adaptive_loss_terms:

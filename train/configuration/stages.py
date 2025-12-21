@@ -87,7 +87,6 @@ class TrainingConfigBuilder:
 
         cfg["freerun_weight"] = float(trainer_cfg.get("freerun_weight", cfg.get("freerun_weight", 0.0)))
         cfg["freerun_horizon"] = int(trainer_cfg.get("freerun_horizon", cfg.get("freerun_horizon", 0)))
-        cfg["w_fk_pos"] = float(loss_cfg.get("w_fk_pos", loss_group_core.get("w_fk_pos", cfg.get("w_fk_pos", 0.0))))
         cfg["w_rot_local"] = float(
             loss_cfg.get("w_rot_local", loss_group_core.get("w_rot_local", cfg.get("w_rot_local", 0.0)))
         )
@@ -134,7 +133,6 @@ class TrainingConfigBuilder:
                         "freerun_horizon": freerun_horizon,
                     },
                     "loss": {
-                        "w_fk_pos": round(posture_weight, 4),
                         "w_rot_local": round(posture_weight, 4),
                     },
                     "tf": {"max": template["tf_max"]},

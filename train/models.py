@@ -634,7 +634,6 @@ class MotionJointLoss(nn.Module):
         w_rot_ortho: float = 0.0,
         ignore_motion_groups: str = '',
         meta: Optional[Dict[str, Any]] = None,
-        w_fk_pos: float = 0.0,
         w_rot_local: float = 0.0,
         w_root_vel: float = 0.0,
         w_root_speed: float = 0.0,
@@ -653,7 +652,6 @@ class MotionJointLoss(nn.Module):
         self.meta = dict(meta) if isinstance(meta, dict) else {}
         self.w_attn_reg = float(w_attn_reg)
         self.w_rot_ortho = float(w_rot_ortho)
-        self.w_fk_pos = float(w_fk_pos)
         self.w_rot_local = float(w_rot_local)
         self.w_root_vel = float(w_root_vel)
         self.w_root_speed = float(w_root_speed)
@@ -663,6 +661,8 @@ class MotionJointLoss(nn.Module):
         self.rot_local_tail_weight = float(getattr(self, 'rot_local_tail_weight', 0.0) or 0.0)
         self.rot_local_tail_k = int(getattr(self, 'rot_local_tail_k', 0) or 0)
         self.rot_local_tail_scope = str(getattr(self, 'rot_local_tail_scope', 'all') or 'all')
+        self.rot_local_tail_select = str(getattr(self, 'rot_local_tail_select', 'batch') or 'batch')
+        self.rot_local_tail_ema_beta = float(getattr(self, 'rot_local_tail_ema_beta', 0.9) or 0.9)
         self.angvel_eps = 1e-6
         self.fps = float(fps)
         self.output_layout = output_layout or {}
@@ -678,13 +678,11 @@ class MotionJointLoss(nn.Module):
         self._warned_bad_rot6d = False
         self.template_hint: Optional[str] = None
         self.bundle_hint: Optional[str] = None
-        # FK position supervision target bones (comma-separated from CLI, or list[str]).
-        # Default keeps backward-compatible behavior: only supervise feet.
-        self.fk_pos_bone_names: list[str] = ['foot_l', 'foot_r']
-        self._warned_fk_pos_bones_missing = False
-        # 缓存几何骨骼权重（按 device/dtype），以及可选的动态每关节缩放因子
+        # 缓存几何骨骼权重（按 device/dtype）
         self._joint_weight_cache: dict[tuple, torch.Tensor] = {}
-        self._dynamic_bone_alpha_cpu: Optional[torch.Tensor] = None
+        # Tail-loss 辅助缓存（candidate pool 与选择打分）
+        self._tail_candidate_cache: dict[tuple, torch.Tensor] = {}
+        self._tail_score_cache: dict[tuple, torch.Tensor] = {}
         self.root_idx = 0
         self.bone_names: list[str] = []
         self.limb_monitor_names: list[str] = [
@@ -714,11 +712,9 @@ class MotionJointLoss(nn.Module):
                     self.bone_offsets = torch.as_tensor(offsets, dtype=torch.float32)
                 except Exception:
                     self.bone_offsets = None
-        self.has_fk = bool(self.parents and self.bone_offsets is not None)
         # 参与 AdaptiveLossWeighting 的 component 项。
         # 注意：
         #   - rot_ortho 仅作为小正则，不参与自适应缩放；
-        #   - fk_pos 也保持固定权重，避免位置约束抢占过多自适应容量；
         #   - 目前仅对 rot_local 使用 uncertainty/gradnorm 等策略。
         self._adaptive_loss_terms: Tuple[str, ...] = (
             "rot_local",
@@ -729,7 +725,6 @@ class MotionJointLoss(nn.Module):
             'attn': 'aux',
             'rot_geo': 'core',
             'rot_ortho': 'core',
-            'fk_pos': 'core',
             'rot_local': 'core',
             'root_vel': 'core',
             'root_speed': 'core',
@@ -775,9 +770,12 @@ class MotionJointLoss(nn.Module):
 
     def set_bone_names(self, names: Optional[Sequence[str]]) -> None:
         self.bone_names = [str(n) for n in (names or [])]
+        self._bone_name_to_idx = {name: idx for idx, name in enumerate(self.bone_names)}
         self._limb_mask_cache = None
         self._torso_mask_cache = None
         self._limb_mask_joint_count = None
+        self._tail_candidate_cache = {}
+        self._tail_score_cache = {}
         # reset fk caches when bone count changes
         self._parents_tensor = None
 
@@ -790,7 +788,7 @@ class MotionJointLoss(nn.Module):
                 self.bone_offsets = torch.as_tensor(offsets, dtype=torch.float32)
             except Exception:
                 self.bone_offsets = None
-        self.has_fk = bool(self.parents and self.bone_offsets is not None)
+        self._tail_candidate_cache = {}
 
     def _invalidate_weight_cache(self) -> None:
         """Drop cached joint weights / hierarchy weights when configuration changes."""
@@ -971,15 +969,6 @@ class MotionJointLoss(nn.Module):
         # 基于几何的统一权重
         weights_cpu = self._compute_unified_weights_cpu(joint_count)
 
-        # 可选：叠加跨 epoch 的动态缩放（根据上一轮指标微调），保持均值为 1
-        alpha = getattr(self, "_dynamic_bone_alpha_cpu", None)
-        if alpha is not None and alpha.numel() >= joint_count:
-            a = alpha[:joint_count].detach().clone()
-            if a.numel() == weights_cpu.numel():
-                a = a / a.mean().clamp_min(1e-6)
-                weights_cpu = weights_cpu * a
-                weights_cpu = weights_cpu / weights_cpu.mean().clamp_min(1e-6)
-
         weights = weights_cpu.to(device=device, dtype=dtype)
         cache[key] = weights
         if not hasattr(self, '_weight_vector_logged'):
@@ -1050,169 +1039,101 @@ class MotionJointLoss(nn.Module):
 
         return weights
 
-    # === Epoch-level dynamic bone reweighting (teacher metrics driven) ===
-    def update_bone_weights_from_metrics(
-        self,
-        metrics: Dict[str, Any],
-        *,
-        epoch: int | None = None,
-        alpha_min: float = 0.5,
-        alpha_max: float = 2.0,
-        ema_beta: float = 0.5,
-        warmup_epochs: int = 3,
-        ratio_gamma: float = 0.7,
-        alpha_step: float = 0.2,
-    ) -> None:
+    def _rot_local_tail_scores(self, per_bone: torch.Tensor) -> torch.Tensor:
         """
-        使用上一轮 teacher 评估的 KeyBone GeoLocalDeg 指标（root 对齐），微调每个关节的动态权重 alpha。
-
-        完整逻辑（更平滑的目标驱动方式）:
-
-        - 取 KeyBone/GeoLocalDegMean 的 EMA 作为全局参考 m_ema（无 root 干扰）
-        - 对 limb_monitor_names 中的每个关键骨骼:
-            * 维护 GeoLocalDeg(bone) 的 EMA: e_ema(bone)
-            * 计算相对误差 r = e_ema(bone) / m_ema
-            * 目标权重: alpha_target(bone) = clamp(r ** ratio_gamma, [alpha_min, alpha_max])
-        - 然后对所有关节做一次平滑更新:
-            alpha_new = (1 - alpha_step) * alpha_old + alpha_step * alpha_target
-          （未出现在目标列表中的骨骼 alpha_target = 1）
-        - 最后 clamp 到 [alpha_min, alpha_max] 并归一化使 mean(alpha)=1
+        Selection scores for tail top-k:
+        - batch: current batch mean (default; backward compatible)
+        - ema:   exponential moving average across batches for smoother selection
         """
-        import math
-        import torch
-
-        if not isinstance(metrics, dict):
-            return
-        # 需要骨骼名字映射
-        if not isinstance(self.bone_names, list) or not self.bone_names:
-            return
-
-        # Prefer root-aligned (geo_local) metrics to avoid global root interference.
-        # Fallback to world-space GeoDeg for backward compatibility.
-        key_mean = metrics.get("KeyBone/GeoLocalDegMean", metrics.get("KeyBone/GeoDegMean"))
-        try:
-            key_mean_f = float(key_mean)
-        except (TypeError, ValueError):
-            return
-        if not math.isfinite(key_mean_f) or key_mean_f <= 0.0:
-            return
-
-        J = len(self.bone_names)
-        if J <= 0:
-            return
-
-        # 早期 epoch 不做动态调节，避免训练初期抖动干扰
-        if epoch is not None and int(epoch) < int(warmup_epochs):
-            return
-
-        # 初始化 / 扩展 alpha
-        if self._dynamic_bone_alpha_cpu is None or self._dynamic_bone_alpha_cpu.numel() < J:
-            self._dynamic_bone_alpha_cpu = torch.ones(J, dtype=torch.float32)
-        alpha = self._dynamic_bone_alpha_cpu
-
-        # 维护 per-bone EMA 以平滑指标
-        if not hasattr(self, "_bone_geo_ema"):
-            self._bone_geo_ema: Dict[str, float] = {}
-        if not hasattr(self, "_bone_geo_mean_ema"):
-            self._bone_geo_mean_ema: float = float(key_mean_f)
-        # 更新全局 mean 的 EMA
-        m_prev = self._bone_geo_mean_ema
-        self._bone_geo_mean_ema = float(ema_beta * m_prev + (1.0 - ema_beta) * key_mean_f)
-        ref_mean = self._bone_geo_mean_ema
-        if ref_mean <= 0.0 or not math.isfinite(ref_mean):
-            ref_mean = key_mean_f
-
-        idx_map = {str(name): idx for idx, name in enumerate(self.bone_names)}
-        monitor_names = getattr(self, "limb_monitor_names", None) or []
-
-        # 目标 alpha，未监控骨骼默认为 1.0
-        alpha_target = torch.ones(J, dtype=torch.float32)
-        any_target = False
-
-        for bone_name in monitor_names:
-            # Use root-aligned geodesic; fall back to world GeoDeg if old logs are passed in.
-            key = f"KeyBone/{bone_name}/GeoLocalDeg"
-            val = metrics.get(key, metrics.get(f"KeyBone/{bone_name}/GeoDeg"))
-            try:
-                v = float(val)
-            except (TypeError, ValueError):
-                continue
-            if not math.isfinite(v):
-                continue
-            # 更新该骨骼的 EMA
-            prev = float(self._bone_geo_ema.get(bone_name, v))
-            cur = ema_beta * prev + (1.0 - ema_beta) * v
-            self._bone_geo_ema[bone_name] = cur
-
-            ref = ref_mean
-            if ref <= 0.0 or not math.isfinite(ref):
-                ref = cur
-            if ref <= 0.0:
-                continue
-
-            idx = idx_map.get(bone_name)
-            if idx is None or idx < 0 or idx >= J:
-                continue
-
-            # 目标权重：相对误差的幂次映射
-            r = cur / ref
-            if not math.isfinite(r) or r <= 0.0:
-                continue
-            w_raw = float(r ** float(ratio_gamma))
-            w_raw = max(alpha_min, min(alpha_max, w_raw))
-            alpha_target[idx] = w_raw
-            any_target = True
-
-        if not any_target:
-            return
-
-        # 平滑更新 alpha：朝目标分布走一步
-        alpha_step = float(alpha_step)
-        alpha_step = max(0.0, min(1.0, alpha_step))
-        if alpha_step > 0.0:
-            alpha = (1.0 - alpha_step) * alpha + alpha_step * alpha_target
-
-        # 限幅 + 归一化，保持整体 loss 尺度稳定
-        alpha.clamp_(alpha_min, alpha_max)
-        alpha /= alpha.mean().clamp_min(1e-6)
-        self._dynamic_bone_alpha_cpu = alpha
-        # 权重改变后，丢弃缓存以便下次重新计算 joint_weight_vector
-        self._invalidate_weight_cache()
-
-    def _fk_positions(self, R_seq: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
-        if R_seq is None:
-            return None
-        if not getattr(self, 'has_fk', False):
-            return None
-        import torch
-        J = R_seq.shape[-3]
-        if len(self.parents) < J or self.bone_offsets.shape[0] < J:
-            return None
-        device = R_seq.device
-        dtype = R_seq.dtype
-        parents_tensor = getattr(self, '_parents_tensor', None)
-        if parents_tensor is None or parents_tensor.device != device or parents_tensor.numel() < J:
-            parents_tensor = torch.as_tensor(self.parents[:J], device=device, dtype=torch.long)
-            self._parents_tensor = parents_tensor
+        mode = str(getattr(self, 'rot_local_tail_select', 'batch') or 'batch').lower()
+        if mode != 'ema':
+            return per_bone
+        beta = float(getattr(self, 'rot_local_tail_ema_beta', 0.9) or 0.9)
+        beta = max(0.0, min(0.999, beta))
+        key = (str(per_bone.device), int(per_bone.numel()))
+        cache = getattr(self, '_tail_score_cache', None)
+        if cache is None:
+            cache = {}
+            self._tail_score_cache = cache
+        prev = cache.get(key)
+        if prev is None or (not torch.is_tensor(prev)) or prev.shape != per_bone.shape or prev.device != per_bone.device:
+            score = per_bone.detach().clone()
         else:
-            parents_tensor = parents_tensor[:J]
-        offsets = self.bone_offsets.to(device=device, dtype=dtype)
-        B, T = R_seq.shape[:2]
-        world_rot = torch.empty_like(R_seq)
-        world_pos = torch.zeros(B, T, J, 3, device=device, dtype=dtype)
-        for j in range(J):
-            parent = int(parents_tensor[j].item())
-            rot_j = R_seq[..., j, :, :]
-            if parent < 0 or parent >= J:
-                world_rot[..., j, :, :] = rot_j
-                continue
-            parent_rot = world_rot[..., parent, :, :].clone()
-            world_rot[..., j, :, :] = torch.matmul(parent_rot, rot_j)
-            offset = offsets[j].view(1, 1, 3, 1)
-            delta = torch.matmul(parent_rot, offset).squeeze(-1)
-            parent_pos = world_pos[..., parent, :].clone()
-            world_pos[..., j, :] = parent_pos + delta
-        return world_pos
+            score = prev
+            score.mul_(beta).add_(per_bone.detach(), alpha=(1.0 - beta))
+        cache[key] = score
+        return score
+
+    def _rot_local_tail_candidates(self, scope: str, joint_count: int, device: torch.device, *, k: int) -> Optional[torch.Tensor]:
+        """
+        Candidate joint indices for tail selection. Uses:
+        - explicit name list (limb_monitor_names / pelvis) when bone_names are known
+        - skeleton leaves (end-effectors) as a dynamic fallback/augmentation
+        """
+        scope_norm = str(scope or 'all').lower()
+        if scope_norm in ('all', '*'):
+            return None
+        if scope_norm not in ('limbs', 'limb', 'keybones', 'key_bones'):
+            return None
+        cache = getattr(self, '_tail_candidate_cache', None)
+        if cache is None:
+            cache = {}
+            self._tail_candidate_cache = cache
+        key = (scope_norm, int(joint_count), str(device))
+        cached = cache.get(key)
+        if cached is not None and torch.is_tensor(cached) and cached.device == device and cached.numel() > 0:
+            return cached
+
+        J = int(joint_count)
+        idxs: list[int] = []
+
+        # 1) Name-driven candidates (keeps old behavior when names match)
+        name_to_idx = getattr(self, '_bone_name_to_idx', None)
+        if isinstance(name_to_idx, dict) and name_to_idx:
+            monitor = list(getattr(self, 'limb_monitor_names', None) or [])
+            if scope_norm in ('keybones', 'key_bones'):
+                monitor = ['pelvis'] + monitor
+            for nm in monitor:
+                idx = name_to_idx.get(str(nm))
+                if isinstance(idx, int) and 0 <= idx < J:
+                    idxs.append(int(idx))
+
+        # 2) Skeleton-driven candidates: leaf joints (end-effectors) + root for keybones
+        parents = getattr(self, 'parents', None)
+        if isinstance(parents, list) and len(parents) >= J:
+            child_counts = [0] * J
+            for j, p in enumerate(parents[:J]):
+                if isinstance(p, int) and 0 <= p < J:
+                    child_counts[p] += 1
+            leaves = [j for j in range(J) if child_counts[j] == 0]
+
+            # Avoid selecting too many tiny leaves (e.g. fingers) as candidates.
+            max_leaf = int(max(16, 4 * max(1, int(k))))
+            if len(leaves) > max_leaf:
+                try:
+                    w = self._compute_unified_weights_cpu(J)
+                    vals = w[torch.as_tensor(leaves, dtype=torch.long)]
+                    _, sel = torch.topk(vals, k=min(max_leaf, int(vals.numel())), largest=True, sorted=False)
+                    leaves = [leaves[int(i)] for i in sel.tolist()]
+                except Exception:
+                    leaves = leaves[:max_leaf]
+
+            if scope_norm in ('keybones', 'key_bones'):
+                root_idx = int(getattr(self, 'root_idx', 0))
+                if 0 <= root_idx < J:
+                    idxs.append(root_idx)
+            idxs.extend(leaves)
+
+        # De-dup preserving order
+        if not idxs:
+            return None
+        seen = set()
+        idxs = [i for i in idxs if 0 <= i < J and not (i in seen or seen.add(i))]
+        if not idxs:
+            return None
+        out = torch.as_tensor(idxs, device=device, dtype=torch.long)
+        cache[key] = out
+        return out
 
     def _forward_base_inner(self, pred_motion: torch.Tensor, gt_motion: torch.Tensor, attn_weights=None) -> tuple[torch.Tensor, dict[str, float]]:
         """
@@ -1671,69 +1592,12 @@ class MotionJointLoss(nn.Module):
 
         Rp_world = Rg_world = None
         Rp_root = Rg_root = None
-        if self.w_fk_pos > 0.0 or self.w_rot_local > 0.0:
+        if self.w_rot_local > 0.0:
             Rp_world = self._rot6d_matrices(pm)
             Rg_world = self._rot6d_matrices(gm)
             if Rp_world is not None and Rg_world is not None:
                 Rp_root = self._root_relative(Rp_world)
                 Rg_root = self._root_relative(Rg_world)
-
-        if self.w_fk_pos > 0.0 and self.has_fk:
-            if Rp_root is not None and Rg_root is not None:
-                pos_pred = self._fk_positions(Rp_root)
-                pos_gt = self._fk_positions(Rg_root)
-                if pos_pred is not None and pos_gt is not None:
-                    # pos_*: (..., J, 3) world positions from FK
-                    fk_res = F.smooth_l1_loss(pos_pred, pos_gt, reduction='none').mean(dim=-1)  # (..., J)
-                    joint_count = pos_pred.shape[-2]
-                    weights = self._joint_weight_vector(pos_pred.device, pos_pred.dtype, joint_count)
-
-                    # FK position loss: optionally supervise a subset of joints (default = feet).
-                    # Note: knee/ankle usually correspond to bone origins, e.g. calf_* (knee) / foot_* (ankle) in this rig.
-                    target_names = getattr(self, 'fk_pos_bone_names', None)
-                    if isinstance(target_names, str):
-                        target_names = [s.strip() for s in target_names.split(',') if s.strip()]
-                    elif isinstance(target_names, (list, tuple)):
-                        target_names = [str(s).strip() for s in target_names if str(s).strip()]
-                    else:
-                        target_names = list(self.fk_pos_bone_names)
-
-                    # Special tokens: "all" / "*" -> supervise all joints (no filtering)
-                    if target_names and any(s.lower() in ('all', '*') for s in target_names):
-                        target_names = []
-
-                    if target_names and isinstance(self.bone_names, list) and self.bone_names:
-                        name_to_idx = {name: idx for idx, name in enumerate(self.bone_names[:joint_count])}
-                        target_indices: list[int] = []
-                        for nm in target_names:
-                            idx = name_to_idx.get(nm)
-                            if isinstance(idx, int) and 0 <= idx < joint_count:
-                                target_indices.append(idx)
-
-                        # De-dup while keeping order
-                        if target_indices:
-                            seen = set()
-                            target_indices = [i for i in target_indices if not (i in seen or seen.add(i))]
-
-                        if target_indices:
-                            import torch as _torch
-                            idx_tensor = _torch.as_tensor(target_indices, device=pos_pred.device, dtype=_torch.long)
-                            fk_res = fk_res.index_select(-1, idx_tensor)
-                            weights = weights.index_select(0, idx_tensor)
-                        elif not self._warned_fk_pos_bones_missing:
-                            self._warned_fk_pos_bones_missing = True
-                            print(
-                                f"[Loss][WARN] fk_pos_bone_names={target_names} not found in bone_names; fallback to supervise all joints."
-                            )
-
-                    w = weights.view(1, 1, -1)
-                    fk_loss = (fk_res * w).mean()
-                    loss = loss + self.w_fk_pos * fk_loss
-                    self._accumulate_loss_contrib('fk_pos', fk_loss, self.w_fk_pos, group='core')
-                    stats['fk_pos'] = float(fk_loss.detach().cpu())
-                    self._register_component_loss('fk_pos', fk_loss, self.w_fk_pos)
-        else:
-            stats.setdefault('fk_pos', 0.0)
 
         if self.w_rot_local > 0.0:
             if Rp_root is not None and Rg_root is not None:
@@ -1756,38 +1620,24 @@ class MotionJointLoss(nn.Module):
                 if tail_w > 0.0 and tail_k > 0 and J > 0:
                     k = min(max(1, tail_k), J)
 
-                    # Candidate bones for tail selection
-                    cand_idx = None
-                    if tail_scope in ('keybones', 'key_bones', 'limbs', 'limb'):
-                        names = getattr(self, 'bone_names', None)
-                        if isinstance(names, list) and names:
-                            name_to_idx = {str(nm): i for i, nm in enumerate(names[:J])}
-                            monitor = list(getattr(self, 'limb_monitor_names', None) or [])
-                            if tail_scope in ('keybones', 'key_bones'):
-                                monitor = ['pelvis'] + monitor
-                            idxs = [name_to_idx[nm] for nm in monitor if nm in name_to_idx]
-                            if idxs:
-                                # de-dup preserving order
-                                seen = set()
-                                idxs = [i for i in idxs if not (i in seen or seen.add(i))]
-                                cand_idx = torch.as_tensor(idxs, device=geo_local.device, dtype=torch.long)
-                                k = min(k, int(cand_idx.numel()))
-
-                    # Select by per-bone mean (detach for stable selection).
+                    cand_idx = self._rot_local_tail_candidates(tail_scope, J, geo_local.device, k=k)
                     per_bone = torch.nanmean(geo_local.detach(), dim=tuple(range(geo_local.dim() - 1)))  # (J,)
+                    scores = self._rot_local_tail_scores(per_bone)
+                    select_mode = str(getattr(self, 'rot_local_tail_select', 'batch') or 'batch').lower()
                     try:
                         if cand_idx is not None and cand_idx.numel() > 0:
-                            vals = per_bone.index_select(0, cand_idx)
+                            vals = scores.index_select(0, cand_idx)
                             _, sel = torch.topk(vals, k=k, largest=True, sorted=False)
                             idx = cand_idx.index_select(0, sel)
                         else:
-                            _, idx = torch.topk(per_bone, k=k, largest=True, sorted=False)
+                            _, idx = torch.topk(scores, k=k, largest=True, sorted=False)
                         tail_loss = torch.nanmean(geo_local.index_select(-1, idx))
                         loss = loss + tail_w * tail_loss
                         self._accumulate_loss_contrib('rot_local_tail', tail_loss, tail_w, group='core')
                         stats['rot_local_tail_deg'] = float((tail_loss * (180.0 / math.pi)).detach().cpu())
                         stats['rot_local_tail_k'] = float(k)
                         stats['rot_local_tail_scope'] = float({'all': 0.0, 'limbs': 1.0, 'keybones': 2.0}.get(tail_scope, 0.0))
+                        stats['rot_local_tail_select'] = float({'batch': 0.0, 'ema': 1.0}.get(select_mode, 0.0))
                         self._register_component_loss('rot_local_tail', tail_loss, tail_w)
                     except Exception:
                         pass
