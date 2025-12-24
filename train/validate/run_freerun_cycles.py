@@ -171,6 +171,26 @@ class FreeRunCycleRunner:
             "mu": None,
             "std": None,
         }
+        self.so3_corr_apply = bool(getattr(args, "so3_corr_apply", False))
+        self.so3_corr_max_deg = float(getattr(args, "so3_corr_max_deg", 20.0) or 20.0)
+        gate_force_raw = getattr(args, "so3_corr_gate_force", None)
+        self.so3_corr_gate_force = None
+        if gate_force_raw is not None:
+            s = str(gate_force_raw).strip().lower()
+            if s in ("", "none", "null"):
+                self.so3_corr_gate_force = None
+            else:
+                self.so3_corr_gate_force = float(gate_force_raw)
+        self.so3_corr_gate_from_contacts_err = bool(getattr(args, "so3_corr_gate_from_contacts_err", False))
+        self.so3_corr_gate_from_contacts_err_mode = str(getattr(args, "so3_corr_gate_from_contacts_err_mode", "scale") or "scale").lower()
+        self.so3_corr_gate_err_k = float(getattr(args, "so3_corr_gate_err_k", 1.0) or 1.0)
+        self.so3_corr_gate_err_bias = float(getattr(args, "so3_corr_gate_err_bias", 0.0) or 0.0)
+        self.so3_corr_gate_err_max = float(getattr(args, "so3_corr_gate_err_max", 1.0) or 1.0)
+        self.so3_corr_gate_err_ref_steps = int(getattr(args, "so3_corr_gate_err_ref_steps", 8) or 8)
+        self.so3_corr_gate_err_margin = float(getattr(args, "so3_corr_gate_err_margin", 0.0) or 0.0)
+        self.so3_corr_gate_err_use_ref = bool(getattr(args, "so3_corr_gate_err_use_ref", False))
+        self.so3_corr_gate_scale_max = float(getattr(args, "so3_corr_gate_scale_max", 2.0) or 2.0)
+        self.log_contacts = bool(getattr(args, "log_contacts", False) or self.so3_corr_gate_from_contacts_err)
         self.normalizer: Optional[DataNormalizer] = None
 
     @staticmethod
@@ -222,6 +242,46 @@ class FreeRunCycleRunner:
         if self.model is not None:
             return
 
+        contact_plan_enable = any(
+            str(k).startswith("contact_plan_cell.") or str(k).startswith("contact_plan_head.")
+            for k in self.state_dict.keys()
+        )
+        contact_plan_hidden = 64
+        try:
+            w_hh = self.state_dict.get("contact_plan_cell.weight_hh", None)
+            if torch.is_tensor(w_hh) and w_hh.ndim == 2:
+                contact_plan_hidden = int(w_hh.shape[1])
+        except Exception:
+            pass
+        # Infer trunk injection mode from checkpoint shared_encoder input dim.
+        contact_plan_inject = "none"
+        try:
+            w0 = self.state_dict.get("shared_encoder.0.weight", None)
+            if torch.is_tensor(w0) and w0.ndim == 2:
+                nin = int(w0.shape[1])
+                base_in = int(Dx + Dc)
+                extra = int(max(0, nin - base_in))
+                if extra > 0:
+                    # If extra matches contact_dim, assume contacts injection; otherwise plan_z injection.
+                    if int(self.contact_dim) > 0 and extra == int(self.contact_dim):
+                        contact_plan_inject = "contacts"
+                    else:
+                        contact_plan_inject = "plan_z"
+                        # Ensure plan hidden matches injected dim (prefer actual injected size).
+                        if extra != int(contact_plan_hidden):
+                            contact_plan_hidden = int(extra)
+        except Exception:
+            contact_plan_inject = "none"
+
+        contact_meas_enable = any(str(k).startswith("contact_meas_head.") for k in self.state_dict.keys())
+        contact_meas_hidden = 64
+        try:
+            w1 = self.state_dict.get("contact_meas_head.1.weight", None)
+            if torch.is_tensor(w1) and w1.ndim == 2:
+                contact_meas_hidden = int(w1.shape[0])
+        except Exception:
+            pass
+
         model = EventMotionModel(
             in_state_dim=Dx,
             out_motion_dim=Dy,
@@ -237,6 +297,13 @@ class FreeRunCycleRunner:
             pose_hist_dim=self.pose_hist_dim,
             bone_names=getattr(ds, "bone_names", None),
             output_layout=getattr(ds, "output_layout", None),
+            contact_plan_enable=bool(contact_plan_enable or contact_plan_inject != "none"),
+            contact_plan_hidden=int(contact_plan_hidden),
+            contact_plan_inject=str(contact_plan_inject),
+            contact_plan_inject_detach=True,
+            contact_meas_enable=bool(contact_meas_enable),
+            contact_meas_hidden=int(contact_meas_hidden),
+            contact_meas_dropout=0.0,
         ).to(self.device)
         # Validate basic shapes then load weights (allow extra frozen encoder keys).
         validate_and_fix_model_(model, Dx, Dc)
@@ -267,6 +334,19 @@ class FreeRunCycleRunner:
             accum_steps=1,
             pin_memory=False,
         )
+        trainer.so3_corr_apply = bool(self.so3_corr_apply)
+        trainer.so3_corr_max_deg = float(self.so3_corr_max_deg)
+        trainer.so3_corr_gate_force = self.so3_corr_gate_force
+        trainer.so3_corr_gate_from_contacts_err = self.so3_corr_gate_from_contacts_err
+        trainer.so3_corr_gate_from_contacts_err_mode = self.so3_corr_gate_from_contacts_err_mode
+        trainer.so3_corr_gate_err_k = self.so3_corr_gate_err_k
+        trainer.so3_corr_gate_err_bias = self.so3_corr_gate_err_bias
+        trainer.so3_corr_gate_err_max = self.so3_corr_gate_err_max
+        trainer.so3_corr_gate_err_ref_steps = self.so3_corr_gate_err_ref_steps
+        trainer.so3_corr_gate_err_margin = self.so3_corr_gate_err_margin
+        trainer.so3_corr_gate_err_use_ref = self.so3_corr_gate_err_use_ref
+        trainer.so3_corr_gate_scale_max = self.so3_corr_gate_scale_max
+        trainer.log_contacts = self.log_contacts
         # Inject bundle‑derived slices & normalizer
         self.bundle.apply_to_dataset(ds)
         self.bundle.apply_to_trainer(trainer)
@@ -560,6 +640,7 @@ def _run_freerun_cycles(
     model = trainer.model
     predsY: List[torch.Tensor] = []
     predsX: List[torch.Tensor] = []
+    contacts_log: List[Optional[Dict[str, Any]]] = []
 
     # Initialize motion & raw state
     motion = state_seq[:, start_t]  # [B, Dx]
@@ -589,9 +670,28 @@ def _run_freerun_cycles(
     gt_motion_raw = motion_raw.clone() if motion_raw is not None else None
 
     # Main autoregressive loop
+    plan_enable = bool(getattr(trainer.model, "contact_plan_enable", False)) if getattr(trainer, "model", None) is not None else False
+    plan_z = None
+    if plan_enable:
+        try:
+            h_plan = int(getattr(trainer.model, "contact_plan_hidden", 0) or 0)
+        except Exception:
+            h_plan = 0
+        if h_plan > 0:
+            plan_z = torch.zeros((motion.shape[0], h_plan), device=device, dtype=motion.dtype)
+
+    # Closed-loop gate from contacts_err needs a stable reference level; we estimate it online
+    # from the first few steps (gate=0) to avoid step-0 transients from plan_z initialization.
+    ref_err_steps = int(getattr(trainer, "so3_corr_gate_err_ref_steps", 8) or 8)
+    ref_err_steps = max(0, ref_err_steps)
+    ref_err_margin = float(getattr(trainer, "so3_corr_gate_err_margin", 0.0) or 0.0)
+    use_ref = bool(getattr(trainer, "so3_corr_gate_err_use_ref", False))
+    ref_err_sum = 0.0
+    ref_err_count = 0
+    ref_err_value: Optional[float] = None
+
     for t in range(start_t, end_t):
         cond_input = cond_seq[:, t] if (cond_seq is not None and cond_seq.dim() == 3) else cond_seq
-        contacts_t = contacts_seq[:, t] if (contacts_seq is not None and contacts_seq.dim() == 3) else contacts_seq
         angvel_t = angvel_seq[:, t] if (angvel_seq is not None and angvel_seq.dim() == 3) else angvel_seq
         if pose_hist_enabled:
             pose_hist_t = pose_hist_buffer_norm
@@ -648,9 +748,9 @@ def _run_freerun_cycles(
             ret = model(
                 motion,
                 cond_input,
-                contacts=contacts_t,
                 angvel=angvel_t,
                 pose_history=pose_hist_t,
+                plan_z=plan_z,
             )
 
         if not isinstance(ret, dict):
@@ -659,10 +759,158 @@ def _run_freerun_cycles(
         if out is None:
             break
 
+        gate_override = None
+        contact_entry: Optional[Dict[str, Any]] = None
+        if bool(getattr(trainer, "log_contacts", False)):
+            try:
+                # GT soft contacts (from dataset / teacher), aligned to the tiled timeline.
+                gt_contacts = None
+                gt_contacts_next = None
+                if torch.is_tensor(contacts_seq) and contacts_seq.dim() == 3 and contacts_seq.shape[0] == motion.shape[0]:
+                    idx0 = min(int(contacts_seq.shape[1]) - 1, int(t))
+                    idx1 = min(int(contacts_seq.shape[1]) - 1, int(t) + 1)
+                    gt_contacts = contacts_seq[:, idx0]
+                    gt_contacts_next = contacts_seq[:, idx1]
+
+                plan = ret.get("contacts_plan", None)
+                meas = ret.get("contacts_meas", None)
+                err = ret.get("contacts_err", None)
+                if torch.is_tensor(plan) and plan.ndim == 2:
+                    plan_mean = float(plan.mean().item())
+                    plan_abs_mean = float(plan.abs().mean().item())
+                else:
+                    plan_mean = None
+                    plan_abs_mean = None
+                if torch.is_tensor(meas) and meas.ndim == 2:
+                    meas_mean = float(meas.mean().item())
+                    meas_abs_mean = float(meas.abs().mean().item())
+                else:
+                    meas_mean = None
+                    meas_abs_mean = None
+                err_abs_mean = None
+                if torch.is_tensor(err) and err.ndim == 2:
+                    err_abs = err.abs()
+                    err_abs_mean = float(err_abs.mean().item())
+                    # Also keep per-channel mean abs error (small C, debug-friendly).
+                    err_abs_per_c = err_abs.mean(dim=0).detach().cpu().tolist()
+                else:
+                    err_abs_per_c = None
+                gt_mean = None
+                gt_abs_mean = None
+                gt_next_mean = None
+                gt_next_abs_mean = None
+                if torch.is_tensor(gt_contacts) and gt_contacts.ndim == 2:
+                    gt_mean = float(gt_contacts.mean().item())
+                    gt_abs_mean = float(gt_contacts.abs().mean().item())
+                if torch.is_tensor(gt_contacts_next) and gt_contacts_next.ndim == 2:
+                    gt_next_mean = float(gt_contacts_next.mean().item())
+                    gt_next_abs_mean = float(gt_contacts_next.abs().mean().item())
+
+                # Errors against GT contacts (debugging alignment / meas head quality).
+                plan_gt_abs_mean = None
+                meas_gt_abs_mean = None
+                plan_gt_abs_per_c = None
+                meas_gt_abs_per_c = None
+                if torch.is_tensor(gt_contacts) and gt_contacts.ndim == 2:
+                    if torch.is_tensor(plan) and plan.ndim == 2 and plan.shape == gt_contacts.shape:
+                        diff = (plan - gt_contacts).abs()
+                        plan_gt_abs_mean = float(diff.mean().item())
+                        plan_gt_abs_per_c = diff.mean(dim=0).detach().cpu().tolist()
+                    if torch.is_tensor(meas) and meas.ndim == 2 and meas.shape == gt_contacts.shape:
+                        diff = (meas - gt_contacts).abs()
+                        meas_gt_abs_mean = float(diff.mean().item())
+                        meas_gt_abs_per_c = diff.mean(dim=0).detach().cpu().tolist()
+                contact_entry = {
+                    "ContactGTMean": gt_mean,
+                    "ContactGTAbsMean": gt_abs_mean,
+                    "ContactGTNextMean": gt_next_mean,
+                    "ContactGTNextAbsMean": gt_next_abs_mean,
+                    "ContactPlanMean": plan_mean,
+                    "ContactPlanAbsMean": plan_abs_mean,
+                    "ContactMeasMean": meas_mean,
+                    "ContactMeasAbsMean": meas_abs_mean,
+                    "ContactErrAbsMean": err_abs_mean,
+                    "ContactErrAbsPerC": err_abs_per_c,
+                    "ContactPlanGtAbsMean": plan_gt_abs_mean,
+                    "ContactMeasGtAbsMean": meas_gt_abs_mean,
+                    "ContactPlanGtAbsPerC": plan_gt_abs_per_c,
+                    "ContactMeasGtAbsPerC": meas_gt_abs_per_c,
+                }
+                if (
+                    bool(getattr(trainer, "so3_corr_apply", False))
+                    and bool(getattr(trainer, "so3_corr_gate_from_contacts_err", False))
+                    and bool(getattr(model, "contact_plan_enable", False))
+                    and bool(getattr(model, "contact_meas_enable", False))
+                    and (err_abs_mean is not None)
+                ):
+                    k = float(getattr(trainer, "so3_corr_gate_err_k", 1.0) or 1.0)
+                    bias = float(getattr(trainer, "so3_corr_gate_err_bias", 0.0) or 0.0)
+                    mx = float(getattr(trainer, "so3_corr_gate_err_max", 1.0) or 1.0)
+                    warmup_active = bool(ref_err_steps > 0 and ref_err_count < ref_err_steps)
+                    if warmup_active:
+                        # Collect reference error for the first few steps (gate forced to 0.0).
+                        if use_ref:
+                            ref_err_sum += float(err_abs_mean)
+                        ref_err_count += 1
+                        gate_override = 0.0
+                        contact_entry["So3GateWarmup"] = True
+                        contact_entry["So3GateOverride"] = float(gate_override)
+                    else:
+                        eff = float(err_abs_mean)
+                        if use_ref:
+                            if ref_err_value is None:
+                                denom = max(1, int(ref_err_count))
+                                ref_err_value = float(ref_err_sum / denom) if denom > 0 else float(err_abs_mean)
+                            eff = eff - float(ref_err_value)
+                        eff = max(0.0, eff - float(ref_err_margin))
+                        mode = str(getattr(trainer, "so3_corr_gate_from_contacts_err_mode", "scale") or "scale").lower()
+                        # base gate: forced > learned > 0
+                        base_gate = getattr(trainer, "so3_corr_gate_force", None)
+                        if base_gate is None:
+                            try:
+                                logit = getattr(model, "so3_corr_gate_logit", None)
+                                if torch.is_tensor(logit):
+                                    base_gate = float(torch.sigmoid(logit.detach()).item())
+                            except Exception:
+                                base_gate = None
+                        base_gate = float(base_gate or 0.0)
+                        if mode == "override":
+                            gate_override = max(0.0, min(mx, k * (eff - bias)))
+                        else:
+                            scale_max = float(getattr(trainer, "so3_corr_gate_scale_max", 2.0) or 2.0)
+                            scale = max(0.0, min(scale_max, 1.0 + k * (eff - bias)))
+                            gate_override = base_gate * scale
+                            gate_override = max(0.0, min(mx, gate_override))
+                        contact_entry["So3GateWarmup"] = False
+                        contact_entry["So3GateErrRef"] = float(ref_err_value) if ref_err_value is not None else None
+                        contact_entry["So3GateErrEff"] = float(eff)
+                        contact_entry["So3GateBase"] = float(base_gate)
+                        contact_entry["So3GateMode"] = str(mode)
+                        contact_entry["So3GateScale"] = float(scale) if mode != "override" else None
+                        contact_entry["So3GateOverride"] = float(gate_override)
+            except Exception:
+                contact_entry = None
+
+        if plan_enable:
+            try:
+                z_next = ret.get("plan_z_next", None)
+                if z_next is not None:
+                    plan_z = z_next.detach()
+            except Exception:
+                pass
+
         delta_norm = out
         if y_raw_prev is not None:
             try:
-                y_raw = trainer._compose_delta_to_raw(y_raw_prev, delta_norm)
+                so3_gate = gate_override if gate_override is not None else getattr(trainer, "so3_corr_gate_force", None)
+                y_raw = trainer._compose_delta_to_raw(
+                    y_raw_prev,
+                    delta_norm,
+                    omega_hat=ret.get("omega_hat", None) if bool(getattr(trainer, "so3_corr_apply", False)) else None,
+                    so3_gate=so3_gate,
+                    so3_max_deg=getattr(trainer, "so3_corr_max_deg", None),
+                    omega_detach=True,
+                )
             except Exception:
                 y_raw = trainer._denorm(delta_norm)
         else:
@@ -684,6 +932,9 @@ def _run_freerun_cycles(
             motion = trainer._apply_free_carry(motion, y_raw, cond_next_raw=None).detach()
 
         predsX.append(motion)
+
+        # Align contact logging with predsY/predsX timeline.
+        contacts_log.append(contact_entry)
 
         if pose_hist_enabled and pose_hist_stride > 0:
             with torch.no_grad():
@@ -716,6 +967,8 @@ def _run_freerun_cycles(
     predX = predX_full[:, :max_aligned] if predX_full is not None else None  # [B, free_steps, Dx]
     # predsX[t] is the carried state after predicting predY[t], so align it to GT state at t+1.
     gtX = state_seq[:, gt_start + 1:gt_end + 1]  # [B, free_steps, Dx]
+
+    contact_steps = contacts_log[:max_aligned] if contacts_log else []
 
     predX_raw = None
     gtX_raw = None
@@ -879,6 +1132,38 @@ def _run_freerun_cycles(
             "RootPosErr": float(root_pos_err[t].item()) if root_pos_err is not None else None,
             "RootVelMAE": float(root_vel_mae[t].item()) if root_vel_mae is not None else None,
         }
+        if contact_steps:
+            c = contact_steps[t] if t < len(contact_steps) else None
+            if isinstance(c, dict):
+                # Keep keys flat for easy plotting.
+                for ck in (
+                    "ContactGTMean",
+                    "ContactGTAbsMean",
+                    "ContactGTNextMean",
+                    "ContactGTNextAbsMean",
+                    "ContactPlanMean",
+                    "ContactPlanAbsMean",
+                    "ContactMeasMean",
+                    "ContactMeasAbsMean",
+                    "ContactErrAbsMean",
+                    "ContactPlanGtAbsMean",
+                    "ContactMeasGtAbsMean",
+                    "So3GateWarmup",
+                    "So3GateErrRef",
+                    "So3GateErrEff",
+                    "So3GateBase",
+                    "So3GateMode",
+                    "So3GateScale",
+                    "So3GateOverride",
+                ):
+                    if ck in c:
+                        entry[ck] = c.get(ck)
+                if "ContactErrAbsPerC" in c:
+                    entry["ContactErrAbsPerC"] = c.get("ContactErrAbsPerC")
+                if "ContactPlanGtAbsPerC" in c:
+                    entry["ContactPlanGtAbsPerC"] = c.get("ContactPlanGtAbsPerC")
+                if "ContactMeasGtAbsPerC" in c:
+                    entry["ContactMeasGtAbsPerC"] = c.get("ContactMeasGtAbsPerC")
         if keybone_geo:
             entry["KeyBoneGeoDeg"] = keybone_geo
         if keybone_geo_local:
@@ -1059,6 +1344,81 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=5,
         help="Number of full animation cycles to free‑run without reset.",
+    )
+    parser.add_argument(
+        "--so3_corr_apply",
+        action="store_true",
+        help="Apply SO(3) corrector during compose (uses model omega_hat).",
+    )
+    parser.add_argument(
+        "--so3_corr_max_deg",
+        type=float,
+        default=20.0,
+        help="Max correction angle per step (deg) when --so3_corr_apply is set.",
+    )
+    parser.add_argument(
+        "--so3_corr_gate_force",
+        type=str,
+        default=None,
+        help="Force SO(3) gate scalar (float), or 'null'/'none' to use learned gate.",
+    )
+    parser.add_argument(
+        "--so3_corr_gate_from_contacts_err",
+        action="store_true",
+        help="Override SO(3) gate per-step using |contacts_plan-contacts_meas| (requires both heads).",
+    )
+    parser.add_argument(
+        "--so3_corr_gate_from_contacts_err_mode",
+        type=str,
+        default="scale",
+        choices=("scale", "override"),
+        help="How to apply contact error to SO(3) gate: 'scale' multiplies learned/forced gate; 'override' replaces it.",
+    )
+    parser.add_argument(
+        "--so3_corr_gate_err_k",
+        type=float,
+        default=1.0,
+        help="Gate = clamp(k*(ContactErrAbsMean-bias), 0, max) when --so3_corr_gate_from_contacts_err is set.",
+    )
+    parser.add_argument(
+        "--so3_corr_gate_err_bias",
+        type=float,
+        default=0.0,
+        help="Gate bias term for --so3_corr_gate_from_contacts_err.",
+    )
+    parser.add_argument(
+        "--so3_corr_gate_err_max",
+        type=float,
+        default=1.0,
+        help="Gate max clamp for --so3_corr_gate_from_contacts_err.",
+    )
+    parser.add_argument(
+        "--so3_corr_gate_err_ref_steps",
+        type=int,
+        default=8,
+        help="Number of initial steps used to estimate reference ContactErrAbsMean (gate forced to 0).",
+    )
+    parser.add_argument(
+        "--so3_corr_gate_err_margin",
+        type=float,
+        default=0.0,
+        help="Extra margin subtracted from (err-ref) before computing gate.",
+    )
+    parser.add_argument(
+        "--so3_corr_gate_err_use_ref",
+        action="store_true",
+        help="Use (ContactErrAbsMean - ref) as gate signal (ref estimated over ref_steps). Default uses absolute err.",
+    )
+    parser.add_argument(
+        "--so3_corr_gate_scale_max",
+        type=float,
+        default=2.0,
+        help="Max multiplicative scale when --so3_corr_gate_from_contacts_err_mode=scale.",
+    )
+    parser.add_argument(
+        "--log_contacts",
+        action="store_true",
+        help="Log contacts_plan/meas/err stats into metrics_per_step JSON (auto-enabled by --so3_corr_gate_from_contacts_err).",
     )
     parser.add_argument(
         "--force",

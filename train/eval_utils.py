@@ -312,6 +312,15 @@ def evaluate_freerun(
             except Exception:
                 pass
 
+        plan_z = None
+        if bool(getattr(model, "contact_plan_enable", False)):
+            try:
+                h_plan = int(getattr(model, "contact_plan_hidden", 0) or 0)
+            except Exception:
+                h_plan = 0
+            if h_plan > 0 and torch.is_tensor(motion):
+                plan_z = motion.new_zeros((motion.shape[0], h_plan))
+
         for t in range(start_t, end_t):
             cond_input = cond_seq[:, t] if (cond_seq is not None and cond_seq.dim() == 3) else cond_seq
             contacts_t = contacts_seq[:, t] if (contacts_seq is not None and contacts_seq.dim() == 3) else contacts_seq
@@ -385,12 +394,20 @@ def evaluate_freerun(
                     contacts=contacts_t,
                     angvel=angvel_t,
                     pose_history=pose_hist_t,
+                    plan_z=plan_z,
                 )
 
             if not isinstance(ret, dict):
                 raise RuntimeError("Model forward must return a dict with at least 'out'.")
             out = ret.get("out")
             period_pred = ret.get("period_pred")
+            if plan_z is not None:
+                try:
+                    z_next = ret.get("plan_z_next", None)
+                    if z_next is not None:
+                        plan_z = z_next.detach()
+                except Exception:
+                    pass
 
             if out is None:
                 break

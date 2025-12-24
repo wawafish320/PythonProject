@@ -340,6 +340,64 @@ def axis_angle_to_matrix(axis: torch.Tensor, angle: torch.Tensor) -> torch.Tenso
     return torch.stack([row0, row1, row2], dim=-2)
 
 
+def so3_exp_map(omega: torch.Tensor, *, eps: float = 1e-6) -> torch.Tensor:
+    """
+    Exponential map on SO(3): omega (axis-angle vector) -> rotation matrix.
+
+    Uses stable Rodrigues coefficients with Taylor expansions around theta=0, so
+    gradients are well-defined when omega≈0 (unlike axis/angle normalization).
+
+    Args:
+        omega: (..., 3)
+        eps: small-angle threshold for Taylor approximation.
+
+    Returns:
+        (..., 3, 3)
+    """
+    if omega.shape[-1] != 3:
+        raise ValueError(f"[so3_exp_map] expects (...,3), got {omega.shape}")
+    wx, wy, wz = omega.unbind(dim=-1)
+    zeros = torch.zeros_like(wx)
+    K = torch.stack(
+        [
+            torch.stack([zeros, -wz, wy], dim=-1),
+            torch.stack([wz, zeros, -wx], dim=-1),
+            torch.stack([-wy, wx, zeros], dim=-1),
+        ],
+        dim=-2,
+    )  # (...,3,3)
+
+    theta2 = (omega * omega).sum(dim=-1, keepdim=True)  # (...,1) non-negative in theory
+
+    # A = sin(theta)/theta, B = (1-cos(theta))/theta^2
+    # Taylor around theta=0:
+    #   A ≈ 1 - t2/6 + t4/120
+    #   B ≈ 1/2 - t2/24 + t4/720
+    t2 = theta2
+    t4 = t2 * t2
+    A_taylor = 1.0 - t2 / 6.0 + t4 / 120.0
+    B_taylor = 0.5 - t2 / 24.0 + t4 / 720.0
+
+    # Use sqrt(theta2 + eps) to avoid NaN/Inf gradients at theta2≈0 (0 * inf -> NaN).
+    # This mirrors the "sqrt(x + eps)" trick used elsewhere in this repo for stable gradients.
+    sqrt_eps = 1e-8
+    theta = torch.sqrt(theta2 + sqrt_eps)  # (...,1)
+    A = torch.sin(theta) / theta
+    B = (1.0 - torch.cos(theta)) / (theta2 + sqrt_eps)
+
+    use_taylor = (theta2 < (eps * eps)).to(dtype=omega.dtype)
+    A = A * (1.0 - use_taylor) + A_taylor * use_taylor
+    B = B * (1.0 - use_taylor) + B_taylor * use_taylor
+
+    # Broadcast A,B to (...,1,1)
+    A = A.unsqueeze(-1)
+    B = B.unsqueeze(-1)
+
+    eye = torch.eye(3, device=omega.device, dtype=omega.dtype).expand(K.shape)
+    K2 = torch.matmul(K, K)
+    return eye + A * K + B * K2
+
+
 # ============================================
 # 测地线距离 (Geodesic Distance)
 # ============================================

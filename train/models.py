@@ -239,6 +239,25 @@ class EventMotionModel(nn.Module):
         residual_adapter_bones: Optional[Sequence[str]] = None,
         residual_adapter_hidden: int = 128,
         residual_adapter_dropout: Optional[float] = None,
+        # ===== Contact Plan (independent anchor) =====
+        contact_plan_enable: bool = False,
+        contact_plan_hidden: int = 64,
+        contact_plan_dropout: float = 0.0,
+        contact_plan_inject: str = "none",  # 'none' | 'contacts' | 'plan_z'
+        contact_plan_inject_detach: bool = True,
+        # ===== Contact Meas (pose-derived, no physics) =====
+        contact_meas_enable: bool = False,
+        contact_meas_hidden: int = 64,
+        contact_meas_dropout: float = 0.0,
+        contact_meas_use_pose_hist: bool = True,
+        contact_meas_use_angvel: bool = True,
+        # If True, treat `contacts` input as contacts_meas override (debug/legacy).
+        # Default False: safe for inference even if caller passes zeros.
+        contacts_as_meas_override: bool = False,
+        # ===== SO(3) Delta Corrector (post-train friendly) =====
+        so3_corr_hidden: int = 128,
+        so3_corr_dropout: float = 0.0,
+        so3_corr_gate_logit_init: float = -5.0,
     ):
         super().__init__()
         self.in_state_dim = int(in_state_dim)
@@ -252,12 +271,28 @@ class EventMotionModel(nn.Module):
         self.angvel_dim = max(0, int(angvel_dim))
         self.pose_hist_dim = max(0, int(pose_hist_dim))
         self.encoder_input_dim = self.contact_dim + self.angvel_dim + self.pose_hist_dim
+        self.contact_plan_enable = bool(contact_plan_enable and self.contact_dim > 0 and self.cond_dim > 0)
+        self.contact_plan_hidden = int(contact_plan_hidden)
+        if self.contact_plan_enable:
+            self.contact_plan_hidden = max(8, int(self.contact_plan_hidden))
+        self._contact_plan_dropout = float(contact_plan_dropout)
+        self.contact_plan_inject = str(contact_plan_inject or "none").lower().strip()
+        if self.contact_plan_inject not in ("none", "contacts", "plan_z"):
+            self.contact_plan_inject = "none"
+        self.contact_plan_inject_detach = bool(contact_plan_inject_detach)
+        self.contacts_as_meas_override = bool(contacts_as_meas_override)
         self.adaptive_history_module: Optional[AdaptiveHistoryModule] = None
         self._adaptive_history_diag: Optional[dict[str, torch.Tensor | float]] = None
         self.pose_hist_len: int = 0
         self._adaptive_history_device: Optional[torch.device] = None
 
-        input_dim = self.in_state_dim + self.cond_dim
+        plan_inject_dim = 0
+        if self.contact_plan_enable:
+            if self.contact_plan_inject == "contacts":
+                plan_inject_dim = int(self.contact_dim)
+            elif self.contact_plan_inject == "plan_z":
+                plan_inject_dim = int(self.contact_plan_hidden)
+        input_dim = self.in_state_dim + self.cond_dim + plan_inject_dim
         enc_depth = max(1, int(num_layers))
         self._encoder_residual = bool(enc_depth > 2)
         if not self._encoder_residual:
@@ -314,6 +349,94 @@ class EventMotionModel(nn.Module):
             final_dim=out_motion_dim,
         )
         self.period_encoder = nn.Linear(self.period_dim, hidden_dim) if self.period_dim > 0 else None
+
+        # ===== Contact Plan (cond-only GRUCell) =====
+        # Purpose:
+        #   - produce contacts_plan as an *independent anchor* (only sees cond + its own hidden state),
+        #     so e_t = contacts_plan - contacts_meas stays informative when pose drifts.
+        self.contact_plan_cell: Optional[nn.GRUCell] = None
+        self.contact_plan_head: Optional[nn.Module] = None
+        if self.contact_plan_enable:
+            h_plan = int(self.contact_plan_hidden)
+            self.contact_plan_cell = nn.GRUCell(self.cond_dim, h_plan)
+            self.contact_plan_head = nn.Sequential(
+                nn.LayerNorm(h_plan),
+                nn.Linear(h_plan, h_plan),
+                nn.ReLU(),
+                nn.Dropout(self._contact_plan_dropout),
+                nn.Linear(h_plan, self.contact_dim),
+            )
+
+        # ===== Contact Meas (pose-derived, cheap; no physics) =====
+        self.contact_meas_enable = bool(contact_meas_enable and self.contact_dim > 0)
+        self.contact_meas_head: Optional[nn.Module] = None
+        self._contact_meas_in_dim = 0
+        self._contact_meas_dropout = float(contact_meas_dropout)
+        if self.contact_meas_enable:
+            use_pose_hist = bool(contact_meas_use_pose_hist and self.pose_hist_dim > 0)
+            use_angvel = bool(contact_meas_use_angvel and self.angvel_dim > 0)
+            meas_in_dim = (self.pose_hist_dim if use_pose_hist else 0) + (self.angvel_dim if use_angvel else 0)
+            self._contact_meas_in_dim = int(meas_in_dim)
+            if self._contact_meas_in_dim > 0:
+                h_meas = max(8, int(contact_meas_hidden))
+                self.contact_meas_head = nn.Sequential(
+                    nn.LayerNorm(self._contact_meas_in_dim),
+                    nn.Linear(self._contact_meas_in_dim, h_meas),
+                    nn.ReLU(),
+                    nn.Dropout(self._contact_meas_dropout),
+                    nn.Linear(h_meas, self.contact_dim),
+                )
+                try:
+                    last = self.contact_meas_head[-1]
+                    if isinstance(last, nn.Linear):
+                        with torch.no_grad():
+                            last.weight.zero_()
+                            if last.bias is not None:
+                                last.bias.zero_()
+                except Exception:
+                    pass
+            else:
+                self.contact_meas_enable = False
+
+        # ===== SO(3) Delta Corrector (lightweight head) =====
+        # - Predicts omega_hat in so(3) to correct ΔR on-manifold.
+        # - Does NOT change the main motion output; baseline behavior remains identical
+        #   unless the caller explicitly uses omega_hat.
+        self.so3_corr_joint_count: int = 0
+        self.so3_delta_corrector: Optional[nn.Module] = None
+        self.so3_corr_gate_logit: Optional[nn.Parameter] = None
+        try:
+            rot_sl = None
+            if isinstance(output_layout, dict):
+                rot_sl = parse_layout_entry(output_layout.get("BoneRotations6D"), "BoneRotations6D", self.out_motion_dim)
+            if rot_sl is not None:
+                rot_dim = int(rot_sl.stop - rot_sl.start)
+                if rot_dim > 0 and rot_dim % 6 == 0:
+                    self.so3_corr_joint_count = int(rot_dim // 6)
+            elif bone_names is not None and len(bone_names) > 0 and (self.out_motion_dim // 6) > 0:
+                self.so3_corr_joint_count = int(len(bone_names))
+        except Exception:
+            self.so3_corr_joint_count = 0
+        if self.so3_corr_joint_count > 0:
+            self.so3_corr_gate_logit = nn.Parameter(torch.tensor(float(so3_corr_gate_logit_init)))
+            h_mid = max(8, int(so3_corr_hidden))
+            corr_in_dim = int(self.hidden_dim + (self.contact_dim if self.contact_plan_enable else 0))
+            self.so3_delta_corrector = nn.Sequential(
+                nn.LayerNorm(corr_in_dim),
+                nn.Linear(corr_in_dim, h_mid),
+                nn.ReLU(),
+                nn.Dropout(float(so3_corr_dropout)),
+                nn.Linear(h_mid, int(self.so3_corr_joint_count) * 3),
+            )
+            try:
+                last = self.so3_delta_corrector[-1]
+                if isinstance(last, nn.Linear):
+                    with torch.no_grad():
+                        last.weight.zero_()
+                        if last.bias is not None:
+                            last.bias.zero_()
+            except Exception:
+                pass
 
         # Low-risk per-bone residual adapters:
         # - initial adapter output == 0 (zero-init last Linear) so behavior matches baseline;
@@ -406,6 +529,7 @@ class EventMotionModel(nn.Module):
         contacts: Optional[torch.Tensor] = None,
         angvel: Optional[torch.Tensor] = None,
         pose_history: Optional[torch.Tensor] = None,
+        plan_z: Optional[torch.Tensor] = None,
     ) -> dict[str, torch.Tensor]:
         is_single = state.ndim == 2
         if is_single:
@@ -418,6 +542,8 @@ class EventMotionModel(nn.Module):
                 angvel = angvel.unsqueeze(1)
             if pose_history is not None and pose_history.ndim == 2:
                 pose_history = pose_history.unsqueeze(1)
+            if plan_z is not None and plan_z.ndim == 1:
+                plan_z = plan_z.unsqueeze(0)
 
         if cond is None and self.cond_dim > 0:
             cond = torch.zeros(state.shape[:-1] + (self.cond_dim,), device=state.device, dtype=state.dtype)
@@ -426,16 +552,58 @@ class EventMotionModel(nn.Module):
 
         device = state.device
         dtype = state.dtype
-        if contacts is None and self.contact_dim > 0:
-            contacts = torch.zeros(state.shape[:-1] + (self.contact_dim,), device=device, dtype=dtype)
+        contacts_input = contacts
+        contacts_enc = contacts_input
         if angvel is None and self.angvel_dim > 0:
             angvel = torch.zeros(state.shape[:-1] + (self.angvel_dim,), device=device, dtype=dtype)
         if pose_history is None and self.pose_hist_dim > 0:
             pose_history = torch.zeros(state.shape[:-1] + (self.pose_hist_dim,), device=device, dtype=dtype)
 
+        # ---- Contact plan (independent anchor) ----
+        # - contacts_plan is produced from cond history via a GRUCell and stays independent of pose.
+        # - plan_z is the only cached state needed at inference.
+        contacts_plan = None
+        plan_z_next = None
+        plan_feat_for_inject = None
+        if self.contact_plan_enable and self.contact_plan_cell is not None and self.contact_plan_head is not None:
+            B, Tq, _ = state.shape
+            h_plan = int(self.contact_plan_hidden)
+            if plan_z is None:
+                plan_z_t = torch.zeros((B, h_plan), device=device, dtype=dtype)
+            else:
+                plan_z_t = plan_z.to(device=device, dtype=dtype)
+                if plan_z_t.ndim == 3 and plan_z_t.size(1) == 1:
+                    plan_z_t = plan_z_t[:, 0]
+                if plan_z_t.ndim != 2:
+                    plan_z_t = plan_z_t.reshape(B, h_plan)
+            cond_seq = cond if cond is not None else torch.zeros((B, Tq, self.cond_dim), device=device, dtype=dtype)
+
+            plan_probs = []
+            plan_z_seq = [] if self.contact_plan_inject == "plan_z" else None
+            for _t in range(Tq):
+                plan_z_t = self.contact_plan_cell(cond_seq[:, _t], plan_z_t)
+                if plan_z_seq is not None:
+                    plan_z_seq.append(plan_z_t)
+                logits = self.contact_plan_head(plan_z_t)
+                plan_probs.append(torch.sigmoid(logits))
+            contacts_plan = torch.stack(plan_probs, dim=1)  # (B,T,C)
+            plan_z_next = plan_z_t
+            if self.contact_plan_inject == "contacts":
+                plan_feat_for_inject = contacts_plan
+            elif self.contact_plan_inject == "plan_z" and plan_z_seq is not None:
+                plan_feat_for_inject = torch.stack(plan_z_seq, dim=1)  # (B,T,H)
+
+        # Use predicted contact plan as a proxy input to the frozen encoder (contact-hint embedding),
+        # so we keep train/infer consistent without feeding GT contacts into forward.
+        # NOTE: prefer plan whenever available, because deployment may pass zero/unknown contacts.
+        if contacts_plan is not None:
+            contacts_enc = contacts_plan.detach()
+        if contacts_enc is None and self.contact_dim > 0:
+            contacts_enc = torch.zeros(state.shape[:-1] + (self.contact_dim,), device=device, dtype=dtype)
+
         encoder_feats = []
-        if contacts is not None and contacts.size(-1) > 0:
-            encoder_feats.append(contacts)
+        if contacts_enc is not None and contacts_enc.size(-1) > 0:
+            encoder_feats.append(contacts_enc)
         if angvel is not None and angvel.size(-1) > 0:
             encoder_feats.append(angvel)
         if pose_history is not None and pose_history.size(-1) > 0:
@@ -458,6 +626,11 @@ class EventMotionModel(nn.Module):
         x_inputs = [state]
         if cond is not None:
             x_inputs.append(cond)
+        if plan_feat_for_inject is not None:
+            feat = plan_feat_for_inject.to(device=device, dtype=dtype)
+            if self.contact_plan_inject_detach:
+                feat = feat.detach()
+            x_inputs.append(feat)
         x = torch.cat(x_inputs, dim=-1)
         # 导出/编译时跳过数据依赖的 guard，避免 torch.export 的 GuardOnDataDependentSymNode
         _skip_guard = False
@@ -551,6 +724,58 @@ class EventMotionModel(nn.Module):
             'attn': attn.mean(dim=1),
         }
         result['h_final'] = hidden_out
+
+        # ---- Contact meas (pose-derived) + error signal ----
+        e_t = None
+        contacts_meas = None
+        contacts_override = contacts_input if (self.contacts_as_meas_override and contacts_input is not None) else None
+        if contacts_override is not None:
+            contacts_meas = contacts_override.to(device=device, dtype=dtype)
+            if contacts_meas.ndim == 2:
+                contacts_meas = contacts_meas.unsqueeze(1)
+        elif self.contact_meas_enable and self.contact_meas_head is not None and self._contact_meas_in_dim > 0:
+            meas_feats = []
+            if self.pose_hist_dim > 0 and pose_history is not None and pose_history.size(-1) == self.pose_hist_dim:
+                meas_feats.append(pose_history)
+            if self.angvel_dim > 0 and angvel is not None and angvel.size(-1) == self.angvel_dim:
+                meas_feats.append(angvel)
+            if meas_feats:
+                meas_in = torch.cat(meas_feats, dim=-1)
+                flat = meas_in.reshape(-1, meas_in.shape[-1])
+                logits = self.contact_meas_head(flat).view(meas_in.shape[0], meas_in.shape[1], -1)
+                contacts_meas = torch.sigmoid(logits)
+        if contacts_meas is None:
+            if contacts_plan is not None:
+                contacts_meas = torch.zeros_like(contacts_plan)
+            elif self.contact_dim > 0:
+                contacts_meas = torch.zeros(state.shape[:-1] + (self.contact_dim,), device=device, dtype=dtype)
+
+        if contacts_meas is not None:
+            result['contacts_meas'] = contacts_meas.squeeze(1) if is_single else contacts_meas
+
+        if contacts_plan is not None:
+            result['contacts_plan'] = contacts_plan.squeeze(1) if is_single else contacts_plan
+            if plan_z_next is not None:
+                result['plan_z_next'] = plan_z_next
+            if contacts_meas is not None:
+                # Ensure meas shape aligns with (B,T,C)
+                if contacts_meas.ndim == 2:
+                    contacts_meas = contacts_meas.unsqueeze(1)
+                e_t = contacts_plan - contacts_meas.to(device=device, dtype=dtype)
+                result['contacts_err'] = e_t.squeeze(1) if is_single else e_t
+
+        if self.so3_delta_corrector is not None and self.so3_corr_joint_count > 0:
+            corr_in = h_final
+            if self.contact_plan_enable and e_t is not None:
+                # Ensure e_t aligns with (B,T,C)
+                if e_t.ndim == 2:
+                    e_t = e_t.unsqueeze(1)
+                corr_in = torch.cat([h_final, e_t.to(device=device, dtype=dtype)], dim=-1)
+            omega = self.so3_delta_corrector(corr_in)  # (B, T, 3J)
+            omega = omega.view(omega.shape[0], omega.shape[1], self.so3_corr_joint_count, 3)
+            if is_single:
+                omega = omega.squeeze(1)
+            result['omega_hat'] = omega
         if soft_period is not None:
             result['period_pred'] = soft_period
         return result
@@ -637,6 +862,12 @@ class MotionJointLoss(nn.Module):
         w_rot_local: float = 0.0,
         w_root_vel: float = 0.0,
         w_root_speed: float = 0.0,
+        # Contact plan (cond-only anchor) supervision
+        w_contact_plan: float = 0.0,
+        # Optional: supervise meas head (pose-derived contacts)
+        w_contact_meas: float = 0.0,
+        # Optional: regularize omega_hat magnitude (prevents aggressive corrections)
+        w_omega_l2: float = 0.0,
 
         # ===== Adaptive bone weighting =====
         adaptive_bone_weights: bool = False,
@@ -655,6 +886,9 @@ class MotionJointLoss(nn.Module):
         self.w_rot_local = float(w_rot_local)
         self.w_root_vel = float(w_root_vel)
         self.w_root_speed = float(w_root_speed)
+        self.w_contact_plan = float(w_contact_plan)
+        self.w_contact_meas = float(w_contact_meas)
+        self.w_omega_l2 = float(w_omega_l2)
         # Tail-risk regularization for per-bone rotation errors (CVaR / top-k style).
         # When enabled, adds an extra term on the worst bones (by mean GeoLocalDeg),
         # which reduces whack-a-mole without requiring explicit per-bone weight tables.
@@ -1671,6 +1905,60 @@ class MotionJointLoss(nn.Module):
         else:
             stats.setdefault('root_vel_mse', 0.0)
             stats.setdefault('root_speed_mae', 0.0)
+
+        # Contact plan supervision (soft targets in [0,1])
+        if self.w_contact_plan > 0.0 and isinstance(pred_motion, dict) and isinstance(batch, dict):
+            try:
+                plan = pred_motion.get('contacts_plan', None)
+                gt_c = batch.get('contacts', None)
+                if torch.is_tensor(plan) and torch.is_tensor(gt_c):
+                    gt_c = gt_c.to(device=plan.device, dtype=plan.dtype)
+                    if plan.dim() == 2:
+                        plan = plan.unsqueeze(1)
+                    if gt_c.dim() == 2:
+                        gt_c = gt_c.unsqueeze(1)
+                    T = min(int(plan.shape[1]), int(gt_c.shape[1]))
+                    if T > 0 and plan.shape[-1] == gt_c.shape[-1]:
+                        l_contact = F.mse_loss(plan[:, :T], gt_c[:, :T])
+                        loss = loss + self.w_contact_plan * l_contact
+                        stats['contact_plan_mse'] = float(l_contact.detach().cpu())
+                        stats['contact_plan_weighted'] = float((self.w_contact_plan * l_contact).detach().cpu())
+            except Exception:
+                pass
+
+        # Contact meas supervision (optional, small weight; keeps meas head sane)
+        if self.w_contact_meas > 0.0 and isinstance(pred_motion, dict) and isinstance(batch, dict):
+            try:
+                meas = pred_motion.get('contacts_meas', None)
+                gt_c = batch.get('contacts', None)
+                if torch.is_tensor(meas) and torch.is_tensor(gt_c):
+                    gt_c = gt_c.to(device=meas.device, dtype=meas.dtype)
+                    if meas.dim() == 2:
+                        meas = meas.unsqueeze(1)
+                    if gt_c.dim() == 2:
+                        gt_c = gt_c.unsqueeze(1)
+                    T = min(int(meas.shape[1]), int(gt_c.shape[1]))
+                    if T > 0 and meas.shape[-1] == gt_c.shape[-1]:
+                        l_meas = F.mse_loss(meas[:, :T], gt_c[:, :T])
+                        loss = loss + self.w_contact_meas * l_meas
+                        stats['contact_meas_mse'] = float(l_meas.detach().cpu())
+                        stats['contact_meas_weighted'] = float((self.w_contact_meas * l_meas).detach().cpu())
+            except Exception:
+                pass
+
+        # Omega regularization (optional)
+        if self.w_omega_l2 > 0.0 and isinstance(pred_motion, dict):
+            try:
+                omega = pred_motion.get('omega_hat', None)
+                if torch.is_tensor(omega) and omega.numel() > 0:
+                    if omega.dim() == 3:  # (B,J,3)
+                        omega = omega.unsqueeze(1)
+                    l2 = (omega * omega).mean()
+                    loss = loss + self.w_omega_l2 * l2
+                    stats['omega_l2'] = float(l2.detach().cpu())
+                    stats['omega_l2_weighted'] = float((self.w_omega_l2 * l2).detach().cpu())
+            except Exception:
+                pass
 
         self._finalize_adaptive_payload(loss)
         stats.update(self._loss_group_stats())

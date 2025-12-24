@@ -37,6 +37,19 @@
   "w_rot_local": 0.2,
   "w_root_vel": 0.05,
   "w_root_speed": 0.03,
+  "contact_plan_enable": true,
+  "contact_plan_hidden": 64,
+  "contact_plan_dropout": 0.0,
+  "contact_plan_inject": "plan_z",
+  "contact_plan_inject_detach": true,
+  "w_contact_plan": 1.0,
+  "contact_meas_enable": true,
+  "contact_meas_hidden": 64,
+  "contact_meas_dropout": 0.0,
+  "w_contact_meas": 0.05,
+  "meas_pose_hist_drop_prob": 0.0,
+  "meas_pose_hist_delay_prob": 0.0,
+  "meas_pose_hist_noise_std": 0.0,
   "freerun_stage_schedule": [
     {
       "range": [

@@ -169,6 +169,27 @@ def get_global_arg(name: str, default=None, namespace=None):
 # Model sanity helpers (extracted from training_MPL.py)
 # -----------------------------------------------------------------------------
 
+def _expected_first_linear_in_features(model: nn.Module, Dx: int, Dc: int) -> int:
+    """
+    Compute the expected in_features for EventMotionModel's first Linear.
+
+    Base input is [state, cond]. Some variants additionally inject plan features into the main trunk:
+      - contact_plan_inject='contacts' -> +contact_dim
+      - contact_plan_inject='plan_z'   -> +contact_plan_hidden
+    """
+    expected = int(Dx) + int(Dc)
+    try:
+        if bool(getattr(model, "contact_plan_enable", False)):
+            inject = str(getattr(model, "contact_plan_inject", "none") or "none").lower().strip()
+            if inject == "contacts":
+                expected += int(getattr(model, "contact_dim", 0) or 0)
+            elif inject == "plan_z":
+                expected += int(getattr(model, "contact_plan_hidden", 0) or 0)
+    except Exception:
+        pass
+    return int(expected)
+
+
 def validate_and_fix_model_(m: nn.Module, Dx: int | None = None, Dc: int | None = None, *, reinit_on_nonfinite: bool = True) -> None:
     """Production-safe sanity check and optional re-init for models."""
     if Dx is not None and Dc is not None:
@@ -177,8 +198,10 @@ def validate_and_fix_model_(m: nn.Module, Dx: int | None = None, Dc: int | None 
             if isinstance(mod, nn.Linear):
                 first_linear_in = mod.in_features
                 break
-        if first_linear_in is not None and first_linear_in != (Dx + Dc):
-            raise RuntimeError(f"First Linear in_features={first_linear_in} != Dx+Dc={Dx+Dc}")
+        if first_linear_in is not None:
+            expected = _expected_first_linear_in_features(m, int(Dx), int(Dc))
+            if first_linear_in != expected:
+                raise RuntimeError(f"First Linear in_features={first_linear_in} != expected={expected} (Dx={Dx}, Dc={Dc})")
 
     def _reinit_module_(mod: nn.Module) -> None:
         if isinstance(mod, nn.Linear):
@@ -218,8 +241,13 @@ def _first_linear_in_features(model):
 
 def sanity_check_model_dims(model, Dx, Dy, Dc):
     nin = _first_linear_in_features(model)
-    if nin is not None and nin != Dx + Dc:
-        raise RuntimeError(f'[Guard] 模型第一层 in_features={nin}，但应为 Dx+Dc={Dx + Dc}；很可能构建时把 in_dim 设成 Dy+Dc={Dy + Dc} 了。')
+    if nin is not None:
+        expected = _expected_first_linear_in_features(model, int(Dx), int(Dc))
+        if nin != expected:
+            raise RuntimeError(
+                f'[Guard] 模型第一层 in_features={nin}，但应为 expected={expected} (Dx={Dx}, Dc={Dc})；'
+                f'也可能是注入了 contact_plan_inject 导致输入维度增加，或构建时把 in_dim 设错了。'
+            )
 
 
 __all__ = [

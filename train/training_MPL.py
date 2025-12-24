@@ -26,6 +26,7 @@ from .geometry import (
     infer_rot6d_delta_from_abs,
     axis_angle_to_matrix,
     geodesic_R,
+    so3_exp_map,
     so3_log_map,
     angvel_vec_from_R_seq,
     reproject_rot6d,
@@ -215,6 +216,9 @@ class Trainer:
         delta_preds = []
         period_preds = []
         hidden_preds = []
+        contacts_plan_preds = []
+        contacts_meas_preds = []
+        contacts_err_preds = []
         last_attn = None
         y_raw_local = None
         Dy = None
@@ -314,15 +318,54 @@ class Trainer:
             enable_reprojection = False
         reprojection_applied_count = 0
 
+        plan_enable = bool(getattr(self.model, 'contact_plan_enable', False))
+        plan_z = None
+        if plan_enable:
+            try:
+                h_plan = int(getattr(self.model, 'contact_plan_hidden', 0) or 0)
+            except Exception:
+                h_plan = 0
+            if h_plan > 0:
+                plan_z = state_seq.new_zeros((B, h_plan))
+        prev_pose_hist_meas = None
+
         for t in range(T):
             self._diag_roll_step = int(t)
             cond_input = cond_seq[:, t] if has_time_dim['cond'] else cond_seq
-            contacts_t = contacts_seq[:, t] if has_time_dim['contacts'] else contacts_seq
+            # Backward compatibility:
+            # - legacy training may feed GT soft-contacts as an extra input feature;
+            # - the new plan/meas design keeps train/infer loop-closed by NOT depending on external contacts.
+            contacts_in_t = None
+            if (not plan_enable) and (not bool(getattr(self.model, "contact_meas_enable", False))):
+                try:
+                    if contacts_seq is not None:
+                        contacts_in_t = contacts_seq[:, t] if has_time_dim['contacts'] else contacts_seq
+                except Exception:
+                    contacts_in_t = None
             angvel_t = angvel_seq[:, t] if has_time_dim['angvel'] else angvel_seq
             if pose_hist_enabled:
                 pose_hist_t = pose_hist_buffer_norm
             else:
                 pose_hist_t = pose_hist_seq[:, t] if has_time_dim['pose_hist'] else pose_hist_seq
+            # Train-time meas-input corruption: simulate pose-history contamination/delay so that
+            # e_t = contacts_plan - contacts_meas stays informative under drift.
+            pose_hist_meas_t = pose_hist_t
+            if plan_enable and getattr(self.model, "training", False) and mode in ("mixed", "train_free") and torch.is_tensor(pose_hist_meas_t):
+                try:
+                    tf_cur = float(tf_ratio)
+                except Exception:
+                    tf_cur = 1.0
+                if tf_cur < 0.999:
+                    drop_p = float(getattr(self, "meas_pose_hist_drop_prob", 0.0) or 0.0)
+                    if drop_p > 0.0 and torch.rand(1, device=pose_hist_meas_t.device).item() < drop_p:
+                        pose_hist_meas_t = torch.zeros_like(pose_hist_meas_t)
+                    delay_p = float(getattr(self, "meas_pose_hist_delay_prob", 0.0) or 0.0)
+                    if prev_pose_hist_meas is not None and delay_p > 0.0 and torch.rand(1, device=pose_hist_meas_t.device).item() < delay_p:
+                        pose_hist_meas_t = prev_pose_hist_meas
+                    noise_std = float(getattr(self, "meas_pose_hist_noise_std", 0.0) or 0.0)
+                    if noise_std > 0.0:
+                        pose_hist_meas_t = pose_hist_meas_t + torch.randn_like(pose_hist_meas_t) * noise_std
+                    prev_pose_hist_meas = pose_hist_meas_t.detach()
             cond_raw_t = None
             if cond_raw_seq is not None:
                 if has_time_dim['cond_raw']:
@@ -411,9 +454,10 @@ class Trainer:
                 ret = self.model(
                     motion,
                     cond_input,
-                    contacts=contacts_t,
+                    contacts=contacts_in_t,
                     angvel=angvel_t,
-                    pose_history=pose_hist_t,
+                    pose_history=pose_hist_meas_t,
+                    plan_z=plan_z,
                 )
 
             if not isinstance(ret, dict):
@@ -421,6 +465,23 @@ class Trainer:
             delta_out = ret.get('delta', ret.get('out', None))
             period_pred = ret.get('period_pred', None)
             last_attn = ret.get('attn', last_attn)
+            if plan_enable:
+                try:
+                    cp = ret.get('contacts_plan', None)
+                    if cp is not None:
+                        if cp.dim() == 2:
+                            cp = cp.unsqueeze(1)
+                        elif cp.dim() >= 3 and cp.size(1) != 1:
+                            cp = cp[:, -1:, ...]
+                        contacts_plan_preds.append(cp)
+                except Exception:
+                    pass
+                try:
+                    z_next = ret.get('plan_z_next', None)
+                    if z_next is not None:
+                        plan_z = z_next if allow_grad else z_next.detach()
+                except Exception:
+                    pass
 
             if delta_out is None:
                 raise RuntimeError("Model forward must return 'delta' tensor.")
@@ -437,7 +498,10 @@ class Trainer:
                 hidden_preds.append(hidden_step)
 
             prev_raw_snapshot = y_raw_local.clone() if y_raw_local is not None else None
-            y_raw = self._compose_delta_to_raw(y_raw_local, delta_out)
+            y_raw = self._compose_delta_to_raw(
+                y_raw_local,
+                delta_out,
+            )
             if y_raw is None:
                 self._raise_norm_error("compose_delta_to_raw 返回 None，缺少上一帧 RAW 数据。")
 
@@ -465,6 +529,26 @@ class Trainer:
             outs.append(y_norm)
             if period_pred is not None:
                 period_preds.append(period_pred)
+            try:
+                cm = ret.get("contacts_meas", None)
+                if cm is not None:
+                    if cm.dim() == 2:
+                        cm = cm.unsqueeze(1)
+                    elif cm.dim() >= 3 and cm.size(1) != 1:
+                        cm = cm[:, -1:, ...]
+                    contacts_meas_preds.append(cm)
+            except Exception:
+                pass
+            try:
+                ce = ret.get("contacts_err", None)
+                if ce is not None:
+                    if ce.dim() == 2:
+                        ce = ce.unsqueeze(1)
+                    elif ce.dim() >= 3 and ce.size(1) != 1:
+                        ce = ce[:, -1:, ...]
+                    contacts_err_preds.append(ce)
+            except Exception:
+                pass
             debug_stats['rot6d_geo_deg'] = None
             if gt_seq is not None and gt_seq.dim() == 3:
                 try:
@@ -541,6 +625,21 @@ class Trainer:
             preds['period_pred'] = torch.stack(
                 [p if p.dim() == 2 else p.squeeze(1) for p in period_preds], dim=1
             )
+        if contacts_plan_preds:
+            try:
+                preds['contacts_plan'] = torch.cat(contacts_plan_preds, dim=1)
+            except Exception:
+                pass
+        if contacts_meas_preds:
+            try:
+                preds['contacts_meas'] = torch.cat(contacts_meas_preds, dim=1)
+            except Exception:
+                pass
+        if contacts_err_preds:
+            try:
+                preds['contacts_err'] = torch.cat(contacts_err_preds, dim=1)
+            except Exception:
+                pass
 
         # 诊断：报告重投影应用情况
         if enable_reprojection and reprojection_applied_count > 0:
@@ -2555,8 +2654,17 @@ class Trainer:
         except Exception as exc:
             self._raise_norm_error("normalizer.norm_y 失败", exc)
 
-    def _compose_delta_to_raw(self, y_prev_raw, delta_norm):
-        import torch
+    def _compose_delta_to_raw(
+        self,
+        y_prev_raw,
+        delta_norm,
+        *,
+        omega_hat=None,
+        so3_gate: Optional[float] = None,
+        so3_max_deg: Optional[float] = None,
+        omega_detach: bool = True,
+    ):
+        import torch, math
         if y_prev_raw is None:
             self._raise_norm_error("compose_delta_to_raw 需要上一帧 RAW，但收到 None。")
         if delta_norm is None:
@@ -2581,6 +2689,59 @@ class Trainer:
         rot_len = rot_slice.stop - rot_slice.start
         if rot_len % 6 != 0:
             self._raise_norm_error(f"compose_delta_to_raw: rot_slice 长度 {rot_len} 不是 6 的倍数。")
+
+        # Optional SO(3) delta correction: ΔR_used = Exp(gate*omega) @ ΔR_pred
+        if omega_hat is not None:
+            try:
+                J = rot_len // 6
+                omega = omega_hat
+                if torch.is_tensor(omega) and omega.dim() == 4 and omega.size(1) == 1:
+                    omega = omega[:, 0]
+                if torch.is_tensor(omega) and omega.shape[-2:] == (J, 3) and omega.shape[0] == delta_raw.shape[0]:
+                    gate_val = so3_gate
+                    if gate_val is None:
+                        logit = getattr(self.model, 'so3_corr_gate_logit', None)
+                        if torch.is_tensor(logit):
+                            gate_val = float(torch.sigmoid(logit.detach()).item())
+                        else:
+                            gate_val = 0.0
+                    gate_val = float(gate_val or 0.0)
+                    if gate_val > 1e-6:
+                        max_deg = so3_max_deg
+                        if max_deg is None:
+                            max_deg = float(getattr(self, 'so3_corr_max_deg', 20.0) or 20.0)
+                        max_deg = float(max_deg or 0.0)
+                        max_rad = (max_deg * (math.pi / 180.0)) if max_deg > 0.0 else None
+
+                        omega_src = omega.detach() if bool(omega_detach) else omega
+                        omega_eff = omega_src.to(device=delta_raw.device, dtype=delta_raw.dtype) * gate_val
+                        if max_rad is not None:
+                            n = omega_eff.norm(dim=-1, keepdim=True).clamp_min(1e-9)
+                            s = (max_rad / n).clamp_max(1.0)
+                            omega_eff = omega_eff * s
+
+                        R_corr = so3_exp_map(omega_eff)  # (B,J,3,3)
+                        # NOTE:
+                        #   delta_raw[..., rot_slice] is a *residual* in 6D-space (around identity),
+                        #   and compose_rot6d_delta expects the same residual convention.
+                        #   So we must:
+                        #     1) residual -> proper ΔR (near identity) via normalize_rot6d_delta
+                        #     2) apply correction on-manifold
+                        #     3) convert back to residual (Δrot6d_abs - rot6d_identity)
+                        columns = getattr(self.loss_fn, '_rot6d_columns', ("X", "Z"))
+                        cols = tuple(columns) if isinstance(columns, (list, tuple)) else ("X", "Z")
+
+                        delta6_proj = normalize_rot6d_delta(delta_raw[..., rot_slice], columns=cols)  # (B,J,6) abs 6D
+                        R_delta = rot6d_to_matrix(delta6_proj, columns=cols)  # (B,J,3,3)
+                        R_used = torch.matmul(R_corr, R_delta)  # (B,J,3,3)
+
+                        delta6_used_abs = matrix_to_rot6d(R_used, columns=cols)  # (B,J,6)
+                        ident6 = _rot6d_identity_like(delta6_used_abs, columns=cols)
+                        delta6_used = delta6_used_abs - ident6
+                        delta_raw = delta_raw.clone()
+                        delta_raw[..., rot_slice] = delta6_used.reshape(delta_raw.shape[0], J * 6)
+            except Exception:
+                pass
         try:
             rot_next = compose_rot6d_delta(
                 y_prev_raw[..., rot_slice],
@@ -4141,6 +4302,36 @@ def train_entry():
                    help='根速度向量 MSE 损失权重（输出包含 RootVelocity 时生效）。')
     p.add_argument('--w_root_speed', type=float, default=0.0,
                    help='根速度模长 MAE 损失权重（输出包含 RootVelocity 时生效）。')
+    # ---- Contact plan anchor (independent) ----
+    p.add_argument('--contact_plan_enable', action='store_true', default=False,
+                   help='启用 cond-only GRU contacts_plan（作为独立锚点）')
+    p.add_argument('--contact_plan_hidden', type=int, default=64,
+                   help='contacts_plan GRU hidden dim')
+    p.add_argument('--contact_plan_dropout', type=float, default=0.0,
+                   help='contacts_plan head dropout')
+    p.add_argument('--w_contact_plan', type=float, default=0.0,
+                   help='contacts_plan 监督权重（MSE vs GT soft_contacts）')
+    p.add_argument('--contact_plan_inject', type=str, default='none', choices=['none', 'contacts', 'plan_z'],
+                   help="Phase2: 将 contacts_plan / plan_z 前馈注入主干输入（none=关闭）")
+    p.add_argument('--contact_plan_inject_detach', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
+                   help="注入主干时对 plan 特征 stop-grad（保持 plan 语义为独立锚点；推荐开启）")
+    # ---- Meas head (pose-derived contacts; no physics) ----
+    p.add_argument('--contact_meas_enable', action='store_true', default=False,
+                   help='启用 contacts_meas head（从 pose_hist/angvel 推导 soft contact）')
+    p.add_argument('--contact_meas_hidden', type=int, default=64,
+                   help='contacts_meas MLP hidden dim')
+    p.add_argument('--contact_meas_dropout', type=float, default=0.0,
+                   help='contacts_meas head dropout')
+    p.add_argument('--w_contact_meas', type=float, default=0.0,
+                   help='contacts_meas 监督权重（小权重对齐 GT soft_contacts；0=关闭）')
+    # ---- (Reserved) post-train corrector knobs live in dedicated scripts ----
+    # ---- Optional mismatch enrichment (meas input corruption) ----
+    p.add_argument('--meas_pose_hist_drop_prob', type=float, default=0.0,
+                   help='mixed/train_free 下对 pose_hist 输入整向量 dropout 概率（增强 plan!=meas）')
+    p.add_argument('--meas_pose_hist_delay_prob', type=float, default=0.0,
+                   help='mixed/train_free 下 pose_hist 输入 1-step delay 概率（增强 plan!=meas）')
+    p.add_argument('--meas_pose_hist_noise_std', type=float, default=0.0,
+                   help='mixed/train_free 下给 pose_hist 输入加高斯噪声 std（增强 plan!=meas）')
     p.add_argument('--adaptive_bone_weights', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
                    help='是否根据骨骼运动幅度自适应权重（默认开启）。')
     p.add_argument('--use_hierarchy_weights', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
@@ -4370,6 +4561,14 @@ def train_entry():
         pose_hist_dim=pose_hist_dim_model,
         bone_names=getattr(ds_train, 'bone_names', None),
         output_layout=getattr(ds_train, 'output_layout', None),
+        contact_plan_enable=bool(_arg('contact_plan_enable', False)),
+        contact_plan_hidden=int(_arg('contact_plan_hidden', 64) or 64),
+        contact_plan_dropout=float(_arg('contact_plan_dropout', 0.0) or 0.0),
+        contact_plan_inject=str(_arg('contact_plan_inject', 'none') or 'none'),
+        contact_plan_inject_detach=bool(_arg('contact_plan_inject_detach', True)),
+        contact_meas_enable=bool(_arg('contact_meas_enable', False)),
+        contact_meas_hidden=int(_arg('contact_meas_hidden', 64) or 64),
+        contact_meas_dropout=float(_arg('contact_meas_dropout', 0.0) or 0.0),
     ).to(device)
     if history_export_frames > 0:
         if pose_hist_dim_raw <= 0 or pose_hist_len_raw <= 0:
@@ -4483,6 +4682,8 @@ def train_entry():
         w_rot_local=w_rot_local,
         w_root_vel=w_root_vel,
         w_root_speed=w_root_speed,
+        w_contact_plan=float(_arg('w_contact_plan', 0.0) or 0.0),
+        w_contact_meas=float(_arg('w_contact_meas', 0.0) or 0.0),
 
         adaptive_bone_weights=adaptive_bone_weights,
         bone_prior_stds=bone_prior_stds,
@@ -4572,6 +4773,10 @@ def train_entry():
     # 一次性归一化数值诊断
     _norm_debug_once(trainer, train_loader, thr=float(_arg('diag_thr')), topk=int(_arg('diag_topk')), print_to_console=False)
     trainer.bone_hz = fps_data
+    # --- Loop-closure knobs: meas input corruption (enhance plan!=meas mismatch) ---
+    trainer.meas_pose_hist_drop_prob = float(_arg('meas_pose_hist_drop_prob', 0.0) or 0.0)
+    trainer.meas_pose_hist_delay_prob = float(_arg('meas_pose_hist_delay_prob', 0.0) or 0.0)
+    trainer.meas_pose_hist_noise_std = float(_arg('meas_pose_hist_noise_std', 0.0) or 0.0)
 
 
     # RootYaw 不再参与训练/损失，默认跳过；仍保留字段以兼容旧模型，需时可显式设置
@@ -4780,8 +4985,8 @@ def train_entry():
 def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path: str, opset: int = 18, dynamic_batch: bool = False):
     """
     单步（无隐式状态）ONNX 导出：
-      输入:  state[B,Dx], cond[B,Dc], contacts[B,C], angvel[B,A], pose_hist[B,P]
-      输出:  motion_pred[B,Dy]
+      输入:  state[B,Dx], cond[B,Dc], contacts[B,C], angvel[B,A], pose_hist[B,P], (optional) plan_z[B,Hp]
+      输出:  motion_pred[B,Dy], (optional) plan_z_next[B,Hp]
 
     训练与推理均使用显式历史缓冲，对应 UE 中的 PoseHistoryBuffer。
     """
@@ -4854,46 +5059,86 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
     contact_dim = int(getattr(model, 'contact_dim', contacts_seq.shape[-1] if isinstance(contacts_seq, torch.Tensor) else 0))
     angvel_dim = int(getattr(model, 'angvel_dim', angvel_seq.shape[-1] if isinstance(angvel_seq, torch.Tensor) else 0))
     pose_hist_dim = int(getattr(model, 'pose_hist_dim', pose_hist_seq.shape[-1] if isinstance(pose_hist_seq, torch.Tensor) else 0))
+    plan_dim = int(getattr(model, 'contact_plan_hidden', 0) or 0) if bool(getattr(model, 'contact_plan_enable', False)) else 0
 
     cond0 = _frame_or_zero(cond_seq, cond_dim, torch.float32)
     contacts0 = _frame_or_zero(contacts_seq, contact_dim, torch.float32)
     angvel0 = _frame_or_zero(angvel_seq, angvel_dim, torch.float32)
     pose_hist0 = _frame_or_zero(pose_hist_seq, pose_hist_dim, torch.float32)
+    plan_z0 = torch.zeros((1, plan_dim), dtype=torch.float32) if plan_dim > 0 else None
 
     device = torch.device('cpu')
     model = model.to(device).eval()
 
-    class _StatelessWrapper(torch.nn.Module):
-        def __init__(self, core):
-            super().__init__()
-            self.core = core
+    if plan_dim > 0:
+        class _StatelessWrapper(torch.nn.Module):
+            def __init__(self, core):
+                super().__init__()
+                self.core = core
 
-        def forward(self, state, cond, contacts, angvel, pose_hist):
-            cond_in = cond if cond.shape[-1] > 0 else None
-            contacts_in = contacts if contacts.shape[-1] > 0 else None
-            angvel_in = angvel if angvel.shape[-1] > 0 else None
-            pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
-            out = self.core(
-                state,
-                cond_in,
-                contacts=contacts_in,
-                angvel=angvel_in,
-                pose_history=pose_hist_in,
-            )
-            if isinstance(out, dict):
-                pred = out.get('out')
-                if pred is None:
-                    raise RuntimeError("Model dict output missing 'out'.")
-                return pred
-            return out
+            def forward(self, state, cond, contacts, angvel, pose_hist, plan_z):
+                cond_in = cond if cond.shape[-1] > 0 else None
+                contacts_in = contacts if contacts.shape[-1] > 0 else None
+                angvel_in = angvel if angvel.shape[-1] > 0 else None
+                pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
+                plan_z_in = plan_z if plan_z.shape[-1] > 0 else None
+                out = self.core(
+                    state,
+                    cond_in,
+                    contacts=contacts_in,
+                    angvel=angvel_in,
+                    pose_history=pose_hist_in,
+                    plan_z=plan_z_in,
+                )
+                if isinstance(out, dict):
+                    pred = out.get('out')
+                    if pred is None:
+                        raise RuntimeError("Model dict output missing 'out'.")
+                    z_next = out.get('plan_z_next')
+                    if z_next is None:
+                        z_next = plan_z.new_zeros(plan_z.shape)
+                    return pred, z_next
+                return out, plan_z
 
-    wrapper = _StatelessWrapper(model).cpu().eval()
-    sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0)
-    Dy = int(sample_out.shape[-1])
+        wrapper = _StatelessWrapper(model).cpu().eval()
+        sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0, plan_z0)
+        Dy = int(sample_out[0].shape[-1])
 
-    inputs = (state0, cond0, contacts0, angvel0, pose_hist0)
-    input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist']
-    output_names = ['motion_pred']
+        inputs = (state0, cond0, contacts0, angvel0, pose_hist0, plan_z0)
+        input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'plan_z']
+        output_names = ['motion_pred', 'plan_z_next']
+    else:
+        class _StatelessWrapper(torch.nn.Module):
+            def __init__(self, core):
+                super().__init__()
+                self.core = core
+
+            def forward(self, state, cond, contacts, angvel, pose_hist):
+                cond_in = cond if cond.shape[-1] > 0 else None
+                contacts_in = contacts if contacts.shape[-1] > 0 else None
+                angvel_in = angvel if angvel.shape[-1] > 0 else None
+                pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
+                out = self.core(
+                    state,
+                    cond_in,
+                    contacts=contacts_in,
+                    angvel=angvel_in,
+                    pose_history=pose_hist_in,
+                )
+                if isinstance(out, dict):
+                    pred = out.get('out')
+                    if pred is None:
+                        raise RuntimeError("Model dict output missing 'out'.")
+                    return pred
+                return out
+
+        wrapper = _StatelessWrapper(model).cpu().eval()
+        sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0)
+        Dy = int(sample_out.shape[-1])
+
+        inputs = (state0, cond0, contacts0, angvel0, pose_hist0)
+        input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist']
+        output_names = ['motion_pred']
     dynamic_axes = {name: {0: 'B'} for name in input_names + output_names} if dynamic_batch else None
 
     os.makedirs(os.path.dirname(onnx_path) or '.', exist_ok=True)
@@ -4908,7 +5153,10 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
         output_names=output_names,
         dynamic_axes=dynamic_axes,
     )
-    print(f'[Export][OK] saved: {onnx_path} | Dx={Dx} Dy={Dy} Dc={cond_dim} C={contact_dim} A={angvel_dim} P={pose_hist_dim}')
+    if plan_dim > 0:
+        print(f'[Export][OK] saved: {onnx_path} | Dx={Dx} Dy={Dy} Dc={cond_dim} C={contact_dim} A={angvel_dim} P={pose_hist_dim} Hp={plan_dim}')
+    else:
+        print(f'[Export][OK] saved: {onnx_path} | Dx={Dx} Dy={Dy} Dc={cond_dim} C={contact_dim} A={angvel_dim} P={pose_hist_dim}')
 
 def main():
     """
