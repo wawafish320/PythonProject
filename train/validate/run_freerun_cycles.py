@@ -253,6 +253,13 @@ class FreeRunCycleRunner:
                 contact_plan_hidden = int(w_hh.shape[1])
         except Exception:
             pass
+        contact_plan_time_pe_dim = 0
+        try:
+            w_time = self.state_dict.get("contact_plan_time_head.weight", None)
+            if torch.is_tensor(w_time) and w_time.ndim == 2:
+                contact_plan_time_pe_dim = int(w_time.shape[1])
+        except Exception:
+            contact_plan_time_pe_dim = 0
         # Infer trunk injection mode from checkpoint shared_encoder input dim.
         contact_plan_inject = "none"
         try:
@@ -301,6 +308,7 @@ class FreeRunCycleRunner:
             contact_plan_hidden=int(contact_plan_hidden),
             contact_plan_inject=str(contact_plan_inject),
             contact_plan_inject_detach=True,
+            contact_plan_time_pe_dim=int(contact_plan_time_pe_dim),
             contact_meas_enable=bool(contact_meas_enable),
             contact_meas_hidden=int(contact_meas_hidden),
             contact_meas_dropout=0.0,
@@ -433,6 +441,8 @@ class FreeRunCycleRunner:
             sample=base_sample,
             rounds=rounds,
             device=self.device,
+            time_index_mode=str(getattr(self.args, "time_index_mode", "auto") or "auto"),
+            round_seg_mode=str(getattr(self.args, "round_seg_mode", "intra") or "intra"),
         )
 
         payload = {
@@ -442,6 +452,8 @@ class FreeRunCycleRunner:
             "fps": data.get("fps", getattr(ds, "fps", 60.0)),
             "cycle_len": int(T_base),
             "rounds": rounds,
+            "time_index_mode": str(getattr(self.args, "time_index_mode", "auto") or "auto"),
+            "round_seg_mode": str(getattr(self.args, "round_seg_mode", "intra") or "intra"),
             "model": str(Path(self.args.model).expanduser().resolve()),
             "metrics_per_round": metrics_per_round,
             "metrics_per_step": per_step,
@@ -540,6 +552,9 @@ def _run_freerun_cycles(
     sample: Dict[str, torch.Tensor],
     rounds: int,
     device: torch.device,
+    *,
+    time_index_mode: str = "auto",
+    round_seg_mode: str = "intra",
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Core free‑run loop: autoregress over `rounds * T` steps without reset,
@@ -632,6 +647,9 @@ def _run_freerun_cycles(
     assert T == T_total, "Internal error: tiled length mismatch."
     if T < 2:
         raise ValueError("Sequence too short for free‑run (need at least 2 frames).")
+
+    time_index_mode = str(time_index_mode or "auto").strip().lower()
+    round_seg_mode = str(round_seg_mode or "intra").strip().lower()
 
     warmup = 0
     start_t = warmup
@@ -744,6 +762,14 @@ def _run_freerun_cycles(
 
             amp_ctx = nullcontext()
 
+        if time_index_mode == "none":
+            time_index_t = None
+        elif time_index_mode == "cycle" or (time_index_mode == "auto" and rounds > 1):
+            time_index_t = int(t % T_cycle)
+        else:
+            # global / auto(single-round): keep increasing global step index
+            time_index_t = int(t)
+
         with amp_ctx:
             ret = model(
                 motion,
@@ -751,6 +777,7 @@ def _run_freerun_cycles(
                 angvel=angvel_t,
                 pose_history=pose_hist_t,
                 plan_z=plan_z,
+                time_index=time_index_t,
             )
 
         if not isinstance(ret, dict):
@@ -1123,6 +1150,7 @@ def _run_freerun_cycles(
                 )
         entry: Dict[str, Any] = {
             "step": int(t),
+            "time_index": int(time_index_t) if time_index_t is not None else None,
             "GeoDeg": geo_t,
             "GeoDegAligned0": geo_aligned0_t,
             "GeoLocalDeg": geo_local_t,
@@ -1170,9 +1198,32 @@ def _run_freerun_cycles(
             entry["KeyBoneGeoLocalDeg"] = keybone_geo_local
         per_step.append(entry)
 
+    def _nanmean(xs: List[Optional[float]]) -> Optional[float]:
+        vals = [float(x) for x in xs if x is not None]
+        if not vals:
+            return None
+        return float(sum(vals) / len(vals))
+
+    def _nanstd(xs: List[Optional[float]]) -> Optional[float]:
+        vals = [float(x) for x in xs if x is not None]
+        if len(vals) < 2:
+            return 0.0 if len(vals) == 1 else None
+        mu = sum(vals) / len(vals)
+        var = sum((v - mu) ** 2 for v in vals) / len(vals)
+        return float(var ** 0.5)
+
     for r in range(rounds):
-        t0 = r * T_cycle
-        t1 = min((r + 1) * T_cycle, free_steps)
+        if round_seg_mode == "legacy":
+            # Legacy behavior: treat each round as T_cycle steps starting at r*T_cycle.
+            # This includes the boundary transition at t=(r+1)*T_cycle-1 (wrap into next round),
+            # and the last round may be short by 1 due to the (T_total-1) evaluation horizon.
+            t0 = r * T_cycle
+            t1 = min((r + 1) * T_cycle, free_steps)
+        else:
+            # Intra-cycle transitions only: each round covers exactly (T_cycle-1) steps,
+            # i.e., transitions within frames [r*T_cycle .. (r+1)*T_cycle-1], dropping the wrap boundary.
+            t0 = r * T_cycle
+            t1 = min((r + 1) * T_cycle - 1, free_steps)
         if t1 <= t0:
             continue
 
@@ -1232,6 +1283,7 @@ def _run_freerun_cycles(
             "start_step": int(t0),
             "end_step": int(t1 - 1),
             "steps": int(t1 - t0),
+            "round_seg_mode": str(round_seg_mode),
             "GeoDeg": geo_deg_val,
             "GeoDegAligned0": geo_deg_aligned0_val,
             "GeoLocalDeg": geo_local_deg_val,
@@ -1245,6 +1297,14 @@ def _run_freerun_cycles(
             "RootVelMAEStart": root_vel_mae_start,
             "RootVelMAEEnd": root_vel_mae_end,
         }
+        if contact_steps:
+            seg = contact_steps[t0:t1]
+            if seg:
+                round_entry["ContactPlanGtAbsMean"] = _nanmean([c.get("ContactPlanGtAbsMean") if isinstance(c, dict) else None for c in seg])
+                round_entry["ContactMeasGtAbsMean"] = _nanmean([c.get("ContactMeasGtAbsMean") if isinstance(c, dict) else None for c in seg])
+                round_entry["ContactErrAbsMean"] = _nanmean([c.get("ContactErrAbsMean") if isinstance(c, dict) else None for c in seg])
+                plan_mean_seq = [c.get("ContactPlanMean") if isinstance(c, dict) else None for c in seg]
+                round_entry["ContactPlanMeanStd"] = _nanstd(plan_mean_seq)
         if keybone_geo_mean is not None:
             round_entry["KeyBoneGeoDegMean"] = keybone_geo_mean
         if keybone_geo_local_mean is not None:
@@ -1344,6 +1404,28 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=5,
         help="Number of full animation cycles to free‑run without reset.",
+    )
+    parser.add_argument(
+        "--time-index-mode",
+        type=str,
+        default="auto",
+        choices=("auto", "global", "cycle", "none"),
+        help=(
+            "How to feed time_index into EventMotionModel (used by contact_plan time-PE). "
+            "'global' uses the global step t; 'cycle' uses (t % cycle_len) to stay in-range under multi-cycle; "
+            "'auto' uses 'cycle' when rounds>1 else 'global'; 'none' disables time_index."
+        ),
+    )
+    parser.add_argument(
+        "--round-seg-mode",
+        type=str,
+        default="intra",
+        choices=("legacy", "intra"),
+        help=(
+            "How to segment the (T_total-1) transition steps into rounds. "
+            "'intra' reports per-round metrics over within-cycle transitions only (T_cycle-1) and drops wrap boundaries; "
+            "'legacy' keeps the old [r*T_cycle:(r+1)*T_cycle] slicing (Round0 may include one boundary step)."
+        ),
     )
     parser.add_argument(
         "--so3_corr_apply",

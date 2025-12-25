@@ -192,7 +192,22 @@ class Trainer:
         import torch
         return torch.ones(joint_count, device=ref_tensor.device, dtype=ref_tensor.dtype)
 
-    def _rollout_sequence(self, state_seq, cond_seq=None, cond_raw_seq=None, contacts_seq=None, angvel_seq=None, pose_hist_seq=None, *, gt_seq=None, cond_norm_mu=None, cond_norm_std=None, mode='mixed', tf_ratio=1.0):
+    def _rollout_sequence(
+        self,
+        state_seq,
+        cond_seq=None,
+        cond_raw_seq=None,
+        contacts_seq=None,
+        angvel_seq=None,
+        pose_hist_seq=None,
+        *,
+        gt_seq=None,
+        cond_norm_mu=None,
+        cond_norm_std=None,
+        mode='mixed',
+        tf_ratio=1.0,
+        time_base=None,
+    ):
         self._require_normalizer("Trainer._rollout_sequence")
         import torch
         assert state_seq.dim() == 3, "state_seq expects [B,T,Dx]"
@@ -329,6 +344,13 @@ class Trainer:
                 plan_z = state_seq.new_zeros((B, h_plan))
         prev_pose_hist_meas = None
 
+        time_base_local = time_base
+        if torch.is_tensor(time_base_local):
+            try:
+                time_base_local = time_base_local.to(device=state_seq.device)
+            except Exception:
+                time_base_local = time_base
+
         for t in range(T):
             self._diag_roll_step = int(t)
             cond_input = cond_seq[:, t] if has_time_dim['cond'] else cond_seq
@@ -450,6 +472,13 @@ class Trainer:
                                 # 保守处理：噪声注入失败时回退到原始 motion
                                 pass
 
+            time_index_t = None
+            if time_base_local is not None:
+                try:
+                    time_index_t = time_base_local + int(t)
+                except Exception:
+                    time_index_t = None
+
             with self._amp_context(amp_enabled):
                 ret = self.model(
                     motion,
@@ -458,6 +487,7 @@ class Trainer:
                     angvel=angvel_t,
                     pose_history=pose_hist_meas_t,
                     plan_z=plan_z,
+                    time_index=time_index_t,
                 )
 
             if not isinstance(ret, dict):
@@ -872,6 +902,16 @@ class Trainer:
         pose_hist_sub = _slice_tensor(pose_hist_seq)
 
         mode = 'train_free' if train_mode else 'free'
+        time_base = None
+        try:
+            if isinstance(batch, dict):
+                base = batch.get("start", None)
+                if base is not None:
+                    if torch.is_tensor(base):
+                        base = base.to(device=state_seq.device)
+                    time_base = base + int(start)
+        except Exception:
+            time_base = None
         preds_free, attn_free = self._rollout_sequence(
             state_sub,
             cond_sub,
@@ -884,6 +924,7 @@ class Trainer:
             tf_ratio=0.0,
             cond_norm_mu=cond_norm_mu,
             cond_norm_std=cond_norm_std,
+            time_base=time_base,
         )
         preds_free = self._ensure_rot6d_delta(preds_free)
         with self._amp_context(self.use_amp):
@@ -1793,6 +1834,13 @@ class Trainer:
             cond_norm_mu = cond_norm_mu.to(self.device).float()
         if cond_norm_std is not None:
             cond_norm_std = cond_norm_std.to(self.device).float()
+        time_base = None
+        try:
+            start_base = sample_batch.get("start") if isinstance(sample_batch, dict) else None
+            if start_base is not None and torch.is_tensor(start_base):
+                time_base = start_base.to(self.device).float()
+        except Exception:
+            time_base = None
 
         use_anomaly = bool(getattr(self, 'grad_conn_detect_anomaly', True))
         import contextlib
@@ -1810,6 +1858,7 @@ class Trainer:
                 cond_norm_std=cond_norm_std,
                 mode='train_free',
                 tf_ratio=0.0,
+                time_base=time_base,
             )
             with self._amp_context(self.use_amp):
                 out = self.loss_fn(preds, gt_seq, attn_weights=attn, batch=sample_batch)
@@ -2190,6 +2239,7 @@ class Trainer:
                 pose_hist_seq = _to_device(batch.get('pose_hist')) if isinstance(batch, dict) else None
                 cond_norm_mu = _to_device(batch.get('cond_norm_mu')) if isinstance(batch, dict) else None
                 cond_norm_std = _to_device(batch.get('cond_norm_std')) if isinstance(batch, dict) else None
+                time_base = _to_device(batch.get('start')) if isinstance(batch, dict) else None
 
                 # === 插入开始：一次性打印训练端 X(z) 的 RMS，验证不是 0 ===
                 current_tf_ratio = float(getattr(self, 'teacher_forcing_ratio', tf_ratio))
@@ -2206,6 +2256,7 @@ class Trainer:
                     cond_norm_std=cond_norm_std,
                     mode='mixed',
                     tf_ratio=current_tf_ratio,
+                    time_base=time_base,
                 )
 
                 stats = {}

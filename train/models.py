@@ -245,6 +245,10 @@ class EventMotionModel(nn.Module):
         contact_plan_dropout: float = 0.0,
         contact_plan_inject: str = "none",  # 'none' | 'contacts' | 'plan_z'
         contact_plan_inject_detach: bool = True,
+        # Optional: time embedding for contact_plan (helps when cond has little/no phase info).
+        # Implemented as an additive bias on contact_plan logits: logits += time_head(PE(t)).
+        contact_plan_time_pe_dim: int = 0,  # 0 disables; recommended 8/16
+        contact_plan_time_pe_base: float = 10000.0,
         # ===== Contact Meas (pose-derived, no physics) =====
         contact_meas_enable: bool = False,
         contact_meas_hidden: int = 64,
@@ -285,6 +289,10 @@ class EventMotionModel(nn.Module):
         self._adaptive_history_diag: Optional[dict[str, torch.Tensor | float]] = None
         self.pose_hist_len: int = 0
         self._adaptive_history_device: Optional[torch.device] = None
+        self.contact_plan_time_pe_dim = int(contact_plan_time_pe_dim or 0)
+        if self.contact_plan_time_pe_dim % 2 == 1:
+            self.contact_plan_time_pe_dim += 1
+        self._contact_plan_time_pe_base = float(contact_plan_time_pe_base or 10000.0)
 
         plan_inject_dim = 0
         if self.contact_plan_enable:
@@ -356,6 +364,7 @@ class EventMotionModel(nn.Module):
         #     so e_t = contacts_plan - contacts_meas stays informative when pose drifts.
         self.contact_plan_cell: Optional[nn.GRUCell] = None
         self.contact_plan_head: Optional[nn.Module] = None
+        self.contact_plan_time_head: Optional[nn.Module] = None
         if self.contact_plan_enable:
             h_plan = int(self.contact_plan_hidden)
             self.contact_plan_cell = nn.GRUCell(self.cond_dim, h_plan)
@@ -366,6 +375,15 @@ class EventMotionModel(nn.Module):
                 nn.Dropout(self._contact_plan_dropout),
                 nn.Linear(h_plan, self.contact_dim),
             )
+            if self.contact_plan_time_pe_dim > 0:
+                self.contact_plan_time_head = nn.Linear(self.contact_plan_time_pe_dim, self.contact_dim)
+                try:
+                    with torch.no_grad():
+                        self.contact_plan_time_head.weight.zero_()
+                        if getattr(self.contact_plan_time_head, "bias", None) is not None:
+                            self.contact_plan_time_head.bias.zero_()
+                except Exception:
+                    pass
 
         # ===== Contact Meas (pose-derived, cheap; no physics) =====
         self.contact_meas_enable = bool(contact_meas_enable and self.contact_dim > 0)
@@ -530,6 +548,7 @@ class EventMotionModel(nn.Module):
         angvel: Optional[torch.Tensor] = None,
         pose_history: Optional[torch.Tensor] = None,
         plan_z: Optional[torch.Tensor] = None,
+        time_index: Optional[torch.Tensor | int | float] = None,
     ) -> dict[str, torch.Tensor]:
         is_single = state.ndim == 2
         if is_single:
@@ -540,10 +559,10 @@ class EventMotionModel(nn.Module):
                 contacts = contacts.unsqueeze(1)
             if angvel is not None and angvel.ndim == 2:
                 angvel = angvel.unsqueeze(1)
-            if pose_history is not None and pose_history.ndim == 2:
-                pose_history = pose_history.unsqueeze(1)
-            if plan_z is not None and plan_z.ndim == 1:
-                plan_z = plan_z.unsqueeze(0)
+        if pose_history is not None and pose_history.ndim == 2:
+            pose_history = pose_history.unsqueeze(1)
+        if plan_z is not None and plan_z.ndim == 1:
+            plan_z = plan_z.unsqueeze(0)
 
         if cond is None and self.cond_dim > 0:
             cond = torch.zeros(state.shape[:-1] + (self.cond_dim,), device=state.device, dtype=state.dtype)
@@ -578,6 +597,48 @@ class EventMotionModel(nn.Module):
                     plan_z_t = plan_z_t.reshape(B, h_plan)
             cond_seq = cond if cond is not None else torch.zeros((B, Tq, self.cond_dim), device=device, dtype=dtype)
 
+            time_pe = None
+            if self.contact_plan_time_head is not None and int(self.contact_plan_time_pe_dim) > 0:
+                # Build per-step time index: either provided directly as (B,T) / (B,) / scalar, or default to arange(Tq).
+                try:
+                    if time_index is None:
+                        t_grid = torch.arange(Tq, device=device, dtype=dtype).unsqueeze(0).expand(B, Tq)
+                    elif isinstance(time_index, (int, float)):
+                        base = torch.full((B, 1), float(time_index), device=device, dtype=dtype)
+                        t_grid = base + torch.arange(Tq, device=device, dtype=dtype).unsqueeze(0)
+                    elif torch.is_tensor(time_index):
+                        t_in = time_index.to(device=device, dtype=dtype)
+                        if t_in.dim() == 0:
+                            base = t_in.view(1, 1).expand(B, 1)
+                            t_grid = base + torch.arange(Tq, device=device, dtype=dtype).unsqueeze(0)
+                        elif t_in.dim() == 1:
+                            if t_in.numel() == 1:
+                                base = t_in.view(1, 1).expand(B, 1)
+                            else:
+                                base = t_in.view(B, 1)
+                            t_grid = base + torch.arange(Tq, device=device, dtype=dtype).unsqueeze(0)
+                        elif t_in.dim() == 2:
+                            # Either (B,Tq) or broadcastable; treat it as explicit time per step.
+                            if t_in.shape[0] == 1 and B > 1:
+                                t_in = t_in.expand(B, -1)
+                            t_grid = t_in[:, :Tq]
+                        else:
+                            t_grid = torch.arange(Tq, device=device, dtype=dtype).unsqueeze(0).expand(B, Tq)
+                    else:
+                        t_grid = torch.arange(Tq, device=device, dtype=dtype).unsqueeze(0).expand(B, Tq)
+
+                    pe_dim = int(self.contact_plan_time_pe_dim)
+                    half = pe_dim // 2
+                    idx = torch.arange(0, pe_dim, 2, device=device, dtype=dtype)
+                    base = float(getattr(self, "_contact_plan_time_pe_base", 10000.0) or 10000.0)
+                    freqs = 1.0 / torch.pow(torch.full((half,), base, device=device, dtype=dtype), idx / float(pe_dim))
+                    angles = t_grid.unsqueeze(-1) * freqs.view(1, 1, half)
+                    time_pe = torch.zeros((B, Tq, pe_dim), device=device, dtype=dtype)
+                    time_pe[..., 0::2] = torch.sin(angles)
+                    time_pe[..., 1::2] = torch.cos(angles)
+                except Exception:
+                    time_pe = None
+
             plan_probs = []
             plan_z_seq = [] if self.contact_plan_inject == "plan_z" else None
             for _t in range(Tq):
@@ -585,6 +646,11 @@ class EventMotionModel(nn.Module):
                 if plan_z_seq is not None:
                     plan_z_seq.append(plan_z_t)
                 logits = self.contact_plan_head(plan_z_t)
+                if time_pe is not None and self.contact_plan_time_head is not None:
+                    try:
+                        logits = logits + self.contact_plan_time_head(time_pe[:, _t])
+                    except Exception:
+                        pass
                 plan_probs.append(torch.sigmoid(logits))
             contacts_plan = torch.stack(plan_probs, dim=1)  # (B,T,C)
             plan_z_next = plan_z_t
