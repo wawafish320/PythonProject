@@ -266,6 +266,15 @@ def evaluate_freerun(
         if end_t <= start_t:
             continue
         enable_reprojection = bool(getattr(trainer, "enable_cond_reprojection", True))
+        time_base = None
+        try:
+            base = batch.get("start", None) if isinstance(batch, dict) else None
+            if base is not None:
+                if torch.is_tensor(base):
+                    base = base.to(device=device)
+                time_base = base
+        except Exception:
+            time_base = None
 
         motion = state_seq[:, start_t]
         motion_raw = None
@@ -321,6 +330,7 @@ def evaluate_freerun(
             if h_plan > 0 and torch.is_tensor(motion):
                 plan_z = motion.new_zeros((motion.shape[0], h_plan))
 
+        prev_foot_pos_meas = None
         for t in range(start_t, end_t):
             cond_input = cond_seq[:, t] if (cond_seq is not None and cond_seq.dim() == 3) else cond_seq
             contacts_t = contacts_seq[:, t] if (contacts_seq is not None and contacts_seq.dim() == 3) else contacts_seq
@@ -387,14 +397,33 @@ def evaluate_freerun(
                 from contextlib import nullcontext
                 amp_ctx = nullcontext()
 
+            time_index_t = int(t)
+            if time_base is not None:
+                try:
+                    time_index_t = time_base + int(t)
+                except Exception:
+                    time_index_t = int(t)
+
+            contacts_in_t = contacts_t
+            if bool(getattr(model, "contact_plan_enable", False)) and bool(getattr(model, "contacts_as_meas_override", False)):
+                try:
+                    fn = getattr(trainer, "_contact_meas_whitebox", None)
+                    if callable(fn) and motion_raw is not None:
+                        contacts_in_t, prev_foot_pos_meas = fn(motion_raw, prev_foot_pos_meas)
+                    else:
+                        contacts_in_t = None
+                except Exception:
+                    contacts_in_t = None
+
             with amp_ctx:
                 ret = model(
                     motion,
                     cond_input,
-                    contacts=contacts_t,
+                    contacts=contacts_in_t,
                     angvel=angvel_t,
                     pose_history=pose_hist_t,
                     plan_z=plan_z,
+                    time_index=time_index_t,
                 )
 
             if not isinstance(ret, dict):

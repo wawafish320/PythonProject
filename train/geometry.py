@@ -6,7 +6,7 @@
 
 从 training_MPL.py 重构而来，作为独立工具模块。
 """
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -568,3 +568,83 @@ def gram_schmidt_renorm_np(rot6d: np.ndarray) -> np.ndarray:
     b = b / np.maximum(b_norm, 1e-8)
 
     return np.concatenate([a, b], axis=-1)
+
+
+# ============================================
+# Forward kinematics (positions)
+# ============================================
+
+def fk_positions_from_rot6d(
+    rot6d: torch.Tensor,
+    parents: Sequence[int] | torch.Tensor,
+    offsets: torch.Tensor,
+    root_pos: Optional[torch.Tensor] = None,
+    *,
+    columns: Tuple[str, str] = ("X", "Z"),
+) -> torch.Tensor:
+    """
+    Compute global joint positions from local joint rotations (6D) and fixed local offsets.
+
+    Assumptions:
+        - `parents[j]` gives the parent joint index of joint j (use -1 for root).
+        - `offsets[j]` is the child-in-parent local offset (meters).
+        - Root joint position is `root_pos + offsets[root]` (if root_pos is None, uses zeros).
+
+    Args:
+        rot6d: (..., J, 6) local rotations.
+        parents: (J,) list/tensor of parent indices.
+        offsets: (J, 3) local offsets in parent frame.
+        root_pos: (..., 3) root translation (same leading dims as rot6d without the joint dim).
+        columns: 6D columns convention for `rot6d_to_matrix`.
+
+    Returns:
+        pos: (..., J, 3) global joint positions.
+    """
+    if rot6d.shape[-1] != 6:
+        raise ValueError(f"fk_positions_from_rot6d expects (..., J, 6); got rot6d.shape={tuple(rot6d.shape)}")
+    if offsets.dim() != 2 or offsets.shape[-1] != 3:
+        raise ValueError(f"offsets must be (J, 3); got offsets.shape={tuple(offsets.shape)}")
+    J = int(rot6d.shape[-2])
+    if J <= 0:
+        raise ValueError("fk_positions_from_rot6d: J must be > 0")
+    if offsets.shape[0] < J:
+        raise ValueError(f"offsets has {offsets.shape[0]} joints, but rot6d needs {J}")
+
+    device = rot6d.device
+    dtype = rot6d.dtype
+    offsets_t = offsets[:J].to(device=device, dtype=dtype)
+
+    if torch.is_tensor(parents):
+        parents_list = [int(x) for x in parents.reshape(-1).tolist()[:J]]
+    else:
+        parents_list = [int(x) for x in list(parents)[:J]]
+    if len(parents_list) < J:
+        raise ValueError(f"parents has {len(parents_list)} entries, but rot6d needs {J}")
+
+    lead_shape = rot6d.shape[:-2]
+    flat = rot6d.reshape(-1, J, 6)
+    R_local = rot6d_to_matrix(flat, columns=columns)  # (N, J, 3, 3)
+
+    if root_pos is None:
+        root_flat = rot6d.new_zeros((flat.shape[0], 3))
+    else:
+        if root_pos.shape[-1] != 3:
+            raise ValueError(f"root_pos must be (..., 3); got root_pos.shape={tuple(root_pos.shape)}")
+        root_flat = root_pos.to(device=device, dtype=dtype).reshape(-1, 3)
+        if root_flat.shape[0] != flat.shape[0]:
+            raise ValueError(
+                f"root_pos leading dims {tuple(root_pos.shape[:-1])} incompatible with rot6d leading dims {lead_shape}"
+            )
+
+    gR = rot6d.new_empty((flat.shape[0], J, 3, 3))
+    gP = rot6d.new_empty((flat.shape[0], J, 3))
+    for j in range(J):
+        p = parents_list[j]
+        if p < 0 or p >= J:
+            gR[:, j] = R_local[:, j]
+            gP[:, j] = root_flat + offsets_t[j]
+        else:
+            gR[:, j] = gR[:, p] @ R_local[:, j]
+            gP[:, j] = gP[:, p] + (gR[:, p] @ offsets_t[j].view(1, 3, 1)).squeeze(-1)
+
+    return gP.reshape(*lead_shape, J, 3)

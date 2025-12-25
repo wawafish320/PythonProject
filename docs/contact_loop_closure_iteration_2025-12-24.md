@@ -200,11 +200,28 @@ Round 1（第 2 轮）：
 
 结论：time-PE 想在 **多轮循环** 下当 phase anchor，需要把时间输入变成 “phase-like”（例如 `t % cycle_len` / `t % clip_len`），或者让训练覆盖更大的 time_index 范围（单 clip 长度限制下做不到，只能通过“重复拼接/合成更长序列”或引入外部 phase 信号）。
 
-### 5.3 `contacts_meas` 仍偏向均值解（对 GT 的拟合不够好/信息不足）
+### 5.3 `contacts_meas` 仍偏向均值解：输入与 GT 生成机制不匹配（隐式 FK 过难）
 
-当前 meas 只看 `pose_history`/`angvel`，但数据集的 soft contact 来自 FootEvidence（更像“接触/高度/速度”的混合证据），未必能从旋转历史充分反推。
+把 GT 的 “soft contact” 生成路径先写清楚（来自原始 JSON 的 `FootEvidence.*` 字段）：
 
-现象上：
+- `pose` → FK → `foot_pos_world`
+- `foot_pos_world` → `foot_height_world_m` / `dist_to_ground_m`
+- `foot_pos_world` 的时间差分 → `vxy_mps` / `vz_mps`（或 `||v||`）
+- 一套门控/阈值/平滑（通常是 sigmoid/clip 的组合）→ `soft_contact_score ∈ [0, 1]`
+
+而当前 meas 是：
+
+- `pose_history, angvel` → `contact_meas_head`(MLP) → `contacts_meas`
+
+这会迫使 MLP **隐式学会一个“FK + 高度/速度证据”的复合测量函数**：
+
+- FK 是强非线性的链式传递（parent→child accumulation），并且对骨骼拓扑/骨长敏感；
+- `foot_height_world_m` 依赖世界系与 ground plane（若输入里没有显式的 root height / ground_z 信息，问题本质上是欠定的）；
+- 监督目标本身是 soft label（带噪/阈值平滑），再叠加 contact 分布不均衡时，最容易收敛到 **预测常数/均值** 来最小化期望误差。
+
+所以你给出的判断基本成立：**“MLP 需要隐式学 FK → 难 → 退化成均值解”是一个非常合理的根因解释**。
+
+现象上也符合：
 
 - `ContactMeasMean` 在 time-series 上非常平（std 很小），更像“均值解”而不是随动作 phase 起伏的传感器输出：
   - global/no-apply：mean≈`0.423`，std≈`0.016`
@@ -216,6 +233,101 @@ Round 1（第 2 轮）：
 这会让 `e_t = plan - meas` 的“测量侧”不够可靠：
 
 - 在 5.2 用 `time_index=t%cycle_len` 把 plan 的 multi-cycle OOD 修掉后，`ContactPlanGtAbsMean` 两轮都能维持在 `~0.06`；但由于 meas 仍接近均值解，`ContactErrAbsMean` 反而变成“近似常数偏置”，与 `GeoLocalDeg` 的相关性很弱（cycle/apply10 下 per-step corr≈`0.09`），因此很难形成有效的“随 drift 增长而增强”的负反馈去拉回姿态。
+
+#### 建议：把 `contacts_meas` 改成白盒 measurement function（可解释、无拟合误差）
+
+思路：直接复刻 FootEvidence 的逻辑：`pose → FK → foot_height/velocity → contact`，避免让 MLP 去学 FK。
+
+```python
+import torch
+import torch.nn.functional as F
+
+def contacts_meas(
+    dist_to_ground_m,      # (...,)  ≥0
+    vxy_mps,               # (...,)
+    vz_mps,                # (...,)
+    hit_flag=None,         # (...,) bool (可选，等价 FootEvidence.hit_flag)
+    *,
+    # 来自 meta['foot_evidence']['soft_score_spec']
+    dist0_cm=0.5,
+    alpha_dist=2.0,
+    vxy0_cmps=96.0,
+    alpha_vxy=0.2,
+    vz0_cmps=40.0,
+    alpha_vz=0.5,
+    # 与 JSON 的数值范围对齐（hit=1 时约在 [1e-4, 0.9]）
+    min_score=1e-4,
+    max_score=0.9,
+    scale=0.92,
+):
+    """
+    White-box contact measurement (FootEvidence-style):
+      pose -> FK -> dist_to_ground / (vxy, vz) -> soft_contact_score
+
+    关键点：
+      - dist gate 用 sigmoid（并归一化到 dist=0 时为 1）
+      - velocity gate 用 hinge + exp（低于阈值不惩罚）
+    """
+    dist_cm = dist_to_ground_m * 100.0
+    vxy_cmps = vxy_mps * 100.0
+    vz_cmps = vz_mps * 100.0
+
+    # distance gate (normalized so dist=0 -> 1.0)
+    dist0_cm = max(1e-6, float(dist0_cm))
+    alpha_dist = max(1e-6, float(alpha_dist))
+    dist_raw = torch.sigmoid(alpha_dist * (dist0_cm - dist_cm) / dist0_cm)
+    dist_score = (dist_raw / torch.sigmoid(torch.tensor(alpha_dist, device=dist_raw.device))).clamp(0.0, 1.0)
+
+    # velocity gates (no penalty when below thresholds)
+    vz0_cmps = max(1e-6, float(vz0_cmps))
+    alpha_vz = max(1e-6, float(alpha_vz))
+    vz_score = torch.exp(-F.relu(vz_cmps - vz0_cmps) / (alpha_vz * vz0_cmps))
+
+    vxy0_cmps = max(1e-6, float(vxy0_cmps))
+    alpha_vxy = max(1e-6, float(alpha_vxy))
+    vxy_score = torch.exp(-F.relu(vxy_cmps - vxy0_cmps) / (alpha_vxy * vxy0_cmps))
+
+    contacts = dist_score * vz_score * vxy_score
+    contacts = contacts * float(scale)
+    contacts = contacts.clamp(0.0, float(max_score))
+
+    if hit_flag is not None:
+        contacts = contacts * hit_flag.to(dtype=contacts.dtype)
+        # hit=1 时 clamp 到 min_score；hit=0 时保持 0
+        if float(min_score) > 0.0:
+            contacts = torch.where(hit_flag, contacts.clamp_min(float(min_score)), contacts)
+    elif float(min_score) > 0.0:
+        contacts = contacts.clamp_min(float(min_score))
+
+    return contacts
+```
+
+好处（vs MLP）：
+
+| 对比 | MLP meas | 白盒 meas |
+|------|----------|-----------|
+| 是否需要训练 | 要 | 不要（或只学少量标定参数） |
+| 是否有拟合误差 | 有（均值解风险） | 无（确定性映射） |
+| 可解释性 | 黑盒 | 完全可解释 |
+| 推理开销 | MLP forward | 几行数学运算 |
+
+对应闭环结构变成：
+
+```
+contacts_plan = GRU(cond, h_{t-1})                       ← 学习的：提供“期望节律/phase anchor”
+contacts_meas = WhiteBox(FK(pose) → height/velocity)     ← 确定的：提供“实际观测/sensor”
+e_t = plan - meas                                        ← 干净的误差信号
+```
+
+实现落点（代码层面）：
+
+- `train/training_MPL.py:Trainer._contact_meas_whitebox()`：用 `rot6d → FK → foot_pos` 直接算 `contacts_meas`
+- `train/validate/run_freerun_cycles.py` / `train/posttrain.py`：在 `contact_plan_enable=True` 的闭环路径里调用该白盒 meas
+
+备注：
+
+- 若担心阈值不准，可把 `dist0_cm/vxy0_cmps/vz0_cmps/alpha_*` 做成可学习标量（per-foot / per-action），但仍保持 “FK + 公式” 的白盒骨架；
+- 这不会自动解决所有 drift（corrector 仍需要稳定训练），但会显著提升 `contacts_err` 的时序信息量与与姿态误差的相关性，是后续纠偏稳定性的前提。
 
 ---
 
@@ -255,6 +367,7 @@ Round 1（第 2 轮）：
 
 当前 meas 仅由旋转历史推断接触，可能信息不足。可选增强：
 
+- **白盒 meas**：用 `pose → FK → foot_height/velocity → contact` 直接算 `contacts_meas`（见 5.3），避免 MLP 隐式学 FK；
 - 给 meas 增加更接触相关的输入：root/bone velocity、foot height proxy、骨骼末端速度/加速度等；
 - 对 meas 做不确定性/可靠性建模（输出 `reliability r_t`），用 `e_t := r_t*(plan-meas)` 调制纠偏强度；
 - 在训练中加入“带漂移输入”的 meas 强化（对 pose_history 做 delay/noise/drop 已有雏形，可继续增强）。

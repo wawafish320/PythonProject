@@ -192,6 +192,221 @@ class Trainer:
         import torch
         return torch.ones(joint_count, device=ref_tensor.device, dtype=ref_tensor.dtype)
 
+    def _contact_meas_whitebox(self, x_raw, prev_foot_pos=None):
+        """
+        White-box contacts_meas:
+            pose (rot6d) -> FK -> foot height/velocity -> contact score
+
+        Returns:
+            contacts_meas: (B, C) or None
+            foot_pos: (B, C, 3) detached for next-step velocity, or None
+        """
+        import torch
+        if x_raw is None or (not torch.is_tensor(x_raw)):
+            return None, prev_foot_pos
+        if x_raw.dim() == 3 and x_raw.size(1) == 1:
+            x_raw = x_raw[:, 0]
+        if x_raw.dim() != 2:
+            return None, prev_foot_pos
+        contact_dim = int(getattr(self.model, "contact_dim", 0) or 0) if getattr(self, "model", None) is not None else 0
+        if contact_dim <= 0:
+            return None, prev_foot_pos
+
+        x_layout = getattr(self, "_x_layout", None) or {}
+        rot_sl = self._sl_from_layout(x_layout, "BoneRotations6D")
+        if not isinstance(rot_sl, slice):
+            return None, prev_foot_pos
+        rot_flat = x_raw[..., rot_sl]
+        if rot_flat.numel() == 0 or (rot_flat.shape[-1] % 6 != 0):
+            return None, prev_foot_pos
+        J = int(rot_flat.shape[-1] // 6)
+
+        parents = getattr(self.loss_fn, "parents", None)
+        offsets = getattr(self.loss_fn, "bone_offsets", None)
+        if not parents or offsets is None:
+            return None, prev_foot_pos
+        if offsets.shape[0] < J:
+            return None, prev_foot_pos
+
+        bone_names_src = getattr(self.loss_fn, "bone_names", None) or getattr(self, "_bone_names", None)
+        if not bone_names_src:
+            meta = getattr(self.loss_fn, "meta", None)
+            if isinstance(meta, dict):
+                bone_names_src = meta.get("bone_names") or meta.get("skeleton", {}).get("bone_names")
+        bone_names = [str(b) for b in bone_names_src] if isinstance(bone_names_src, (list, tuple)) else []
+
+        foot_idxs = getattr(self, "_contact_meas_foot_idxs", None)
+        if not isinstance(foot_idxs, (list, tuple)) or len(foot_idxs) != contact_dim:
+            foot_idxs = None
+        if foot_idxs is None:
+            foot_idxs = []
+            name_to_idx = {n: i for i, n in enumerate(bone_names[:J])} if bone_names else {}
+            meta = getattr(self.loss_fn, "meta", None)
+            if isinstance(meta, dict):
+                markers = meta.get("foot_evidence", {}).get("markers")
+                if isinstance(markers, str):
+                    for nm in [s.strip() for s in markers.split(",") if s.strip()]:
+                        if nm in name_to_idx:
+                            foot_idxs.append(int(name_to_idx[nm]))
+            for nm in ("ball_l", "ball_r", "foot_l", "foot_r"):
+                if len(foot_idxs) >= contact_dim:
+                    break
+                idx = name_to_idx.get(nm)
+                if isinstance(idx, int) and 0 <= idx < J and idx not in foot_idxs:
+                    foot_idxs.append(int(idx))
+            if len(foot_idxs) != contact_dim:
+                return None, prev_foot_pos
+            self._contact_meas_foot_idxs = list(foot_idxs)
+
+        root_sl = self._sl_from_layout(x_layout, "RootPosition")
+        if isinstance(root_sl, slice) and (root_sl.stop - root_sl.start) == 3:
+            root_pos = x_raw[..., root_sl]
+        else:
+            root_pos = x_raw.new_zeros((x_raw.shape[0], 3))
+
+        up_axis = int(getattr(self, "eval_up_axis", getattr(self, "_up_axis", 2)))
+        up_axis = 2 if up_axis not in (0, 1, 2) else up_axis
+
+        cfg = getattr(self, "_contact_meas_cfg", None)
+        if not isinstance(cfg, dict):
+            meta = getattr(self.loss_fn, "meta", None)
+            fe = (meta.get("foot_evidence") if isinstance(meta, dict) else {}) or {}
+            sweep = (fe.get("sweep") if isinstance(fe, dict) else {}) or {}
+            spec = (fe.get("soft_score_spec") if isinstance(fe, dict) else {}) or {}
+
+            def _f(d, k, default):
+                if not isinstance(d, dict):
+                    return default
+                try:
+                    v = float(d.get(k, default))
+                except Exception:
+                    v = default
+                return default if (not math.isfinite(v)) else v
+
+            radius_cm = _f(sweep, "sphere_radius_cm", 0.0)
+            up_offset_cm = _f(sweep, "up_offset_cm", 0.0)
+            down_distance_cm = _f(sweep, "down_distance_cm", 0.0)
+
+            cfg = {
+                "radius_m": max(0.0, radius_cm) / 100.0,
+                "up_offset_m": max(0.0, up_offset_cm) / 100.0,
+                "down_distance_m": max(0.0, down_distance_cm) / 100.0,
+                "dist0_cm": max(0.0, _f(spec, "dist0_cm", 0.5)),
+                "alpha_dist": max(1e-6, _f(spec, "alpha_dist", 2.0)),
+                "vz0_cmps": max(1e-6, _f(spec, "vz0_cmps", 40.0)),
+                "alpha_vz": max(1e-6, _f(spec, "alpha_vz", 0.5)),
+                "vxy0_cmps": max(1e-6, _f(spec, "vxy0_cmps", 96.0)),
+                "alpha_vxy": max(1e-6, _f(spec, "alpha_vxy", 0.2)),
+                "gate_by_hit": bool(spec.get("gate_by_hit", True)) if isinstance(spec, dict) else True,
+                # Empirically close to the JSON FootEvidence range (~[1e-4, 0.9]).
+                "min_score": 1e-4,
+                "max_score": 0.9,
+                "scale": 0.92,
+            }
+            self._contact_meas_cfg = cfg
+
+        with torch.no_grad():
+            try:
+                from train.geometry import fk_positions_from_rot6d, reproject_rot6d
+            except ImportError:  # pragma: no cover
+                from geometry import fk_positions_from_rot6d, reproject_rot6d
+
+            cols = getattr(self.loss_fn, "_rot6d_columns", ("X", "Z"))
+            rot_proj = reproject_rot6d(rot_flat).view(x_raw.shape[0], J, 6)
+            pos = fk_positions_from_rot6d(rot_proj, parents, offsets, root_pos=root_pos, columns=cols)  # (B,J,3)
+            foot_pos = pos[:, torch.as_tensor(foot_idxs, device=pos.device, dtype=torch.long)]  # (B,C,3)
+
+            if prev_foot_pos is None or (not torch.is_tensor(prev_foot_pos)) or prev_foot_pos.shape != foot_pos.shape:
+                vel = torch.zeros_like(foot_pos)
+            else:
+                vel = (foot_pos - prev_foot_pos.to(device=foot_pos.device, dtype=foot_pos.dtype)) * float(getattr(self, "fps", 60.0) or 60.0)
+
+            planar_axes = [0, 1, 2]
+            planar_axes.remove(up_axis)
+            vxy_mps = vel[..., planar_axes].norm(dim=-1)
+            vz_mps = vel[..., up_axis].abs()
+
+            radius_m = float(cfg.get("radius_m", 0.0) or 0.0)
+            bottom_z = foot_pos[..., up_axis] - radius_m  # (B, C)
+            ground_z_now = bottom_z.min(dim=-1).values  # (B,)
+            ground_z_prev = getattr(self, "_contact_meas_ground_z", None)
+            if (
+                ground_z_prev is None
+                or (not torch.is_tensor(ground_z_prev))
+                or ground_z_prev.shape != ground_z_now.shape
+                or (prev_foot_pos is None)
+            ):
+                ground_z = ground_z_now
+            else:
+                ground_z = torch.minimum(ground_z_prev.to(device=ground_z_now.device, dtype=ground_z_now.dtype), ground_z_now)
+            self._contact_meas_ground_z = ground_z.detach()
+
+            dist_to_ground_m = (bottom_z - ground_z.unsqueeze(-1)).clamp_min(0.0)
+
+            # Gate by sweep hit (matches JSON behavior: hit_flag=0 => contact=0).
+            hit_flag = None
+            if bool(cfg.get("gate_by_hit", True)):
+                up_off = float(cfg.get("up_offset_m", 0.0) or 0.0)
+                down_dist = float(cfg.get("down_distance_m", 0.0) or 0.0)
+                start_z = foot_pos[..., up_axis] + up_off
+                # Sphere-sweep hits the ground when the *center* crosses (ground_z + radius).
+                sweep_target_z = ground_z.unsqueeze(-1) + radius_m
+                hit_flag = (start_z >= sweep_target_z) & ((start_z - down_dist) <= sweep_target_z)
+
+            # FootEvidence-style soft score in cm / cmps.
+            # A robust, explainable sensor: contact is high when the foot is close to the estimated ground plane
+            # and the foot is not moving too fast (esp. vertical velocity).
+            #
+            # We intentionally use a hinge-style velocity gate (no penalty below threshold) to keep the meas signal
+            # sharp and interpretable; thresholds/softness are taken from meta['foot_evidence']['soft_score_spec'].
+            dist_cm = dist_to_ground_m * 100.0
+            vz_cmps = vz_mps * 100.0
+            vxy_cmps = vxy_mps * 100.0
+
+            dist0_cm = float(cfg.get("dist0_cm", 0.5) or 0.5)
+            dist0_cm = max(1e-6, dist0_cm)
+            alpha_dist = float(cfg.get("alpha_dist", 2.0) or 2.0)
+            if (not math.isfinite(alpha_dist)) or alpha_dist <= 0.0:
+                alpha_dist = 2.0
+            # Normalize so dist_score==1 at dist=0 (i.e., on the ground) regardless of alpha_dist.
+            # dist_raw in (0,1) with dist_raw(dist=0)=sigmoid(alpha_dist).
+            dist_raw = torch.sigmoid((alpha_dist * (dist0_cm - dist_cm)) / dist0_cm)
+            dist_raw_max = 1.0 / (1.0 + math.exp(-alpha_dist))  # sigmoid(alpha_dist)
+            dist_score = (dist_raw / max(1e-6, float(dist_raw_max))).clamp(0.0, 1.0)
+
+            vz0_cmps = float(cfg.get("vz0_cmps", 40.0) or 40.0)
+            vz0_cmps = max(1e-6, vz0_cmps)
+            alpha_vz = float(cfg.get("alpha_vz", 0.5) or 0.5)
+            if (not math.isfinite(alpha_vz)) or alpha_vz <= 0.0:
+                alpha_vz = 0.5
+            denom_vz = max(1e-6, alpha_vz * vz0_cmps)
+            vz_score = torch.exp(-torch.relu(vz_cmps - vz0_cmps) / denom_vz)
+
+            vxy0_cmps = float(cfg.get("vxy0_cmps", 96.0) or 96.0)
+            vxy0_cmps = max(1e-6, vxy0_cmps)
+            alpha_vxy = float(cfg.get("alpha_vxy", 0.2) or 0.2)
+            if (not math.isfinite(alpha_vxy)) or alpha_vxy <= 0.0:
+                alpha_vxy = 0.2
+            denom_vxy = max(1e-6, alpha_vxy * vxy0_cmps)
+            vxy_score = torch.exp(-torch.relu(vxy_cmps - vxy0_cmps) / denom_vxy)
+
+            contacts_meas = dist_score * vz_score * vxy_score
+            scale = float(cfg.get("scale", 1.0) or 1.0)
+            if math.isfinite(scale) and scale > 0.0:
+                contacts_meas = contacts_meas * scale
+            if hit_flag is not None:
+                contacts_meas = contacts_meas * hit_flag.to(dtype=contacts_meas.dtype)
+
+            contacts_meas = contacts_meas.clamp(0.0, float(cfg.get("max_score", 1.0) or 1.0))
+            min_score = float(cfg.get("min_score", 0.0) or 0.0)
+            if min_score > 0.0:
+                if hit_flag is not None:
+                    contacts_meas = torch.where(hit_flag, contacts_meas.clamp_min(min_score), contacts_meas)
+                else:
+                    contacts_meas = contacts_meas.clamp_min(min_score)
+
+        return contacts_meas, foot_pos.detach()
+
     def _rollout_sequence(
         self,
         state_seq,
@@ -232,6 +447,7 @@ class Trainer:
         period_preds = []
         hidden_preds = []
         contacts_plan_preds = []
+        direct_pose_preds = []
         contacts_meas_preds = []
         contacts_err_preds = []
         last_attn = None
@@ -343,6 +559,7 @@ class Trainer:
             if h_plan > 0:
                 plan_z = state_seq.new_zeros((B, h_plan))
         prev_pose_hist_meas = None
+        prev_foot_pos_meas = None
 
         time_base_local = time_base
         if torch.is_tensor(time_base_local):
@@ -358,7 +575,12 @@ class Trainer:
             # - legacy training may feed GT soft-contacts as an extra input feature;
             # - the new plan/meas design keeps train/infer loop-closed by NOT depending on external contacts.
             contacts_in_t = None
-            if (not plan_enable) and (not bool(getattr(self.model, "contact_meas_enable", False))):
+            if plan_enable:
+                try:
+                    contacts_in_t, prev_foot_pos_meas = self._contact_meas_whitebox(motion_raw_local, prev_foot_pos_meas)
+                except Exception:
+                    contacts_in_t = None
+            elif not bool(getattr(self.model, "contact_meas_enable", False)):
                 try:
                     if contacts_seq is not None:
                         contacts_in_t = contacts_seq[:, t] if has_time_dim['contacts'] else contacts_seq
@@ -504,6 +726,16 @@ class Trainer:
                         elif cp.dim() >= 3 and cp.size(1) != 1:
                             cp = cp[:, -1:, ...]
                         contacts_plan_preds.append(cp)
+                except Exception:
+                    pass
+                try:
+                    direct_out = ret.get('out_direct', None)
+                    if direct_out is not None:
+                        if direct_out.dim() == 2:
+                            direct_out = direct_out.unsqueeze(1)
+                        elif direct_out.dim() >= 3 and direct_out.size(1) != 1:
+                            direct_out = direct_out[:, -1:, ...]
+                        direct_pose_preds.append(direct_out)
                 except Exception:
                     pass
                 try:
@@ -658,6 +890,11 @@ class Trainer:
         if contacts_plan_preds:
             try:
                 preds['contacts_plan'] = torch.cat(contacts_plan_preds, dim=1)
+            except Exception:
+                pass
+        if direct_pose_preds:
+            try:
+                preds['out_direct'] = torch.cat(direct_pose_preds, dim=1)
             except Exception:
                 pass
         if contacts_meas_preds:
@@ -4366,6 +4603,21 @@ def train_entry():
                    help="Phase2: 将 contacts_plan / plan_z 前馈注入主干输入（none=关闭）")
     p.add_argument('--contact_plan_inject_detach', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
                    help="注入主干时对 plan 特征 stop-grad（保持 plan 语义为独立锚点；推荐开启）")
+    p.add_argument('--contact_plan_time_pe_dim', type=int, default=0,
+                   help='contacts_plan time positional encoding dim（0=关闭；推荐 8/16）')
+    p.add_argument('--contact_plan_time_pe_base', type=float, default=10000.0,
+                   help='contacts_plan time-PE 频率基数（默认 10000）')
+    # ---- Direct pose head (cond + contacts_plan -> absolute pose) ----
+    p.add_argument('--direct_pose_enable', action='store_true', default=False,
+                   help='启用 direct pose head（cond+contacts_plan -> out_direct，不走自回归）')
+    p.add_argument('--direct_pose_hidden', type=int, default=256,
+                   help='direct pose head hidden dim')
+    p.add_argument('--direct_pose_dropout', type=float, default=0.0,
+                   help='direct pose head dropout')
+    p.add_argument('--direct_pose_detach_plan', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
+                   help='direct head 输入 contacts_plan 时 stop-grad（推荐开启）')
+    p.add_argument('--w_direct_pose', type=float, default=0.0,
+                   help='direct pose 监督权重（geodesic vs GT pose；0=关闭）')
     # ---- Meas head (pose-derived contacts; no physics) ----
     p.add_argument('--contact_meas_enable', action='store_true', default=False,
                    help='启用 contacts_meas head（从 pose_hist/angvel 推导 soft contact）')
@@ -4617,9 +4869,16 @@ def train_entry():
         contact_plan_dropout=float(_arg('contact_plan_dropout', 0.0) or 0.0),
         contact_plan_inject=str(_arg('contact_plan_inject', 'none') or 'none'),
         contact_plan_inject_detach=bool(_arg('contact_plan_inject_detach', True)),
+        contact_plan_time_pe_dim=int(_arg('contact_plan_time_pe_dim', 0) or 0),
+        contact_plan_time_pe_base=float(_arg('contact_plan_time_pe_base', 10000.0) or 10000.0),
+        direct_pose_enable=bool(_arg('direct_pose_enable', False)),
+        direct_pose_hidden=int(_arg('direct_pose_hidden', 256) or 256),
+        direct_pose_dropout=float(_arg('direct_pose_dropout', 0.0) or 0.0),
+        direct_pose_detach_plan=bool(_arg('direct_pose_detach_plan', True)),
         contact_meas_enable=bool(_arg('contact_meas_enable', False)),
         contact_meas_hidden=int(_arg('contact_meas_hidden', 64) or 64),
         contact_meas_dropout=float(_arg('contact_meas_dropout', 0.0) or 0.0),
+        contacts_as_meas_override=bool(_arg('contact_plan_enable', False)),
     ).to(device)
     if history_export_frames > 0:
         if pose_hist_dim_raw <= 0 or pose_hist_len_raw <= 0:
@@ -4735,6 +4994,7 @@ def train_entry():
         w_root_speed=w_root_speed,
         w_contact_plan=float(_arg('w_contact_plan', 0.0) or 0.0),
         w_contact_meas=float(_arg('w_contact_meas', 0.0) or 0.0),
+        w_direct_pose=float(_arg('w_direct_pose', 0.0) or 0.0),
 
         adaptive_bone_weights=adaptive_bone_weights,
         bone_prior_stds=bone_prior_stds,
@@ -4824,6 +5084,7 @@ def train_entry():
     # 一次性归一化数值诊断
     _norm_debug_once(trainer, train_loader, thr=float(_arg('diag_thr')), topk=int(_arg('diag_topk')), print_to_console=False)
     trainer.bone_hz = fps_data
+    trainer.fps = float(fps_data)
     # --- Loop-closure knobs: meas input corruption (enhance plan!=meas mismatch) ---
     trainer.meas_pose_hist_drop_prob = float(_arg('meas_pose_hist_drop_prob', 0.0) or 0.0)
     trainer.meas_pose_hist_delay_prob = float(_arg('meas_pose_hist_delay_prob', 0.0) or 0.0)

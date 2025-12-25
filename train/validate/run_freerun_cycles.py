@@ -312,6 +312,7 @@ class FreeRunCycleRunner:
             contact_meas_enable=bool(contact_meas_enable),
             contact_meas_hidden=int(contact_meas_hidden),
             contact_meas_dropout=0.0,
+            contacts_as_meas_override=bool(contact_plan_enable or contact_plan_inject != "none"),
         ).to(self.device)
         # Validate basic shapes then load weights (allow extra frozen encoder keys).
         validate_and_fix_model_(model, Dx, Dc)
@@ -359,6 +360,11 @@ class FreeRunCycleRunner:
         self.bundle.apply_to_dataset(ds)
         self.bundle.apply_to_trainer(trainer)
         trainer._bundle_meta = dict(self.bundle.meta)
+        try:
+            trainer.fps = float(getattr(self.bundle, "fps", None) or getattr(ds, "fps", 60.0) or 60.0)
+            trainer.bone_hz = float(trainer.fps)
+        except Exception:
+            pass
         trainer.pose_hist_len = int(getattr(ds, "pose_hist_len", 0) or 0)
         trainer.pose_hist_dim = int(getattr(ds, "pose_hist_dim", 0) or 0)
         pose_norm = getattr(ds, "pose_hist_norm", None)
@@ -707,6 +713,7 @@ def _run_freerun_cycles(
     ref_err_sum = 0.0
     ref_err_count = 0
     ref_err_value: Optional[float] = None
+    prev_foot_pos_meas = None
 
     for t in range(start_t, end_t):
         cond_input = cond_seq[:, t] if (cond_seq is not None and cond_seq.dim() == 3) else cond_seq
@@ -770,10 +777,18 @@ def _run_freerun_cycles(
             # global / auto(single-round): keep increasing global step index
             time_index_t = int(t)
 
+        contacts_in_t = None
+        if plan_enable:
+            try:
+                contacts_in_t, prev_foot_pos_meas = trainer._contact_meas_whitebox(motion_raw, prev_foot_pos_meas)
+            except Exception:
+                contacts_in_t = None
+
         with amp_ctx:
             ret = model(
                 motion,
                 cond_input,
+                contacts=contacts_in_t,
                 angvel=angvel_t,
                 pose_history=pose_hist_t,
                 plan_z=plan_z,
@@ -1410,12 +1425,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="auto",
         choices=("auto", "global", "cycle", "none"),
-        help=(
-            "How to feed time_index into EventMotionModel (used by contact_plan time-PE). "
-            "'global' uses the global step t; 'cycle' uses (t % cycle_len) to stay in-range under multi-cycle; "
-            "'auto' uses 'cycle' when rounds>1 else 'global'; 'none' disables time_index."
-        ),
-    )
+	        help=(
+	            "How to feed time_index into EventMotionModel (used by contact_plan time-PE). "
+	            "'global' uses the global step t; 'cycle' uses (t %% cycle_len) to stay in-range under multi-cycle; "
+	            "'auto' uses 'cycle' when rounds>1 else 'global'; 'none' disables time_index."
+	        ),
+	    )
     parser.add_argument(
         "--round-seg-mode",
         type=str,

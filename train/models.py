@@ -249,6 +249,11 @@ class EventMotionModel(nn.Module):
         # Implemented as an additive bias on contact_plan logits: logits += time_head(PE(t)).
         contact_plan_time_pe_dim: int = 0,  # 0 disables; recommended 8/16
         contact_plan_time_pe_base: float = 10000.0,
+        # ===== Direct Pose Head (cond + contacts_plan -> absolute pose in Y space) =====
+        direct_pose_enable: bool = False,
+        direct_pose_hidden: int = 256,
+        direct_pose_dropout: float = 0.0,
+        direct_pose_detach_plan: bool = True,
         # ===== Contact Meas (pose-derived, no physics) =====
         contact_meas_enable: bool = False,
         contact_meas_hidden: int = 64,
@@ -293,6 +298,10 @@ class EventMotionModel(nn.Module):
         if self.contact_plan_time_pe_dim % 2 == 1:
             self.contact_plan_time_pe_dim += 1
         self._contact_plan_time_pe_base = float(contact_plan_time_pe_base or 10000.0)
+        self.direct_pose_enable = bool(direct_pose_enable)
+        self.direct_pose_hidden = max(8, int(direct_pose_hidden or 0))
+        self._direct_pose_dropout = float(direct_pose_dropout)
+        self.direct_pose_detach_plan = bool(direct_pose_detach_plan)
 
         plan_inject_dim = 0
         if self.contact_plan_enable:
@@ -365,6 +374,7 @@ class EventMotionModel(nn.Module):
         self.contact_plan_cell: Optional[nn.GRUCell] = None
         self.contact_plan_head: Optional[nn.Module] = None
         self.contact_plan_time_head: Optional[nn.Module] = None
+        self.direct_pose_head: Optional[nn.Module] = None
         if self.contact_plan_enable:
             h_plan = int(self.contact_plan_hidden)
             self.contact_plan_cell = nn.GRUCell(self.cond_dim, h_plan)
@@ -384,6 +394,20 @@ class EventMotionModel(nn.Module):
                             self.contact_plan_time_head.bias.zero_()
                 except Exception:
                     pass
+
+            if self.direct_pose_enable:
+                in_dim = int(self.cond_dim + self.contact_dim)
+                hid = int(self.direct_pose_hidden)
+                drop = float(self._direct_pose_dropout)
+                self.direct_pose_head = nn.Sequential(
+                    nn.Linear(in_dim, hid),
+                    nn.ReLU(),
+                    nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                    nn.Linear(hid, hid),
+                    nn.ReLU(),
+                    nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                    nn.Linear(hid, int(self.out_motion_dim)),
+                )
 
         # ===== Contact Meas (pose-derived, cheap; no physics) =====
         self.contact_meas_enable = bool(contact_meas_enable and self.contact_dim > 0)
@@ -791,6 +815,19 @@ class EventMotionModel(nn.Module):
         }
         result['h_final'] = hidden_out
 
+        # ---- Direct pose head (cond + contacts_plan -> absolute Y) ----
+        if self.direct_pose_head is not None and contacts_plan is not None:
+            try:
+                plan_in = contacts_plan.detach() if self.direct_pose_detach_plan else contacts_plan
+                direct_in = torch.cat([cond, plan_in.to(device=device, dtype=dtype)], dim=-1)
+                direct_flat = direct_in.reshape(-1, direct_in.shape[-1])
+                direct_out = self.direct_pose_head(direct_flat).view(B, Tq, -1)
+                if is_single:
+                    direct_out = direct_out.squeeze(1)
+                result['out_direct'] = direct_out
+            except Exception:
+                pass
+
         # ---- Contact meas (pose-derived) + error signal ----
         e_t = None
         contacts_meas = None
@@ -932,6 +969,8 @@ class MotionJointLoss(nn.Module):
         w_contact_plan: float = 0.0,
         # Optional: supervise meas head (pose-derived contacts)
         w_contact_meas: float = 0.0,
+        # Optional: supervise direct pose head (cond + contacts_plan -> absolute pose)
+        w_direct_pose: float = 0.0,
         # Optional: regularize omega_hat magnitude (prevents aggressive corrections)
         w_omega_l2: float = 0.0,
 
@@ -954,6 +993,7 @@ class MotionJointLoss(nn.Module):
         self.w_root_speed = float(w_root_speed)
         self.w_contact_plan = float(w_contact_plan)
         self.w_contact_meas = float(w_contact_meas)
+        self.w_direct_pose = float(w_direct_pose)
         self.w_omega_l2 = float(w_omega_l2)
         # Tail-risk regularization for per-bone rotation errors (CVaR / top-k style).
         # When enabled, adds an extra term on the worst bones (by mean GeoLocalDeg),
@@ -1028,6 +1068,7 @@ class MotionJointLoss(nn.Module):
             'rot_local': 'core',
             'root_vel': 'core',
             'root_speed': 'core',
+            'direct_pose': 'core',
         }
 
         # === adaptive bone weight params ===
@@ -1971,6 +2012,33 @@ class MotionJointLoss(nn.Module):
         else:
             stats.setdefault('root_vel_mse', 0.0)
             stats.setdefault('root_speed_mae', 0.0)
+
+        # Direct pose supervision (cond + contacts_plan -> absolute pose)
+        if self.w_direct_pose > 0.0 and isinstance(pred_motion, dict):
+            try:
+                direct = pred_motion.get('out_direct', None)
+                if torch.is_tensor(direct):
+                    if direct.dim() == 2 and gm.dim() == 3:
+                        direct = direct.unsqueeze(1)
+                    gm_direct = gm
+                    if gm_direct.dim() == 2 and direct.dim() == 3:
+                        gm_direct = gm_direct.unsqueeze(1)
+                    if direct.dim() == 3 and gm_direct.dim() == 3:
+                        T = min(int(direct.shape[1]), int(gm_direct.shape[1]))
+                        if T > 0:
+                            l_direct = self.compute_rot6d_geo_loss(direct[:, :T], gm_direct[:, :T])
+                            loss = loss + self.w_direct_pose * l_direct
+                            self._accumulate_loss_contrib('direct_pose', l_direct, self.w_direct_pose, group='core')
+                            stats['direct_pose_geo'] = float(l_direct.detach().cpu())
+                            stats['direct_pose_geo_deg'] = float((l_direct * (180.0 / math.pi)).detach().cpu())
+                            stats['direct_pose_weighted'] = float((self.w_direct_pose * l_direct).detach().cpu())
+                            self._register_component_loss('direct_pose', l_direct, self.w_direct_pose)
+            except Exception:
+                pass
+        else:
+            stats.setdefault('direct_pose_geo', 0.0)
+            stats.setdefault('direct_pose_geo_deg', 0.0)
+            stats.setdefault('direct_pose_weighted', 0.0)
 
         # Contact plan supervision (soft targets in [0,1])
         if self.w_contact_plan > 0.0 and isinstance(pred_motion, dict) and isinstance(batch, dict):
