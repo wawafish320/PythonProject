@@ -16,6 +16,7 @@
 7. [评估系统](#评估系统)
 8. [配置系统](#配置系统)
 9. [关键创新点](#关键创新点)
+10. [Contact Loop Closure & Stage2 λ Fusion](contact_loop_closure_design.md)
 
 ---
 
@@ -399,6 +400,8 @@ pos = fk_positions_from_rot6d(
 ---
 
 ## 训练流程
+
+> 说明：关于 **Contact-loop / Stage2（λ Gate + SO(3) on-manifold 融合，把 `out_direct` 真正接入 rollout）** 的完整设计、诊断与验收指标，见 `docs/contact_loop_closure_design.md`。
 
 ### training_MPL.py: Trainer类
 

@@ -245,15 +245,46 @@ class EventMotionModel(nn.Module):
         contact_plan_dropout: float = 0.0,
         contact_plan_inject: str = "none",  # 'none' | 'contacts' | 'plan_z'
         contact_plan_inject_detach: bool = True,
+        # Contact-plan output head mode:
+        # - sigmoid: independent per-channel Bernoulli (legacy): contacts_plan = sigmoid(logits[C])
+        # - joint4 : coupled 4-state softmax -> (L,R) (recommended when contact_dim==2):
+        #     p = softmax([L_only, R_only, both, none])
+        #     L = p[L_only] + p[both]; R = p[R_only] + p[both]
+        contact_plan_head_mode: str = "sigmoid",  # 'sigmoid' | 'joint4'
         # Optional: time embedding for contact_plan (helps when cond has little/no phase info).
         # Implemented as an additive bias on contact_plan logits: logits += time_head(PE(t)).
         contact_plan_time_pe_dim: int = 0,  # 0 disables; recommended 8/16
         contact_plan_time_pe_base: float = 10000.0,
+        # Contact-plan init (cold-start): how to initialize plan_z when plan_z is None.
+        # - zeros: init plan_z as zeros
+        # - learnable: use learnable contact_plan_init_z (default, backward compatible)
+        # - obs: init from observation features (contacts/angvel/pose_history) via a small MLP
+        # - learnable+obs: use learnable init_z + obs-conditioned delta (recommended for phase/anchor disambiguation)
+        contact_plan_init_mode: str = "learnable",
+        contact_plan_init_hidden: int = 128,
+        contact_plan_init_dropout: float = 0.0,
         # ===== Direct Pose Head (cond + contacts_plan -> absolute pose in Y space) =====
         direct_pose_enable: bool = False,
         direct_pose_hidden: int = 256,
         direct_pose_dropout: float = 0.0,
         direct_pose_detach_plan: bool = True,
+        # Optional: phase-hint bridge for direct head (see docs/phase_disambiguation_bridge.md)
+        # - none: direct uses (cond, contacts_plan) only (legacy)
+        # - concat: direct uses (cond, contacts_plan, contacts_meas) (D0)
+        # - mode_select: predict 2 modes from (cond, contacts_plan) and blend by contacts_meas (D1)
+        direct_pose_meas_mode: str = "none",  # 'none' | 'concat' | 'mode_select'
+        # Train-time corruption for robustness / avoid shortcutting (D2)
+        direct_pose_meas_drop_prob: float = 0.0,  # drop (zero) meas hint per-step
+        direct_pose_meas_noise_std: float = 0.0,  # add noise then clamp to [0,1]
+        direct_pose_plan_drop_prob: float = 0.0,  # drop (zero) plan input per-step
+        # ===== Stage2: λ Fusion Gate (incremental vs direct) =====
+        lambda_fusion_enable: bool = False,
+        lambda_fusion_mode: str = "per_joint",  # "global" | "per_joint"
+        lambda_fusion_hidden: int = 128,
+        lambda_fusion_dropout: float = 0.0,
+        lambda_fusion_detach_err: bool = True,
+        lambda_fusion_logit_init: float = -2.0,
+        lambda_fusion_use_rollout_step: bool = False,
         # ===== Contact Meas (pose-derived, no physics) =====
         contact_meas_enable: bool = False,
         contact_meas_hidden: int = 64,
@@ -289,6 +320,12 @@ class EventMotionModel(nn.Module):
         if self.contact_plan_inject not in ("none", "contacts", "plan_z"):
             self.contact_plan_inject = "none"
         self.contact_plan_inject_detach = bool(contact_plan_inject_detach)
+        self.contact_plan_head_mode = str(contact_plan_head_mode or "sigmoid").lower().strip()
+        if self.contact_plan_head_mode not in ("sigmoid", "joint4"):
+            self.contact_plan_head_mode = "sigmoid"
+        if self.contact_plan_head_mode == "joint4" and self.contact_dim != 2:
+            raise ValueError(f"contact_plan_head_mode='joint4' requires contact_dim==2, got {self.contact_dim}.")
+        self._contact_plan_logits_dim = 4 if self.contact_plan_head_mode == "joint4" else self.contact_dim
         self.contacts_as_meas_override = bool(contacts_as_meas_override)
         self.adaptive_history_module: Optional[AdaptiveHistoryModule] = None
         self._adaptive_history_diag: Optional[dict[str, torch.Tensor | float]] = None
@@ -298,10 +335,32 @@ class EventMotionModel(nn.Module):
         if self.contact_plan_time_pe_dim % 2 == 1:
             self.contact_plan_time_pe_dim += 1
         self._contact_plan_time_pe_base = float(contact_plan_time_pe_base or 10000.0)
+        self.contact_plan_init_mode = str(contact_plan_init_mode or "learnable").lower().strip()
+        if self.contact_plan_init_mode in ("learnable_obs", "obs+learnable", "learnable+obs"):
+            self.contact_plan_init_mode = "learnable+obs"
+        if self.contact_plan_init_mode not in ("zeros", "learnable", "obs", "learnable+obs"):
+            self.contact_plan_init_mode = "learnable"
+        self.contact_plan_init_hidden = max(8, int(contact_plan_init_hidden or 0))
+        self._contact_plan_init_dropout = float(contact_plan_init_dropout or 0.0)
         self.direct_pose_enable = bool(direct_pose_enable)
         self.direct_pose_hidden = max(8, int(direct_pose_hidden or 0))
         self._direct_pose_dropout = float(direct_pose_dropout)
         self.direct_pose_detach_plan = bool(direct_pose_detach_plan)
+        self.direct_pose_meas_mode = str(direct_pose_meas_mode or "none").lower().strip()
+        if self.direct_pose_meas_mode not in ("none", "concat", "mode_select"):
+            self.direct_pose_meas_mode = "none"
+        self.direct_pose_meas_drop_prob = float(direct_pose_meas_drop_prob or 0.0)
+        self.direct_pose_meas_noise_std = float(direct_pose_meas_noise_std or 0.0)
+        self.direct_pose_plan_drop_prob = float(direct_pose_plan_drop_prob or 0.0)
+        self.lambda_fusion_enable = bool(lambda_fusion_enable)
+        self.lambda_fusion_mode = str(lambda_fusion_mode or "per_joint").lower().strip()
+        if self.lambda_fusion_mode not in ("global", "per_joint"):
+            self.lambda_fusion_mode = "per_joint"
+        self.lambda_fusion_hidden = max(8, int(lambda_fusion_hidden or 0))
+        self._lambda_fusion_dropout = float(lambda_fusion_dropout)
+        self.lambda_fusion_detach_err = bool(lambda_fusion_detach_err)
+        self._lambda_fusion_logit_init = float(lambda_fusion_logit_init)
+        self.lambda_fusion_use_rollout_step = bool(lambda_fusion_use_rollout_step)
 
         plan_inject_dim = 0
         if self.contact_plan_enable:
@@ -374,19 +433,50 @@ class EventMotionModel(nn.Module):
         self.contact_plan_cell: Optional[nn.GRUCell] = None
         self.contact_plan_head: Optional[nn.Module] = None
         self.contact_plan_time_head: Optional[nn.Module] = None
+        self.contact_plan_init_z: Optional[nn.Parameter] = None
+        self.contact_plan_init_head: Optional[nn.Module] = None
+        self._contact_plan_init_obs_dim: int = 0
         self.direct_pose_head: Optional[nn.Module] = None
+        self.lambda_fusion_joint_count: int = 0
+        self.lambda_fusion_head: Optional[nn.Module] = None
         if self.contact_plan_enable:
             h_plan = int(self.contact_plan_hidden)
             self.contact_plan_cell = nn.GRUCell(self.cond_dim, h_plan)
+            # Learnable initial hidden state for contact-plan GRU (mitigates plan_z cold-start).
+            # If older checkpoints don't have this parameter, strict=False loading keeps it at zeros.
+            self.contact_plan_init_z = nn.Parameter(torch.zeros(h_plan), requires_grad=True)
+            if self.contact_plan_init_mode in ("obs", "learnable+obs"):
+                obs_dim = int(self.contact_dim + self.angvel_dim + self.pose_hist_dim)
+                self._contact_plan_init_obs_dim = obs_dim
+                if obs_dim > 0:
+                    h_init = int(self.contact_plan_init_hidden or h_plan)
+                    drop = float(self._contact_plan_init_dropout)
+                    self.contact_plan_init_head = nn.Sequential(
+                        nn.LayerNorm(obs_dim),
+                        nn.Linear(obs_dim, h_init),
+                        nn.ReLU(),
+                        nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                        nn.Linear(h_init, h_plan),
+                    )
+                    # Safe init: keep obs-conditioned delta near 0 before training.
+                    try:
+                        last = self.contact_plan_init_head[-1]
+                        if isinstance(last, nn.Linear):
+                            with torch.no_grad():
+                                last.weight.zero_()
+                                if last.bias is not None:
+                                    last.bias.zero_()
+                    except Exception:
+                        pass
             self.contact_plan_head = nn.Sequential(
                 nn.LayerNorm(h_plan),
                 nn.Linear(h_plan, h_plan),
                 nn.ReLU(),
                 nn.Dropout(self._contact_plan_dropout),
-                nn.Linear(h_plan, self.contact_dim),
+                nn.Linear(h_plan, int(self._contact_plan_logits_dim)),
             )
             if self.contact_plan_time_pe_dim > 0:
-                self.contact_plan_time_head = nn.Linear(self.contact_plan_time_pe_dim, self.contact_dim)
+                self.contact_plan_time_head = nn.Linear(self.contact_plan_time_pe_dim, int(self._contact_plan_logits_dim))
                 try:
                     with torch.no_grad():
                         self.contact_plan_time_head.weight.zero_()
@@ -396,9 +486,13 @@ class EventMotionModel(nn.Module):
                     pass
 
             if self.direct_pose_enable:
-                in_dim = int(self.cond_dim + self.contact_dim)
+                want_meas = (self.direct_pose_meas_mode == "concat")
+                in_dim = int(self.cond_dim + self.contact_dim + (self.contact_dim if want_meas else 0))
                 hid = int(self.direct_pose_hidden)
                 drop = float(self._direct_pose_dropout)
+                out_dim = int(self.out_motion_dim)
+                if self.direct_pose_meas_mode == "mode_select":
+                    out_dim = int(out_dim) * 2
                 self.direct_pose_head = nn.Sequential(
                     nn.Linear(in_dim, hid),
                     nn.ReLU(),
@@ -406,8 +500,45 @@ class EventMotionModel(nn.Module):
                     nn.Linear(hid, hid),
                     nn.ReLU(),
                     nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                    nn.Linear(hid, int(self.out_motion_dim)),
+                    nn.Linear(hid, int(out_dim)),
                 )
+
+        if self.lambda_fusion_enable:
+            try:
+                rot_sl = None
+                if isinstance(output_layout, dict):
+                    rot_sl = parse_layout_entry(output_layout.get("BoneRotations6D"), "BoneRotations6D", self.out_motion_dim)
+                if rot_sl is not None:
+                    rot_dim = int(rot_sl.stop - rot_sl.start)
+                    if rot_dim > 0 and rot_dim % 6 == 0:
+                        self.lambda_fusion_joint_count = int(rot_dim // 6)
+                elif bone_names is not None and len(bone_names) > 0 and (self.out_motion_dim // 6) > 0:
+                    self.lambda_fusion_joint_count = int(len(bone_names))
+            except Exception:
+                self.lambda_fusion_joint_count = 0
+
+            out_dim = 1 if self.lambda_fusion_mode == "global" else int(self.lambda_fusion_joint_count)
+            if int(out_dim) > 0:
+                use_rollout_step = bool(getattr(self, "lambda_fusion_use_rollout_step", False))
+                in_dim = int(self.hidden_dim + (self.contact_dim if self.contact_plan_enable else 0) + (1 if use_rollout_step else 0))
+                h_mid = max(8, int(self.lambda_fusion_hidden))
+                drop = float(self._lambda_fusion_dropout)
+                self.lambda_fusion_head = nn.Sequential(
+                    nn.LayerNorm(in_dim),
+                    nn.Linear(in_dim, h_mid),
+                    nn.ReLU(),
+                    nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                    nn.Linear(h_mid, int(out_dim)),
+                )
+                try:
+                    last = self.lambda_fusion_head[-1]
+                    if isinstance(last, nn.Linear):
+                        with torch.no_grad():
+                            last.weight.zero_()
+                            if last.bias is not None:
+                                last.bias.fill_(float(self._lambda_fusion_logit_init))
+                except Exception:
+                    pass
 
         # ===== Contact Meas (pose-derived, cheap; no physics) =====
         self.contact_meas_enable = bool(contact_meas_enable and self.contact_dim > 0)
@@ -573,6 +704,7 @@ class EventMotionModel(nn.Module):
         pose_history: Optional[torch.Tensor] = None,
         plan_z: Optional[torch.Tensor] = None,
         time_index: Optional[torch.Tensor | int | float] = None,
+        rollout_step: Optional[torch.Tensor | int | float] = None,
     ) -> dict[str, torch.Tensor]:
         is_single = state.ndim == 2
         if is_single:
@@ -608,11 +740,102 @@ class EventMotionModel(nn.Module):
         contacts_plan = None
         plan_z_next = None
         plan_feat_for_inject = None
+        contacts_plan_logits = None
         if self.contact_plan_enable and self.contact_plan_cell is not None and self.contact_plan_head is not None:
             B, Tq, _ = state.shape
             h_plan = int(self.contact_plan_hidden)
             if plan_z is None:
-                plan_z_t = torch.zeros((B, h_plan), device=device, dtype=dtype)
+                init_mode = str(getattr(self, "contact_plan_init_mode", "learnable") or "learnable").lower().strip()
+                plan_z_t = None
+                if init_mode == "zeros":
+                    plan_z_t = torch.zeros((B, h_plan), device=device, dtype=dtype)
+                elif init_mode in ("obs", "learnable+obs"):
+                    init_head = getattr(self, "contact_plan_init_head", None)
+                    if init_head is not None and int(getattr(self, "_contact_plan_init_obs_dim", 0) or 0) > 0:
+                        try:
+                            obs_feats = []
+                            # Contacts (meas) at t=0
+                            if int(self.contact_dim) > 0:
+                                if contacts_input is None:
+                                    c0 = torch.zeros((B, int(self.contact_dim)), device=device, dtype=dtype)
+                                else:
+                                    c_in = contacts_input.to(device=device, dtype=dtype)
+                                    if c_in.ndim == 3:
+                                        c0 = c_in[:, 0]
+                                    elif c_in.ndim == 2:
+                                        c0 = c_in
+                                    elif c_in.ndim == 1:
+                                        c0 = c_in.view(1, -1).expand(B, -1)
+                                    else:
+                                        c0 = c_in.reshape(B, -1)
+                                    if c0.shape[-1] != int(self.contact_dim):
+                                        if c0.shape[-1] > int(self.contact_dim):
+                                            c0 = c0[..., : int(self.contact_dim)]
+                                        else:
+                                            c0 = F.pad(c0, (0, int(self.contact_dim) - c0.shape[-1]))
+                                obs_feats.append(c0)
+                            # Angvel at t=0
+                            if int(self.angvel_dim) > 0:
+                                av_in = angvel
+                                if av_in is None:
+                                    av0 = torch.zeros((B, int(self.angvel_dim)), device=device, dtype=dtype)
+                                else:
+                                    av = av_in.to(device=device, dtype=dtype)
+                                    if av.ndim == 3:
+                                        av0 = av[:, 0]
+                                    elif av.ndim == 2:
+                                        av0 = av
+                                    elif av.ndim == 1:
+                                        av0 = av.view(1, -1).expand(B, -1)
+                                    else:
+                                        av0 = av.reshape(B, -1)
+                                    if av0.shape[-1] != int(self.angvel_dim):
+                                        if av0.shape[-1] > int(self.angvel_dim):
+                                            av0 = av0[..., : int(self.angvel_dim)]
+                                        else:
+                                            av0 = F.pad(av0, (0, int(self.angvel_dim) - av0.shape[-1]))
+                                obs_feats.append(av0)
+                            # Pose history at t=0
+                            if int(self.pose_hist_dim) > 0:
+                                ph_in = pose_history
+                                if ph_in is None:
+                                    ph0 = torch.zeros((B, int(self.pose_hist_dim)), device=device, dtype=dtype)
+                                else:
+                                    ph = ph_in.to(device=device, dtype=dtype)
+                                    if ph.ndim == 3:
+                                        ph0 = ph[:, 0]
+                                    elif ph.ndim == 2:
+                                        ph0 = ph
+                                    elif ph.ndim == 1:
+                                        ph0 = ph.view(1, -1).expand(B, -1)
+                                    else:
+                                        ph0 = ph.reshape(B, -1)
+                                    if ph0.shape[-1] != int(self.pose_hist_dim):
+                                        if ph0.shape[-1] > int(self.pose_hist_dim):
+                                            ph0 = ph0[..., : int(self.pose_hist_dim)]
+                                        else:
+                                            ph0 = F.pad(ph0, (0, int(self.pose_hist_dim) - ph0.shape[-1]))
+                                obs_feats.append(ph0)
+                            if obs_feats:
+                                obs0 = torch.cat(obs_feats, dim=-1)
+                                plan_z_t = init_head(obs0)
+                        except Exception:
+                            plan_z_t = None
+
+                    if init_mode == "learnable+obs":
+                        init_z = getattr(self, "contact_plan_init_z", None)
+                        if torch.is_tensor(init_z) and init_z.numel() == h_plan:
+                            init_z_t = init_z.to(device=device, dtype=dtype).view(1, h_plan).expand(B, h_plan)
+                        else:
+                            init_z_t = torch.zeros((B, h_plan), device=device, dtype=dtype)
+                        plan_z_t = init_z_t if plan_z_t is None else (plan_z_t + init_z_t)
+
+                if plan_z_t is None:
+                    init_z = getattr(self, "contact_plan_init_z", None)
+                    if torch.is_tensor(init_z) and init_z.numel() == h_plan:
+                        plan_z_t = init_z.to(device=device, dtype=dtype).view(1, h_plan).expand(B, h_plan)
+                    else:
+                        plan_z_t = torch.zeros((B, h_plan), device=device, dtype=dtype)
             else:
                 plan_z_t = plan_z.to(device=device, dtype=dtype)
                 if plan_z_t.ndim == 3 and plan_z_t.size(1) == 1:
@@ -664,6 +887,7 @@ class EventMotionModel(nn.Module):
                     time_pe = None
 
             plan_probs = []
+            plan_logits = []
             plan_z_seq = [] if self.contact_plan_inject == "plan_z" else None
             for _t in range(Tq):
                 plan_z_t = self.contact_plan_cell(cond_seq[:, _t], plan_z_t)
@@ -675,8 +899,22 @@ class EventMotionModel(nn.Module):
                         logits = logits + self.contact_plan_time_head(time_pe[:, _t])
                     except Exception:
                         pass
-                plan_probs.append(torch.sigmoid(logits))
+                plan_logits.append(logits)
+                mode = str(getattr(self, "contact_plan_head_mode", "sigmoid") or "sigmoid").lower().strip()
+                if mode == "joint4":
+                    # logits: (B,4) for [L_only, R_only, both, none]
+                    p = torch.softmax(logits, dim=-1)
+                    # Map to (L,R) marginals in [0,1]
+                    L = p[..., 0] + p[..., 2]
+                    R = p[..., 1] + p[..., 2]
+                    plan_probs.append(torch.stack([L, R], dim=-1))
+                else:
+                    plan_probs.append(torch.sigmoid(logits))
             contacts_plan = torch.stack(plan_probs, dim=1)  # (B,T,C)
+            try:
+                contacts_plan_logits = torch.stack(plan_logits, dim=1) if plan_logits else None  # (B,T,logits_dim)
+            except Exception:
+                contacts_plan_logits = None
             plan_z_next = plan_z_t
             if self.contact_plan_inject == "contacts":
                 plan_feat_for_inject = contacts_plan
@@ -815,22 +1053,10 @@ class EventMotionModel(nn.Module):
         }
         result['h_final'] = hidden_out
 
-        # ---- Direct pose head (cond + contacts_plan -> absolute Y) ----
-        if self.direct_pose_head is not None and contacts_plan is not None:
-            try:
-                plan_in = contacts_plan.detach() if self.direct_pose_detach_plan else contacts_plan
-                direct_in = torch.cat([cond, plan_in.to(device=device, dtype=dtype)], dim=-1)
-                direct_flat = direct_in.reshape(-1, direct_in.shape[-1])
-                direct_out = self.direct_pose_head(direct_flat).view(B, Tq, -1)
-                if is_single:
-                    direct_out = direct_out.squeeze(1)
-                result['out_direct'] = direct_out
-            except Exception:
-                pass
-
         # ---- Contact meas (pose-derived) + error signal ----
         e_t = None
         contacts_meas = None
+        contacts_meas_logits = None
         contacts_override = contacts_input if (self.contacts_as_meas_override and contacts_input is not None) else None
         if contacts_override is not None:
             contacts_meas = contacts_override.to(device=device, dtype=dtype)
@@ -846,6 +1072,7 @@ class EventMotionModel(nn.Module):
                 meas_in = torch.cat(meas_feats, dim=-1)
                 flat = meas_in.reshape(-1, meas_in.shape[-1])
                 logits = self.contact_meas_head(flat).view(meas_in.shape[0], meas_in.shape[1], -1)
+                contacts_meas_logits = logits
                 contacts_meas = torch.sigmoid(logits)
         if contacts_meas is None:
             if contacts_plan is not None:
@@ -855,9 +1082,13 @@ class EventMotionModel(nn.Module):
 
         if contacts_meas is not None:
             result['contacts_meas'] = contacts_meas.squeeze(1) if is_single else contacts_meas
+            if contacts_meas_logits is not None and torch.is_tensor(contacts_meas_logits):
+                result['contacts_meas_logits'] = contacts_meas_logits.squeeze(1) if is_single else contacts_meas_logits
 
         if contacts_plan is not None:
             result['contacts_plan'] = contacts_plan.squeeze(1) if is_single else contacts_plan
+            if contacts_plan_logits is not None and torch.is_tensor(contacts_plan_logits):
+                result['contacts_plan_logits'] = contacts_plan_logits.squeeze(1) if is_single else contacts_plan_logits
             if plan_z_next is not None:
                 result['plan_z_next'] = plan_z_next
             if contacts_meas is not None:
@@ -866,6 +1097,230 @@ class EventMotionModel(nn.Module):
                     contacts_meas = contacts_meas.unsqueeze(1)
                 e_t = contacts_plan - contacts_meas.to(device=device, dtype=dtype)
                 result['contacts_err'] = e_t.squeeze(1) if is_single else e_t
+
+        # ---- Direct pose head (bridge: add phase-hint contacts_meas) ----
+        if self.direct_pose_head is not None and contacts_plan is not None:
+            try:
+                plan_in = contacts_plan.detach() if self.direct_pose_detach_plan else contacts_plan
+                if self.training and float(getattr(self, "direct_pose_plan_drop_prob", 0.0) or 0.0) > 0.0:
+                    p = float(getattr(self, "direct_pose_plan_drop_prob", 0.0) or 0.0)
+                    p = max(0.0, min(1.0, p))
+                    if p > 0.0:
+                        m = (torch.rand(plan_in.shape[:-1] + (1,), device=plan_in.device) < p).to(plan_in.dtype)
+                        plan_in = plan_in * (1.0 - m)
+                # Optional per-call override (debug): force a specific plan source for *direct* only.
+                # - tensor: used as plan_in (after clamp); supports (B,C) / (B,T,C) / (C,)
+                # - "ignore"/"zero": replace with zeros (keeps shape)
+                try:
+                    override = getattr(self, "direct_pose_plan_override", None)
+                    if isinstance(override, str):
+                        s = override.strip().lower()
+                        if s in ("ignore", "zero", "none", "null"):
+                            plan_in = torch.zeros_like(plan_in)
+                            override = None
+                    if torch.is_tensor(override):
+                        ov = override.detach()
+                        # Canonicalize to (B,T,C)
+                        if ov.ndim == 1:
+                            ov = ov.view(1, 1, -1)
+                        elif ov.ndim == 2:
+                            ov = ov.unsqueeze(1)
+                        if ov.ndim == 3:
+                            if ov.shape[0] == 1 and B > 1:
+                                ov = ov.expand(B, -1, -1)
+                            if ov.shape[1] == 1 and Tq > 1:
+                                ov = ov.expand(-1, Tq, -1)
+                            # Match contact dim (pad/trim) to avoid concat shape mismatch.
+                            target_c = int(plan_in.shape[-1]) if torch.is_tensor(plan_in) else int(self.contact_dim)
+                            if target_c > 0 and ov.shape[-1] != target_c:
+                                if ov.shape[-1] > target_c:
+                                    ov = ov[..., :target_c]
+                                else:
+                                    ov = F.pad(ov, (0, target_c - ov.shape[-1]))
+                            plan_in = ov.to(device=device, dtype=dtype).clamp(0.0, 1.0)
+                except Exception:
+                    pass
+
+                mode = str(getattr(self, "direct_pose_meas_mode", "none") or "none").lower().strip()
+                meas_in = None
+                if mode in ("concat", "mode_select"):
+                    meas_in = contacts_meas
+                    if meas_in is None and int(self.contact_dim) > 0:
+                        meas_in = torch.zeros_like(contacts_plan)
+                    if meas_in is not None and meas_in.ndim == 2:
+                        meas_in = meas_in.unsqueeze(1)
+                    if meas_in is not None:
+                        meas_in = meas_in.to(device=device, dtype=dtype)
+                        if self.training:
+                            drop_p = float(getattr(self, "direct_pose_meas_drop_prob", 0.0) or 0.0)
+                            drop_p = max(0.0, min(1.0, drop_p))
+                            if drop_p > 0.0:
+                                m = (torch.rand(meas_in.shape[:-1] + (1,), device=meas_in.device) < drop_p).to(meas_in.dtype)
+                                meas_in = meas_in * (1.0 - m)
+                            noise_std = float(getattr(self, "direct_pose_meas_noise_std", 0.0) or 0.0)
+                            if noise_std > 0.0 and _math.isfinite(noise_std):
+                                meas_in = meas_in + torch.randn_like(meas_in) * noise_std
+                        meas_in = meas_in.clamp(0.0, 1.0)
+                    # Optional per-call override (debug): force a specific meas hint source for *direct* only.
+                    # - tensor: used as meas_in (after clamp); supports (B,C) / (B,T,C) / (C,)
+                    # - "ignore"/"zero": treat as missing (concat->zeros, mode_select->uniform)
+                    _override_applied = False
+                    try:
+                        override = getattr(self, "direct_pose_meas_override", None)
+                        if isinstance(override, str):
+                            s = override.strip().lower()
+                            if s in ("ignore", "zero", "none", "null"):
+                                if mode == "concat":
+                                    meas_in = torch.zeros_like(plan_in)
+                                elif mode == "mode_select":
+                                    meas_in = None
+                                _override_applied = True
+                            else:
+                                override = None
+                        if torch.is_tensor(override):
+                            ov = override
+                            # Canonicalize to (B,T,C)
+                            if ov.ndim == 1:
+                                ov = ov.view(1, 1, -1)
+                            elif ov.ndim == 2:
+                                ov = ov.unsqueeze(1)
+                            if ov.ndim == 3:
+                                if ov.shape[0] == 1 and B > 1:
+                                    ov = ov.expand(B, -1, -1)
+                                if ov.shape[1] == 1 and Tq > 1:
+                                    ov = ov.expand(-1, Tq, -1)
+                                # Match contact dim (pad/trim) to avoid concat shape mismatch.
+                                target_c = int(plan_in.shape[-1]) if torch.is_tensor(plan_in) else int(self.contact_dim)
+                                if target_c > 0 and ov.shape[-1] != target_c:
+                                    if ov.shape[-1] > target_c:
+                                        ov = ov[..., :target_c]
+                                    else:
+                                        ov = F.pad(ov, (0, target_c - ov.shape[-1]))
+                                meas_in = ov.to(device=device, dtype=dtype).clamp(0.0, 1.0)
+                                _override_applied = True
+                    except Exception:
+                        _override_applied = False
+
+                    if not _override_applied:
+                        # Debug/ablation: force direct to ignore meas hint (simulates "no meas" without changing ckpt shape).
+                        # - concat: set meas features to 0
+                        # - mode_select: treat as missing => fallback to uniform blend (0.5/0.5)
+                        if bool(getattr(self, "direct_pose_meas_force_zero", False)):
+                            if mode == "concat":
+                                meas_in = torch.zeros_like(plan_in)
+                            elif mode == "mode_select":
+                                meas_in = None
+
+                if mode == "concat":
+                    direct_in = torch.cat([cond, plan_in.to(device=device, dtype=dtype), meas_in], dim=-1)
+                    direct_flat = direct_in.reshape(-1, direct_in.shape[-1])
+                    direct_out = self.direct_pose_head(direct_flat).view(B, Tq, -1)
+                elif mode == "mode_select":
+                    direct_in = torch.cat([cond, plan_in.to(device=device, dtype=dtype)], dim=-1)
+                    direct_flat = direct_in.reshape(-1, direct_in.shape[-1])
+                    modes = self.direct_pose_head(direct_flat).view(B, Tq, -1)
+                    Dy = int(self.out_motion_dim)
+                    if modes.shape[-1] == Dy * 2:
+                        y_left, y_right = modes[..., :Dy], modes[..., Dy:]
+                        if meas_in is None:
+                            w_left = w_right = None
+                        elif meas_in.shape[-1] >= 2:
+                            w_left = meas_in[..., :1]
+                            w_right = meas_in[..., 1:2]
+                        elif meas_in.shape[-1] == 1:
+                            w_left = meas_in[..., :1]
+                            w_right = 1.0 - w_left
+                        else:
+                            w_left = w_right = None
+                        if w_left is None or w_right is None:
+                            w_left = meas_in.new_full(y_left.shape[:-1] + (1,), 0.5) if torch.is_tensor(meas_in) else y_left.new_full(y_left.shape[:-1] + (1,), 0.5)
+                            w_right = 1.0 - w_left
+                        denom = (w_left + w_right).clamp_min(1e-6)
+                        w_left = (w_left / denom).clamp(0.0, 1.0)
+                        w_right = (w_right / denom).clamp(0.0, 1.0)
+                        direct_out = w_left * y_left + w_right * y_right
+                    else:
+                        direct_out = modes
+                else:
+                    direct_in = torch.cat([cond, plan_in.to(device=device, dtype=dtype)], dim=-1)
+                    direct_flat = direct_in.reshape(-1, direct_in.shape[-1])
+                    direct_out = self.direct_pose_head(direct_flat).view(B, Tq, -1)
+
+                if is_single:
+                    direct_out = direct_out.squeeze(1)
+                result['out_direct'] = direct_out
+            except Exception:
+                pass
+
+        if self.lambda_fusion_head is not None:
+            try:
+                lam_in = h_final
+                if lam_in.ndim == 2:
+                    lam_in = lam_in.unsqueeze(1)
+
+                if self.contact_plan_enable and e_t is not None:
+                    err_in = e_t.detach() if self.lambda_fusion_detach_err else e_t
+                    if err_in.ndim == 2:
+                        err_in = err_in.unsqueeze(1)
+                    lam_in = torch.cat([lam_in, err_in.to(device=device, dtype=dtype)], dim=-1)
+
+                if bool(getattr(self, "lambda_fusion_use_rollout_step", False)):
+                    B, Tq, _ = lam_in.shape
+                    try:
+                        if rollout_step is None:
+                            step_feat = lam_in.new_zeros((B, Tq, 1))
+                        elif torch.is_tensor(rollout_step):
+                            s = rollout_step.to(device=device, dtype=dtype)
+                            if s.dim() == 0:
+                                step_feat = s.view(1, 1, 1).expand(B, Tq, 1)
+                            elif s.dim() == 1:
+                                if s.numel() == 1:
+                                    step_feat = s.view(1, 1, 1).expand(B, Tq, 1)
+                                elif s.shape[0] == B:
+                                    step_feat = s.view(B, 1, 1).expand(B, Tq, 1)
+                                else:
+                                    step_feat = s[:1].view(1, 1, 1).expand(B, Tq, 1)
+                            elif s.dim() == 2:
+                                if s.shape[0] == 1 and B > 1:
+                                    s = s.expand(B, -1)
+                                if s.shape[1] == 1:
+                                    step_feat = s[:, :1].reshape(B, 1, 1).expand(B, Tq, 1)
+                                else:
+                                    step_feat = s[:, :Tq].unsqueeze(-1)
+                                    if step_feat.shape[1] < Tq:
+                                        pad = step_feat[:, -1:, :].expand(B, Tq - step_feat.shape[1], 1)
+                                        step_feat = torch.cat([step_feat, pad], dim=1)
+                            else:
+                                if s.shape[0] == 1 and B > 1:
+                                    s = s.expand(B, *s.shape[1:])
+                                if s.shape[-1] != 1:
+                                    s = s[..., :1]
+                                if s.shape[1] == 1:
+                                    step_feat = s[:, :1, :].expand(B, Tq, 1)
+                                else:
+                                    step_feat = s[:, :Tq, :].reshape(B, -1, 1)
+                                    if step_feat.shape[1] < Tq:
+                                        pad = step_feat[:, -1:, :].expand(B, Tq - step_feat.shape[1], 1)
+                                        step_feat = torch.cat([step_feat, pad], dim=1)
+                        else:
+                            step_feat = torch.full((B, Tq, 1), float(rollout_step), device=device, dtype=dtype)
+                    except Exception:
+                        step_feat = lam_in.new_zeros((B, Tq, 1))
+                    lam_in = torch.cat([lam_in, step_feat], dim=-1)
+
+                flat = lam_in.reshape(-1, lam_in.shape[-1])
+                logits = self.lambda_fusion_head(flat).view(lam_in.shape[0], lam_in.shape[1], -1)
+                lam = torch.sigmoid(logits)
+                # Normalize output to per-joint (B,T,J) even in global mode.
+                if self.lambda_fusion_mode == "global" and int(self.lambda_fusion_joint_count) > 0:
+                    lam = lam.expand(lam.shape[0], lam.shape[1], int(self.lambda_fusion_joint_count))
+                if is_single:
+                    logits = logits.squeeze(1)
+                    lam = lam.squeeze(1)
+                result["lambda_fusion_logits"] = logits
+                result["lambda_fusion"] = lam
+            except Exception:
+                pass
 
         if self.so3_delta_corrector is not None and self.so3_corr_joint_count > 0:
             corr_in = h_final

@@ -321,14 +321,9 @@ def evaluate_freerun(
             except Exception:
                 pass
 
+        # NOTE: let the model decide the initial plan_z when plan_z is None.
+        # This allows using a learnable contact_plan_init_z (or falling back to zeros).
         plan_z = None
-        if bool(getattr(model, "contact_plan_enable", False)):
-            try:
-                h_plan = int(getattr(model, "contact_plan_hidden", 0) or 0)
-            except Exception:
-                h_plan = 0
-            if h_plan > 0 and torch.is_tensor(motion):
-                plan_z = motion.new_zeros((motion.shape[0], h_plan))
 
         prev_foot_pos_meas = None
         for t in range(start_t, end_t):
@@ -404,6 +399,17 @@ def evaluate_freerun(
                 except Exception:
                     time_index_t = int(t)
 
+            rollout_step_t = None
+            try:
+                denom = int(horizon - warmup - 1)
+                if denom > 0:
+                    step_norm = float(int(t - warmup)) / float(denom)
+                else:
+                    step_norm = 0.0
+                rollout_step_t = torch.full((motion.shape[0], 1, 1), step_norm, device=device, dtype=motion.dtype)
+            except Exception:
+                rollout_step_t = None
+
             contacts_in_t = contacts_t
             if bool(getattr(model, "contact_plan_enable", False)) and bool(getattr(model, "contacts_as_meas_override", False)):
                 try:
@@ -424,13 +430,14 @@ def evaluate_freerun(
                     pose_history=pose_hist_t,
                     plan_z=plan_z,
                     time_index=time_index_t,
+                    rollout_step=rollout_step_t,
                 )
 
             if not isinstance(ret, dict):
                 raise RuntimeError("Model forward must return a dict with at least 'out'.")
             out = ret.get("out")
             period_pred = ret.get("period_pred")
-            if plan_z is not None:
+            if bool(getattr(model, "contact_plan_enable", False)):
                 try:
                     z_next = ret.get("plan_z_next", None)
                     if z_next is not None:
@@ -444,7 +451,26 @@ def evaluate_freerun(
             delta_norm = out
             if y_raw_prev is not None:
                 try:
-                    y_raw = trainer._compose_delta_to_raw(y_raw_prev, delta_norm)
+                    y_inc_raw = trainer._compose_delta_to_raw(y_raw_prev, delta_norm)
+                    y_raw = y_inc_raw
+                    if bool(getattr(trainer, "lambda_fusion_apply", False)):
+                        lam_eff = ret.get("lambda_fusion", None)
+                        if lam_eff is not None:
+                            try:
+                                lam_eff, _ = trainer._lambda_fusion_apply_reliability(
+                                    lam_eff,
+                                    step_idx=int(t - warmup),
+                                    total_steps=int(max(1, int(horizon - warmup - 1))),
+                                    rollout_step=rollout_step_t,
+                                    ret=ret,
+                                )
+                            except Exception:
+                                lam_eff = ret.get("lambda_fusion", None)
+                        y_raw = trainer._apply_lambda_fusion_to_raw(
+                            y_inc_raw,
+                            direct_norm=ret.get("out_direct", None),
+                            lambda_fusion=lam_eff,
+                        )
                 except Exception:
                     y_raw = trainer._denorm(delta_norm)
             else:

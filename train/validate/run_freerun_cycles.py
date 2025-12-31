@@ -36,7 +36,7 @@ import numpy as np
 import torch  # ensure torch is bound before any inner scope uses it
 
 from train.training_MPL import MotionEventDataset, Trainer, geodesic_R, validate_and_fix_model_
-from train.geometry import rot6d_to_matrix, reproject_rot6d, root_relative_matrices
+from train.geometry import rot6d_to_matrix, reproject_rot6d
 from train.models import EventMotionModel, MotionJointLoss
 from train.layout import LayoutCenter, DataNormalizer
 from train.geometry import compose_rot6d_delta
@@ -143,6 +143,14 @@ class FreeRunCycleRunner:
         self.pose_hist_len = int(self.norm_spec.get("pose_hist_len", 0) or 0)
 
         ckpt = torch.load(Path(args.model).expanduser(), map_location="cpu")
+        self._ckpt_posttrain_cfg = None
+        try:
+            if isinstance(ckpt, dict):
+                cfg = ckpt.get("posttrain_cfg", None)
+                if isinstance(cfg, dict):
+                    self._ckpt_posttrain_cfg = dict(cfg)
+        except Exception:
+            self._ckpt_posttrain_cfg = None
         raw_state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
         # Drop frozen_encoder / frozen_period_head weights that are not part of the runtime model
         # to avoid noisy mismatch warnings during load_state_dict(strict=False).
@@ -190,7 +198,79 @@ class FreeRunCycleRunner:
         self.so3_corr_gate_err_margin = float(getattr(args, "so3_corr_gate_err_margin", 0.0) or 0.0)
         self.so3_corr_gate_err_use_ref = bool(getattr(args, "so3_corr_gate_err_use_ref", False))
         self.so3_corr_gate_scale_max = float(getattr(args, "so3_corr_gate_scale_max", 2.0) or 2.0)
-        self.log_contacts = bool(getattr(args, "log_contacts", False) or self.so3_corr_gate_from_contacts_err)
+        self.log_contacts_whitebox = bool(getattr(args, "log_contacts_whitebox", False))
+        self.log_contacts_whitebox_first_steps = max(
+            0, int(getattr(args, "log_contacts_whitebox_first_steps", 4) or 4)
+        )
+        self.log_contacts = bool(
+            getattr(args, "log_contacts", False) or self.so3_corr_gate_from_contacts_err or self.log_contacts_whitebox
+        )
+        gate_raw = str(getattr(args, "contact_meas_gate_by_hit", "auto") or "auto").strip().lower()
+        if gate_raw in ("true", "1", "yes", "y"):
+            self.contact_meas_gate_by_hit_override = True
+        elif gate_raw in ("false", "0", "no", "n"):
+            self.contact_meas_gate_by_hit_override = False
+        else:
+            self.contact_meas_gate_by_hit_override = None
+        self.contact_meas_vxy_mode = str(getattr(args, "contact_meas_vxy_mode", "abs") or "abs").strip().lower()
+        self.contact_meas_ground_z_select = str(getattr(args, "contact_meas_ground_z_select", "min") or "min").strip().lower()
+        self.contact_meas_ground_z_mode = str(getattr(args, "contact_meas_ground_z_mode", "min") or "min").strip().lower()
+        self.contact_meas_ground_z_beta = float(getattr(args, "contact_meas_ground_z_beta", 0.05) or 0.05)
+        self.contact_meas_ground_z_window = int(getattr(args, "contact_meas_ground_z_window", 5) or 5)
+        self.contact_meas_ground_z_quantile = float(getattr(args, "contact_meas_ground_z_quantile", 0.2) or 0.2)
+        self.contact_meas_ground_z_slew_up_cm = float(getattr(args, "contact_meas_ground_z_slew_up_cm", 0.0) or 0.0)
+        self.contact_meas_ground_z_slew_down_cm = float(getattr(args, "contact_meas_ground_z_slew_down_cm", 0.0) or 0.0)
+        # Optional: force contact_plan init behavior for ablations (even if ckpt lacks init_head weights).
+        self.contact_plan_init_mode_override = getattr(args, "contact_plan_init_mode", None)
+        if self.contact_plan_init_mode_override is not None:
+            mode = str(self.contact_plan_init_mode_override).strip().lower()
+            if mode in ("learnable_obs", "obs+learnable"):
+                mode = "learnable+obs"
+            self.contact_plan_init_mode_override = mode
+        self.contact_plan_init_hidden_override = getattr(args, "contact_plan_init_hidden", None)
+        self.contact_plan_init_dropout_override = getattr(args, "contact_plan_init_dropout", None)
+        self.direct_pose_meas_force_zero = bool(getattr(args, "direct_pose_meas_force_zero", False))
+        self.direct_pose_meas_source = str(getattr(args, "direct_pose_meas_source", "model") or "model").strip().lower()
+        self.direct_pose_meas_warmup_steps = max(0, int(getattr(args, "direct_pose_meas_warmup_steps", 0) or 0))
+        self.direct_pose_plan_source = str(getattr(args, "direct_pose_plan_source", "model") or "model").strip().lower()
+        # Backward-compatible alias: --direct_pose_meas_force_zero ~= --direct_pose_meas_source=zero (unless explicitly overridden).
+        if self.direct_pose_meas_force_zero and self.direct_pose_meas_source in ("", "model"):
+            self.direct_pose_meas_source = "zero"
+        self.lambda_fusion_apply = bool(getattr(args, "lambda_fusion_apply", False))
+        # Stage2: deterministic r_t (shared with posttrain) for λ modulation.
+        def _cfg_get(name: str, default: Any) -> Any:
+            v = getattr(args, name, None)
+            if v is not None:
+                return v
+            if isinstance(self._ckpt_posttrain_cfg, dict) and name in self._ckpt_posttrain_cfg:
+                return self._ckpt_posttrain_cfg.get(name)
+            return default
+
+        self.lambda_reliability_mode = str(_cfg_get("lambda_reliability_mode", "none") or "none")
+        self.lambda_reliability_warmup_steps = int(_cfg_get("lambda_reliability_warmup_steps", 0) or 0)
+        self.lambda_reliability_contact_err_max = float(_cfg_get("lambda_reliability_contact_err_max", 1.0) or 1.0)
+        self.lambda_reliability_warmup_joint_scales = None
+        try:
+            raw_scales = _cfg_get("lambda_reliability_warmup_joint_scales", None)
+            if raw_scales is not None:
+                payload = raw_scales
+                if isinstance(payload, str):
+                    s = payload.strip()
+                    if s:
+                        try:
+                            p = Path(s).expanduser()
+                            if p.is_file():
+                                payload = _load_json(p)
+                            else:
+                                payload = json.loads(s)
+                        except Exception:
+                            payload = None
+                if isinstance(payload, dict):
+                    payload = payload.get("scales", payload.get("values", None))
+                if isinstance(payload, (list, tuple)) and payload:
+                    self.lambda_reliability_warmup_joint_scales = [float(x) for x in payload]
+        except Exception:
+            self.lambda_reliability_warmup_joint_scales = None
         self.normalizer: Optional[DataNormalizer] = None
 
     @staticmethod
@@ -260,6 +340,45 @@ class FreeRunCycleRunner:
                 contact_plan_time_pe_dim = int(w_time.shape[1])
         except Exception:
             contact_plan_time_pe_dim = 0
+        # Infer contact-plan head parameterization from checkpoint shapes.
+        # - legacy: sigmoid per-channel, head out_dim = contact_dim (typically 2)
+        # - joint4 : coupled 4-state softmax, head out_dim = 4 (requires contact_dim==2)
+        contact_plan_head_mode = "sigmoid"
+        try:
+            w_head = self.state_dict.get("contact_plan_head.4.weight", None)
+            if torch.is_tensor(w_head) and w_head.ndim == 2:
+                out_dim = int(w_head.shape[0])
+                if out_dim == 4 and int(self.contact_dim or 0) == 2:
+                    contact_plan_head_mode = "joint4"
+        except Exception:
+            contact_plan_head_mode = "sigmoid"
+
+        # Infer obs-conditioned contact plan init head (plan_z0 = init_z + init_head(obs0)).
+        contact_plan_init_mode = "learnable"
+        contact_plan_init_hidden = 128
+        contact_plan_init_dropout = 0.0
+        try:
+            init_has_weights = any(str(k).startswith("contact_plan_init_head.") for k in self.state_dict.keys())
+            if init_has_weights:
+                contact_plan_init_mode = "learnable+obs"
+                w_init = self.state_dict.get("contact_plan_init_head.1.weight", None)
+                if torch.is_tensor(w_init) and w_init.ndim == 2:
+                    contact_plan_init_hidden = int(w_init.shape[0])
+        except Exception:
+            contact_plan_init_mode = "learnable"
+        # Allow overriding init mode for ablations (create init_head even if ckpt doesn't have weights).
+        if self.contact_plan_init_mode_override is not None:
+            contact_plan_init_mode = str(self.contact_plan_init_mode_override)
+        if self.contact_plan_init_hidden_override is not None:
+            try:
+                contact_plan_init_hidden = int(self.contact_plan_init_hidden_override)
+            except Exception:
+                pass
+        if self.contact_plan_init_dropout_override is not None:
+            try:
+                contact_plan_init_dropout = float(self.contact_plan_init_dropout_override)
+            except Exception:
+                contact_plan_init_dropout = 0.0
         # Infer trunk injection mode from checkpoint shared_encoder input dim.
         contact_plan_inject = "none"
         try:
@@ -289,6 +408,61 @@ class FreeRunCycleRunner:
         except Exception:
             pass
 
+        # Infer direct pose head (cond + contacts_plan -> absolute pose).
+        # If we don't instantiate this head, load_state_dict(strict=False) will warn about unexpected keys
+        # and the runtime model won't expose `out_direct`.
+        direct_pose_enable = False
+        direct_pose_hidden = 256
+        direct_pose_meas_mode = "none"
+        try:
+            direct_has_weights = any(str(k).startswith("direct_pose_head.") for k in self.state_dict.keys())
+            if direct_has_weights and int(Dy) > 0 and int(Dc) > 0 and int(self.contact_dim) > 0:
+                w_in = self.state_dict.get("direct_pose_head.0.weight", None)
+                w_out = self.state_dict.get("direct_pose_head.6.weight", None)
+                if torch.is_tensor(w_in) and w_in.ndim == 2 and torch.is_tensor(w_out) and w_out.ndim == 2:
+                    in_dim = int(w_in.shape[1])
+                    hid = int(w_in.shape[0])
+                    out_dim = int(w_out.shape[0])
+                    expected_in = int(Dc) + int(self.contact_dim)
+                    expected_in_concat = int(Dc) + int(self.contact_dim) * 2
+                    expected_out = int(Dy)
+                    expected_out_modes = int(Dy) * 2
+                    if hid > 0 and out_dim in (expected_out, expected_out_modes) and in_dim in (expected_in, expected_in_concat):
+                        direct_pose_enable = True
+                        direct_pose_hidden = hid
+                        if in_dim == expected_in_concat and out_dim == expected_out:
+                            direct_pose_meas_mode = "concat"
+                        elif in_dim == expected_in and out_dim == expected_out_modes:
+                            direct_pose_meas_mode = "mode_select"
+                        else:
+                            direct_pose_meas_mode = "none"
+        except Exception:
+            direct_pose_enable = False
+
+        # Infer lambda fusion head (Stage2): must match ckpt shapes to avoid size mismatch errors.
+        lambda_has_weights = any(str(k).startswith("lambda_fusion_head.") for k in self.state_dict.keys())
+        lambda_fusion_enable = bool(lambda_has_weights)
+        lambda_fusion_mode = "per_joint"
+        lambda_fusion_hidden = 128
+        lambda_fusion_use_rollout_step = False
+        try:
+            if lambda_has_weights:
+                w_in = self.state_dict.get("lambda_fusion_head.1.weight", None)
+                w_out = self.state_dict.get("lambda_fusion_head.4.weight", None)
+                if torch.is_tensor(w_in) and w_in.ndim == 2:
+                    lambda_fusion_hidden = int(w_in.shape[0])
+                    base_in = int(self.width + (self.contact_dim if contact_plan_enable else 0))
+                    in_features = int(w_in.shape[1])
+                    if in_features == base_in + 1:
+                        lambda_fusion_use_rollout_step = True
+                    elif in_features == base_in:
+                        lambda_fusion_use_rollout_step = False
+                if torch.is_tensor(w_out) and w_out.ndim == 2:
+                    out_dim = int(w_out.shape[0])
+                    lambda_fusion_mode = "global" if out_dim == 1 else "per_joint"
+        except Exception:
+            lambda_fusion_enable = False
+
         model = EventMotionModel(
             in_state_dim=Dx,
             out_motion_dim=Dy,
@@ -304,21 +478,43 @@ class FreeRunCycleRunner:
             pose_hist_dim=self.pose_hist_dim,
             bone_names=getattr(ds, "bone_names", None),
             output_layout=getattr(ds, "output_layout", None),
-            contact_plan_enable=bool(contact_plan_enable or contact_plan_inject != "none"),
+            contact_plan_enable=bool(contact_plan_enable or contact_plan_inject != "none" or direct_pose_enable),
             contact_plan_hidden=int(contact_plan_hidden),
             contact_plan_inject=str(contact_plan_inject),
             contact_plan_inject_detach=True,
+            contact_plan_head_mode=str(contact_plan_head_mode),
             contact_plan_time_pe_dim=int(contact_plan_time_pe_dim),
+            contact_plan_init_mode=str(contact_plan_init_mode),
+            contact_plan_init_hidden=int(contact_plan_init_hidden),
+            contact_plan_init_dropout=float(contact_plan_init_dropout),
+            direct_pose_enable=bool(direct_pose_enable),
+            direct_pose_hidden=int(direct_pose_hidden),
+            direct_pose_dropout=0.0,
+            direct_pose_detach_plan=True,
+            direct_pose_meas_mode=str(direct_pose_meas_mode),
+            direct_pose_meas_drop_prob=0.0,
+            direct_pose_meas_noise_std=0.0,
+            direct_pose_plan_drop_prob=0.0,
+            lambda_fusion_enable=bool(lambda_fusion_enable),
+            lambda_fusion_mode=str(lambda_fusion_mode),
+            lambda_fusion_hidden=int(lambda_fusion_hidden),
+            lambda_fusion_dropout=0.0,
+            lambda_fusion_detach_err=True,
+            lambda_fusion_logit_init=-2.0,
+            lambda_fusion_use_rollout_step=bool(lambda_fusion_use_rollout_step),
             contact_meas_enable=bool(contact_meas_enable),
             contact_meas_hidden=int(contact_meas_hidden),
             contact_meas_dropout=0.0,
-            contacts_as_meas_override=bool(contact_plan_enable or contact_plan_inject != "none"),
+            # If a learned meas head exists, don't override it with external contacts/whitebox.
+            contacts_as_meas_override=bool(contact_plan_enable or contact_plan_inject != "none") and (not bool(contact_meas_enable)),
         ).to(self.device)
         # Validate basic shapes then load weights (allow extra frozen encoder keys).
         validate_and_fix_model_(model, Dx, Dc)
         missing, unexpected = model.load_state_dict(self.state_dict, strict=False)
         if missing or unexpected:
             print(f"[FreeRun][WARN] state_dict mismatch: missing={missing}, unexpected={unexpected}")
+        if bool(getattr(self, "direct_pose_meas_force_zero", False)):
+            setattr(model, "direct_pose_meas_force_zero", True)
         # Optional frozen motion encoder
         if self.encoder_bundle_path and self.encoder_bundle_path.is_file():
             model.attach_motion_encoder(torch.load(str(self.encoder_bundle_path), map_location="cpu"))
@@ -356,6 +552,34 @@ class FreeRunCycleRunner:
         trainer.so3_corr_gate_err_use_ref = self.so3_corr_gate_err_use_ref
         trainer.so3_corr_gate_scale_max = self.so3_corr_gate_scale_max
         trainer.log_contacts = self.log_contacts
+        trainer.log_contacts_whitebox = bool(getattr(self, "log_contacts_whitebox", False))
+        trainer.log_contacts_whitebox_first_steps = int(getattr(self, "log_contacts_whitebox_first_steps", 0) or 0)
+        trainer.contact_meas_gate_by_hit_override = getattr(self, "contact_meas_gate_by_hit_override", None)
+        trainer.contact_meas_vxy_mode = str(getattr(self, "contact_meas_vxy_mode", "abs") or "abs")
+        trainer.contact_meas_ground_z_select = str(getattr(self, "contact_meas_ground_z_select", "min") or "min")
+        trainer.contact_meas_ground_z_mode = str(getattr(self, "contact_meas_ground_z_mode", "min") or "min")
+        trainer.contact_meas_ground_z_beta = float(getattr(self, "contact_meas_ground_z_beta", 0.05) or 0.05)
+        trainer.contact_meas_ground_z_window = int(getattr(self, "contact_meas_ground_z_window", 5) or 5)
+        trainer.contact_meas_ground_z_quantile = float(getattr(self, "contact_meas_ground_z_quantile", 0.2) or 0.2)
+        # Slew in meters per step (set 0 to disable). Applied after the chosen mode.
+        try:
+            up_cm = float(getattr(self, "contact_meas_ground_z_slew_up_cm", 0.0) or 0.0)
+        except Exception:
+            up_cm = 0.0
+        try:
+            down_cm = float(getattr(self, "contact_meas_ground_z_slew_down_cm", 0.0) or 0.0)
+        except Exception:
+            down_cm = 0.0
+        trainer.contact_meas_ground_z_max_up_m = max(0.0, up_cm) / 100.0
+        trainer.contact_meas_ground_z_max_down_m = max(0.0, down_cm) / 100.0
+        trainer.lambda_fusion_apply = bool(self.lambda_fusion_apply)
+        trainer.lambda_reliability_mode = str(getattr(self, "lambda_reliability_mode", "none") or "none")
+        trainer.lambda_reliability_warmup_steps = int(getattr(self, "lambda_reliability_warmup_steps", 0) or 0)
+        trainer.lambda_reliability_contact_err_max = float(getattr(self, "lambda_reliability_contact_err_max", 1.0) or 1.0)
+        trainer.lambda_reliability_warmup_joint_scales = getattr(self, "lambda_reliability_warmup_joint_scales", None)
+        trainer.direct_pose_meas_source = str(getattr(self, "direct_pose_meas_source", "model") or "model")
+        trainer.direct_pose_meas_warmup_steps = int(getattr(self, "direct_pose_meas_warmup_steps", 0) or 0)
+        trainer.direct_pose_plan_source = str(getattr(self, "direct_pose_plan_source", "model") or "model")
         # Inject bundle‑derived slices & normalizer
         self.bundle.apply_to_dataset(ds)
         self.bundle.apply_to_trainer(trainer)
@@ -442,14 +666,82 @@ class FreeRunCycleRunner:
         base_sample = _build_full_cycle_sample(ds, clip, seq_len=T_base)
 
         # Run free‑run for N cycles without reset.
-        metrics_per_round, per_step = _run_freerun_cycles(
+        metrics_per_round, per_step, extra = _run_freerun_cycles(
             trainer=self.trainer,
             sample=base_sample,
             rounds=rounds,
             device=self.device,
             time_index_mode=str(getattr(self.args, "time_index_mode", "auto") or "auto"),
             round_seg_mode=str(getattr(self.args, "round_seg_mode", "intra") or "intra"),
+            lambda_fusion_apply=bool(self.lambda_fusion_apply),
+            export_joint_geolocal=bool(getattr(self.args, "export_joint_geolocal", False)),
+            direct_align_inc0=bool(getattr(self.args, "direct_align_inc0", False)),
         )
+        if bool(getattr(self.args, "direct_align_inc0", False)):
+            try:
+                def _mean_key(seg, key: str):
+                    vals = []
+                    for rec in seg:
+                        v = rec.get(key)
+                        if v is None:
+                            continue
+                        try:
+                            vals.append(float(v))
+                        except Exception:
+                            continue
+                    if not vals:
+                        return None
+                    return float(sum(vals) / len(vals))
+
+                def _fmt(v):
+                    return f"{v:6.2f}" if v is not None else "  nan "
+
+                # Print a compact summary to quickly judge if direct is mostly a phase/anchor offset.
+                print("[Diag][AlignInc0] DirectGeoLocalDeg vs AlignInc0 (deg):")
+                for r in metrics_per_round:
+                    rr = r.get("round")
+                    if rr is None:
+                        continue
+                    start = int(r.get("start_step", 0) or 0)
+                    end = int(r.get("end_step", -1) or -1)
+                    seg = []
+                    for rec in per_step:
+                        if not isinstance(rec, dict):
+                            continue
+                        step_val = rec.get("step", None)
+                        if step_val is None:
+                            continue
+                        try:
+                            step_i = int(step_val)
+                        except Exception:
+                            continue
+                        if start <= step_i <= end:
+                            seg.append(rec)
+                    k = min(10, len(seg))
+                    early = seg[:k] if k > 0 else []
+
+                    inc_m = r.get("GeoLocalDeg")
+                    d_m = r.get("DirectGeoLocalDeg")
+                    da_m = r.get("DirectGeoLocalDegAlignInc0")
+                    inc_e = _mean_key(early, "GeoLocalDeg")
+                    d_e = _mean_key(early, "DirectGeoLocalDeg")
+                    da_e = _mean_key(early, "DirectGeoLocalDegAlignInc0")
+                    gain = None
+                    try:
+                        if d_m is not None and da_m is not None:
+                            gain = float(d_m) - float(da_m)
+                    except Exception:
+                        gain = None
+
+                    print(
+                        f"  Round{int(rr)} mean  inc={_fmt(inc_m)} direct={_fmt(d_m)} align={_fmt(da_m)}  gain={_fmt(gain)}"
+                    )
+                    if k > 0:
+                        print(
+                            f"          first{k:02d} inc={_fmt(inc_e)} direct={_fmt(d_e)} align={_fmt(da_e)}"
+                        )
+            except Exception:
+                pass
 
         payload = {
             "clip": clip_name,
@@ -460,10 +752,37 @@ class FreeRunCycleRunner:
             "rounds": rounds,
             "time_index_mode": str(getattr(self.args, "time_index_mode", "auto") or "auto"),
             "round_seg_mode": str(getattr(self.args, "round_seg_mode", "intra") or "intra"),
+            "contact_plan_init_mode": str(getattr(self.model, "contact_plan_init_mode", None) or "unknown"),
+            "contact_plan_init_hidden": int(getattr(self.model, "contact_plan_init_hidden", 0) or 0),
+            "contact_plan_init_dropout": float(getattr(self.model, "_contact_plan_init_dropout", 0.0) or 0.0),
+            "contact_plan_head_mode": str(getattr(self.model, "contact_plan_head_mode", None) or "unknown"),
+            "contact_plan_init_mode_override": getattr(self, "contact_plan_init_mode_override", None),
+            "lambda_fusion_apply": bool(self.lambda_fusion_apply),
+            "so3_corr_apply": bool(getattr(self.trainer, "so3_corr_apply", False)) if self.trainer is not None else False,
+            "direct_align_inc0": bool(getattr(self.args, "direct_align_inc0", False)),
+            "direct_pose_meas_force_zero": bool(getattr(self, "direct_pose_meas_force_zero", False)),
+            "direct_pose_meas_source": str(getattr(self, "direct_pose_meas_source", "model") or "model"),
+            "direct_pose_meas_warmup_steps": int(getattr(self, "direct_pose_meas_warmup_steps", 0) or 0),
+            "direct_pose_plan_source": str(getattr(self, "direct_pose_plan_source", "model") or "model"),
+            "lambda_reliability_mode": str(getattr(self, "lambda_reliability_mode", "none") or "none"),
+            "lambda_reliability_warmup_steps": int(getattr(self, "lambda_reliability_warmup_steps", 0) or 0),
+            "lambda_reliability_contact_err_max": float(getattr(self, "lambda_reliability_contact_err_max", 1.0) or 1.0),
+            "lambda_reliability_warmup_joint_scales": getattr(self, "lambda_reliability_warmup_joint_scales", None),
+            "contact_meas_gate_by_hit": getattr(self, "contact_meas_gate_by_hit_override", None),
+            "contact_meas_vxy_mode": str(getattr(self, "contact_meas_vxy_mode", "abs") or "abs"),
+            "contact_meas_ground_z_select": str(getattr(self, "contact_meas_ground_z_select", "min") or "min"),
+            "contact_meas_ground_z_mode": str(getattr(self, "contact_meas_ground_z_mode", "min") or "min"),
+            "contact_meas_ground_z_beta": float(getattr(self, "contact_meas_ground_z_beta", 0.05) or 0.05),
+            "contact_meas_ground_z_window": int(getattr(self, "contact_meas_ground_z_window", 5) or 5),
+            "contact_meas_ground_z_quantile": float(getattr(self, "contact_meas_ground_z_quantile", 0.2) or 0.2),
+            "contact_meas_ground_z_slew_up_cm": float(getattr(self, "contact_meas_ground_z_slew_up_cm", 0.0) or 0.0),
+            "contact_meas_ground_z_slew_down_cm": float(getattr(self, "contact_meas_ground_z_slew_down_cm", 0.0) or 0.0),
             "model": str(Path(self.args.model).expanduser().resolve()),
             "metrics_per_round": metrics_per_round,
             "metrics_per_step": per_step,
         }
+        if isinstance(extra, dict) and extra:
+            payload.update(extra)
 
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{clip_name}_freerun_cycles.json"
@@ -561,7 +880,10 @@ def _run_freerun_cycles(
     *,
     time_index_mode: str = "auto",
     round_seg_mode: str = "intra",
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    lambda_fusion_apply: bool = False,
+    export_joint_geolocal: bool = False,
+    direct_align_inc0: bool = False,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
     """
     Core free‑run loop: autoregress over `rounds * T` steps without reset,
     then compute per‑round diagnostics.
@@ -571,14 +893,21 @@ def _run_freerun_cycles(
         "couple" root deviation into all joint errors if rotations are global.
         We additionally report:
             - RootGeoDeg: root joint geodesic error (deg)
-            - GeoLocalDeg: root-relative geodesic error (deg), decoupled from root (unweighted mean)
-            - GeoLocalDegWeighted: root-relative geodesic error (deg) with Trainer joint weights
+            - GeoLocalDeg: pose geodesic error excluding root joint (deg), decoupled from motion (unweighted mean)
+            - GeoLocalDegWeighted: pose geodesic error excluding root joint (deg) with Trainer joint weights
             - RootPosErr / RootVelMAE (if X has RootPosition/RootVelocity)
 
         Training/online diagnostics may apply a constant "root0 alignment" (align predicted
         root at the first step to GT root, then measure drift). This script reports both:
             - GeoDeg / RootGeoDeg: raw (no alignment)
             - GeoDegAligned0 / RootGeoDegAligned0: constant aligned at step 0
+
+        When direct_align_inc0=True, we additionally report a diagnostic that applies a
+        per-joint constant bias computed at step0:
+            R_bias[j] = R_inc0[j] @ R_dir0[j]^T
+            R_dir_align_inc0[t,j] = R_bias[j] @ R_dir[t,j]
+        This helps verify whether the direct head's early errors are mostly phase/anchor
+        offsets (constant bias) versus genuinely worse dynamics.
     """
     if rounds <= 0:
         raise ValueError("rounds must be > 0")
@@ -662,9 +991,15 @@ def _run_freerun_cycles(
     end_t = T - 1  # last usable index for t+1
 
     model = trainer.model
-    predsY: List[torch.Tensor] = []
+    predsY: List[torch.Tensor] = []  # incremental (Δ) absolute pose (y_norm), not necessarily used for update
+    predsY_blend: List[torch.Tensor] = []  # blended absolute pose (y_norm)
+    predsY_direct: List[torch.Tensor] = []
     predsX: List[torch.Tensor] = []
     contacts_log: List[Optional[Dict[str, Any]]] = []
+    time_index_log: List[Optional[int]] = []
+    lambda_log: List[Optional[torch.Tensor]] = []  # (B,J) on CPU
+    lambda_eff_log: List[Optional[torch.Tensor]] = []  # (B,J) on CPU (after r_t)
+    lambda_rel_log: List[Optional[torch.Tensor]] = []  # (B,) on CPU (r_t)
 
     # Initialize motion & raw state
     motion = state_seq[:, start_t]  # [B, Dx]
@@ -695,14 +1030,9 @@ def _run_freerun_cycles(
 
     # Main autoregressive loop
     plan_enable = bool(getattr(trainer.model, "contact_plan_enable", False)) if getattr(trainer, "model", None) is not None else False
+    # NOTE: let the model decide the initial plan_z when plan_z is None.
+    # This allows using a learnable contact_plan_init_z (or falling back to zeros).
     plan_z = None
-    if plan_enable:
-        try:
-            h_plan = int(getattr(trainer.model, "contact_plan_hidden", 0) or 0)
-        except Exception:
-            h_plan = 0
-        if h_plan > 0:
-            plan_z = torch.zeros((motion.shape[0], h_plan), device=device, dtype=motion.dtype)
 
     # Closed-loop gate from contacts_err needs a stable reference level; we estimate it online
     # from the first few steps (gate=0) to avoid step-0 transients from plan_z initialization.
@@ -715,9 +1045,19 @@ def _run_freerun_cycles(
     ref_err_value: Optional[float] = None
     prev_foot_pos_meas = None
 
+    # Rotation slice/J for lambda fusion shape checks.
+    rot_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
+    if not isinstance(rot_slice, slice):
+        rot_slice = slice(0, gt_seq.shape[-1])
+    rot_len = int(rot_slice.stop - rot_slice.start)
+    J = (rot_len // 6) if (rot_len > 0 and (rot_len % 6) == 0) else 0
+
     for t in range(start_t, end_t):
         cond_input = cond_seq[:, t] if (cond_seq is not None and cond_seq.dim() == 3) else cond_seq
-        angvel_t = angvel_seq[:, t] if (angvel_seq is not None and angvel_seq.dim() == 3) else angvel_seq
+        if getattr(trainer, "use_freerun_state_sync", False) and isinstance(getattr(trainer, "angvel_x_slice", None), slice):
+            angvel_t = motion[..., trainer.angvel_x_slice].detach()
+        else:
+            angvel_t = angvel_seq[:, t] if (angvel_seq is not None and angvel_seq.dim() == 3) else angvel_seq
         if pose_hist_enabled:
             pose_hist_t = pose_hist_buffer_norm
         else:
@@ -776,13 +1116,100 @@ def _run_freerun_cycles(
         else:
             # global / auto(single-round): keep increasing global step index
             time_index_t = int(t)
+        time_index_log.append(int(time_index_t) if time_index_t is not None else None)
+
+        rollout_step_t = None
+        try:
+            denom = int(end_t - start_t - 1)
+            if denom > 0:
+                step_norm = float(int(t - start_t)) / float(denom)
+            else:
+                step_norm = 0.0
+            rollout_step_t = torch.full((motion.shape[0], 1, 1), step_norm, device=device, dtype=motion.dtype)
+        except Exception:
+            rollout_step_t = None
+
+        # Optional: override which contacts signal the *direct* head uses as phase hint.
+        # This does NOT affect contacts_err/lambda (those always use model-produced contacts_meas).
+        direct_meas_source_eff = str(getattr(trainer, "direct_pose_meas_source", "model") or "model").strip().lower()
+        direct_meas_warmup = int(getattr(trainer, "direct_pose_meas_warmup_steps", 0) or 0)
+        step_idx = int(t - start_t)
+        if direct_meas_warmup > 0 and step_idx >= direct_meas_warmup:
+            direct_meas_source_eff = "zero"
+
+        # Compute whitebox contacts only when needed:
+        # - model has no learned meas head (fallback),
+        # - direct head explicitly requests whitebox,
+        # - plan init_mode is obs-based (t==0 only),
+        # - whitebox debug logging enabled.
+        use_learned_meas = bool(getattr(model, "contact_meas_enable", False))
+        init_mode = str(getattr(model, "contact_plan_init_mode", "learnable") or "learnable").strip().lower()
+        log_wb = bool(getattr(trainer, "log_contacts_whitebox", False))
+        if log_wb:
+            try:
+                setattr(trainer, "_contact_meas_whitebox_debug", None)
+            except Exception:
+                pass
+
+        need_wb = bool(plan_enable) and (
+            (not use_learned_meas)
+            or (direct_meas_source_eff in ("whitebox", "wb"))
+            or (init_mode in ("obs", "learnable+obs") and plan_z is None and step_idx == 0)
+            or log_wb
+        )
+        contacts_wb_t = None
+        if need_wb:
+            try:
+                contacts_wb_t, prev_foot_pos_meas = trainer._contact_meas_whitebox(motion_raw, prev_foot_pos_meas)
+            except Exception:
+                contacts_wb_t = None
 
         contacts_in_t = None
         if plan_enable:
+            if not use_learned_meas:
+                contacts_in_t = contacts_wb_t
+            elif init_mode in ("obs", "learnable+obs") and plan_z is None and step_idx == 0:
+                # Feed contacts only for plan_z0 init (won't override the learned meas head).
+                contacts_in_t = contacts_wb_t
+
+        direct_meas_override = None
+        if direct_meas_source_eff in ("zero", "ignore", "none"):
+            direct_meas_override = "ignore"
+        elif direct_meas_source_eff in ("whitebox", "wb"):
+            direct_meas_override = contacts_wb_t
+        elif direct_meas_source_eff in ("gt", "teacher"):
             try:
-                contacts_in_t, prev_foot_pos_meas = trainer._contact_meas_whitebox(motion_raw, prev_foot_pos_meas)
+                if torch.is_tensor(contacts_seq) and contacts_seq.dim() == 3 and contacts_seq.shape[0] == motion.shape[0]:
+                    idx0 = min(int(contacts_seq.shape[1]) - 1, int(t))
+                    direct_meas_override = contacts_seq[:, idx0]
             except Exception:
-                contacts_in_t = None
+                direct_meas_override = None
+        else:
+            direct_meas_override = None
+        try:
+            setattr(model, "direct_pose_meas_override", direct_meas_override)
+        except Exception:
+            pass
+
+        # Optional: override which contacts *plan* the direct head uses (ablation: direct upper bound).
+        # This does NOT affect contacts_plan/contacts_err/lambda (only direct hint).
+        direct_plan_source_eff = str(getattr(trainer, "direct_pose_plan_source", "model") or "model").strip().lower()
+        direct_plan_override = None
+        if direct_plan_source_eff in ("zero", "ignore", "none"):
+            direct_plan_override = "ignore"
+        elif direct_plan_source_eff in ("gt", "teacher"):
+            try:
+                if torch.is_tensor(contacts_seq) and contacts_seq.dim() == 3 and contacts_seq.shape[0] == motion.shape[0]:
+                    idx0 = min(int(contacts_seq.shape[1]) - 1, int(t))
+                    direct_plan_override = contacts_seq[:, idx0]
+            except Exception:
+                direct_plan_override = None
+        else:
+            direct_plan_override = None
+        try:
+            setattr(model, "direct_pose_plan_override", direct_plan_override)
+        except Exception:
+            pass
 
         with amp_ctx:
             ret = model(
@@ -793,6 +1220,7 @@ def _run_freerun_cycles(
                 pose_history=pose_hist_t,
                 plan_z=plan_z,
                 time_index=time_index_t,
+                rollout_step=rollout_step_t,
             )
 
         if not isinstance(ret, dict):
@@ -800,6 +1228,70 @@ def _run_freerun_cycles(
         out = ret.get("out")
         if out is None:
             break
+        # Optional: direct pose head output (absolute y_norm; does NOT use y_{t-1}).
+        direct_norm_step = None
+        try:
+            direct_out = ret.get("out_direct", None)
+            if torch.is_tensor(direct_out):
+                if direct_out.dim() == 3 and direct_out.size(1) == 1:
+                    direct_out = direct_out[:, 0]
+                if direct_out.dim() == 2 and direct_out.shape[0] == motion.shape[0]:
+                    direct_norm_step = direct_out
+        except Exception:
+            direct_norm_step = None
+
+        # Optional: lambda fusion gate (Stage2), normalized to (B,J) for stats / blending.
+        lam_step = None
+        lam_eff_step = None
+        lam_rel_step = None
+        lam_stats = None
+        try:
+            lam = ret.get("lambda_fusion", None)
+            if torch.is_tensor(lam):
+                if lam.dim() == 3 and lam.size(1) == 1:
+                    lam = lam[:, 0]
+                if lam.dim() == 1:
+                    if lam.shape[0] == motion.shape[0]:
+                        lam = lam.unsqueeze(-1)
+                    elif motion.shape[0] == 1 and J > 0 and lam.shape[0] == J:
+                        lam = lam.unsqueeze(0)
+                if lam.dim() == 2 and lam.shape[0] == motion.shape[0]:
+                    if lam.shape[-1] == 1 and J > 0:
+                        lam = lam.expand(lam.shape[0], J)
+                    if J > 0 and lam.shape[-1] == J:
+                        lam_step = lam.clamp(0.0, 1.0)
+                        lam_cpu = lam_step.detach().cpu()
+                        lambda_log.append(lam_cpu)
+                        lam_stats = (float(lam_cpu.mean().item()), float(lam_cpu.std(unbiased=False).item()))
+                        # Shared reliability r_t -> lambda_eff for actual on-manifold blend.
+                        lam_eff_step = lam_step
+                        try:
+                            lam_eff_step, lam_rel_step = trainer._lambda_fusion_apply_reliability(
+                                lam_step,
+                                step_idx=int(t - start_t),
+                                total_steps=int(max(1, int(end_t - start_t))),
+                                rollout_step=rollout_step_t,
+                                ret=ret,
+                            )
+                        except Exception:
+                            lam_eff_step, lam_rel_step = lam_step, None
+                        try:
+                            lambda_eff_log.append(lam_eff_step.detach().cpu() if torch.is_tensor(lam_eff_step) else None)
+                        except Exception:
+                            lambda_eff_log.append(None)
+                        try:
+                            lambda_rel_log.append(lam_rel_step.detach().cpu() if torch.is_tensor(lam_rel_step) else None)
+                        except Exception:
+                            lambda_rel_log.append(None)
+        except Exception:
+            lam_step = None
+            lam_eff_step = None
+            lam_rel_step = None
+            lam_stats = None
+        if lam_step is None:
+            lambda_log.append(None)
+            lambda_eff_log.append(None)
+            lambda_rel_log.append(None)
 
         gate_override = None
         contact_entry: Optional[Dict[str, Any]] = None
@@ -817,36 +1309,159 @@ def _run_freerun_cycles(
                 plan = ret.get("contacts_plan", None)
                 meas = ret.get("contacts_meas", None)
                 err = ret.get("contacts_err", None)
+                plan_logits = ret.get("contacts_plan_logits", None)
+                meas_logits = ret.get("contacts_meas_logits", None)
+                plan_per_c = None
+                meas_per_c = None
+                err_per_c = None
+                plan_logits_mean = None
+                plan_logits_std = None
+                plan_logits_per_c = None
+                meas_logits_mean = None
+                meas_logits_std = None
+                meas_logits_per_c = None
+                angvel_mean = None
+                angvel_abs_mean = None
+                angvel_std = None
+                pose_hist_mean = None
+                pose_hist_abs_mean = None
+                pose_hist_std = None
+                plan_lr_absdiff_mean = None
+                plan_lr_diff_std = None
+                meas_lr_absdiff_mean = None
+                meas_lr_diff_std = None
+                gt_lr_absdiff_mean = None
+                gt_lr_diff_std = None
+                gt_next_lr_absdiff_mean = None
+                gt_next_lr_diff_std = None
                 if torch.is_tensor(plan) and plan.ndim == 2:
                     plan_mean = float(plan.mean().item())
                     plan_abs_mean = float(plan.abs().mean().item())
+                    try:
+                        plan_per_c = plan.mean(dim=0).detach().cpu().tolist()
+                    except Exception:
+                        plan_per_c = None
+                    try:
+                        if plan.shape[-1] >= 2:
+                            d = plan[:, 0] - plan[:, 1]
+                            plan_lr_absdiff_mean = float(d.abs().mean().item())
+                            plan_lr_diff_std = float(d.std(unbiased=False).item())
+                    except Exception:
+                        plan_lr_absdiff_mean = None
+                        plan_lr_diff_std = None
                 else:
                     plan_mean = None
                     plan_abs_mean = None
                 if torch.is_tensor(meas) and meas.ndim == 2:
                     meas_mean = float(meas.mean().item())
                     meas_abs_mean = float(meas.abs().mean().item())
+                    try:
+                        meas_per_c = meas.mean(dim=0).detach().cpu().tolist()
+                    except Exception:
+                        meas_per_c = None
+                    try:
+                        if meas.shape[-1] >= 2:
+                            d = meas[:, 0] - meas[:, 1]
+                            meas_lr_absdiff_mean = float(d.abs().mean().item())
+                            meas_lr_diff_std = float(d.std(unbiased=False).item())
+                    except Exception:
+                        meas_lr_absdiff_mean = None
+                        meas_lr_diff_std = None
                 else:
                     meas_mean = None
                     meas_abs_mean = None
+                if torch.is_tensor(plan_logits) and plan_logits.ndim == 2:
+                    try:
+                        plan_logits_mean = float(plan_logits.mean().item())
+                        plan_logits_std = float(plan_logits.std(unbiased=False).item())
+                        plan_logits_per_c = plan_logits.mean(dim=0).detach().cpu().tolist()
+                    except Exception:
+                        plan_logits_mean = None
+                        plan_logits_std = None
+                        plan_logits_per_c = None
+                if torch.is_tensor(meas_logits) and meas_logits.ndim == 2:
+                    try:
+                        meas_logits_mean = float(meas_logits.mean().item())
+                        meas_logits_std = float(meas_logits.std(unbiased=False).item())
+                        meas_logits_per_c = meas_logits.mean(dim=0).detach().cpu().tolist()
+                    except Exception:
+                        meas_logits_mean = None
+                        meas_logits_std = None
+                        meas_logits_per_c = None
+                try:
+                    av = angvel_t
+                    if torch.is_tensor(av):
+                        if av.ndim == 3 and av.size(1) == 1:
+                            av = av[:, 0]
+                        if av.ndim == 2:
+                            angvel_mean = float(av.mean().item())
+                            angvel_abs_mean = float(av.abs().mean().item())
+                            angvel_std = float(av.std(unbiased=False).item())
+                except Exception:
+                    angvel_mean = None
+                    angvel_abs_mean = None
+                    angvel_std = None
+                try:
+                    ph = pose_hist_t
+                    if torch.is_tensor(ph):
+                        if ph.ndim == 3 and ph.size(1) == 1:
+                            ph = ph[:, 0]
+                        if ph.ndim == 2:
+                            pose_hist_mean = float(ph.mean().item())
+                            pose_hist_abs_mean = float(ph.abs().mean().item())
+                            pose_hist_std = float(ph.std(unbiased=False).item())
+                except Exception:
+                    pose_hist_mean = None
+                    pose_hist_abs_mean = None
+                    pose_hist_std = None
                 err_abs_mean = None
                 if torch.is_tensor(err) and err.ndim == 2:
                     err_abs = err.abs()
                     err_abs_mean = float(err_abs.mean().item())
                     # Also keep per-channel mean abs error (small C, debug-friendly).
                     err_abs_per_c = err_abs.mean(dim=0).detach().cpu().tolist()
+                    try:
+                        err_per_c = err.mean(dim=0).detach().cpu().tolist()
+                    except Exception:
+                        err_per_c = None
                 else:
                     err_abs_per_c = None
                 gt_mean = None
                 gt_abs_mean = None
+                gt_per_c = None
                 gt_next_mean = None
                 gt_next_abs_mean = None
+                gt_next_per_c = None
                 if torch.is_tensor(gt_contacts) and gt_contacts.ndim == 2:
                     gt_mean = float(gt_contacts.mean().item())
                     gt_abs_mean = float(gt_contacts.abs().mean().item())
+                    try:
+                        gt_per_c = gt_contacts.mean(dim=0).detach().cpu().tolist()
+                    except Exception:
+                        gt_per_c = None
+                    try:
+                        if gt_contacts.shape[-1] >= 2:
+                            d = gt_contacts[:, 0] - gt_contacts[:, 1]
+                            gt_lr_absdiff_mean = float(d.abs().mean().item())
+                            gt_lr_diff_std = float(d.std(unbiased=False).item())
+                    except Exception:
+                        gt_lr_absdiff_mean = None
+                        gt_lr_diff_std = None
                 if torch.is_tensor(gt_contacts_next) and gt_contacts_next.ndim == 2:
                     gt_next_mean = float(gt_contacts_next.mean().item())
                     gt_next_abs_mean = float(gt_contacts_next.abs().mean().item())
+                    try:
+                        gt_next_per_c = gt_contacts_next.mean(dim=0).detach().cpu().tolist()
+                    except Exception:
+                        gt_next_per_c = None
+                    try:
+                        if gt_contacts_next.shape[-1] >= 2:
+                            d = gt_contacts_next[:, 0] - gt_contacts_next[:, 1]
+                            gt_next_lr_absdiff_mean = float(d.abs().mean().item())
+                            gt_next_lr_diff_std = float(d.std(unbiased=False).item())
+                    except Exception:
+                        gt_next_lr_absdiff_mean = None
+                        gt_next_lr_diff_std = None
 
                 # Errors against GT contacts (debugging alignment / meas head quality).
                 plan_gt_abs_mean = None
@@ -865,19 +1480,88 @@ def _run_freerun_cycles(
                 contact_entry = {
                     "ContactGTMean": gt_mean,
                     "ContactGTAbsMean": gt_abs_mean,
+                    "ContactGTPerC": gt_per_c,
                     "ContactGTNextMean": gt_next_mean,
                     "ContactGTNextAbsMean": gt_next_abs_mean,
+                    "ContactGTNextPerC": gt_next_per_c,
                     "ContactPlanMean": plan_mean,
                     "ContactPlanAbsMean": plan_abs_mean,
+                    "ContactPlanPerC": plan_per_c,
                     "ContactMeasMean": meas_mean,
                     "ContactMeasAbsMean": meas_abs_mean,
+                    "ContactMeasPerC": meas_per_c,
+                    "ContactPlanLogitsMean": plan_logits_mean,
+                    "ContactPlanLogitsStd": plan_logits_std,
+                    "ContactPlanLogitsPerC": plan_logits_per_c,
+                    "ContactMeasLogitsMean": meas_logits_mean,
+                    "ContactMeasLogitsStd": meas_logits_std,
+                    "ContactMeasLogitsPerC": meas_logits_per_c,
+                    "AngvelMean": angvel_mean,
+                    "AngvelAbsMean": angvel_abs_mean,
+                    "AngvelStd": angvel_std,
+                    "PoseHistMean": pose_hist_mean,
+                    "PoseHistAbsMean": pose_hist_abs_mean,
+                    "PoseHistStd": pose_hist_std,
+                    "ContactPlanLRAbsDiffMean": plan_lr_absdiff_mean,
+                    "ContactPlanLRDiffStd": plan_lr_diff_std,
+                    "ContactMeasLRAbsDiffMean": meas_lr_absdiff_mean,
+                    "ContactMeasLRDiffStd": meas_lr_diff_std,
+                    "ContactGTLRAbsDiffMean": gt_lr_absdiff_mean,
+                    "ContactGTLRDiffStd": gt_lr_diff_std,
+                    "ContactGTNextLRAbsDiffMean": gt_next_lr_absdiff_mean,
+                    "ContactGTNextLRDiffStd": gt_next_lr_diff_std,
                     "ContactErrAbsMean": err_abs_mean,
                     "ContactErrAbsPerC": err_abs_per_c,
+                    "ContactErrPerC": err_per_c,
                     "ContactPlanGtAbsMean": plan_gt_abs_mean,
                     "ContactMeasGtAbsMean": meas_gt_abs_mean,
                     "ContactPlanGtAbsPerC": plan_gt_abs_per_c,
                     "ContactMeasGtAbsPerC": meas_gt_abs_per_c,
                 }
+                # Debug: record what meas the direct head actually saw (override only; otherwise it's "model").
+                try:
+                    direct_meas_per_c = None
+                    if isinstance(direct_meas_override, str):
+                        if direct_meas_override.strip().lower() in ("ignore", "zero", "none"):
+                            C = None
+                            for ref in (plan, meas, gt_contacts):
+                                if torch.is_tensor(ref) and ref.ndim == 2:
+                                    C = int(ref.shape[-1])
+                                    break
+                            if C is not None and C > 0:
+                                direct_meas_per_c = [0.0 for _ in range(C)]
+                    elif torch.is_tensor(direct_meas_override):
+                        ov = direct_meas_override
+                        if ov.ndim == 3 and ov.size(1) == 1:
+                            ov = ov[:, 0]
+                        if ov.ndim == 2:
+                            direct_meas_per_c = ov.mean(dim=0).detach().cpu().tolist()
+                    contact_entry["DirectMeasSource"] = str(direct_meas_source_eff)
+                    contact_entry["DirectMeasOverridePerC"] = direct_meas_per_c
+                except Exception:
+                    pass
+                # Debug: record what plan the direct head actually saw (override only; otherwise it's "model").
+                try:
+                    direct_plan_per_c = None
+                    if isinstance(direct_plan_override, str):
+                        if direct_plan_override.strip().lower() in ("ignore", "zero", "none"):
+                            C = None
+                            for ref in (plan, meas, gt_contacts):
+                                if torch.is_tensor(ref) and ref.ndim == 2:
+                                    C = int(ref.shape[-1])
+                                    break
+                            if C is not None and C > 0:
+                                direct_plan_per_c = [0.0 for _ in range(C)]
+                    elif torch.is_tensor(direct_plan_override):
+                        ov = direct_plan_override
+                        if ov.ndim == 3 and ov.size(1) == 1:
+                            ov = ov[:, 0]
+                        if ov.ndim == 2:
+                            direct_plan_per_c = ov.mean(dim=0).detach().cpu().tolist()
+                    contact_entry["DirectPlanSource"] = str(direct_plan_source_eff)
+                    contact_entry["DirectPlanOverridePerC"] = direct_plan_per_c
+                except Exception:
+                    pass
                 if (
                     bool(getattr(trainer, "so3_corr_apply", False))
                     and bool(getattr(trainer, "so3_corr_gate_from_contacts_err", False))
@@ -933,6 +1617,27 @@ def _run_freerun_cycles(
             except Exception:
                 contact_entry = None
 
+        # Optional: attach detailed white-box intermediates for debugging discrete collapses.
+        if contact_entry is not None and bool(getattr(trainer, "log_contacts_whitebox", False)):
+            try:
+                first_steps = int(getattr(trainer, "log_contacts_whitebox_first_steps", 4) or 4)
+                step_idx = int(t - start_t)
+                want_wb = step_idx < max(0, first_steps)
+                if not want_wb:
+                    meas_abs = contact_entry.get("ContactMeasAbsMean", None)
+                    gt_abs = contact_entry.get("ContactGTAbsMean", None)
+                    meas_gt_abs = contact_entry.get("ContactMeasGtAbsMean", None)
+                    if (meas_abs is not None) and (gt_abs is not None) and float(meas_abs) < 0.05 and float(gt_abs) > 0.2:
+                        want_wb = True
+                    elif meas_gt_abs is not None and float(meas_gt_abs) > 0.35:
+                        want_wb = True
+                if want_wb:
+                    wb = getattr(trainer, "_contact_meas_whitebox_debug", None)
+                    if isinstance(wb, dict) and wb:
+                        contact_entry["ContactMeasWhitebox"] = wb
+            except Exception:
+                pass
+
         if plan_enable:
             try:
                 z_next = ret.get("plan_z_next", None)
@@ -945,7 +1650,7 @@ def _run_freerun_cycles(
         if y_raw_prev is not None:
             try:
                 so3_gate = gate_override if gate_override is not None else getattr(trainer, "so3_corr_gate_force", None)
-                y_raw = trainer._compose_delta_to_raw(
+                y_inc_raw = trainer._compose_delta_to_raw(
                     y_raw_prev,
                     delta_norm,
                     omega_hat=ret.get("omega_hat", None) if bool(getattr(trainer, "so3_corr_apply", False)) else None,
@@ -954,24 +1659,51 @@ def _run_freerun_cycles(
                     omega_detach=True,
                 )
             except Exception:
-                y_raw = trainer._denorm(delta_norm)
+                y_inc_raw = trainer._denorm(delta_norm)
         else:
-            y_raw = trainer._denorm(delta_norm)
+            y_inc_raw = trainer._denorm(delta_norm)
 
-        y_raw_prev = y_raw.detach()
+        # Stage2: on-manifold blend (incremental -> direct) for rollout update + metrics.
+        y_blend_raw = y_inc_raw
+        if bool(lambda_fusion_apply) and y_inc_raw is not None and torch.is_tensor(y_inc_raw):
+            lam_for_blend = lam_eff_step if torch.is_tensor(lam_eff_step) else lam_step
+            if torch.is_tensor(direct_norm_step) and torch.is_tensor(lam_for_blend):
+                try:
+                    y_blend_raw = trainer._apply_lambda_fusion_to_raw(
+                        y_inc_raw,
+                        direct_norm=direct_norm_step,
+                        lambda_fusion=lam_for_blend,
+                    )
+                except Exception:
+                    y_blend_raw = y_inc_raw
+
+        # Store incremental and blend predictions (normalized absolute Y).
+        try:
+            y_inc_norm = trainer._norm_y(y_inc_raw)
+        except Exception:
+            y_inc_norm = delta_norm
+        predsY.append(y_inc_norm)
 
         try:
-            y_norm = trainer._norm_y(y_raw)
+            y_blend_norm = trainer._norm_y(y_blend_raw)
         except Exception:
-            y_norm = delta_norm
+            y_blend_norm = y_inc_norm
+        predsY_blend.append(y_blend_norm)
 
-        predsY.append(y_norm)
+        # Choose the actual rollout state update.
+        y_used_raw = y_blend_raw if bool(lambda_fusion_apply) else y_inc_raw
+        y_raw_prev = y_used_raw.detach() if torch.is_tensor(y_used_raw) else None
+
+        if torch.is_tensor(direct_norm_step):
+            predsY_direct.append(direct_norm_step.detach())
+        else:
+            predsY_direct.append(y_inc_norm.detach())
 
         if motion_raw is not None:
-            motion_raw = trainer._apply_free_carry(motion_raw, y_raw, cond_next_raw=cond_raw_step).detach()
+            motion_raw = trainer._apply_free_carry(motion_raw, y_used_raw, cond_next_raw=cond_raw_step).detach()
             motion = trainer._diag_norm_x(motion_raw)
         else:
-            motion = trainer._apply_free_carry(motion, y_raw, cond_next_raw=None).detach()
+            motion = trainer._apply_free_carry(motion, y_used_raw, cond_next_raw=None).detach()
 
         predsX.append(motion)
 
@@ -983,7 +1715,7 @@ def _run_freerun_cycles(
                 pose_hist_buffer_raw = torch.roll(pose_hist_buffer_raw, shifts=-pose_hist_stride, dims=-1)
                 rot_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
                 if isinstance(rot_slice, slice):
-                    pose_hist_buffer_raw[..., -pose_hist_stride:] = y_raw[..., rot_slice]
+                    pose_hist_buffer_raw[..., -pose_hist_stride:] = y_used_raw[..., rot_slice]
                 pose_hist_buffer_norm = trainer._pose_hist_transform_vec(pose_hist_buffer_raw, scales, mu, std)
 
     if not predsY:
@@ -994,11 +1726,15 @@ def _run_freerun_cycles(
     # (see MotionEventDataset.__getitem__: "Y 已在转换阶段对齐到 下一帧"),
     # and free-run evaluation compares predY[t] vs gtY[t] starting at start_t.
     predY_full = torch.stack(predsY, dim=1)  # [B, free_steps_raw, Dy]
+    predY_blend_full = torch.stack(predsY_blend, dim=1) if predsY_blend else None  # [B, free_steps_raw, Dy]
+    predY_direct_full = torch.stack(predsY_direct, dim=1) if predsY_direct else None  # [B, free_steps_raw, Dy]
     free_steps_raw = predY_full.shape[1]
     max_aligned = max(0, min(free_steps_raw, T_total - start_t))
     if max_aligned <= 0:
         raise RuntimeError("Not enough frames for aligned free-run evaluation.")
     predY = predY_full[:, :max_aligned]
+    predY_blend = predY_blend_full[:, :max_aligned] if predY_blend_full is not None else None
+    predY_direct = predY_direct_full[:, :max_aligned] if predY_direct_full is not None else None
     free_steps = max_aligned
     gt_start = start_t
     gt_end = gt_start + free_steps
@@ -1011,6 +1747,10 @@ def _run_freerun_cycles(
     gtX = state_seq[:, gt_start + 1:gt_end + 1]  # [B, free_steps, Dx]
 
     contact_steps = contacts_log[:max_aligned] if contacts_log else []
+    time_index_steps = time_index_log[:max_aligned] if time_index_log else []
+    lambda_steps = lambda_log[:max_aligned] if lambda_log else []
+    lambda_eff_steps = lambda_eff_log[:max_aligned] if lambda_eff_log else []
+    lambda_rel_steps = lambda_rel_log[:max_aligned] if lambda_rel_log else []
 
     predX_raw = None
     gtX_raw = None
@@ -1036,7 +1776,7 @@ def _run_freerun_cycles(
             root_vel_mae = None
 
     # ---- Per‑round metrics ---------------------------------------------------
-    # Shared slices for rotations
+    # Shared slices for rotations (reuse previously inferred)
     rot_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
     if not isinstance(rot_slice, slice):
         rot_slice = slice(0, predY.shape[-1])
@@ -1047,9 +1787,20 @@ def _run_freerun_cycles(
     # Denorm entire run once for GeoDeg
     with torch.no_grad():
         pred_raw_full = trainer._denorm(predY.reshape(1, free_steps, -1))
+        pred_blend_raw_full = (
+            trainer._denorm(predY_blend.reshape(1, free_steps, -1))
+            if predY_blend is not None
+            else None
+        )
         gt_raw_full = trainer._denorm(gtY.reshape(1, free_steps, -1))
+        pred_direct_raw_full = (
+            trainer._denorm(predY_direct.reshape(1, free_steps, -1))
+            if predY_direct is not None
+            else None
+        )
 
     per_step: List[Dict[str, Any]] = []
+    extra: Dict[str, Any] = {}
 
     # Optional: per-bone geodesic error for key bones (same set as training diag)
     loss_fn = getattr(trainer, "loss_fn", None)
@@ -1079,6 +1830,8 @@ def _run_freerun_cycles(
         J = width // 6
         root_idx = int(getattr(trainer, "eval_root_idx", 0) or 0)
         root_idx = max(0, min(J - 1, root_idx))
+        joint_mask = torch.ones(J, device=device, dtype=torch.bool)
+        joint_mask[root_idx] = False
         pr6_full = pred_raw_full[..., rot_slice].view(1, free_steps, J, 6)
         gt6_full = gt_raw_full[..., rot_slice].view(1, free_steps, J, 6)
         pr6_full = reproject_rot6d(pr6_full)
@@ -1101,10 +1854,80 @@ def _run_freerun_cycles(
                 geo_full_aligned0 = geodesic_R(Rp_aligned, Rg_full) * deg_factor
             except Exception:
                 geo_full_aligned0 = None
-        # Root-relative geodesic (decouples global root drift from pose).
-        Rp_local_full = root_relative_matrices(Rp_full, root_idx)
-        Rg_local_full = root_relative_matrices(Rg_full, root_idx)
-        geo_local_full = geodesic_R(Rp_local_full, Rg_local_full) * deg_factor  # [1, free_steps, J]
+        # Pose-only geodesic per joint. "GeoLocal*" aggregates this while excluding the root joint,
+        # so the metric reflects BoneRotations6D pose quality and is not dominated by root/motion.
+        geo_local_full = geo_full  # [1, free_steps, J]
+
+        # Blend diagnostics: absolute pose after SO(3) fusion (used for rollout update if enabled).
+        geo_blend_full = None
+        geo_blend_full_aligned0 = None
+        geo_blend_local_full = None
+        if pred_blend_raw_full is not None:
+            try:
+                b6_full = pred_blend_raw_full[..., rot_slice].view(1, free_steps, J, 6)
+                b6_full = reproject_rot6d(b6_full)
+                Rb_full = rot6d_to_matrix(b6_full)  # [1, free_steps, J, 3, 3]
+                geo_blend_full = geodesic_R(Rb_full, Rg_full) * deg_factor
+                if free_steps > 0:
+                    try:
+                        Rbr0 = Rb_full[:, 0, root_idx]
+                        Rgr0 = Rg_full[:, 0, root_idx]
+                        R_align_b = torch.matmul(Rgr0, Rbr0.transpose(-1, -2))
+                        Rb_aligned = torch.matmul(
+                            R_align_b.view(1, 1, 1, 3, 3).expand_as(Rb_full),
+                            Rb_full,
+                        )
+                        geo_blend_full_aligned0 = geodesic_R(Rb_aligned, Rg_full) * deg_factor
+                    except Exception:
+                        geo_blend_full_aligned0 = None
+                geo_blend_local_full = geo_blend_full
+            except Exception:
+                geo_blend_full = None
+                geo_blend_full_aligned0 = None
+                geo_blend_local_full = None
+
+        # Direct head diagnostics (if available): absolute pose prediction that does NOT use y_{t-1}.
+        geo_direct_full = None
+        geo_direct_full_aligned0 = None
+        geo_direct_local_full = None
+        geo_direct_full_align_inc0 = None
+        geo_direct_local_full_align_inc0 = None
+        if pred_direct_raw_full is not None:
+            try:
+                d6_full = pred_direct_raw_full[..., rot_slice].view(1, free_steps, J, 6)
+                d6_full = reproject_rot6d(d6_full)
+                Rd_full = rot6d_to_matrix(d6_full)  # [1, free_steps, J, 3, 3]
+                geo_direct_full = geodesic_R(Rd_full, Rg_full) * deg_factor
+                if free_steps > 0:
+                    try:
+                        Rdr0 = Rd_full[:, 0, root_idx]
+                        Rgr0 = Rg_full[:, 0, root_idx]
+                        R_align_d = torch.matmul(Rgr0, Rdr0.transpose(-1, -2))
+                        Rd_aligned = torch.matmul(
+                            R_align_d.view(1, 1, 1, 3, 3).expand_as(Rd_full),
+                            Rd_full,
+                        )
+                        geo_direct_full_aligned0 = geodesic_R(Rd_aligned, Rg_full) * deg_factor
+                    except Exception:
+                        geo_direct_full_aligned0 = None
+                geo_direct_local_full = geo_direct_full
+                if bool(direct_align_inc0) and free_steps > 0:
+                    try:
+                        # Per-joint constant bias at step0: R_bias[j] = R_inc0[j] @ R_dir0[j]^T
+                        R_bias = torch.matmul(Rp_full[:, 0], Rd_full[:, 0].transpose(-1, -2))  # [B,J,3,3]
+                        Rd_inc0_aligned = torch.matmul(R_bias.unsqueeze(1), Rd_full)  # [B,T,J,3,3]
+                        geo_direct_full_align_inc0 = geodesic_R(Rd_inc0_aligned, Rg_full) * deg_factor
+                        geo_direct_local_full_align_inc0 = geo_direct_full_align_inc0
+                    except Exception:
+                        geo_direct_full_align_inc0 = None
+                        geo_direct_local_full_align_inc0 = None
+            except Exception:
+                geo_direct_full = None
+                geo_direct_full_aligned0 = None
+                geo_direct_local_full = None
+                geo_direct_full_align_inc0 = None
+                geo_direct_local_full_align_inc0 = None
+
         # Training diagnostics use joint weights (unified/hierarchy weights) for GeoLocalDeg.
         # Keep both:
         #   - GeoLocalDeg: unweighted mean over all joints (debug-friendly)
@@ -1113,7 +1936,10 @@ def _run_freerun_cycles(
         weights_sum = None
         w_joint = None
         try:
-            joint_weights = trainer._joint_weights(Rp_local_full, J)  # [J]
+            joint_weights = trainer._joint_weights(Rp_full, J)  # [J]
+            if 0 <= root_idx < joint_weights.numel():
+                joint_weights = joint_weights.clone()
+                joint_weights[root_idx] = 0.0
             weights_sum = joint_weights.sum().clamp_min(1e-6)
             w_joint = joint_weights.view(1, 1, -1)  # [1,1,J]
         except Exception:
@@ -1122,12 +1948,135 @@ def _run_freerun_cycles(
             w_joint = None
     else:
         root_idx = 0
+        joint_mask = None
         geo_full = None
         geo_full_aligned0 = None
         geo_local_full = None
+        geo_blend_full = None
+        geo_blend_full_aligned0 = None
+        geo_blend_local_full = None
+        geo_direct_full = None
+        geo_direct_full_aligned0 = None
+        geo_direct_local_full = None
+        geo_direct_full_align_inc0 = None
+        geo_direct_local_full_align_inc0 = None
         joint_weights = None
         weights_sum = None
         w_joint = None
+
+    # Optional: export per-joint GeoLocal stats and recommend warmup joint scales.
+    # This is meant to support per-joint warmup scaling ablations without hand-tuning.
+    if bool(export_joint_geolocal) and geo_local_full is not None:
+        try:
+            # Build joint name list aligned to BoneRotations6D joint count.
+            names = list(bone_names) if isinstance(bone_names, (list, tuple)) else []
+            if len(names) < int(J):
+                names = names + [f"joint_{i}" for i in range(len(names), int(J))]
+            names = names[: int(J)]
+
+            inc = geo_local_full[0]  # (T,J)
+            steps_total = int(inc.shape[0])
+            k = int(getattr(trainer, "lambda_reliability_warmup_steps", 0) or 0)
+            if k <= 0:
+                k = min(10, steps_total)
+            k = max(2, min(int(k), steps_total))
+
+            inc_mean = inc.mean(dim=0)
+            inc_start = inc[0]
+            inc_end = inc[-1]
+            inc_early_mean = inc[:k].mean(dim=0)
+            inc_late_mean = inc[-k:].mean(dim=0) if steps_total >= k else inc_early_mean
+            inc_drift_delta = inc[k - 1] - inc[0]
+
+            dloc = geo_direct_local_full[0] if geo_direct_local_full is not None else None
+            dloc_align_inc0 = geo_direct_local_full_align_inc0[0] if geo_direct_local_full_align_inc0 is not None else None
+            bloc = geo_blend_local_full[0] if geo_blend_local_full is not None else None
+
+            per_joint = {
+                "bone_names": names,
+                "root_idx": int(root_idx),
+                "steps": steps_total,
+                "analysis_steps": int(k),
+                "GeoLocalDegMean": inc_mean.detach().cpu().tolist(),
+                "GeoLocalDegStart": inc_start.detach().cpu().tolist(),
+                "GeoLocalDegEnd": inc_end.detach().cpu().tolist(),
+                "GeoLocalDegEarlyMean": inc_early_mean.detach().cpu().tolist(),
+                "GeoLocalDegLateMean": inc_late_mean.detach().cpu().tolist(),
+                "GeoLocalDegDriftDelta": inc_drift_delta.detach().cpu().tolist(),
+            }
+            if dloc is not None:
+                try:
+                    per_joint["DirectGeoLocalDegMean"] = dloc.mean(dim=0).detach().cpu().tolist()
+                    per_joint["DirectGeoLocalDegEarlyMean"] = dloc[:k].mean(dim=0).detach().cpu().tolist()
+                    per_joint["DirectGeoLocalDegLateMean"] = (
+                        dloc[-k:].mean(dim=0) if steps_total >= k else dloc[:k].mean(dim=0)
+                    ).detach().cpu().tolist()
+                except Exception:
+                    pass
+            if dloc_align_inc0 is not None:
+                try:
+                    per_joint["DirectGeoLocalDegAlignInc0Mean"] = dloc_align_inc0.mean(dim=0).detach().cpu().tolist()
+                    per_joint["DirectGeoLocalDegAlignInc0EarlyMean"] = dloc_align_inc0[:k].mean(dim=0).detach().cpu().tolist()
+                    per_joint["DirectGeoLocalDegAlignInc0LateMean"] = (
+                        dloc_align_inc0[-k:].mean(dim=0) if steps_total >= k else dloc_align_inc0[:k].mean(dim=0)
+                    ).detach().cpu().tolist()
+                except Exception:
+                    pass
+            if bloc is not None:
+                try:
+                    per_joint["BlendGeoLocalDegMean"] = bloc.mean(dim=0).detach().cpu().tolist()
+                    per_joint["BlendGeoLocalDegEarlyMean"] = bloc[:k].mean(dim=0).detach().cpu().tolist()
+                    per_joint["BlendGeoLocalDegLateMean"] = (
+                        bloc[-k:].mean(dim=0) if steps_total >= k else bloc[:k].mean(dim=0)
+                    ).detach().cpu().tolist()
+                except Exception:
+                    pass
+
+            # Heuristic: per-joint warmup scale based on early drift delta.
+            # - larger drift => scale > 1 (warmup faster for that joint)
+            # - smaller drift => scale < 1 (warmup slower, but will still reach 1 for long rollouts)
+            try:
+                alpha = 0.5  # sqrt compresses extreme ratios
+                min_scale = 0.25
+                max_scale = 4.0
+                eps = 1e-8
+
+                score = inc_drift_delta.detach().clamp(min=0.0)  # (J,)
+                if joint_mask is not None and joint_mask.any():
+                    denom = float(score[joint_mask].mean().item())
+                else:
+                    denom = float(score.mean().item())
+                if denom <= eps:
+                    scales = torch.ones_like(score)
+                else:
+                    scales = (score / (denom + eps)).clamp(min=eps).pow(alpha)
+                # Keep root neutral by default.
+                if 0 <= int(root_idx) < int(scales.numel()):
+                    scales[int(root_idx)] = 1.0
+                scales = scales.clamp(min_scale, max_scale)
+                if joint_mask is not None and joint_mask.any():
+                    m = scales[joint_mask].mean()
+                    if torch.is_tensor(m) and float(m.item()) > eps:
+                        scales = scales.clone()
+                        scales[joint_mask] = (scales[joint_mask] / m).clamp(min_scale, max_scale)
+                scales_out = scales.detach().cpu().tolist()
+
+                extra["lambda_reliability_warmup_joint_scales_suggested"] = scales_out
+                extra["lambda_reliability_warmup_joint_scales_suggested_meta"] = {
+                    "method": "inc_geolocal_drift_delta_sqrt_norm",
+                    "alpha": float(alpha),
+                    "min_scale": float(min_scale),
+                    "max_scale": float(max_scale),
+                    "analysis_steps": int(k),
+                    "root_idx": int(root_idx),
+                }
+                print("[FreeRun][Suggest] lambda_reliability_warmup_joint_scales =", json.dumps(scales_out))
+            except Exception:
+                pass
+
+            extra["per_joint_geolocal"] = per_joint
+        except Exception:
+            pass
 
     for t in range(free_steps):
         geo_t = None
@@ -1152,26 +2101,140 @@ def _run_freerun_cycles(
             geo_aligned0_t = float(geo_full_aligned0[:, t].mean().item())
             root_geo_aligned0_t = float(geo_full_aligned0[:, t, root_idx].mean().item())
         if geo_local_full is not None:
-            geo_local_t = float(geo_local_full[:, t].mean().item())
+            if joint_mask is not None and joint_mask.any():
+                geo_local_t = float(geo_local_full[:, t, joint_mask].mean().item())
+            else:
+                geo_local_t = 0.0
             if key_indices:
                 per_joint_local = geo_local_full[0, t]
                 for name, j_idx in zip(key_bone_names, key_indices):
                     if 0 <= j_idx < per_joint_local.numel():
-                        keybone_geo_local[name] = float(per_joint_local[j_idx].item())
+                        keybone_geo_local[name] = 0.0 if j_idx == root_idx else float(per_joint_local[j_idx].item())
             if geo_local_full is not None and w_joint is not None and weights_sum is not None:
                 # Weighted GeoLocalDeg (matches Trainer)
                 geo_local_weighted_t = float(
                     ((geo_local_full[:, t] * w_joint).sum(dim=-1) / weights_sum).mean().item()
                 )
+
+        direct_geo_t = None
+        direct_geo_aligned0_t = None
+        direct_geo_local_t = None
+        direct_geo_local_weighted_t = None
+        direct_root_geo_t = None
+        direct_root_geo_aligned0_t = None
+        if geo_direct_full is not None:
+            direct_geo_t = float(geo_direct_full[:, t].mean().item())
+            direct_root_geo_t = float(geo_direct_full[:, t, root_idx].mean().item())
+        if geo_direct_full_aligned0 is not None:
+            direct_geo_aligned0_t = float(geo_direct_full_aligned0[:, t].mean().item())
+            direct_root_geo_aligned0_t = float(geo_direct_full_aligned0[:, t, root_idx].mean().item())
+        if geo_direct_local_full is not None:
+            if joint_mask is not None and joint_mask.any():
+                direct_geo_local_t = float(geo_direct_local_full[:, t, joint_mask].mean().item())
+            else:
+                direct_geo_local_t = 0.0
+            if w_joint is not None and weights_sum is not None:
+                direct_geo_local_weighted_t = float(
+                    ((geo_direct_local_full[:, t] * w_joint).sum(dim=-1) / weights_sum).mean().item()
+                )
+
+        direct_geo_align_inc0_t = None
+        direct_geo_local_align_inc0_t = None
+        direct_geo_local_weighted_align_inc0_t = None
+        direct_root_geo_align_inc0_t = None
+        if geo_direct_full_align_inc0 is not None:
+            direct_geo_align_inc0_t = float(geo_direct_full_align_inc0[:, t].mean().item())
+            direct_root_geo_align_inc0_t = float(geo_direct_full_align_inc0[:, t, root_idx].mean().item())
+        if geo_direct_local_full_align_inc0 is not None:
+            if joint_mask is not None and joint_mask.any():
+                direct_geo_local_align_inc0_t = float(geo_direct_local_full_align_inc0[:, t, joint_mask].mean().item())
+            else:
+                direct_geo_local_align_inc0_t = 0.0
+            if w_joint is not None and weights_sum is not None:
+                direct_geo_local_weighted_align_inc0_t = float(
+                    ((geo_direct_local_full_align_inc0[:, t] * w_joint).sum(dim=-1) / weights_sum).mean().item()
+                )
+
+        blend_geo_t = None
+        blend_geo_aligned0_t = None
+        blend_geo_local_t = None
+        blend_geo_local_weighted_t = None
+        blend_root_geo_t = None
+        blend_root_geo_aligned0_t = None
+        if geo_blend_full is not None:
+            blend_geo_t = float(geo_blend_full[:, t].mean().item())
+            blend_root_geo_t = float(geo_blend_full[:, t, root_idx].mean().item())
+        if geo_blend_full_aligned0 is not None:
+            blend_geo_aligned0_t = float(geo_blend_full_aligned0[:, t].mean().item())
+            blend_root_geo_aligned0_t = float(geo_blend_full_aligned0[:, t, root_idx].mean().item())
+        if geo_blend_local_full is not None:
+            if joint_mask is not None and joint_mask.any():
+                blend_geo_local_t = float(geo_blend_local_full[:, t, joint_mask].mean().item())
+            else:
+                blend_geo_local_t = 0.0
+            if w_joint is not None and weights_sum is not None:
+                blend_geo_local_weighted_t = float(
+                    ((geo_blend_local_full[:, t] * w_joint).sum(dim=-1) / weights_sum).mean().item()
+                )
+
+        lam_mean_t = lam_std_t = None
+        if lambda_steps:
+            lam_t = lambda_steps[t] if t < len(lambda_steps) else None
+            if torch.is_tensor(lam_t):
+                try:
+                    lam_mean_t = float(lam_t.mean().item())
+                    lam_std_t = float(lam_t.std(unbiased=False).item())
+                except Exception:
+                    lam_mean_t = lam_std_t = None
+
+        lam_eff_mean_t = lam_eff_std_t = None
+        if lambda_eff_steps:
+            lam_t = lambda_eff_steps[t] if t < len(lambda_eff_steps) else None
+            if torch.is_tensor(lam_t):
+                try:
+                    lam_eff_mean_t = float(lam_t.mean().item())
+                    lam_eff_std_t = float(lam_t.std(unbiased=False).item())
+                except Exception:
+                    lam_eff_mean_t = lam_eff_std_t = None
+
+        lam_rel_mean_t = None
+        if lambda_rel_steps:
+            rel_t = lambda_rel_steps[t] if t < len(lambda_rel_steps) else None
+            if torch.is_tensor(rel_t):
+                try:
+                    lam_rel_mean_t = float(rel_t.mean().item())
+                except Exception:
+                    lam_rel_mean_t = None
         entry: Dict[str, Any] = {
             "step": int(t),
-            "time_index": int(time_index_t) if time_index_t is not None else None,
+            "time_index": int(time_index_steps[t]) if (time_index_steps and t < len(time_index_steps) and time_index_steps[t] is not None) else None,
             "GeoDeg": geo_t,
             "GeoDegAligned0": geo_aligned0_t,
             "GeoLocalDeg": geo_local_t,
             "GeoLocalDegWeighted": geo_local_weighted_t,
             "RootGeoDeg": root_geo_t,
             "RootGeoDegAligned0": root_geo_aligned0_t,
+            "BlendGeoDeg": blend_geo_t,
+            "BlendGeoDegAligned0": blend_geo_aligned0_t,
+            "BlendGeoLocalDeg": blend_geo_local_t,
+            "BlendGeoLocalDegWeighted": blend_geo_local_weighted_t,
+            "BlendRootGeoDeg": blend_root_geo_t,
+            "BlendRootGeoDegAligned0": blend_root_geo_aligned0_t,
+            "DirectGeoDeg": direct_geo_t,
+            "DirectGeoDegAligned0": direct_geo_aligned0_t,
+            "DirectGeoLocalDeg": direct_geo_local_t,
+            "DirectGeoLocalDegWeighted": direct_geo_local_weighted_t,
+            "DirectRootGeoDeg": direct_root_geo_t,
+            "DirectRootGeoDegAligned0": direct_root_geo_aligned0_t,
+            "DirectGeoDegAlignInc0": direct_geo_align_inc0_t,
+            "DirectGeoLocalDegAlignInc0": direct_geo_local_align_inc0_t,
+            "DirectGeoLocalDegWeightedAlignInc0": direct_geo_local_weighted_align_inc0_t,
+            "DirectRootGeoDegAlignInc0": direct_root_geo_align_inc0_t,
+            "LambdaMean": lam_mean_t,
+            "LambdaStd": lam_std_t,
+            "LambdaEffMean": lam_eff_mean_t,
+            "LambdaEffStd": lam_eff_std_t,
+            "LambdaRelMean": lam_rel_mean_t,
             "RootPosErr": float(root_pos_err[t].item()) if root_pos_err is not None else None,
             "RootVelMAE": float(root_vel_mae[t].item()) if root_vel_mae is not None else None,
         }
@@ -1182,15 +2245,43 @@ def _run_freerun_cycles(
                 for ck in (
                     "ContactGTMean",
                     "ContactGTAbsMean",
+                    "ContactGTPerC",
                     "ContactGTNextMean",
                     "ContactGTNextAbsMean",
+                    "ContactGTNextPerC",
                     "ContactPlanMean",
                     "ContactPlanAbsMean",
+                    "ContactPlanPerC",
+                    "ContactPlanLogitsMean",
+                    "ContactPlanLogitsStd",
+                    "ContactPlanLogitsPerC",
                     "ContactMeasMean",
                     "ContactMeasAbsMean",
+                    "ContactMeasPerC",
+                    "ContactMeasLogitsMean",
+                    "ContactMeasLogitsStd",
+                    "ContactMeasLogitsPerC",
+                    "AngvelMean",
+                    "AngvelAbsMean",
+                    "AngvelStd",
+                    "PoseHistMean",
+                    "PoseHistAbsMean",
+                    "PoseHistStd",
+                    "ContactPlanLRAbsDiffMean",
+                    "ContactPlanLRDiffStd",
+                    "ContactMeasLRAbsDiffMean",
+                    "ContactMeasLRDiffStd",
+                    "ContactGTLRAbsDiffMean",
+                    "ContactGTLRDiffStd",
+                    "ContactGTNextLRAbsDiffMean",
+                    "ContactGTNextLRDiffStd",
                     "ContactErrAbsMean",
                     "ContactPlanGtAbsMean",
                     "ContactMeasGtAbsMean",
+                    "DirectMeasSource",
+                    "DirectMeasOverridePerC",
+                    "DirectPlanSource",
+                    "DirectPlanOverridePerC",
                     "So3GateWarmup",
                     "So3GateErrRef",
                     "So3GateErrEff",
@@ -1203,10 +2294,15 @@ def _run_freerun_cycles(
                         entry[ck] = c.get(ck)
                 if "ContactErrAbsPerC" in c:
                     entry["ContactErrAbsPerC"] = c.get("ContactErrAbsPerC")
+                if "ContactErrPerC" in c:
+                    entry["ContactErrPerC"] = c.get("ContactErrPerC")
                 if "ContactPlanGtAbsPerC" in c:
                     entry["ContactPlanGtAbsPerC"] = c.get("ContactPlanGtAbsPerC")
                 if "ContactMeasGtAbsPerC" in c:
                     entry["ContactMeasGtAbsPerC"] = c.get("ContactMeasGtAbsPerC")
+                if "ContactMeasWhitebox" in c:
+                    # Nested dict (debug only): keep it grouped instead of flattening dozens of keys.
+                    entry["ContactMeasWhitebox"] = c.get("ContactMeasWhitebox")
         if keybone_geo:
             entry["KeyBoneGeoDeg"] = keybone_geo
         if keybone_geo_local:
@@ -1243,10 +2339,20 @@ def _run_freerun_cycles(
             continue
 
         geo_deg_val: Optional[float] = None
+        geo_deg_start: Optional[float] = None
+        geo_deg_end: Optional[float] = None
         geo_local_deg_val: Optional[float] = None
+        geo_local_deg_start: Optional[float] = None
+        geo_local_deg_end: Optional[float] = None
         geo_local_deg_weighted_val: Optional[float] = None
+        geo_local_deg_weighted_start: Optional[float] = None
+        geo_local_deg_weighted_end: Optional[float] = None
         root_geo_deg_val: Optional[float] = None
+        root_geo_deg_start: Optional[float] = None
+        root_geo_deg_end: Optional[float] = None
         root_geo_deg_aligned0_val: Optional[float] = None
+        root_geo_deg_aligned0_start: Optional[float] = None
+        root_geo_deg_aligned0_end: Optional[float] = None
         keybone_geo_mean: Optional[float] = None
         keybone_geo_local_mean: Optional[float] = None
         root_pos_err_mean: Optional[float] = None
@@ -1259,27 +2365,60 @@ def _run_freerun_cycles(
         if geo_full is not None:
             geo_seg = geo_full[:, t0:t1]  # [B, Tr, J]
             geo_deg_val = float(geo_seg.mean().item())
+            if geo_seg.shape[1] > 0:
+                geo_deg_start = float(geo_seg[:, 0].mean().item())
+                geo_deg_end = float(geo_seg[:, -1].mean().item())
             root_geo_deg_val = float(geo_seg[..., root_idx].mean().item())
+            if geo_seg.shape[1] > 0:
+                root_geo_deg_start = float(geo_seg[:, 0, root_idx].mean().item())
+                root_geo_deg_end = float(geo_seg[:, -1, root_idx].mean().item())
             if key_indices:
                 kb = geo_seg[..., key_indices]
                 keybone_geo_mean = float(kb.mean().item())
         geo_deg_aligned0_val: Optional[float] = None
+        geo_deg_aligned0_start: Optional[float] = None
+        geo_deg_aligned0_end: Optional[float] = None
         if geo_full_aligned0 is not None:
             geo_align_seg = geo_full_aligned0[:, t0:t1]
             geo_deg_aligned0_val = float(geo_align_seg.mean().item())
+            if geo_align_seg.shape[1] > 0:
+                geo_deg_aligned0_start = float(geo_align_seg[:, 0].mean().item())
+                geo_deg_aligned0_end = float(geo_align_seg[:, -1].mean().item())
             root_geo_deg_aligned0_val = float(geo_align_seg[..., root_idx].mean().item())
+            if geo_align_seg.shape[1] > 0:
+                root_geo_deg_aligned0_start = float(geo_align_seg[:, 0, root_idx].mean().item())
+                root_geo_deg_aligned0_end = float(geo_align_seg[:, -1, root_idx].mean().item())
 
         if geo_local_full is not None:
             geo_local_seg = geo_local_full[:, t0:t1]
-            geo_local_deg_val = float(geo_local_seg.mean().item())
+            if joint_mask is not None and joint_mask.any():
+                geo_local_deg_val = float(geo_local_seg[..., joint_mask].mean().item())
+            else:
+                geo_local_deg_val = 0.0
+            if geo_local_seg.shape[1] > 0:
+                if joint_mask is not None and joint_mask.any():
+                    geo_local_deg_start = float(geo_local_seg[:, 0, joint_mask].mean().item())
+                    geo_local_deg_end = float(geo_local_seg[:, -1, joint_mask].mean().item())
+                else:
+                    geo_local_deg_start = 0.0
+                    geo_local_deg_end = 0.0
             if w_joint is not None and weights_sum is not None:
                 geo_local_deg_weighted_val = float(
                     (geo_local_seg * w_joint).sum().item()
                     / (weights_sum.item() * geo_local_seg.shape[0] * geo_local_seg.shape[1])
                 )
+                if geo_local_seg.shape[1] > 0:
+                    geo_local_deg_weighted_start = float(
+                        ((geo_local_seg[:, 0] * w_joint).sum(dim=-1) / weights_sum).mean().item()
+                    )
+                    geo_local_deg_weighted_end = float(
+                        ((geo_local_seg[:, -1] * w_joint).sum(dim=-1) / weights_sum).mean().item()
+                    )
             if key_indices:
-                kb_local = geo_local_seg[..., key_indices]
-                keybone_geo_local_mean = float(kb_local.mean().item())
+                key_no_root = [i for i in key_indices if i != root_idx]
+                if key_no_root:
+                    kb_local = geo_local_seg[..., key_no_root]
+                    keybone_geo_local_mean = float(kb_local.mean().item())
 
         if root_pos_err is not None:
             seg = root_pos_err[t0:t1]
@@ -1300,11 +2439,23 @@ def _run_freerun_cycles(
             "steps": int(t1 - t0),
             "round_seg_mode": str(round_seg_mode),
             "GeoDeg": geo_deg_val,
+            "GeoDegStart": geo_deg_start,
+            "GeoDegEnd": geo_deg_end,
             "GeoDegAligned0": geo_deg_aligned0_val,
+            "GeoDegAligned0Start": geo_deg_aligned0_start,
+            "GeoDegAligned0End": geo_deg_aligned0_end,
             "GeoLocalDeg": geo_local_deg_val,
+            "GeoLocalDegStart": geo_local_deg_start,
+            "GeoLocalDegEnd": geo_local_deg_end,
             "GeoLocalDegWeighted": geo_local_deg_weighted_val,
+            "GeoLocalDegWeightedStart": geo_local_deg_weighted_start,
+            "GeoLocalDegWeightedEnd": geo_local_deg_weighted_end,
             "RootGeoDeg": root_geo_deg_val,
+            "RootGeoDegStart": root_geo_deg_start,
+            "RootGeoDegEnd": root_geo_deg_end,
             "RootGeoDegAligned0": root_geo_deg_aligned0_val,
+            "RootGeoDegAligned0Start": root_geo_deg_aligned0_start,
+            "RootGeoDegAligned0End": root_geo_deg_aligned0_end,
             "RootPosErrMean": root_pos_err_mean,
             "RootPosErrStart": root_pos_err_start,
             "RootPosErrEnd": root_pos_err_end,
@@ -1312,6 +2463,150 @@ def _run_freerun_cycles(
             "RootVelMAEStart": root_vel_mae_start,
             "RootVelMAEEnd": root_vel_mae_end,
         }
+        if geo_blend_full is not None:
+            try:
+                bseg = geo_blend_full[:, t0:t1]
+                round_entry["BlendGeoDeg"] = float(bseg.mean().item())
+                round_entry["BlendRootGeoDeg"] = float(bseg[..., root_idx].mean().item())
+                if bseg.shape[1] > 0:
+                    round_entry["BlendGeoDegStart"] = float(bseg[:, 0].mean().item())
+                    round_entry["BlendGeoDegEnd"] = float(bseg[:, -1].mean().item())
+                    round_entry["BlendRootGeoDegStart"] = float(bseg[:, 0, root_idx].mean().item())
+                    round_entry["BlendRootGeoDegEnd"] = float(bseg[:, -1, root_idx].mean().item())
+            except Exception:
+                pass
+        if geo_blend_full_aligned0 is not None:
+            try:
+                bseg = geo_blend_full_aligned0[:, t0:t1]
+                round_entry["BlendGeoDegAligned0"] = float(bseg.mean().item())
+                round_entry["BlendRootGeoDegAligned0"] = float(bseg[..., root_idx].mean().item())
+                if bseg.shape[1] > 0:
+                    round_entry["BlendGeoDegAligned0Start"] = float(bseg[:, 0].mean().item())
+                    round_entry["BlendGeoDegAligned0End"] = float(bseg[:, -1].mean().item())
+                    round_entry["BlendRootGeoDegAligned0Start"] = float(bseg[:, 0, root_idx].mean().item())
+                    round_entry["BlendRootGeoDegAligned0End"] = float(bseg[:, -1, root_idx].mean().item())
+            except Exception:
+                pass
+        if geo_blend_local_full is not None:
+            try:
+                bloc = geo_blend_local_full[:, t0:t1]
+                if joint_mask is not None and joint_mask.any():
+                    round_entry["BlendGeoLocalDeg"] = float(bloc[..., joint_mask].mean().item())
+                else:
+                    round_entry["BlendGeoLocalDeg"] = 0.0
+                if bloc.shape[1] > 0:
+                    if joint_mask is not None and joint_mask.any():
+                        round_entry["BlendGeoLocalDegStart"] = float(bloc[:, 0, joint_mask].mean().item())
+                        round_entry["BlendGeoLocalDegEnd"] = float(bloc[:, -1, joint_mask].mean().item())
+                    else:
+                        round_entry["BlendGeoLocalDegStart"] = 0.0
+                        round_entry["BlendGeoLocalDegEnd"] = 0.0
+                if w_joint is not None and weights_sum is not None:
+                    round_entry["BlendGeoLocalDegWeighted"] = float(
+                        (bloc * w_joint).sum().item()
+                        / (weights_sum.item() * bloc.shape[0] * bloc.shape[1])
+                    )
+                    if bloc.shape[1] > 0:
+                        round_entry["BlendGeoLocalDegWeightedStart"] = float(
+                            ((bloc[:, 0] * w_joint).sum(dim=-1) / weights_sum).mean().item()
+                        )
+                        round_entry["BlendGeoLocalDegWeightedEnd"] = float(
+                            ((bloc[:, -1] * w_joint).sum(dim=-1) / weights_sum).mean().item()
+                        )
+            except Exception:
+                pass
+        if geo_direct_full is not None:
+            try:
+                dseg = geo_direct_full[:, t0:t1]
+                round_entry["DirectGeoDeg"] = float(dseg.mean().item())
+                round_entry["DirectRootGeoDeg"] = float(dseg[..., root_idx].mean().item())
+                if dseg.shape[1] > 0:
+                    round_entry["DirectGeoDegStart"] = float(dseg[:, 0].mean().item())
+                    round_entry["DirectGeoDegEnd"] = float(dseg[:, -1].mean().item())
+                    round_entry["DirectRootGeoDegStart"] = float(dseg[:, 0, root_idx].mean().item())
+                    round_entry["DirectRootGeoDegEnd"] = float(dseg[:, -1, root_idx].mean().item())
+            except Exception:
+                pass
+        if geo_direct_full_aligned0 is not None:
+            try:
+                dseg = geo_direct_full_aligned0[:, t0:t1]
+                round_entry["DirectGeoDegAligned0"] = float(dseg.mean().item())
+                round_entry["DirectRootGeoDegAligned0"] = float(dseg[..., root_idx].mean().item())
+                if dseg.shape[1] > 0:
+                    round_entry["DirectGeoDegAligned0Start"] = float(dseg[:, 0].mean().item())
+                    round_entry["DirectGeoDegAligned0End"] = float(dseg[:, -1].mean().item())
+                    round_entry["DirectRootGeoDegAligned0Start"] = float(dseg[:, 0, root_idx].mean().item())
+                    round_entry["DirectRootGeoDegAligned0End"] = float(dseg[:, -1, root_idx].mean().item())
+            except Exception:
+                pass
+        if geo_direct_local_full is not None:
+            try:
+                dloc = geo_direct_local_full[:, t0:t1]
+                if joint_mask is not None and joint_mask.any():
+                    round_entry["DirectGeoLocalDeg"] = float(dloc[..., joint_mask].mean().item())
+                else:
+                    round_entry["DirectGeoLocalDeg"] = 0.0
+                if dloc.shape[1] > 0:
+                    if joint_mask is not None and joint_mask.any():
+                        round_entry["DirectGeoLocalDegStart"] = float(dloc[:, 0, joint_mask].mean().item())
+                        round_entry["DirectGeoLocalDegEnd"] = float(dloc[:, -1, joint_mask].mean().item())
+                    else:
+                        round_entry["DirectGeoLocalDegStart"] = 0.0
+                        round_entry["DirectGeoLocalDegEnd"] = 0.0
+                if w_joint is not None and weights_sum is not None:
+                    round_entry["DirectGeoLocalDegWeighted"] = float(
+                        (dloc * w_joint).sum().item()
+                        / (weights_sum.item() * dloc.shape[0] * dloc.shape[1])
+                    )
+                    if dloc.shape[1] > 0:
+                        round_entry["DirectGeoLocalDegWeightedStart"] = float(
+                            ((dloc[:, 0] * w_joint).sum(dim=-1) / weights_sum).mean().item()
+                        )
+                        round_entry["DirectGeoLocalDegWeightedEnd"] = float(
+                            ((dloc[:, -1] * w_joint).sum(dim=-1) / weights_sum).mean().item()
+                        )
+            except Exception:
+                pass
+        if geo_direct_full_align_inc0 is not None:
+            try:
+                dseg = geo_direct_full_align_inc0[:, t0:t1]
+                round_entry["DirectGeoDegAlignInc0"] = float(dseg.mean().item())
+                round_entry["DirectRootGeoDegAlignInc0"] = float(dseg[..., root_idx].mean().item())
+                if dseg.shape[1] > 0:
+                    round_entry["DirectGeoDegAlignInc0Start"] = float(dseg[:, 0].mean().item())
+                    round_entry["DirectGeoDegAlignInc0End"] = float(dseg[:, -1].mean().item())
+                    round_entry["DirectRootGeoDegAlignInc0Start"] = float(dseg[:, 0, root_idx].mean().item())
+                    round_entry["DirectRootGeoDegAlignInc0End"] = float(dseg[:, -1, root_idx].mean().item())
+            except Exception:
+                pass
+        if geo_direct_local_full_align_inc0 is not None:
+            try:
+                dloc = geo_direct_local_full_align_inc0[:, t0:t1]
+                if joint_mask is not None and joint_mask.any():
+                    round_entry["DirectGeoLocalDegAlignInc0"] = float(dloc[..., joint_mask].mean().item())
+                else:
+                    round_entry["DirectGeoLocalDegAlignInc0"] = 0.0
+                if dloc.shape[1] > 0:
+                    if joint_mask is not None and joint_mask.any():
+                        round_entry["DirectGeoLocalDegAlignInc0Start"] = float(dloc[:, 0, joint_mask].mean().item())
+                        round_entry["DirectGeoLocalDegAlignInc0End"] = float(dloc[:, -1, joint_mask].mean().item())
+                    else:
+                        round_entry["DirectGeoLocalDegAlignInc0Start"] = 0.0
+                        round_entry["DirectGeoLocalDegAlignInc0End"] = 0.0
+                if w_joint is not None and weights_sum is not None:
+                    round_entry["DirectGeoLocalDegWeightedAlignInc0"] = float(
+                        (dloc * w_joint).sum().item()
+                        / (weights_sum.item() * dloc.shape[0] * dloc.shape[1])
+                    )
+                    if dloc.shape[1] > 0:
+                        round_entry["DirectGeoLocalDegWeightedAlignInc0Start"] = float(
+                            ((dloc[:, 0] * w_joint).sum(dim=-1) / weights_sum).mean().item()
+                        )
+                        round_entry["DirectGeoLocalDegWeightedAlignInc0End"] = float(
+                            ((dloc[:, -1] * w_joint).sum(dim=-1) / weights_sum).mean().item()
+                        )
+            except Exception:
+                pass
         if contact_steps:
             seg = contact_steps[t0:t1]
             if seg:
@@ -1320,13 +2615,39 @@ def _run_freerun_cycles(
                 round_entry["ContactErrAbsMean"] = _nanmean([c.get("ContactErrAbsMean") if isinstance(c, dict) else None for c in seg])
                 plan_mean_seq = [c.get("ContactPlanMean") if isinstance(c, dict) else None for c in seg]
                 round_entry["ContactPlanMeanStd"] = _nanstd(plan_mean_seq)
+        if lambda_steps:
+            try:
+                lam_seg = [c.reshape(-1).numpy() for c in lambda_steps[t0:t1] if torch.is_tensor(c)]
+                if lam_seg:
+                    flat = np.concatenate(lam_seg, axis=0)
+                    round_entry["LambdaMean"] = float(np.mean(flat))
+                    round_entry["LambdaStd"] = float(np.std(flat))
+            except Exception:
+                pass
+        if lambda_eff_steps:
+            try:
+                lam_seg = [c.reshape(-1).numpy() for c in lambda_eff_steps[t0:t1] if torch.is_tensor(c)]
+                if lam_seg:
+                    flat = np.concatenate(lam_seg, axis=0)
+                    round_entry["LambdaEffMean"] = float(np.mean(flat))
+                    round_entry["LambdaEffStd"] = float(np.std(flat))
+            except Exception:
+                pass
+        if lambda_rel_steps:
+            try:
+                rel_seg = [c.reshape(-1).numpy() for c in lambda_rel_steps[t0:t1] if torch.is_tensor(c)]
+                if rel_seg:
+                    flat = np.concatenate(rel_seg, axis=0)
+                    round_entry["LambdaRelMean"] = float(np.mean(flat))
+            except Exception:
+                pass
         if keybone_geo_mean is not None:
             round_entry["KeyBoneGeoDegMean"] = keybone_geo_mean
         if keybone_geo_local_mean is not None:
             round_entry["KeyBoneGeoLocalDegMean"] = keybone_geo_local_mean
         metrics_per_round.append(round_entry)
 
-    return metrics_per_round, per_step
+    return metrics_per_round, per_step, extra
 
 
 # ---- CLI --------------------------------------------------------------------
@@ -1425,12 +2746,34 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="auto",
         choices=("auto", "global", "cycle", "none"),
-	        help=(
-	            "How to feed time_index into EventMotionModel (used by contact_plan time-PE). "
-	            "'global' uses the global step t; 'cycle' uses (t %% cycle_len) to stay in-range under multi-cycle; "
-	            "'auto' uses 'cycle' when rounds>1 else 'global'; 'none' disables time_index."
-	        ),
-	    )
+        help=(
+            "How to feed time_index into EventMotionModel (used by contact_plan time-PE). "
+            "'global' uses the global step t; 'cycle' uses (t %% cycle_len) to stay in-range under multi-cycle; "
+            "'auto' uses 'cycle' when rounds>1 else 'global'; 'none' disables time_index."
+        ),
+    )
+    parser.add_argument(
+        "--contact_plan_init_mode",
+        type=str,
+        default=None,
+        choices=("zeros", "learnable", "obs", "learnable+obs"),
+        help=(
+            "Override contact_plan_init_mode used by EventMotionModel when contact_plan is enabled. "
+            "This is mainly for ablations / bootstrapping older checkpoints that don't carry init_head weights."
+        ),
+    )
+    parser.add_argument(
+        "--contact_plan_init_hidden",
+        type=int,
+        default=None,
+        help="Hidden dim for contact_plan_init_head when --contact_plan_init_mode is obs/learnable+obs.",
+    )
+    parser.add_argument(
+        "--contact_plan_init_dropout",
+        type=float,
+        default=None,
+        help="Dropout for contact_plan_init_head when --contact_plan_init_mode is obs/learnable+obs.",
+    )
     parser.add_argument(
         "--round-seg-mode",
         type=str,
@@ -1446,6 +2789,82 @@ def parse_args() -> argparse.Namespace:
         "--so3_corr_apply",
         action="store_true",
         help="Apply SO(3) corrector during compose (uses model omega_hat).",
+    )
+    parser.add_argument(
+        "--lambda_fusion_apply",
+        action="store_true",
+        help="Apply Stage2 lambda fusion during rollout update (requires out_direct + lambda_fusion).",
+    )
+    parser.add_argument(
+        "--lambda_reliability_mode",
+        type=str,
+        default=None,
+        help="Override deterministic r_t mode for λ (none|warmup|contacts_err|warmup+contacts_err). If omitted and ckpt has posttrain_cfg, uses that.",
+    )
+    parser.add_argument(
+        "--lambda_reliability_warmup_steps",
+        type=int,
+        default=None,
+        help="Warmup steps K for r_t ramp 0->1 when mode includes warmup (override).",
+    )
+    parser.add_argument(
+        "--lambda_reliability_contact_err_max",
+        type=float,
+        default=None,
+        help="contacts_err_abs_mean scale for r_t=clamp(1-err/max,0,1) when mode includes contacts_err (override).",
+    )
+    parser.add_argument(
+        "--lambda_reliability_warmup_joint_scales",
+        type=str,
+        default=None,
+        help="Optional per-joint warmup scales: JSON list (e.g. '[1,1,2,...]') or a JSON file path containing list/scales. If omitted and ckpt has posttrain_cfg, uses that.",
+    )
+    parser.add_argument(
+        "--export_joint_geolocal",
+        action="store_true",
+        help="Export per-joint GeoLocal stats and suggest lambda_reliability_warmup_joint_scales (written into output JSON and printed).",
+    )
+    parser.add_argument(
+        "--direct_align_inc0",
+        action="store_true",
+        help=(
+            "Diagnostics only: align the direct head's per-joint rotations by a constant bias computed at step0 "
+            "(R_bias[j]=R_inc0[j]@R_dir0[j]^T) and report Direct*AlignInc0 metrics. "
+            "Useful to verify whether direct early errors are mainly phase/anchor offsets."
+        ),
+    )
+    parser.add_argument(
+        "--direct_pose_meas_force_zero",
+        action="store_true",
+        help="Ablation: force direct head to ignore contacts_meas (concat->zeros, mode_select->uniform).",
+    )
+    parser.add_argument(
+        "--direct_pose_meas_source",
+        type=str,
+        default="model",
+        choices=("model", "whitebox", "gt", "zero"),
+        help=(
+            "Override the *direct* head's contacts_meas source: "
+            "'model'=as-is; 'whitebox'=use whitebox contacts_in_t; 'gt'=use teacher soft contacts; 'zero'=ignore. "
+            "Does not change contacts_err/lambda (only direct hint)."
+        ),
+    )
+    parser.add_argument(
+        "--direct_pose_meas_warmup_steps",
+        type=int,
+        default=0,
+        help="If >0, only use --direct_pose_meas_source for the first K steps (global), then force 'zero' for the rest.",
+    )
+    parser.add_argument(
+        "--direct_pose_plan_source",
+        type=str,
+        default="model",
+        choices=("model", "gt", "zero"),
+        help=(
+            "Override the *direct* head's contacts_plan source: "
+            "'model'=as-is; 'gt'=use teacher soft contacts; 'zero'=all zeros. "
+            "Does not change contacts_plan/contacts_err/lambda (only direct hint)."
+        ),
     )
     parser.add_argument(
         "--so3_corr_max_deg",
@@ -1516,6 +2935,78 @@ def parse_args() -> argparse.Namespace:
         "--log_contacts",
         action="store_true",
         help="Log contacts_plan/meas/err stats into metrics_per_step JSON (auto-enabled by --so3_corr_gate_from_contacts_err).",
+    )
+    parser.add_argument(
+        "--log_contacts_whitebox",
+        action="store_true",
+        help=(
+            "Attach per-foot white-box intermediates (dist/vel/sweep) into metrics_per_step JSON. "
+            "Useful for debugging step-level collapses (hit_flag flip / ground_z drift)."
+        ),
+    )
+    parser.add_argument(
+        "--log_contacts_whitebox_first_steps",
+        type=int,
+        default=4,
+        help="Always attach white-box debug payload for the first N free-run steps (still logs suspected collapse steps beyond N).",
+    )
+    parser.add_argument(
+        "--contact_meas_gate_by_hit",
+        type=str,
+        default="auto",
+        choices=("auto", "true", "false"),
+        help="Override white-box gate_by_hit (auto uses bundle/meta). Set to 'false' for the first ablation pass.",
+    )
+    parser.add_argument(
+        "--contact_meas_vxy_mode",
+        type=str,
+        default="abs",
+        choices=("abs", "root_rel"),
+        help="White-box vxy gate: abs uses ||v_foot_xy||, root_rel uses ||v_foot_xy - v_root_xy|| (more robust under translation).",
+    )
+    parser.add_argument(
+        "--contact_meas_ground_z_select",
+        type=str,
+        default="min",
+        choices=("min", "stance"),
+        help="How to compute ground_z_now from feet: min=legacy min(bottom_z), stance=choose most stance-like foot by low speeds.",
+    )
+    parser.add_argument(
+        "--contact_meas_ground_z_mode",
+        type=str,
+        default="min",
+        choices=("min", "ema", "window", "slew"),
+        help="White-box ground_z update mode (P2). Default 'min' matches the legacy monotonic-min behavior.",
+    )
+    parser.add_argument(
+        "--contact_meas_ground_z_beta",
+        type=float,
+        default=0.05,
+        help="EMA beta for --contact_meas_ground_z_mode=ema (higher adapts faster).",
+    )
+    parser.add_argument(
+        "--contact_meas_ground_z_window",
+        type=int,
+        default=5,
+        help="Window length for --contact_meas_ground_z_mode=window.",
+    )
+    parser.add_argument(
+        "--contact_meas_ground_z_quantile",
+        type=float,
+        default=0.2,
+        help="Low-quantile (0..1) over the window for --contact_meas_ground_z_mode=window. q=0.2 ignores single downward spikes when window=5.",
+    )
+    parser.add_argument(
+        "--contact_meas_ground_z_slew_up_cm",
+        type=float,
+        default=0.0,
+        help="Max upward change (cm per step) applied to ground_z after the chosen mode (0 disables).",
+    )
+    parser.add_argument(
+        "--contact_meas_ground_z_slew_down_cm",
+        type=float,
+        default=0.0,
+        help="Max downward change (cm per step) applied to ground_z after the chosen mode (0 disables).",
     )
     parser.add_argument(
         "--force",

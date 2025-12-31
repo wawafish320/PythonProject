@@ -242,7 +242,18 @@ class TeacherRolloutRunner:
         self.ort_output_name: Optional[str] = None
         if not self.use_onnx:
             self.ckpt = torch.load(Path(args.model).expanduser(), map_location="cpu")
-            self.state_dict = self.ckpt["model"] if isinstance(self.ckpt, dict) and "model" in self.ckpt else self.ckpt
+            raw_state = self.ckpt["model"] if isinstance(self.ckpt, dict) and "model" in self.ckpt else self.ckpt
+            # Drop frozen_encoder / frozen_period_head weights that are not part of the runtime model to avoid
+            # mismatch errors. These are attached separately via --encoder-bundle for evaluation/export.
+            self.state_dict = {}
+            skipped = 0
+            for k, v in raw_state.items():
+                if str(k).startswith("frozen_encoder.") or str(k).startswith("frozen_period_head."):
+                    skipped += 1
+                    continue
+                self.state_dict[k] = v
+            if skipped > 0:
+                print(f"[TeacherRollout][INFO] stripped {skipped} frozen encoder keys from checkpoint for runtime load.")
         self.width = self._infer_width() if not self.use_onnx else None
         self.period_dim = self._infer_period_dim() if not self.use_onnx else 0
         self.encoder_bundle_path = Path(args.encoder_bundle).expanduser() if args.encoder_bundle else None
@@ -333,6 +344,115 @@ class TeacherRolloutRunner:
 
         if self.model is not None:
             return
+
+        # ---- Infer optional heads from checkpoint (plan / meas / direct pose) ----
+        contact_plan_enable = any(
+            str(k).startswith("contact_plan_cell.") or str(k).startswith("contact_plan_head.")
+            for k in self.state_dict.keys()
+        )
+        contact_plan_hidden = 64
+        try:
+            w_hh = self.state_dict.get("contact_plan_cell.weight_hh", None)
+            if torch.is_tensor(w_hh) and w_hh.ndim == 2:
+                contact_plan_hidden = int(w_hh.shape[1])
+        except Exception:
+            pass
+        contact_plan_time_pe_dim = 0
+        try:
+            w_time = self.state_dict.get("contact_plan_time_head.weight", None)
+            if torch.is_tensor(w_time) and w_time.ndim == 2:
+                contact_plan_time_pe_dim = int(w_time.shape[1])
+        except Exception:
+            contact_plan_time_pe_dim = 0
+        contact_plan_head_mode = "sigmoid"
+        try:
+            w_head = self.state_dict.get("contact_plan_head.4.weight", None)
+            if torch.is_tensor(w_head) and w_head.ndim == 2:
+                out_dim = int(w_head.shape[0])
+                if out_dim == 4 and int(self.contact_dim or 0) == 2:
+                    contact_plan_head_mode = "joint4"
+        except Exception:
+            contact_plan_head_mode = "sigmoid"
+
+        # Infer obs-conditioned contact plan init head (plan_z0 = init_z + init_head(obs0)).
+        contact_plan_init_mode = "learnable"
+        contact_plan_init_hidden = 128
+        try:
+            init_has_weights = any(str(k).startswith("contact_plan_init_head.") for k in self.state_dict.keys())
+            if init_has_weights:
+                contact_plan_init_mode = "learnable+obs"
+                w_init = self.state_dict.get("contact_plan_init_head.1.weight", None)
+                if torch.is_tensor(w_init) and w_init.ndim == 2:
+                    contact_plan_init_hidden = int(w_init.shape[0])
+        except Exception:
+            contact_plan_init_mode = "learnable"
+        # Infer trunk injection mode from checkpoint shared_encoder input dim.
+        contact_plan_inject = "none"
+        try:
+            w0 = self.state_dict.get("shared_encoder.0.weight", None)
+            if torch.is_tensor(w0) and w0.ndim == 2:
+                nin = int(w0.shape[1])
+                base_in = int(Dx + Dc)
+                extra = int(max(0, nin - base_in))
+                if extra > 0:
+                    if int(self.contact_dim or 0) > 0 and extra == int(self.contact_dim):
+                        contact_plan_inject = "contacts"
+                    else:
+                        contact_plan_inject = "plan_z"
+                        # Ensure plan hidden matches injected dim (prefer actual injected size).
+                        if extra != int(contact_plan_hidden):
+                            contact_plan_hidden = int(extra)
+        except Exception:
+            contact_plan_inject = "none"
+
+        contact_meas_enable = any(str(k).startswith("contact_meas_head.") for k in self.state_dict.keys())
+        contact_meas_hidden = 64
+        meas_in_features = None
+        try:
+            w1 = self.state_dict.get("contact_meas_head.1.weight", None)
+            if torch.is_tensor(w1) and w1.ndim == 2:
+                contact_meas_hidden = int(w1.shape[0])
+                meas_in_features = int(w1.shape[1])
+        except Exception:
+            pass
+        use_pose_hist = True
+        use_angvel = True
+        if meas_in_features is not None:
+            if meas_in_features == int(self.pose_hist_dim or 0) and int(self.pose_hist_dim or 0) > 0:
+                use_pose_hist, use_angvel = True, False
+            elif meas_in_features == int(self.angvel_dim or 0) and int(self.angvel_dim or 0) > 0:
+                use_pose_hist, use_angvel = False, True
+            elif meas_in_features == int((self.pose_hist_dim or 0) + (self.angvel_dim or 0)) and int((self.pose_hist_dim or 0) + (self.angvel_dim or 0)) > 0:
+                use_pose_hist, use_angvel = True, True
+
+        direct_pose_enable = False
+        direct_pose_hidden = 256
+        direct_pose_meas_mode = "none"
+        try:
+            direct_has_weights = any(str(k).startswith("direct_pose_head.") for k in self.state_dict.keys())
+            if direct_has_weights and int(Dy) > 0 and int(Dc) > 0 and int(self.contact_dim or 0) > 0:
+                w_in = self.state_dict.get("direct_pose_head.0.weight", None)
+                w_out = self.state_dict.get("direct_pose_head.6.weight", None)
+                if torch.is_tensor(w_in) and w_in.ndim == 2 and torch.is_tensor(w_out) and w_out.ndim == 2:
+                    in_dim = int(w_in.shape[1])
+                    hid = int(w_in.shape[0])
+                    out_dim = int(w_out.shape[0])
+                    expected_in = int(Dc) + int(self.contact_dim or 0)
+                    expected_in_concat = int(Dc) + int(self.contact_dim or 0) * 2
+                    expected_out = int(Dy)
+                    expected_out_modes = int(Dy) * 2
+                    if hid > 0 and out_dim in (expected_out, expected_out_modes) and in_dim in (expected_in, expected_in_concat):
+                        direct_pose_enable = True
+                        direct_pose_hidden = hid
+                        if in_dim == expected_in_concat and out_dim == expected_out:
+                            direct_pose_meas_mode = "concat"
+                        elif in_dim == expected_in and out_dim == expected_out_modes:
+                            direct_pose_meas_mode = "mode_select"
+                        else:
+                            direct_pose_meas_mode = "none"
+        except Exception:
+            direct_pose_enable = False
+
         model = EventMotionModel(
             in_state_dim=Dx,
             out_motion_dim=Dy,
@@ -348,11 +468,36 @@ class TeacherRolloutRunner:
             pose_hist_dim=self.pose_hist_dim,
             bone_names=getattr(ds, "bone_names", None),
             output_layout=getattr(ds, "output_layout", None),
+            contact_plan_enable=bool(contact_plan_enable or contact_plan_inject != "none" or direct_pose_enable),
+            contact_plan_hidden=int(contact_plan_hidden),
+            contact_plan_dropout=0.0,
+            contact_plan_inject=str(contact_plan_inject),
+            contact_plan_inject_detach=True,
+            contact_plan_head_mode=str(contact_plan_head_mode),
+            contact_plan_time_pe_dim=int(contact_plan_time_pe_dim),
+            contact_plan_init_mode=str(contact_plan_init_mode),
+            contact_plan_init_hidden=int(contact_plan_init_hidden),
+            contact_plan_init_dropout=0.0,
+            direct_pose_enable=bool(direct_pose_enable),
+            direct_pose_hidden=int(direct_pose_hidden),
+            direct_pose_dropout=0.0,
+            direct_pose_detach_plan=True,
+            direct_pose_meas_mode=str(direct_pose_meas_mode),
+            direct_pose_meas_drop_prob=0.0,
+            direct_pose_meas_noise_std=0.0,
+            direct_pose_plan_drop_prob=0.0,
+            contact_meas_enable=bool(contact_meas_enable),
+            contact_meas_hidden=int(contact_meas_hidden),
+            contact_meas_dropout=0.0,
+            contact_meas_use_pose_hist=bool(use_pose_hist),
+            contact_meas_use_angvel=bool(use_angvel),
+            # If a learned meas head exists, don't override it with external contacts/whitebox.
+            contacts_as_meas_override=bool(contact_plan_enable or contact_plan_inject != "none" or direct_pose_enable) and (not bool(contact_meas_enable)),
         ).to(self.device)
         validate_and_fix_model_(model, Dx, Dc)
         missing, unexpected = model.load_state_dict(self.state_dict, strict=False)
         if missing or unexpected:
-            raise RuntimeError(f"State dict mismatch (missing={missing}, unexpected={unexpected})")
+            print(f"[TeacherRollout][WARN] state_dict mismatch: missing={missing}, unexpected={unexpected}")
         # Attach frozen motion encoder bundle if提供
         if self.encoder_bundle_path and self.encoder_bundle_path.is_file():
             model.attach_motion_encoder(torch.load(str(self.encoder_bundle_path), map_location="cpu"))
