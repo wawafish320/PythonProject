@@ -340,18 +340,18 @@ class FreeRunCycleRunner:
                 contact_plan_time_pe_dim = int(w_time.shape[1])
         except Exception:
             contact_plan_time_pe_dim = 0
-        # Infer contact-plan head parameterization from checkpoint shapes.
-        # - legacy: sigmoid per-channel, head out_dim = contact_dim (typically 2)
-        # - joint4 : coupled 4-state softmax, head out_dim = 4 (requires contact_dim==2)
+        # Infer contact-plan head output dim from checkpoint shapes (sigmoid heads only).
         contact_plan_head_mode = "sigmoid"
         try:
             w_head = self.state_dict.get("contact_plan_head.4.weight", None)
             if torch.is_tensor(w_head) and w_head.ndim == 2:
                 out_dim = int(w_head.shape[0])
                 if out_dim == 4 and int(self.contact_dim or 0) == 2:
-                    contact_plan_head_mode = "joint4"
+                    raise SystemExit("[FATAL] joint4 contact_plan_head_mode is no longer supported.")
+        except SystemExit:
+            raise
         except Exception:
-            contact_plan_head_mode = "sigmoid"
+            pass
 
         # Infer obs-conditioned contact plan init head (plan_z0 = init_z + init_head(obs0)).
         contact_plan_init_mode = "learnable"

@@ -245,12 +245,9 @@ class EventMotionModel(nn.Module):
         contact_plan_dropout: float = 0.0,
         contact_plan_inject: str = "none",  # 'none' | 'contacts' | 'plan_z'
         contact_plan_inject_detach: bool = True,
-        # Contact-plan output head mode:
-        # - sigmoid: independent per-channel Bernoulli (legacy): contacts_plan = sigmoid(logits[C])
-        # - joint4 : coupled 4-state softmax -> (L,R) (recommended when contact_dim==2):
-        #     p = softmax([L_only, R_only, both, none])
-        #     L = p[L_only] + p[both]; R = p[R_only] + p[both]
-        contact_plan_head_mode: str = "sigmoid",  # 'sigmoid' | 'joint4'
+        # Contact-plan output head mode (legacy knob).
+        # NOTE: joint4 mode has been removed; only "sigmoid" is supported.
+        contact_plan_head_mode: str = "sigmoid",
         # Optional: time embedding for contact_plan (helps when cond has little/no phase info).
         # Implemented as an additive bias on contact_plan logits: logits += time_head(PE(t)).
         contact_plan_time_pe_dim: int = 0,  # 0 disables; recommended 8/16
@@ -321,11 +318,9 @@ class EventMotionModel(nn.Module):
             self.contact_plan_inject = "none"
         self.contact_plan_inject_detach = bool(contact_plan_inject_detach)
         self.contact_plan_head_mode = str(contact_plan_head_mode or "sigmoid").lower().strip()
-        if self.contact_plan_head_mode not in ("sigmoid", "joint4"):
-            self.contact_plan_head_mode = "sigmoid"
-        if self.contact_plan_head_mode == "joint4" and self.contact_dim != 2:
-            raise ValueError(f"contact_plan_head_mode='joint4' requires contact_dim==2, got {self.contact_dim}.")
-        self._contact_plan_logits_dim = 4 if self.contact_plan_head_mode == "joint4" else self.contact_dim
+        if self.contact_plan_head_mode != "sigmoid":
+            raise ValueError(f"Unsupported contact_plan_head_mode={self.contact_plan_head_mode!r}; only 'sigmoid' is supported.")
+        self._contact_plan_logits_dim = self.contact_dim
         self.contacts_as_meas_override = bool(contacts_as_meas_override)
         self.adaptive_history_module: Optional[AdaptiveHistoryModule] = None
         self._adaptive_history_diag: Optional[dict[str, torch.Tensor | float]] = None
@@ -900,16 +895,7 @@ class EventMotionModel(nn.Module):
                     except Exception:
                         pass
                 plan_logits.append(logits)
-                mode = str(getattr(self, "contact_plan_head_mode", "sigmoid") or "sigmoid").lower().strip()
-                if mode == "joint4":
-                    # logits: (B,4) for [L_only, R_only, both, none]
-                    p = torch.softmax(logits, dim=-1)
-                    # Map to (L,R) marginals in [0,1]
-                    L = p[..., 0] + p[..., 2]
-                    R = p[..., 1] + p[..., 2]
-                    plan_probs.append(torch.stack([L, R], dim=-1))
-                else:
-                    plan_probs.append(torch.sigmoid(logits))
+                plan_probs.append(torch.sigmoid(logits))
             contacts_plan = torch.stack(plan_probs, dim=1)  # (B,T,C)
             try:
                 contacts_plan_logits = torch.stack(plan_logits, dim=1) if plan_logits else None  # (B,T,logits_dim)
