@@ -5,6 +5,7 @@
 用于运动学骨骼动画中的旋转处理。
 
 从 training_MPL.py 重构而来，作为独立工具模块。
+本模块是 train/ 子系统中几何原子能力的唯一来源（single source of truth）。
 """
 from typing import Optional, Sequence, Tuple
 import torch
@@ -430,6 +431,44 @@ def geodesic_R(R_pred: torch.Tensor, R_gt: torch.Tensor, *, reduce=None) -> torc
     return ang
 
 
+def geodesic_R_safe(
+    R_pred: torch.Tensor,
+    R_gt: torch.Tensor,
+    *,
+    reduce=None,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """
+    数值更稳健的 SO(3) 测地线角距离。
+
+    与 `geodesic_R` 的区别：
+    - `sin` 项使用 `sqrt(sum(vec^2) + eps)`，在 `vec≈0` 时避免 `0*inf` 类梯度问题。
+
+    Args:
+        R_pred: (..., J, 3, 3) - 预测旋转矩阵
+        R_gt: (..., J, 3, 3) - 真值旋转矩阵
+        reduce: None | "mean" | "sum"
+        eps: float - sqrt 内部的稳定项
+
+    Returns:
+        (..., J) 或归约后的标量，单位弧度
+    """
+    assert R_pred.shape[-2:] == (3, 3) and R_gt.shape[-2:] == (3, 3)
+    Rt = torch.matmul(R_pred.transpose(-1, -2), R_gt)  # (..., J, 3, 3)
+    trace = Rt[..., 0, 0] + Rt[..., 1, 1] + Rt[..., 2, 2]
+    cos = (trace - 1.0) * 0.5
+    cos = cos.clamp(-1.0, 1.0)
+    skew = Rt - Rt.transpose(-1, -2)
+    vec = torch.stack([skew[..., 2, 1], skew[..., 0, 2], skew[..., 1, 0]], dim=-1) * 0.5
+    sin = torch.sqrt((vec * vec).sum(dim=-1) + float(eps))
+    ang = torch.atan2(sin, cos)
+    if reduce == "mean":
+        return ang.mean()
+    if reduce == "sum":
+        return ang.sum()
+    return ang
+
+
 def _matrix_log_map(R: torch.Tensor) -> torch.Tensor:
     """
     Log map from SO(3) to so(3) as a 3D rotation vector
@@ -487,16 +526,37 @@ def angvel_vec_from_R_seq(R_seq: torch.Tensor, fps: float) -> torch.Tensor:
     从旋转序列计算角速度向量
 
     Args:
-        R_seq: [B, T, J, 3, 3] - 旋转矩阵序列
+        R_seq: (..., T, J, 3, 3) - 旋转矩阵序列
         fps: float - 采样帧率
 
     Returns:
-        omega: [B, T-1, J, 3] - 角速度 (rad/s)
+        omega: (..., T-1, J, 3) - 角速度 (rad/s)
     """
-    dR = torch.matmul(R_seq[:, 1:], R_seq[:, :-1].transpose(-1, -2))
-    phi = so3_log_map(dR)
-    omega = phi * float(fps)
-    return omega
+    if R_seq.shape[-2:] != (3, 3):
+        raise ValueError(f"[angvel_vec_from_R_seq] expects (..., 3, 3), got {tuple(R_seq.shape)}")
+    if R_seq.dim() < 5:
+        raise ValueError(f"[angvel_vec_from_R_seq] expects >=5D tensor (..., T, J, 3, 3), got {R_seq.dim()}D")
+    if R_seq.shape[-4] < 2:
+        raise ValueError(f"[angvel_vec_from_R_seq] expects T>=2, got T={R_seq.shape[-4]}")
+    dR = torch.matmul(R_seq[..., 1:, :, :, :], R_seq[..., :-1, :, :, :].transpose(-1, -2))
+    return angvel_vec_from_delta_R(dR, fps=float(fps))
+
+
+def angvel_vec_from_delta_R(delta_R: torch.Tensor, fps: float) -> torch.Tensor:
+    """
+    从相邻帧旋转增量计算角速度向量。
+
+    Args:
+        delta_R: (..., T, J, 3, 3) 或 (..., J, 3, 3) 的相对旋转
+        fps: float - 采样帧率
+
+    Returns:
+        omega: (..., T, J, 3) 或 (..., J, 3) - 角速度 (rad/s)
+    """
+    if delta_R.shape[-2:] != (3, 3):
+        raise ValueError(f"[angvel_vec_from_delta_R] expects (..., 3, 3), got {tuple(delta_R.shape)}")
+    phi = so3_log_map(delta_R)
+    return phi * float(fps)
 
 
 # ============================================
@@ -521,25 +581,72 @@ def root_relative_matrices(R: torch.Tensor, root_idx: int) -> torch.Tensor:
     return torch.matmul(R_root_T, R)
 
 
+def parent_relative_matrices(R: torch.Tensor, parents: Optional[Sequence[int] | torch.Tensor]) -> torch.Tensor:
+    """
+    将世界旋转转换为 parent-relative 旋转。
+
+    Args:
+        R: (..., J, 3, 3) - 世界坐标系下的关节旋转
+        parents: Sequence[int] 或 Tensor[J]，root 关节 parent 置为 -1
+
+    Returns:
+        (..., J, 3, 3) - 相对父关节旋转
+    """
+    if R.shape[-2:] != (3, 3):
+        return R
+    if parents is None:
+        return R
+    J = int(R.shape[-3])
+    if J <= 0:
+        return R
+    if torch.is_tensor(parents):
+        p = parents.to(device=R.device, dtype=torch.long).reshape(-1)
+    else:
+        try:
+            p = torch.as_tensor(list(parents), device=R.device, dtype=torch.long).reshape(-1)
+        except Exception:
+            return R
+    if int(p.numel()) < J:
+        return R
+    p = p[:J]
+    safe_p = p.clamp(min=0, max=max(J - 1, 0))
+    parent_R = R.index_select(-3, safe_p)
+    rel = torch.matmul(parent_R.transpose(-1, -2), R)
+    keep_world = ((p < 0) | (p >= J)).view(*((1,) * (R.dim() - 3)), J, 1, 1)
+    return torch.where(keep_world, R, rel)
+
+
 # 别名保持向后兼容
 _root_relative_matrices = root_relative_matrices
+_parent_relative_matrices = parent_relative_matrices
 
 
 # ============================================
 # Numpy 版本工具 (用于数据预处理)
 # ============================================
 
-def wrap_to_pi_np(x: np.ndarray) -> np.ndarray:
+def wrap_to_pi_np(x: np.ndarray, *, neg_pi_to_pos_pi: bool = False) -> np.ndarray:
     """
     将角度包裹到 [-π, π) 范围
 
     Args:
         x: np.ndarray - 角度 (弧度)
+        neg_pi_to_pos_pi: 是否将边界点 -π 显式映射到 +π
 
     Returns:
         np.ndarray - 包裹后的角度
     """
-    return (x + np.pi) % (2.0 * np.pi) - np.pi
+    y = (x + np.pi) % (2.0 * np.pi) - np.pi
+    if neg_pi_to_pos_pi:
+        y = np.where(y == -np.pi, np.pi, y)
+    return y
+
+
+def wrap_to_pi_np_negpi_to_pospi(x: np.ndarray) -> np.ndarray:
+    """
+    显式边界特化：[-π, π) 基础上，将 -π 映射为 +π。
+    """
+    return wrap_to_pi_np(x, neg_pi_to_pos_pi=True)
 
 
 def gram_schmidt_renorm_np(rot6d: np.ndarray) -> np.ndarray:
@@ -568,6 +675,115 @@ def gram_schmidt_renorm_np(rot6d: np.ndarray) -> np.ndarray:
     b = b / np.maximum(b_norm, 1e-8)
 
     return np.concatenate([a, b], axis=-1)
+
+
+def rot6d_to_matrix_np(
+    xJ6: np.ndarray,
+    *,
+    columns: Tuple[str, str] = ("X", "Z"),
+    eps: float = 1e-8,
+    canonical_axis_order: bool = True,
+) -> np.ndarray:
+    """
+    Numpy 版本 6D -> 旋转矩阵。
+
+    Args:
+        xJ6: (..., 6) - 6D 旋转表示（提供两列轴向量）
+        columns: 两列对应的轴名，例如 ("X","Z")
+        eps: 归一化稳定项
+        canonical_axis_order:
+            - True: 输出列顺序固定为 [X, Y, Z]（与 torch 版对齐）。
+            - False: 输出列顺序为 [first, second, first×second]（兼容旧 convert 实现）。
+
+    Returns:
+        (..., 3, 3) - 旋转矩阵
+    """
+    if xJ6.shape[-1] != 6:
+        raise ValueError(f"rot6d_to_matrix_np expects (..., 6); got {xJ6.shape}")
+    if len(columns) != 2 or columns[0] == columns[1]:
+        raise ValueError(f"rot6d_to_matrix_np expects two distinct axis names; got {columns}")
+
+    axis_idx = {"X": 0, "Y": 1, "Z": 2}
+    if columns[0] not in axis_idx or columns[1] not in axis_idx:
+        raise ValueError(f"rot6d_to_matrix_np unsupported columns {columns}")
+
+    a = np.array(xJ6[..., 0:3], copy=True)
+    b = np.array(xJ6[..., 3:6], copy=True)
+
+    def _norm(v: np.ndarray) -> np.ndarray:
+        return v / np.clip(np.linalg.norm(v, axis=-1, keepdims=True), eps, None)
+
+    a = _norm(a)
+    b = b - np.sum(a * b, axis=-1, keepdims=True) * a
+    b = _norm(b)
+
+    if not canonical_axis_order:
+        c = _norm(np.cross(a, b, axis=-1))
+        return np.stack([a, b, c], axis=-1)
+
+    ax1, ax2 = columns
+    r = {ax1: a, ax2: b}
+    remaining = [ax for ax in ("X", "Y", "Z") if ax not in (ax1, ax2)][0]
+    r[remaining] = _norm(np.cross(r[ax2], r[ax1], axis=-1))
+    R = np.stack([r["X"], r["Y"], r["Z"]], axis=-1)
+
+    # 与 torch 版对齐：若 det<0，仅翻转派生列
+    det = np.linalg.det(R.reshape(-1, 3, 3)).reshape(R.shape[:-2])
+    neg = det < 0.0
+    if np.any(neg):
+        R = R.copy()
+        col_idx = axis_idx[remaining]
+        R[..., :, col_idx] = np.where(neg[..., None], -R[..., :, col_idx], R[..., :, col_idx])
+    return R
+
+
+def so3_angle_from_matrix_np(R: np.ndarray, *, degrees: bool = False) -> np.ndarray:
+    """
+    Numpy 版本：从旋转矩阵计算旋转角（相对单位旋转的 geodesic angle）。
+
+    Args:
+        R: (..., 3, 3) - 旋转矩阵
+        degrees: 是否返回角度制
+
+    Returns:
+        (...) - 旋转角
+    """
+    if R.shape[-2:] != (3, 3):
+        raise ValueError(f"so3_angle_from_matrix_np expects (..., 3, 3); got {R.shape}")
+    trace = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]
+    cos = np.clip((trace - 1.0) * 0.5, -1.0, 1.0)
+    ang = np.arccos(cos)
+    if degrees:
+        ang = np.degrees(ang)
+    return ang
+
+
+def rot6d_to_angle_deg_np(
+    xJ6: np.ndarray,
+    *,
+    columns: Tuple[str, str] = ("X", "Z"),
+    eps: float = 1e-8,
+    canonical_axis_order: bool = True,
+) -> np.ndarray:
+    """
+    Numpy 版本：6D 旋转表示 -> 旋转角（度）。
+
+    Args:
+        xJ6: (..., 6) - 6D 旋转表示
+        columns: 两列对应的轴名
+        eps: 归一化稳定项
+        canonical_axis_order: 参见 `rot6d_to_matrix_np`
+
+    Returns:
+        (...) - 角度制旋转角
+    """
+    R = rot6d_to_matrix_np(
+        xJ6,
+        columns=columns,
+        eps=eps,
+        canonical_axis_order=canonical_axis_order,
+    )
+    return so3_angle_from_matrix_np(R, degrees=True)
 
 
 # ============================================

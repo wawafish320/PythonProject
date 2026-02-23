@@ -6,6 +6,10 @@ import statistics as stats
 from pathlib import Path
 from typing import Any, Dict, List
 
+import numpy as np
+
+from train.geometry import rot6d_to_angle_deg_np
+
 
 class DatasetProfiler:
     def __init__(self, raw_dir: Path):
@@ -25,18 +29,49 @@ class DatasetProfiler:
             frames = data.get("Frames") or []
             seq_lengths.append(len(frames))
             for fr in frames:
+                # yaw 不是显式特征：这里用 TrajectoryDir 的中心前瞻方向估计 yaw（度），用于粗略复杂度统计。
+                traj_dir = fr.get("TrajectoryDir", None)
+                if isinstance(traj_dir, list) and traj_dir:
+                    vec = None
+                    # 支持两种格式：
+                    # - [x, y]
+                    # - [[x, y], [x, y], ...]（多前瞻点）
+                    if len(traj_dir) >= 2 and not isinstance(traj_dir[0], (list, tuple)):
+                        vec = traj_dir
+                    else:
+                        mid = len(traj_dir) // 2
+                        cand = traj_dir[mid]
+                        if isinstance(cand, (list, tuple)) and len(cand) >= 2:
+                            vec = cand
+                    if vec is not None:
+                        try:
+                            x = float(vec[0])
+                            y = float(vec[1])
+                            if math.isfinite(x) and math.isfinite(y) and math.hypot(x, y) > 1e-6:
+                                yaw_vals.append(math.degrees(math.atan2(y, x)))
+                        except Exception:
+                            pass
                 rv = fr.get("RootVelocityXY") or [0.0, 0.0]
                 speed_vals.append(math.hypot(rv[0], rv[1]))
                 rotations = fr.get("BoneRotations")
                 if rotations:
                     for rot in rotations:
                         try:
-                            bone_angles.append(_rot6d_to_angle(rot))
+                            arr = np.asarray(rot, dtype=np.float64)
+                            bone_angles.append(
+                                float(
+                                    rot6d_to_angle_deg_np(
+                                        arr,
+                                        columns=("X", "Z"),
+                                        canonical_axis_order=True,
+                                    )
+                                )
+                            )
                         except Exception:
                             continue
 
         total_frames = sum(seq_lengths)
-        yaw_mean = stats.mean(yaw_vals)
+        yaw_mean = stats.mean(yaw_vals) if yaw_vals else 0.0
         yaw_std = stats.pstdev(yaw_vals) if len(yaw_vals) > 1 else 0.0
         speed_mean = stats.mean(speed_vals)
         speed_std = stats.pstdev(speed_vals) if len(speed_vals) > 1 else 0.0
@@ -84,29 +119,3 @@ def compute_base_lr(total_frames: int, complexity: float, batch_size: int) -> fl
     comp = 1.0 / (1.0 + complexity)
     lr = 1e-3 * scale * comp * math.sqrt(batch_size / 8.0)
     return max(1e-5, min(6e-4, lr))
-
-
-def _rot6d_to_angle(vec: List[float]) -> float:
-    a = vec[:3]
-    b = vec[3:6]
-
-    def _norm(v: List[float]) -> List[float]:
-        n = math.sqrt(sum(x * x for x in v))
-        if n < 1e-8:
-            return list(v)
-        return [x / n for x in v]
-
-    X = _norm(a)
-    proj = sum(X[i] * b[i] for i in range(3))
-    b_ortho = [b[i] - proj * X[i] for i in range(3)]
-    Z = _norm(b_ortho)
-    Y = _norm(
-        [
-            Z[1] * X[2] - Z[2] * X[1],
-            Z[2] * X[0] - Z[0] * X[2],
-            Z[0] * X[1] - Z[1] * X[0],
-        ]
-    )
-    trace = X[0] + Y[1] + Z[2]
-    val = max(-1.0, min(1.0, 0.5 * (trace - 1.0)))
-    return math.degrees(math.acos(val))

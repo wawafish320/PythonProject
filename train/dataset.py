@@ -27,6 +27,7 @@ from .io import (
 from .layout import normalize_layout as _normalize_layout
 from .normalizers import VectorTanhNormalizer
 from torch.utils.data._utils.collate import default_collate as _default_collate
+from .ttc import ttc_to_next_event_np
 
 
 def _fix_firstdim_any(v, L: int):
@@ -65,6 +66,91 @@ def _fix_firstdim_any(v, L: int):
         seq = [_fix_firstdim_any(x, L) for x in v]
         return type(v)(seq)
     return v
+
+
+def _fit_length_T(arr: np.ndarray, T: int) -> np.ndarray:
+    """Pad/truncate along axis-0 so the first dimension equals T."""
+    if not isinstance(arr, np.ndarray) or arr.ndim < 1:
+        return arr
+    T = int(T)
+    n = int(arr.shape[0])
+    if n == T:
+        return arr
+    if n > T:
+        return arr[:T]
+    if n <= 0:
+        return arr
+    pad = np.repeat(arr[-1:], T - n, axis=0)
+    return np.concatenate([arr, pad], axis=0)
+
+
+def _rotate_cond_dir2d_inplace(arr_TD: np.ndarray, deg: float, hand_sign: float = 1.0) -> None:
+    """In-place yaw rotation on the last 2 channels followed by unit-length normalization."""
+    if arr_TD.ndim != 2 or arr_TD.shape[1] < 2:
+        return
+    xy = arr_TD[:, -2:].copy()
+    t = np.deg2rad(float(deg))
+    c_t, s_t = (np.cos(t), np.sin(t) * float(hand_sign))
+    x, y = (xy[:, 0].copy(), xy[:, 1].copy())
+    xy[:, 0] = c_t * x - s_t * y
+    xy[:, 1] = s_t * x + c_t * y
+    n = np.linalg.norm(xy, axis=-1, keepdims=True) + 1e-08
+    arr_TD[:, -2:] = xy / n
+
+
+def _compute_ttc_touchdown(contacts: np.ndarray):
+    """Compute touchdown TTC targets with the project's default hyperparameters."""
+    return ttc_to_next_event_np(
+        contacts,
+        thr=0.5,
+        kind="touchdown",
+        hyst=0.0,
+        ttc_max=None,
+        cyclic=True,
+        select="longest_run",
+    )
+
+
+def _compute_ttc_touchdown_safe(
+    contacts: Optional[np.ndarray],
+    *,
+    expected_len: Optional[int] = None,
+    context: Optional[str] = None,
+    verbose: bool = False,
+):
+    """Best-effort touchdown TTC compute with unified fallback semantics."""
+    if contacts is None:
+        return None, None, None
+    try:
+        if contacts.ndim != 2 or int(contacts.shape[1]) <= 0:
+            return None, None, None
+        if expected_len is not None and int(contacts.shape[0]) != int(expected_len):
+            return None, None, None
+        return _compute_ttc_touchdown(contacts)
+    except Exception as err:
+        if verbose:
+            where = f" for {context}" if context else ""
+            print(f"[Dataset] TTC target compute failed{where}: {err}")
+        return None, None, None
+
+
+def _npz_scalar_to_json_text(v: Any, *, require_str: bool = False) -> str:
+    """Convert scalar-like npz payload (item/bytes/str) into JSON text."""
+    if hasattr(v, "item"):
+        v = v.item()
+    if isinstance(v, (bytes, bytearray)):
+        v = v.decode("utf-8", "ignore")
+    if require_str and not isinstance(v, str):
+        raise TypeError(f"expected str JSON payload, got {type(v).__name__}")
+    return v if isinstance(v, str) else str(v)
+
+
+def _npz_scalar_to_json_dict(v: Any, *, require_str: bool = False) -> dict[str, Any]:
+    """Parse a JSON object from scalar-like npz payload."""
+    payload = json.loads(_npz_scalar_to_json_text(v, require_str=require_str))
+    if not isinstance(payload, dict):
+        raise TypeError(f"expected JSON object, got {type(payload).__name__}")
+    return payload
 
 
 def make_fixedlen_collate(seq_len: int):
@@ -133,6 +219,10 @@ class ClipData:
     state_layout_norm: Dict[str, Tuple[int, int]]
     output_layout_norm: Dict[str, Tuple[int, int]]
     contacts: Optional[np.ndarray] = None
+    # TTC targets derived from contacts (touchdown countdown by default).
+    ttc_td: Optional[np.ndarray] = None
+    ttc_td_valid: Optional[np.ndarray] = None
+    ttc_td_events: Optional[np.ndarray] = None
     angvel_norm: Optional[np.ndarray] = None
     angvel_raw: Optional[np.ndarray] = None
     pose_hist_norm: Optional[np.ndarray] = None
@@ -245,15 +335,26 @@ class MotionEventDataset(Dataset):
       - cond 序列仍支持归一化等功能
     """
 
-    def __init__(self, data_dir: str, seq_len: int, skeleton_file: None = None, paths: None = None,
-                 pose_hist_len: int = 0,
-                 norm_spec: Optional[dict] = None,
-                 period_dim: int = 0):
+    def __init__(
+        self,
+        data_dir: str,
+        seq_len: int,
+        skeleton_file: None = None,
+        paths: None = None,
+        pose_hist_len: int = 0,
+        norm_spec: Optional[dict] = None,
+        period_dim: int = 0,
+        # Window sampling strategy:
+        # - sliding: enumerate all (clip_id, start) windows (default; legacy behavior)
+        # - start0 : use only start=0 per clip (keeps idx aligned to step_in_cycle when clip is a full cycle)
+        # - clip_random: balanced per-clip sampling; pick a random start per __getitem__ (train only)
+        index_mode: str = "sliding",
+    ):
         self.norm_stats_inherited = None
         self.paths = sorted(paths) if paths is not None else sorted(glob.glob(os.path.join(data_dir, '*.npz')))
         if not self.paths:
             self.paths = sorted(glob.glob(os.path.join(data_dir, '**', '*.npz'), recursive=True))
-        # [PATCH-B2] drop legacy summary npz that isn't a clip
+        # Skip merged dataset summary npz (not a clip).
         self.paths = [p for p in self.paths if os.path.basename(p) != 'normalized_dataset.npz']
         if not self.paths:
             raise FileNotFoundError(f'No .npz files found under {data_dir} (tried *.npz and **/*.npz)')
@@ -262,6 +363,13 @@ class MotionEventDataset(Dataset):
         self.index = []
         self.pose_hist_len = max(0, int(pose_hist_len))
         self.period_dim = int(period_dim)
+        self.index_mode = str(index_mode or "sliding").strip().lower()
+        if self.index_mode in ("random", "random_clip", "per_clip_random", "clip_random"):
+            self.index_mode = "clip_random"
+        elif self.index_mode in ("start0", "s0", "clip0", "clip_0", "zero"):
+            self.index_mode = "start0"
+        else:
+            self.index_mode = "sliding"
         self.contact_dim = 2
         self.angvel_norm = None
         self.pose_hist_norm = None
@@ -302,7 +410,6 @@ class MotionEventDataset(Dataset):
                     raise ValueError(f'{p}: missing X_norm/Y_norm; regenerated dataset required.')
                 if C is None:
                     raise ValueError(f'{p}: missing cond_in')
-                    continue
                 X = np.asarray(X, dtype=np.float32).copy()
                 Y = np.asarray(Y, dtype=np.float32).copy()
                 C = np.asarray(C, dtype=np.float32).copy()
@@ -315,12 +422,12 @@ class MotionEventDataset(Dataset):
                 o_layout = clip.get('output_layout')
                 if s_layout is None and 'state_layout_json' in clip:
                     try:
-                        s_layout = json.loads(str(clip['state_layout_json']))
+                        s_layout = _npz_scalar_to_json_dict(clip['state_layout_json'])
                     except Exception:
                         s_layout = None
                 if o_layout is None and 'output_layout_json' in clip:
                     try:
-                        o_layout = json.loads(str(clip['output_layout_json']))
+                        o_layout = _npz_scalar_to_json_dict(clip['output_layout_json'])
                     except Exception:
                         o_layout = None
 
@@ -328,13 +435,7 @@ class MotionEventDataset(Dataset):
                 if meta_raw is None:
                     raise ValueError(f'{p}: missing meta_json (regenerate dataset with updated converter).')
                 try:
-                    if hasattr(meta_raw, 'item'):
-                        meta_raw = meta_raw.item()
-                    if isinstance(meta_raw, (bytes, bytearray)):
-                        meta_raw = meta_raw.decode('utf-8', 'ignore')
-                    if not isinstance(meta_raw, str):
-                        raise TypeError
-                    meta_dict = json.loads(meta_raw)
+                    meta_dict = _npz_scalar_to_json_dict(meta_raw, require_str=True)
                 except Exception as _meta_err:
                     raise ValueError(f'{p}: failed to parse meta_json ({_meta_err}).') from _meta_err
 
@@ -401,11 +502,7 @@ class MotionEventDataset(Dataset):
                 bone_rot6d_raw = clip.get('bone_rot6d')
                 if bone_rot6d_raw is not None:
                     bone_rot6d_raw = np.asarray(bone_rot6d_raw, dtype=np.float32)
-                    if bone_rot6d_raw.shape[0] < T and bone_rot6d_raw.shape[0] > 0:
-                        pad = np.repeat(bone_rot6d_raw[-1:], T - bone_rot6d_raw.shape[0], axis=0)
-                        bone_rot6d_raw = np.concatenate([bone_rot6d_raw, pad], axis=0)
-                    if bone_rot6d_raw.shape[0] > T:
-                        bone_rot6d_raw = bone_rot6d_raw[:T]
+                    bone_rot6d_raw = _fit_length_T(bone_rot6d_raw, T)
                 src = clip.get('source_json')
                 src_json = npz_scalar_to_str(src) if src is not None else None
                 if src_json:
@@ -413,17 +510,21 @@ class MotionEventDataset(Dataset):
                         src_json = os.path.join(os.path.dirname(p), src_json)
                     try:
                         sc_full = _load_soft_contacts_from_json(src_json)
-                        if sc_full.shape[0] < T and sc_full.shape[0] > 0:
-                            pad = np.repeat(sc_full[-1:], T - sc_full.shape[0], axis=0)
-                            sc_full = np.concatenate([sc_full, pad], axis=0)
-                        if sc_full.shape[0] > T:
-                            sc_full = sc_full[:T]
+                        sc_full = _fit_length_T(sc_full, T)
                         if sc_full.shape[0] == T:
                             contacts = sc_full.astype(np.float32, copy=False)
                         else:
                             print(f"[Dataset] soft_contact length mismatch for {p}: {sc_full.shape[0]} vs {T}")
                     except Exception as _sc_err:
                         print(f"[Dataset] soft_contact unavailable for {p}: {_sc_err}")
+
+                # Derive TTC targets from contacts (touchdown countdown).
+                ttc_td, ttc_td_valid, ttc_td_events = _compute_ttc_touchdown_safe(
+                    contacts,
+                    expected_len=T,
+                    context=p,
+                    verbose=True,
+                )
 
                 rot_seq_full = clip.get('y_out_features')
                 output_layout_json = clip.get('output_layout_json', None)
@@ -436,12 +537,7 @@ class MotionEventDataset(Dataset):
                     rot_slice = None
                     try:
                         if output_layout_json is not None:
-                            s = output_layout_json
-                            if hasattr(s, 'item'):
-                                s = s.item()
-                            if isinstance(s, (bytes, bytearray)):
-                                s = s.decode('utf-8', 'ignore')
-                            layout = json.loads(str(s))
+                            layout = _npz_scalar_to_json_dict(output_layout_json)
                             br = layout.get('BoneRotations6D') or layout.get('bone_rotations6d')
                             if isinstance(br, dict) and 'start' in br and ('size' in br or 'end' in br):
                                 st = int(br.get('start', 0))
@@ -463,11 +559,7 @@ class MotionEventDataset(Dataset):
                         R = rot6d_to_matrix(y_t.view(1, T, J, 6))[0]
                         fps = float(meta['fps'])
                         w = angvel_vec_from_R_seq(R.unsqueeze(0), fps)[0].reshape(-1, J * 3).cpu().numpy()
-                        if w.shape[0] < T:
-                            pad = np.repeat(w[-1:], T - w.shape[0], axis=0)
-                            w = np.concatenate([w, pad], axis=0)
-                        elif w.shape[0] > T:
-                            w = w[:T]
+                        w = _fit_length_T(w, T)
                         angvel_raw = w.astype(np.float32, copy=False)
                         angvel_norm = self.angvel_norm.transform(w) if self.angvel_norm is not None else angvel_raw
 
@@ -494,6 +586,9 @@ class MotionEventDataset(Dataset):
                     state_layout_norm=state_norm,
                     output_layout_norm=output_norm,
                     contacts=contacts,
+                    ttc_td=ttc_td,
+                    ttc_td_valid=ttc_td_valid,
+                    ttc_td_events=ttc_td_events,
                     angvel_norm=angvel_norm,
                     angvel_raw=angvel_raw,
                     pose_hist_norm=pose_hist_norm,
@@ -521,8 +616,14 @@ class MotionEventDataset(Dataset):
                         axis_offset_cnt[axis_idx] += 1
                 cid = len(self.clips) - 1
                 if T >= self.seq_len:
-                    for s in range(0, T - self.seq_len + 1):
-                        self.index.append((cid, s))
+                    if self.index_mode == "sliding":
+                        for s in range(0, T - self.seq_len + 1):
+                            self.index.append((cid, s))
+                    elif self.index_mode == "start0":
+                        self.index.append((cid, 0))
+                    else:
+                        # Balanced per-clip sampling: sample start at __getitem__ time.
+                        self.index.append((cid, -1))
             except Exception as e:
                 print(f'[Dataset] Warning: skip {p}: {e}')
         if not self.clips:
@@ -749,7 +850,7 @@ class MotionEventDataset(Dataset):
         hs = float(getattr(self, '_hand_sign', 1.0))
         c, s = (np.cos(t), np.sin(t) * hs)
 
-        T, D = arr_TD.shape
+        T = arr_TD.shape[0]
         if 'BonePositions' in layout:
             a, b = layout['BonePositions']
             v = arr_TD[:, a:b].reshape(T, -1, 3)
@@ -792,9 +893,28 @@ class MotionEventDataset(Dataset):
 
     def __getitem__(self, idx):
         clip_id, s = self.index[idx]
-        s = int(s)
-        e = s + int(self.seq_len)
         clip = self.clips[clip_id]
+        try:
+            s = int(s)
+        except Exception:
+            s = 0
+        if s < 0:
+            # Per-clip random start (train-time only).
+            if bool(getattr(self, "is_train", False)):
+                try:
+                    max_start = int(clip.X.shape[0]) - int(self.seq_len)
+                except Exception:
+                    max_start = 0
+                if max_start > 0:
+                    try:
+                        s = int(np.random.randint(0, max_start + 1))
+                    except Exception:
+                        s = 0
+                else:
+                    s = 0
+            else:
+                s = 0
+        e = int(s) + int(self.seq_len)
 
         # Y 已在转换阶段对齐到 “下一帧”，这里不要再 +1
         Xv = clip.X[s:e]
@@ -816,27 +936,9 @@ class MotionEventDataset(Dataset):
             deg = float(np.random.uniform(-self.yaw_aug_deg, self.yaw_aug_deg))
             self._apply_yaw_inplace(X, self.state_layout, deg)
             self._apply_yaw_inplace(Y, self.output_layout, deg)
-            if C_in.shape[1] >= 2:
-                xy = C_in[:, -2:].copy()
-                t = np.deg2rad(deg)
-                hs = float(getattr(self, '_hand_sign', 1.0))
-                c_t, s_t = (np.cos(t), np.sin(t) * hs)
-
-                x, y = (xy[:, 0].copy(), xy[:, 1].copy())
-                xy[:, 0] = c_t * x - s_t * y
-                xy[:, 1] = s_t * x + c_t * y
-                n = np.linalg.norm(xy, axis=-1, keepdims=True) + 1e-08
-                C_in[:, -2:] = xy / n
-            if C_tgt.shape[1] >= 2:
-                xy2 = C_tgt[:, -2:].copy()
-                t = np.deg2rad(deg)
-                hs = float(getattr(self, '_hand_sign', 1.0))
-                c_t, s_t = (np.cos(t), np.sin(t) * hs)
-                x2, y2 = (xy2[:, 0].copy(), xy2[:, 1].copy())
-                xy2[:, 0] = c_t * x2 - s_t * y2
-                xy2[:, 1] = s_t * x2 + c_t * y2
-                n2 = np.linalg.norm(xy2, axis=-1, keepdims=True) + 1e-08
-                C_tgt[:, -2:] = xy2 / n2
+            hs = float(getattr(self, '_hand_sign', 1.0))
+            _rotate_cond_dir2d_inplace(C_in, deg, hand_sign=hs)
+            _rotate_cond_dir2d_inplace(C_tgt, deg, hand_sign=hs)
 
         cond_norm_mu = None
         cond_norm_std = None
@@ -866,11 +968,16 @@ class MotionEventDataset(Dataset):
         sample = {'motion': torch.from_numpy(X).float(), 'gt_motion': torch.from_numpy(Y).float()}
         # 边界一致性所需的索引信息（在 collate 中保持为 [B] 标量）
         try:
-            sample['clip_id'] = torch.tensor(int(clip_id), dtype=torch.int64)
-            sample['start']   = torch.tensor(int(s), dtype=torch.int64)
+            clip_id_v = int(clip_id)
         except Exception:
-            sample['clip_id'] = torch.tensor(0, dtype=torch.int64)
-            sample['start']   = torch.tensor(int(s), dtype=torch.int64)
+            clip_id_v = 0
+        try:
+            clip_len_v = int(getattr(clip, "X", np.zeros((0,))).shape[0])
+        except Exception:
+            clip_len_v = 0
+        sample['clip_id'] = torch.tensor(clip_id_v, dtype=torch.int64)
+        sample['start'] = torch.tensor(int(s), dtype=torch.int64)
+        sample['clip_len'] = torch.tensor(clip_len_v, dtype=torch.int64)
 
         if C_in.shape[1] > 0:
             sample['cond_in'] = torch.from_numpy(C_in.astype(np.float32, copy=False)).float()
@@ -880,9 +987,43 @@ class MotionEventDataset(Dataset):
                 sample['cond_norm_mu'] = torch.from_numpy(cond_norm_mu).float()
                 sample['cond_norm_std'] = torch.from_numpy(cond_norm_std).float()
         if clip.contacts is not None:
-            sample['contacts'] = torch.from_numpy(clip.contacts[s:e].astype(np.float32, copy=False)).float()
+            contacts_win = clip.contacts[s:e].astype(np.float32, copy=False)
+            sample['contacts'] = torch.from_numpy(contacts_win).float()
         else:
+            contacts_win = None
             sample['contacts'] = torch.zeros((self.seq_len, self.contact_dim), dtype=torch.float32)
+
+        # TTC targets (touchdown countdown)
+        # NOTE: Recompute TTC targets per sampled window (cyclic semantics) so each cycle-sized sample
+        # gets a single stable event per channel. Slicing clip-level cyclic TTC (single-event selection)
+        # can under-count events when a clip is longer than seq_len (multiple start offsets).
+        ttc_td_win = None
+        ttc_td_valid_win = None
+        ttc_td_events_win = None
+        if contacts_win is not None:
+            ttc_td_win, ttc_td_valid_win, ttc_td_events_win = _compute_ttc_touchdown_safe(
+                contacts_win,
+                expected_len=self.seq_len,
+                verbose=False,
+            )
+
+        if ttc_td_win is not None:
+            sample["ttc_td"] = torch.from_numpy(ttc_td_win.astype(np.float32, copy=False)).float()
+            sample["ttc_td_valid"] = torch.from_numpy(ttc_td_valid_win.astype(bool, copy=False))
+            sample["ttc_td_events"] = torch.from_numpy(ttc_td_events_win.astype(bool, copy=False))
+        else:
+            if getattr(clip, "ttc_td", None) is not None:
+                sample["ttc_td"] = torch.from_numpy(clip.ttc_td[s:e].astype(np.float32, copy=False)).float()
+            else:
+                sample["ttc_td"] = torch.zeros((self.seq_len, self.contact_dim), dtype=torch.float32)
+            if getattr(clip, "ttc_td_valid", None) is not None:
+                sample["ttc_td_valid"] = torch.from_numpy(clip.ttc_td_valid[s:e].astype(bool, copy=False))
+            else:
+                sample["ttc_td_valid"] = torch.zeros((self.seq_len, self.contact_dim), dtype=torch.bool)
+            if getattr(clip, "ttc_td_events", None) is not None:
+                sample["ttc_td_events"] = torch.from_numpy(clip.ttc_td_events[s:e].astype(bool, copy=False))
+            else:
+                sample["ttc_td_events"] = torch.zeros((self.seq_len, self.contact_dim), dtype=torch.bool)
         if clip.angvel_norm is not None:
             sample['angvel'] = torch.from_numpy(clip.angvel_norm[s:e].astype(np.float32, copy=False)).float()
         else:

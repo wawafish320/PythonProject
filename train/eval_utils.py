@@ -19,7 +19,7 @@ def evaluate_teacher(
     trainer,
     loader: Iterable[Dict[str, torch.Tensor]],
     *,
-    mode: str = "teacher",
+    mode: str = "mixed",
     max_batches: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Teacher forcing评估：输出均值loss并复用自由评估的诊断统计。"""
@@ -85,7 +85,7 @@ def evaluate_teacher(
                 gt_seq=gt_seq,
                 cond_norm_mu=cond_norm_mu,
                 cond_norm_std=cond_norm_std,
-                mode=mode,
+                mode="mixed",
                 tf_ratio=1.0,
             )
             out = trainer.loss_fn(preds_dict, gt_seq, attn_weights=last_attn, batch=batch)
@@ -324,6 +324,9 @@ def evaluate_freerun(
         # NOTE: let the model decide the initial plan_z when plan_z is None.
         # This allows using a learnable contact_plan_init_z (or falling back to zeros).
         plan_z = None
+        phase_z = None
+        phase_event_age = None
+        td_hazard_acc = None
 
         prev_foot_pos_meas = None
         for t in range(start_t, end_t):
@@ -411,7 +414,7 @@ def evaluate_freerun(
                 rollout_step_t = None
 
             contacts_in_t = contacts_t
-            if bool(getattr(model, "contact_plan_enable", False)) and bool(getattr(model, "contacts_as_meas_override", False)):
+            if bool(getattr(model, "contact_plan_enable", False)) and (not bool(getattr(model, "contact_meas_enable", False))):
                 try:
                     fn = getattr(trainer, "_contact_meas_whitebox", None)
                     if callable(fn) and motion_raw is not None:
@@ -429,6 +432,9 @@ def evaluate_freerun(
                     angvel=angvel_t,
                     pose_history=pose_hist_t,
                     plan_z=plan_z,
+                    phase_z=phase_z,
+                    phase_event_age=phase_event_age,
+                    td_hazard_acc=td_hazard_acc,
                     time_index=time_index_t,
                     rollout_step=rollout_step_t,
                 )
@@ -442,6 +448,15 @@ def evaluate_freerun(
                     z_next = ret.get("plan_z_next", None)
                     if z_next is not None:
                         plan_z = z_next.detach()
+                    p_next = ret.get("phase_z_next", None)
+                    if p_next is not None:
+                        phase_z = p_next.detach()
+                    a_next = ret.get("phase_event_age_next", None)
+                    if a_next is not None:
+                        phase_event_age = a_next.detach()
+                    hz_acc_next = ret.get("td_hazard_acc_next", None)
+                    if hz_acc_next is not None:
+                        td_hazard_acc = hz_acc_next.detach()
                 except Exception:
                     pass
 
@@ -469,6 +484,7 @@ def evaluate_freerun(
                         y_raw = trainer._apply_lambda_fusion_to_raw(
                             y_inc_raw,
                             direct_norm=ret.get("out_direct", None),
+                            direct_hinge_delta=ret.get("direct_hinge_delta", None),
                             lambda_fusion=lam_eff,
                         )
                 except Exception:

@@ -460,4 +460,3 @@ def _parse_stage_schedule(spec: Optional[Any]):
     for idx, stage in enumerate(stages):
         stage['index'] = idx
     return stages
-

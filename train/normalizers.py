@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Optional, Sequence
 from dataclasses import dataclass
 
+import json
 import numpy as np
 import torch
 import torch.nn as nn
@@ -21,7 +22,7 @@ __all__ = [
 class VectorTanhNormalizer:
     """
     NumPy version for dataset preprocessing.
-    Applies tanh(x / scale), optional z-score; supports inverse_transform for debugging.
+    Applies tanh(x / scale), optional z-score; supports inverse() for debugging.
     """
 
     def __init__(self, scales: np.ndarray, mu: Optional[np.ndarray] = None, std: Optional[np.ndarray] = None):
@@ -47,7 +48,7 @@ class VectorTanhNormalizer:
             X = (X - self.mu) / self.std
         return X.astype(np.float32, copy=False)
 
-    def inverse_transform(self, arr: np.ndarray) -> np.ndarray:
+    def inverse(self, arr: np.ndarray) -> np.ndarray:
         if arr.size == 0:
             return arr.astype(np.float32, copy=False)
         Y = arr.astype(np.float32, copy=False)
@@ -118,10 +119,6 @@ class AngvelNormCfg:
         W_raw = np.arctanh(X) * self.s_eff
         return W_raw.astype(np.float32)
 
-    # Backwards compatibility for call sites using inverse_transform
-    def inverse_transform(self, X_norm: np.ndarray) -> np.ndarray:
-        return self.inverse(X_norm)
-
 
 class AngvelNormalizer:
     """
@@ -169,7 +166,7 @@ class AngvelNormalizer:
             X = (X - self.mu) / self.std
         return X.astype(np.float32)
 
-    def inverse_transform(self, X: np.ndarray) -> np.ndarray:
+    def inverse(self, X: np.ndarray) -> np.ndarray:
         assert X.ndim == 2 and X.shape[1] == self.s_eff.size, \
             f"X shape {tuple(X.shape)} not compatible with J*3={self.s_eff.size}."
         Y = X.astype(np.float32)

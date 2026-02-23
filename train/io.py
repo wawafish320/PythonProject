@@ -3,8 +3,8 @@ from __future__ import annotations
 """
 Unified IO helpers for loading metadata, derived arrays, and dataset-specific signals.
 
-This module merges the legacy io_utils.py and layout_io.py helpers so callers
-have a single import surface: `from train.io import ...`.
+This module merges io_utils.py and layout_io.py helpers so callers have a single
+import surface: `from train.io import ...`.
 """
 
 import json

@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-UE JSON → NPZ 转换工具（v4）
-兼容“局部坐标增强 + 参数缩减”的新版 JSON（单位：米，local_6d，支持 RootVelocityXY、FootEvidence、可选缺失字段），
-同时兼容旧版 JSON（RootVelocity、Contacts、BonePositions/BoneVelocities/BoneAngularVelocities/Phase 等）。
+UE JSON → NPZ 转换工具（v4）。
 
-主要改动：
- - RootVelocity 可自动读取 RootVelocityXY，仅提取 XY 两个分量
- - Contacts 已移除；训练侧需从 JSON 的 FootEvidence 重建软/硬接触
+约定：
+ - JSON 的单位必须是 meters（meta.units="meters"）
+ - 软接触标注来自 Frames[*].FootEvidence.{L,R}.soft_contact_score
+   （训练侧会复用 source_json；本脚本不在 NPZ 中写入 contacts）
+
+主要行为：
+ - RootVelocity 支持 RootVelocityXY（优先）或 RootVelocity（仅取 XY 两个分量）
  - TrajectoryPos 缺失时自动补零（与 TrajectoryDir 使用相同的 K）
  - Phase 缺失时默认不写入，可通过 --use-phase 强制写入 0
- - X 特征按实际存在的通道动态打包，state_layout_json 会与之完全对齐
- - **RootYaw 已废弃**：不再写入特征，也不在模板/layout 中保留对应切片
- - 保持旧版 CLI 兼容，同时新增若干控制开关
+ - X 特征按实际存在的通道动态打包，state_layout_json 与之完全对齐
+ - yaw 不再作为显式特征写入（不在模板/layout 中保留对应切片）
 
 依赖：Python 3.8+，仅依赖标准库与 numpy
 """
@@ -49,15 +50,18 @@ def _canon_state_layout(d: dict) -> dict:
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 
+try:
+    from train import geometry as _geometry
+except Exception:
+    try:
+        from . import geometry as _geometry  # type: ignore
+    except Exception:
+        import geometry as _geometry  # type: ignore
+
 # ===== Embedded: Adaptive Grouped Normalizer (no defaults, data-driven) =====
 from dataclasses import dataclass, asdict, field
 import numpy as _np
 import re as _re
-
-def _wrap_to_pi(x: _np.ndarray) -> _np.ndarray:
-    y = (x + _np.pi) % (2.0*_np.pi) - _np.pi
-    y[(y == -_np.pi)] = _np.pi
-    return y
 
 def _robust_mu_std(arr: _np.ndarray):
     q1 = _np.percentile(arr, 25, axis=0); q3 = _np.percentile(arr, 75, axis=0)
@@ -196,7 +200,7 @@ class GroupedNormalizer:
         if span0 is None or all(
                 getattr(span0, k) is None for k in ['root_pos', 'root_vel', 'rot6d', 'angvel']):
             Xdim0 = int((Xs[0].shape[1]) if Xs else 0)
-            span0 = self._synthesize_spans(out_layout, Xdim0, include_yaw=False)
+            span0 = self._synthesize_spans(out_layout, Xdim0)
 
         self._spans = span0
         self._bone_names = bone_names or []
@@ -418,7 +422,7 @@ class GroupedNormalizer:
             return out
         meta['state_layout'] = to_explicit(state_layout)
         meta['output_layout'] = to_explicit(out_layout)
-        # remove legacy alias if present
+        # Drop deprecated alias if present.
         if 'out_layout' in meta:
             del meta['out_layout']
         d['meta'] = meta
@@ -434,7 +438,7 @@ class GroupedNormalizer:
         if s is None: return _Spans()
 
 
-    def _synthesize_spans(self, out_layout: dict, Xdim: int, include_yaw: bool = True) -> _Spans:
+    def _synthesize_spans(self, out_layout: dict, Xdim: int) -> _Spans:
         """当 state_layout_json 缺失时，按导出端的默认顺序合成 spans。
         默认顺序: RootPosition(3) → RootVelocity(2) → BoneRotations6D(B*6) → BoneAngularVelocities(B*3)
         其中 B 从 output_layout['BoneRotations6D'][1]//6 推断；若缺失则根据 Xdim 反解。
@@ -442,8 +446,6 @@ class GroupedNormalizer:
         st = 0
         root_pos = (st, st+3); st += 3
         root_vel = (st, st+2); st += 2
-        root_yaw = (st, st+1) if include_yaw else None
-        if include_yaw: st += 1
         # rot6d size:
         rot6d_size = 0
         if out_layout and 'BoneRotations6D' in out_layout:
@@ -694,20 +696,6 @@ def find_json_files(path: str) -> List[str]:
 def np_array(x, dtype=np.float32):
     return np.asarray(x, dtype=dtype)
 
-def gram_schmidt_renorm(rot6d: np.ndarray) -> np.ndarray:
-    """
-    rot6d: (..., 6). 列A = X, 列B = Z。做一次 GS，使两列单位正交。
-    """
-    orig_shape = rot6d.shape
-    flat = rot6d.reshape(-1, 6)
-    a = flat[:, 0:3]
-    b = flat[:, 3:6]
-    a = a / np.clip(np.linalg.norm(a, axis=1, keepdims=True), 1e-8, None)
-    b = b - np.sum(a*b, axis=1, keepdims=True)*a
-    b = b / np.clip(np.linalg.norm(b, axis=1, keepdims=True), 1e-8, None)
-    out = np.concatenate([a, b], axis=1).reshape(orig_shape)
-    return out
-
 def resample_series(arr: np.ndarray, new_T: int) -> np.ndarray:
     """对 (T, ...) 的连续序列做线性重采样。"""
     T = arr.shape[0]
@@ -865,21 +853,6 @@ def _infer_up_axis_from_meta(meta: dict | None) -> int:
             return idx
     return 2
 
-def _rot6d_to_matrix_np(rot6d: np.ndarray) -> np.ndarray:
-    """
-    将 (...,6) 的 6D 表达还原为 (...,3,3) 旋转矩阵（列向量形式）。
-    """
-    a = rot6d[..., 0:3]
-    b = rot6d[..., 3:6]
-    a = a / np.clip(np.linalg.norm(a, axis=-1, keepdims=True), 1e-8, None)
-    b = b - np.sum(a * b, axis=-1, keepdims=True) * a
-    b = b / np.clip(np.linalg.norm(b, axis=-1, keepdims=True), 1e-8, None)
-    c = np.cross(a, b, axis=-1)
-    return np.stack([a, b, c], axis=-1)
-
-def _wrap_to_pi_np(x: np.ndarray) -> np.ndarray:
-    return (x + np.pi) % (2.0 * np.pi) - np.pi
-
 def _nan_forward_fill(arr: np.ndarray) -> np.ndarray:
     mask = np.isfinite(arr)
     if not mask.any():
@@ -925,7 +898,9 @@ def _align_pelvis_yaw(clip: Dict[str, Any], cmd_yaw: np.ndarray | None) -> Tuple
     if rot6d is None or rot6d.size == 0:
         return None, {}
     root_rot = rot6d[:, 0, :].reshape(-1, 6)
-    mats = _rot6d_to_matrix_np(root_rot).reshape(rot6d.shape[0], 3, 3)
+    mats = _geometry.rot6d_to_matrix_np(root_rot, columns=("X", "Z"), canonical_axis_order=False).reshape(
+        rot6d.shape[0], 3, 3
+    )
     up_axis = _infer_up_axis_from_meta(clip.get("meta"))
     planar_axes = [ax for ax in (0, 1, 2) if ax != up_axis]
     if len(planar_axes) != 2:
@@ -933,9 +908,6 @@ def _align_pelvis_yaw(clip: Dict[str, Any], cmd_yaw: np.ndarray | None) -> Tuple
     targets = []
     if cmd_yaw is not None:
         targets.append(cmd_yaw)
-    traj_raw = clip.get("traj_yaw_raw")
-    if isinstance(traj_raw, np.ndarray) and traj_raw.shape[0] == mats.shape[0]:
-        targets.append(traj_raw.reshape(-1))
 
     def _score_axis(axis_idx: int):
         vec = mats[:, :, axis_idx]
@@ -951,7 +923,7 @@ def _align_pelvis_yaw(clip: Dict[str, Any], cmd_yaw: np.ndarray | None) -> Tuple
             valid = np.isfinite(tgt) & mask
             if valid.sum() < max(8, int(0.1 * len(tgt))):
                 continue
-            diff = _wrap_to_pi_np(yaw_axis[valid] - tgt[valid])
+            diff = _geometry.wrap_to_pi_np(yaw_axis[valid] - tgt[valid])
             errs.append(float(np.median(np.abs(diff))))
             offsets.append(float(np.median(diff)))
         if errs:
@@ -975,7 +947,7 @@ def _align_pelvis_yaw(clip: Dict[str, Any], cmd_yaw: np.ndarray | None) -> Tuple
             best_series = yaw_axis
     if best_series is None:
         return None, {}
-    yaw_aligned = _wrap_to_pi_np(best_series - best_offset)
+    yaw_aligned = _geometry.wrap_to_pi_np(best_series - best_offset)
     yaw_aligned = _nan_forward_fill(yaw_aligned)
     diag = {
         "forward_axis": int(best_axis),
@@ -988,11 +960,10 @@ def _frame_get(fr: dict, key: str, default=None):
     return fr[key] if key in fr else default
 
 # -----------------------------
-# 解析单个 JSON Clip（新旧兼容）
+# 解析单个 JSON Clip（v4 严格）
 # -----------------------------
 def load_clip(json_path: str,
-              use_phase_if_missing: bool = False,
-              root_yaw_as_feature: bool = False) -> Dict[str, Any]:
+              use_phase_if_missing: bool = False) -> Dict[str, Any]:
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     meta = dict(data.get("meta", {}) or {})
@@ -1011,6 +982,14 @@ def load_clip(json_path: str,
     T = len(frames)
     if T == 0:
         raise ValueError("Empty Frames")
+
+    # FootEvidence schema is required by the training pipeline (soft contacts read from source_json).
+    for i, fr in enumerate(frames):
+        fe = (fr.get("FootEvidence") or {}) if isinstance(fr, dict) else {}
+        L = (fe.get("L") or {}) if isinstance(fe, dict) else {}
+        R = (fe.get("R") or {}) if isinstance(fe, dict) else {}
+        if "soft_contact_score" not in L or "soft_contact_score" not in R:
+            raise ValueError(f"{json_path}: frame {i} missing FootEvidence soft_contact_score.")
 
     # ---------- 逐帧提取 ----------
     # Phase（可缺省）
@@ -1079,7 +1058,6 @@ def load_clip(json_path: str,
 
 def pack_flat_features(clip: Dict[str, Any],
                        include_phase: bool = False,
-                       include_root_yaw: bool = False,
                        include_bone_pos: Optional[bool] = None,
                        include_lin_vel: Optional[bool] = None,
                        include_ang_vel: Optional[bool] = True) -> Tuple[np.ndarray, Dict[str, Tuple[int,int]]]:
@@ -1162,7 +1140,6 @@ def convert_one(json_path: str,
                 smooth_vel: bool = False,
                 traj_keep_idx: Optional[List[int]] = None,
                 use_phase_if_missing: bool = False,
-                include_root_yaw: bool = False,
                 include_bone_pos: Optional[bool] = None,
                 include_lin_vel: Optional[bool] = None,
                 include_ang_vel: Optional[bool] = True,
@@ -1170,17 +1147,13 @@ def convert_one(json_path: str,
                 action_speed_stats: Optional[Dict[str, Any]] = None,
                 base_speed_key: str = "p50",
                 speed_multiplier_clip: float = 5.0) -> Dict[str, Any]:
-    clip = load_clip(json_path, use_phase_if_missing, include_root_yaw)
-    if clip.get("root_yaw") is not None:
-        clip["traj_yaw_raw"] = clip["root_yaw"].copy()
-    else:
-        clip["traj_yaw_raw"] = None
+    clip = load_clip(json_path, use_phase_if_missing)
 
     # 重采样
     if target_fps is not None and target_fps > 0 and target_fps != clip["FPS"]:
         ratio = target_fps / float(clip["FPS"])
         new_T = max(1, int(round(clip["T"] * ratio)))
-        for k in ["phase", "traj_pos", "traj_dir", "root_pos", "root_vel", "root_yaw", "traj_yaw_raw"]:
+        for k in ["phase", "traj_pos", "traj_dir", "root_pos", "root_vel"]:
             if clip.get(k) is not None and isinstance(clip[k], np.ndarray) and clip[k].ndim >= 2:
                 clip[k] = resample_series(clip[k], new_T)
 # bones
@@ -1189,7 +1162,7 @@ def convert_one(json_path: str,
             clip["bone_pos"] = resample_series(clip["bone_pos"].reshape(T_old, -1), new_T).reshape(new_T, B, 3)
         if clip["bone_rot6d"] is not None:
             clip["bone_rot6d"] = resample_series(clip["bone_rot6d"].reshape(T_old, -1), new_T).reshape(new_T, B, 6)
-            clip["bone_rot6d"] = gram_schmidt_renorm(clip["bone_rot6d"])
+            clip["bone_rot6d"] = _geometry.gram_schmidt_renorm_np(clip["bone_rot6d"])
         if clip["bone_vel"] is not None:
             clip["bone_vel"] = resample_series(clip["bone_vel"].reshape(T_old, -1), new_T).reshape(new_T, B, 3)
         if clip["bone_ang_vel"] is not None:
@@ -1220,7 +1193,7 @@ def convert_one(json_path: str,
         pelvis_yaw = np.zeros((clip["T"],), dtype=np.float32)
         yaw_diag = {}
     # 手性与整体方向校正：若骨盆朝向与根速度方向平均夹角反向，则整体加 π
-    yaw_corr = _wrap_to_pi_np(pelvis_yaw)
+    yaw_corr = _geometry.wrap_to_pi_np(pelvis_yaw)
     root_vel = clip.get("root_vel")
     if root_vel is not None and root_vel.size > 0:
         ref_dir = np.asarray(root_vel, dtype=np.float32)
@@ -1229,7 +1202,7 @@ def convert_one(json_path: str,
         ref_yaw = np.arctan2(ref_dir[:, 1], ref_dir[:, 0])
         cos_mean = float(np.cos(yaw_corr[:-1] - ref_yaw[:-1]).mean())
         if cos_mean < 0.0:  # 反向则整体翻转
-            yaw_corr = _wrap_to_pi_np(yaw_corr + np.pi)
+            yaw_corr = _geometry.wrap_to_pi_np(yaw_corr + np.pi)
             yaw_diag["yaw_flip_applied"] = True
             yaw_diag["yaw_flip_reason"] = "mean_cos_with_root_vel<0"
         else:
@@ -1248,7 +1221,6 @@ def convert_one(json_path: str,
     X_flat, layout = pack_flat_features(
         clip,
         include_phase=use_phase_if_missing or clip["has_phase"],
-        include_root_yaw=include_root_yaw,
         include_bone_pos=include_bone_pos,
         include_lin_vel=include_lin_vel,
         include_ang_vel=include_ang_vel
@@ -1471,7 +1443,6 @@ def main():
                 smooth_vel=args.sg_vel,
                 traj_keep_idx=traj_keep_idx,
                 use_phase_if_missing=args.use_phase,
-                include_root_yaw=False,
                 include_bone_pos=(True if args.use_bone_pos else None),
                 include_lin_vel=(True if args.use_bone_linvel else None),
                 include_ang_vel=(False if args.no_bone_angvel else True),

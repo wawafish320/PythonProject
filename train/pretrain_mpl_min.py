@@ -21,6 +21,8 @@ norm_template.json 中与角速度、姿态历史相关的字段。
 """
 
 import os, glob, json, random, contextlib
+import sys
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 from collections import defaultdict
@@ -30,6 +32,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+
+# Allow running as a script from either repo root or `train/`.
+if __package__ is None or __package__ == "":
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 # ---- exact imports from your project (no fallback) ----
 from train.geometry import reproject_rot6d, rot6d_to_matrix, angvel_vec_from_R_seq  # noqa: E402
@@ -116,33 +122,6 @@ def _get_rot_slice_from_layout(layout: dict, Dy: int) -> tuple[int, int]:
     # Fallback: use maximal leading multiple-of-6
     sz = (Dy // 6) * 6
     return 0, sz
-
-
-# --------------------------- Dataset ----------------------------
-
-
-
-    def inverse_transform(self, X: np.ndarray) -> np.ndarray:
-        """
-        逆 transform：
-          if zscore: X = X*std + mu
-          W_raw = atanh(X) * s_eff
-        说明：假设 transform 的最后一步是 tanh 压缩。
-        """
-        assert (
-                X.ndim == 2 and X.shape[1] == self.s_eff.size
-        ), f"X shape {tuple(X.shape)} not compatible with J*3={self.s_eff.size}."
-
-        Y = X.astype(np.float32)
-        # 可选 z-score 还原
-        if getattr(self, "mu", None) is not None and getattr(self, "std", None) is not None:
-            Y = Y * self.std + self.mu
-        # 数值安全：tanh 值域 (-1,1)
-        Y = np.clip(Y, -0.999999, 0.999999)
-        W_raw = np.arctanh(Y) * self.s_eff
-        return W_raw.astype(np.float32)
-
-
 
 def _build_angvel_norm_spec(in_glob: str, save_path: str, pose_hist_len: int = 3) -> dict:
     """
@@ -308,22 +287,30 @@ class YAngvelContactsDataset(Dataset):
       来自 source_json 的软接触 (K=2)，对齐到 Frames[1:] → [T-1, 2]
 
     说明：
-      - 在 __init__ 中预先过滤 T_eff-1 < T_w 的短片段（T_eff = min(T_npz, T_json)）。
+      - 在 __init__ 中按 `short_policy` 处理短片段：short_policy=skip 时过滤 T_eff-1 < T_w；
+        其他策略（wrap/pad_last）允许短片段参与训练。
       - 与主训练保持一致：angvel 计算传入 fps，而不是 dt。
       - 归一化仅使用模板里的 angvel 专用参数（tanh_scales_angvel 或 s_eff_angvel，可选 zscore）。
     """
 
-    def __init__(self, in_glob: str, T_w: int,
+    def __init__(
+        self,
+        in_glob: str,
+        T_w: int,
                  require_zscore: bool = False,
                  norm_spec: dict | None = None,
                  p_event: float = 0.30,
                  event_thresh: float = 0.50,
                  event_min_gap: int = 6,
-                 event_pre: int = -1):
+                 event_pre: int = -1,
+                 short_policy: str = "skip"):
         self.files = sorted(glob.glob(in_glob))
         if not self.files:
             raise RuntimeError(f"No npz matched: {in_glob}")
         self.T_w = int(T_w)
+        self.short_policy = str(short_policy or "skip").strip().lower()
+        if self.short_policy not in {"skip", "wrap", "pad_last"}:
+            raise ValueError(f"Unsupported short_policy={short_policy!r}; expected one of: skip, wrap, pad_last")
 
         self._soft_contact_cache: dict[str, np.ndarray] = {}
 
@@ -424,7 +411,10 @@ class YAngvelContactsDataset(Dataset):
 
                     T_eff = min(T_npz, T_json)
                     eff = T_eff - 1
-                    if eff >= self.T_w:
+                    if eff <= 0:
+                        self._skipped.append((os.path.basename(p), eff))
+                        continue
+                    if eff >= self.T_w or self.short_policy != "skip":
                         self._valid_idx.append(i)
                     else:
                         self._skipped.append((os.path.basename(p), eff))
@@ -523,33 +513,59 @@ class YAngvelContactsDataset(Dataset):
             axis=1,
         )
 
-        # 取窗（此时已保证 T-1 >= T_w）
+        # 取窗：长片段正常随机裁剪；短片段由 short_policy 决定 wrap/pad_last。
         Tw = self.T_w
         Tm1 = T - 1
+        if Tm1 <= 0:
+            raise RuntimeError(f"{os.path.basename(p)} too short after alignment: T-1={Tm1}")
+
+        short = (Tm1 < Tw)
+        if short and self.short_policy == "skip":
+            raise RuntimeError(
+                f"{os.path.basename(p)} effective length T-1={Tm1} < T_w={Tw} (short_policy=skip). "
+                "Lower T_w or use --short_policy wrap/pad_last."
+            )
+
         use_event = (np.random.random() < self.p_event)
-        if use_event:
-            L = (contact_seq[:, 0] > self.event_thresh); R = (contact_seq[:, 1] > self.event_thresh)
-            events = event_indices_from_LR(L, R, min_gap=self.event_min_gap)
-            starts = window_starts_from_events(Tm1, Tw, events, pre=self.event_pre)
-            s = int(np.random.choice(starts)) if len(starts) > 0 else np.random.randint(0, Tm1 - Tw + 1)
-        else:
-            s = np.random.randint(0, Tm1 - Tw + 1)
-                # Safeguard: clamp start to valid range to guarantee window length Tw
-        if s < 0:
+        if short and self.short_policy == "pad_last":
+            # Deterministic: consume whole clip then repeat tail to reach Tw.
             s = 0
-        max_start = max(0, Tm1 - Tw)
-        if s > max_start:
-            s = max_start
-        e = s + Tw
+        elif use_event:
+            L = (contact_seq[:, 0] > self.event_thresh)
+            R = (contact_seq[:, 1] > self.event_thresh)
+            events = event_indices_from_LR(L, R, min_gap=self.event_min_gap)
+            if short and self.short_policy == "wrap":
+                starts = [int((e + self.event_pre) % Tm1) for e in events] if events else []
+            else:
+                starts = window_starts_from_events(Tm1, Tw, events, pre=self.event_pre)
+            if len(starts) > 0:
+                s = int(np.random.choice(starts))
+            else:
+                s = np.random.randint(0, Tm1) if short else np.random.randint(0, Tm1 - Tw + 1)
+        else:
+            s = np.random.randint(0, Tm1) if short else np.random.randint(0, Tm1 - Tw + 1)
+
+        # Build window indices.
+        if not short:
+            e = s + Tw
+            idx = slice(s, e)
+        elif self.short_policy == "wrap":
+            idx = (np.arange(s, s + Tw) % Tm1).astype(np.int64)
+        else:
+            # pad_last: clamp to last valid index (repeat tail).
+            idx = np.minimum(np.arange(s, s + Tw), Tm1 - 1).astype(np.int64)
+
+        def _take(arr: np.ndarray) -> np.ndarray:
+            return arr[idx]
 
         sample = {
-            "inputs": torch.from_numpy(inputs_full[s:e].astype(np.float32, copy=False)),
-            "contact_target": torch.from_numpy(contact_seq[s:e].astype(np.float32, copy=False)),
-            "period_hint": torch.from_numpy(period[s:e].astype(np.float32, copy=False)),
-            "angvel_target": torch.from_numpy(ang_norm[s:e].astype(np.float32, copy=False)),
-            "angvel_target_raw": torch.from_numpy(ang[s:e].astype(np.float32, copy=False)),
-            "pose_target": torch.from_numpy(pose_target_norm[s:e].astype(np.float32, copy=False)),
-            "pose_target_raw": torch.from_numpy(pose_target_raw[s:e].astype(np.float32, copy=False)),
+            "inputs": torch.from_numpy(_take(inputs_full).astype(np.float32, copy=False)),
+            "contact_target": torch.from_numpy(_take(contact_seq).astype(np.float32, copy=False)),
+            "period_hint": torch.from_numpy(_take(period).astype(np.float32, copy=False)),
+            "angvel_target": torch.from_numpy(_take(ang_norm).astype(np.float32, copy=False)),
+            "angvel_target_raw": torch.from_numpy(_take(ang).astype(np.float32, copy=False)),
+            "pose_target": torch.from_numpy(_take(pose_target_norm).astype(np.float32, copy=False)),
+            "pose_target_raw": torch.from_numpy(_take(pose_target_raw).astype(np.float32, copy=False)),
         }
         return sample
 
@@ -576,7 +592,7 @@ def _split_sample(sample):
 
 # ---------------------------- Model ----------------------------
 class StepHead(nn.Module):
-    def __init__(self, hidden_dim, K, bidirectional=False):
+    def __init__(self, hidden_dim, K):
         super().__init__()
         self.fc = nn.Linear(hidden_dim, K)
     def forward(self, h):
@@ -588,15 +604,6 @@ class AuxHead(nn.Module):
         self.fc = nn.Linear(z_dim, K)
     def forward(self, z):
         return self.fc(z)                 # [B, K]
-
-class PeriodHead(nn.Module):
-    def __init__(self, hidden_dim, out_dim, bidirectional=False):
-        super().__init__()
-        self.fc = nn.Linear(hidden_dim, out_dim)
-    def forward(self, h):
-        return self.fc(h)                 # [B, T, out_dim]
-
-
 
 def compute_pos_weight(tgt_btK: torch.Tensor, eps: float=1e-6) -> torch.Tensor:
     p = tgt_btK.mean(dim=(0,1))  # [K]
@@ -751,7 +758,7 @@ def run_linear_next_angvel_probe(encoder, dl, device, J: int, norm_obj, *,
                 ang_raw = batch["angvel_target_raw"].to(device).float()
             else:
                 ang_raw = torch.from_numpy(
-                    norm_obj.inverse_transform(ang_norm.cpu().numpy().reshape(-1, J * 3))
+                    norm_obj.inverse(ang_norm.cpu().numpy().reshape(-1, J * 3))
                 ).to(device).view(ang_norm.size(0), ang_norm.size(1), J * 3)
 
             if inputs.size(1) < 2:
@@ -828,7 +835,7 @@ def train_linear_next_probe_all(encoder, dl, device, J: int, norm_obj, *, epochs
                 ang_raw = batch["angvel_target_raw"].to(device).float()
             else:
                 ang_raw = torch.from_numpy(
-                    norm_obj.inverse_transform(ang_norm.cpu().numpy().reshape(-1, J * 3))
+                    norm_obj.inverse(ang_norm.cpu().numpy().reshape(-1, J * 3))
                 ).to(device).view(ang_norm.size(0), ang_norm.size(1), J * 3)
 
             if inputs.size(1) < 2:
@@ -881,7 +888,7 @@ def rollout_autoreg_probe(encoder, probe, ds, device, J: int, norm_obj, *, warmu
         if Tw <= 2:
             continue
         # 将 GT norm → raw，便于对比
-        Yraw = norm_obj.inverse_transform(Yin_norm.numpy())  # [Tw, 3J]
+        Yraw = norm_obj.inverse(Yin_norm.numpy())  # [Tw, 3J]
 
         # 实际使用的 warmup/horizon（防越界）
         W = min(warmup, Tw - 2)
@@ -1067,7 +1074,7 @@ def motion_cues_diagnostics(encoder, head_step, ds, device):
       - Soft-AUC : 速度 score 区分 off/on 的加权 AUC（阈值无关）
       - Sway     : s(t)=pL-pR 与骨盆角速度互相关峰值与滞后
       - 主频匹配  : s(t) 与骨盆角速度主频相对差
-    依赖已有工具函数：_load_joint_names_*、_find_joint_index、_xcorr_max、ds.norm.inverse_transform
+    依赖已有工具函数：_load_joint_names_*、_find_joint_index、_xcorr_max、ds.norm.inverse
     """
     import numpy as np, torch
 
@@ -1160,7 +1167,7 @@ def motion_cues_diagnostics(encoder, head_step, ds, device):
             logits = head_step(h)              # [1,T,2]
             probs  = torch.sigmoid(logits)[0].cpu().numpy()  # [T,2]
 
-        Yraw = ds.norm.inverse_transform(Yin_norm.numpy())   # [T,3J]
+        Yraw = ds.norm.inverse(Yin_norm.numpy())   # [T,3J]
         W = Yraw.reshape(T, J, 3)
         Wmag = np.linalg.norm(W, axis=-1)     # [T,J]
 
@@ -1327,7 +1334,7 @@ def motion_cues_diagnostics(encoder, head_step, ds, device):
             probs  = torch.sigmoid(logits)[0].cpu().numpy()  # [T,2]
 
         # 还原原始角速度
-        Yraw = ds.norm.inverse_transform(Yin_norm.numpy())   # [T,3J]
+        Yraw = ds.norm.inverse(Yin_norm.numpy())   # [T,3J]
         W = Yraw.reshape(T, J, 3)
         # 防 NaN
         if not np.isfinite(W).all():
@@ -1426,7 +1433,7 @@ def motion_cues_diagnostics(encoder, head_step, ds, device):
 
 def diag_norm_roundtrip(ds, n_samples: int = 2):
     """
-    从 ds 里取若干窗口：Y(norm) → inverse_transform → transform，检查误差
+    从 ds 里取若干窗口：Y(norm) → inverse → transform，检查误差
     """
     import numpy as np
     ok = True
@@ -1439,7 +1446,7 @@ def diag_norm_roundtrip(ds, n_samples: int = 2):
             Yin_np = ang_norm.detach().cpu().numpy()
         else:
             Yin_np = np.asarray(ang_norm, dtype=np.float32)
-        Yin_inv = ds.norm.inverse_transform(Yin_np)    # 回到原始角速度
+        Yin_inv = ds.norm.inverse(Yin_np)    # 回到原始角速度
         Yin_rt  = ds.norm.transform(Yin_inv)           # 再变换回来
         err = np.abs(Yin_rt - Yin_np)
         print(f"[Diag-Norm] roundtrip_err: mean={err.mean():.4g} | p99={np.percentile(err,99):.4g} | max={err.max():.4g}")
@@ -1685,10 +1692,6 @@ def main():
                     help="幅度损失暖启动的 epoch 数；>0 时线性放大到 1。")
     ap.add_argument("--amp_share_encoder", action="store_true",
                     help="让幅度/周期/接触共享同一编码器（默认为 False，即幅度支路使用独立编码器）。")
-    ap.add_argument("--amp_linear_equiv", dest="amp_linear_equiv", action="store_true", default=True,
-                    help="在幅度等变训练时使用线性归一化（不再重新施加 tanh），让缩放扰动更易被感知（默认开启）。")
-    ap.add_argument("--amp_linear_equiv_off", dest="amp_linear_equiv", action="store_false",
-                    help="关闭幅度等变线性归一化，恢复旧的 tanh 归一化。")
     ap.add_argument("--resume", type=str, default=None,
                     help="从此前保存的 motion_encoder *.pt 中恢复权重（仅加载模型参数，不恢复优化器）。")
     ap.add_argument("--out_best", type=str, default=None,
@@ -1699,7 +1702,6 @@ def main():
                     help="允许在解码器输入中消费幅度标量（默认关闭，仅调试）。")
     ap.add_argument("--decode_film_amp", action="store_true",
                     help="若 decode_use_amp，则使用 (1+amp) 的 FiLM 缩放 soft_period。")
-    ap.add_argument("--bidirectional", action="store_true")
     ap.add_argument("--mixed_precision", action="store_true",
                     help="在 CUDA 上启用 torch.cuda.amp，减少显存/加速（需 GPU 支持）")
     ap.add_argument("--require_zscore", action="store_true",
@@ -1711,8 +1713,6 @@ def main():
                     help="训练过程中每隔多少 step 打印一次 batch 级别的快速统计（0 关闭）")
     ap.add_argument("--seed", type=int, default=2024,
                     help="随机种子（影响分割、采样、DataLoader shuffle）")
-    ap.add_argument("--run_legacy_diag", action="store_true",
-                    help="训练结束后额外运行旧版诊断流程（依赖隐式输入形态，默认关闭）")
 
     ap.add_argument('--p_event', type=float, default=0.30,
                         help='事件窗采样占比（0=纯均匀，1=全事件），建议 0.30')
@@ -1722,6 +1722,14 @@ def main():
                         help='事件间最小间隔（去抖）')
     ap.add_argument('--event_pre', type=int, default=-1,
                         help='事件窗起点相对事件帧的偏移（通常 -1）')
+    ap.add_argument(
+        "--short_policy",
+        type=str,
+        default="skip",
+        choices=["skip", "wrap", "pad_last"],
+        help="当 clip 的有效长度 (T-1) < T_w 时的处理策略："
+             "skip=丢弃短片段；wrap=时间维循环取窗；pad_last=重复尾帧补齐到 T_w。",
+    )
 
     args = ap.parse_args()
 
@@ -1748,6 +1756,7 @@ def main():
         event_thresh=args.event_thresh,
         event_min_gap=args.event_min_gap,
         event_pre=args.event_pre,
+        short_policy=args.short_policy,
     )
     print(f"[ds] N={len(base_ds)} clips | J={base_ds.J} | input_dim={base_ds.input_dim} | pose_dim={base_ds.pose_target_dim} | K={args.K} | tpl={base_ds.tpl_path}")
     ds = base_ds  # 兼容后续诊断流程沿用原变量名
@@ -1792,7 +1801,6 @@ def main():
         z_dim=args.z_dim,
         num_layers=args.encoder_layers,
         dropout=args.encoder_dropout,
-        bidirectional=args.bidirectional,
     ).to(device)
     if args.amp_share_encoder:
         enc_amp = enc
@@ -1803,10 +1811,9 @@ def main():
             z_dim=args.z_dim,
             num_layers=args.encoder_layers,
             dropout=args.encoder_dropout,
-            bidirectional=args.bidirectional,
         ).to(device)
-    contact_head = StepHead(args.hidden_dim, args.K, bidirectional=args.bidirectional).to(device)
-    period_head = PeriodHead(args.hidden_dim, period_latent_dim, bidirectional=args.bidirectional).to(device)
+    contact_head = StepHead(args.hidden_dim, args.K).to(device)
+    period_head = PeriodHead(args.hidden_dim, period_latent_dim).to(device)
     amp_head = nn.Linear(args.hidden_dim, 1).to(device)
 
     dec_hidden = max(args.hidden_dim // 2, period_latent_dim)
@@ -1892,7 +1899,7 @@ def main():
         period_include_ang_sign=args.period_use_ang_sign,
         period_use_ang_features=bool(args.w_period_inv > 0),
         angnorm=train_ds.norm,
-        amp_linear=args.amp_linear_equiv,
+        amp_linear=True,
     )
     eps = 1e-6
     scale_min = float(args.amp_scale_min)
@@ -1906,13 +1913,12 @@ def main():
                 "period_dim": period_latent_dim,
                 "period_hint_mode": "contacts_tanh",
                 "period_hint_dim": 2,
-                "bidirectional": bool(args.bidirectional),
                 "hidden_dim": args.hidden_dim,
                 "z_dim": args.z_dim,
                 "mlp_layers": args.encoder_layers,
                 "mlp_dropout": args.encoder_dropout,
                 "amp_share_encoder": bool(args.amp_share_encoder),
-                "amp_linear_equiv": bool(args.amp_linear_equiv),
+                "amp_linear_equiv": True,
         }
         extra_meta = getattr(train_ds, "dataset_meta", None)
         if isinstance(extra_meta, dict) and extra_meta:
@@ -2048,7 +2054,7 @@ def main():
             amp_inputs = projectors.amp(
                 inputs,
                 shuffle_time=False,
-                isolate_for_equiv=args.amp_linear_equiv,
+                isolate_for_equiv=True,
             )
             amp_cpu_state, amp_cuda_state = _capture_rng_states()
             with autocast_ctx:
@@ -2100,7 +2106,7 @@ def main():
                     inputs,
                     scales=scales,
                     shuffle_time=False,
-                    isolate_for_equiv=args.amp_linear_equiv,
+                    isolate_for_equiv=True,
                 )
                 _restore_rng_states(amp_cpu_state, amp_cuda_state)
                 with autocast_ctx:
@@ -2236,7 +2242,7 @@ def main():
     decoder_ang.eval()
 
     torch.save(_gather_state(), args.out)
-    print(f"[OK] Saved MotionEncoder bundle -> {args.out} (D_in={in_dim}, period_dim={period_latent_dim}, bi={args.bidirectional})")
+    print(f"[OK] Saved MotionEncoder bundle -> {args.out} (D_in={in_dim}, period_dim={period_latent_dim})")
 
     # === 评估并打印汇总指标（无梯度） ===
     prev_train_flag = getattr(ds, "is_train", True)
@@ -2271,27 +2277,10 @@ def main():
         amp_pairs=amp_pairs,
         scale_min=scale_min,
         scale_max=scale_max,
-        legacy_diag=args.run_legacy_diag,
         projectors=projectors,
         decode_use_amp=args.decode_use_amp,
         decode_film_amp=args.decode_film_amp,
     )
-
-    if args.run_legacy_diag:
-        try:
-            diag_norm_roundtrip(ds, n_samples=3)
-            probe, _ = train_linear_next_probe_all(
-                encoder=enc, dl=dl, device=device, J=ds.J, norm_obj=ds.norm,
-                epochs=3, lr=1e-3, max_batches=200
-            )
-            rollout_autoreg_probe(
-                encoder=enc, probe=probe, ds=ds, device=device, J=ds.J, norm_obj=ds.norm,
-                warmup=min(20, args.T_w//2), horizon=min(20, max(1, args.T_w//3)), nseq=3
-            )
-            motion_cues_diagnostics(encoder=enc, head_step=contact_head, ds=ds, device=device)
-            run_probes_and_motion_diag(enc, contact_head, ds, device)
-        except Exception as diag_err:
-            print(f"[diag] skipped due to: {diag_err}")
 
     ds.is_train = prev_train_flag
     ds.yaw_aug_deg = prev_yaw_aug
@@ -2315,7 +2304,6 @@ def _run_pretrain_eval_report(
     amp_pairs: int,
     scale_min: float,
     scale_max: float,
-    legacy_diag: bool,
     projectors: InputProjectors,
     decode_use_amp: bool,
     decode_film_amp: bool,
@@ -2475,7 +2463,7 @@ def _run_pretrain_eval_report(
         period_drifts.append(torch.mean(torch.abs(soft_period_scaled - soft_period)).item())
 
         if norm_obj is not None:
-            ang_pred_raw_np = norm_obj.inverse_transform(ang_pred_norm.detach().cpu().numpy().reshape(-1, ang_pred_norm.shape[-1]))
+            ang_pred_raw_np = norm_obj.inverse(ang_pred_norm.detach().cpu().numpy().reshape(-1, ang_pred_norm.shape[-1]))
             ang_pred_raw = torch.from_numpy(ang_pred_raw_np).to(device).view_as(ang_raw)
             totals["ang_raw_mae"] += torch.abs(ang_pred_raw - ang_raw).sum().item()
             totals["ang_raw_elem"] += float(ang_raw.numel())
@@ -2483,7 +2471,7 @@ def _run_pretrain_eval_report(
         if pose_norm_obj is not None and "pose_target_raw" in batch:
             pose_target_raw = batch["pose_target_raw"].to(device).float()
             pose_pred_np = pose_pred.detach().cpu().numpy().reshape(-1, pose_pred.shape[-1])
-            pose_pred_raw_np = pose_norm_obj.inverse_transform(pose_pred_np)
+            pose_pred_raw_np = pose_norm_obj.inverse(pose_pred_np)
             pose_pred_raw = torch.from_numpy(pose_pred_raw_np).to(device).view_as(pose_target_raw)
             totals["pose_raw_mae"] += torch.abs(pose_pred_raw - pose_target_raw).sum().item()
             totals["pose_raw_elem"] += float(pose_target_raw.numel())
@@ -2533,11 +2521,6 @@ def _run_pretrain_eval_report(
             period_rms,
         )
     )
-    if legacy_diag and totals.get("pose_raw_elem", 0.0) > 0:
-        print("[Eval] pose_raw_mae={:.4f}".format(_safe_ratio(totals["pose_raw_mae"], totals["pose_raw_elem"])))
-    if legacy_diag and totals.get("ang_raw_elem", 0.0) > 0:
-        print("[Eval] ang_raw_mae={:.4f}".format(_safe_ratio(totals["ang_raw_mae"], totals["ang_raw_elem"])))
-
     if amp_pred_list:
         amp_pred_all = np.concatenate([arr.reshape(-1) for arr in amp_pred_list], axis=0)
         amp_target_all = np.concatenate([arr.reshape(-1) for arr in amp_target_list], axis=0)
@@ -2620,7 +2603,7 @@ def probe_contact_decode_from_latent(encoder, ds, device, *, left_idxs, right_id
     J = ds.J
     for i in range(nseq):
         Yin_norm, tgt, period = _split_sample(ds[i])
-        Yraw = ds.norm.inverse_transform(Yin_norm.numpy())
+        Yraw = ds.norm.inverse(Yin_norm.numpy())
         Wmag = np.linalg.norm(Yraw.reshape(-1, J, 3), axis=-1)
         def _agg(idx_list):
             idxs = [k for k in idx_list if k >= 0]
@@ -2684,7 +2667,7 @@ def probe_speed_nextstep_gain_from_latent(encoder, ds, device, *, left_idxs, rig
             h = h_seq[0]  # [T,H]
         if H is None: H = h.shape[-1]
 
-        Yraw = ds.norm.inverse_transform(Yin_norm.numpy())
+        Yraw = ds.norm.inverse(Yin_norm.numpy())
         Wmag = np.linalg.norm(Yraw.reshape(T, J, 3), axis=-1)
         sL = _agg_speed(Wmag, left_idxs); sR = _agg_speed(Wmag, right_idxs)
         spd = np.nanmean(np.stack([sL, sR], 1), 1)

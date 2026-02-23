@@ -127,6 +127,66 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--direct_pose_meas_force_zero",
+        action="store_true",
+        help="Ablation: force direct head to ignore contacts_meas (concat->zeros, mode_select->uniform).",
+    )
+    parser.add_argument(
+        "--angvel_source",
+        type=str,
+        default="state",
+        choices=("state", "seq"),
+        help=(
+            "Which angvel signal to feed into the model. "
+            "'state' uses angvel from the X-state slice (Trainer.use_freerun_state_sync=True). "
+            "'seq' uses the precomputed angvel_norm from the dataset (enables --angvel_ablation)."
+        ),
+    )
+    parser.add_argument(
+        "--pose_hist_source",
+        type=str,
+        default="buffer",
+        choices=("buffer", "seq"),
+        help=(
+            "Which pose_hist signal to feed into the model. "
+            "'buffer' uses Trainer's internal rolling history (built from y_raw each step; matches deployment). "
+            "'seq' uses the precomputed pose_hist_norm from the dataset (lets you ablate/sweep history blocks)."
+        ),
+    )
+    parser.add_argument(
+        "--pose_hist_ablation",
+        type=str,
+        default="none",
+        choices=("none", "zero", "keep_last", "replicate_last", "replicate_oldest"),
+        help=(
+            "Ablation on pose_hist input (per-step, before passing into the model). "
+            "'keep_last' keeps only the most recent history block (zeros older ones). "
+            "'replicate_*' copies one block into all blocks to keep scale similar."
+        ),
+    )
+    parser.add_argument(
+        "--pose_hist_keep_last",
+        type=int,
+        default=1,
+        help="When --pose_hist_ablation=keep_last, keep the last K history blocks (K in [1, pose_hist_len]).",
+    )
+    parser.add_argument(
+        "--pose_hist_time_shift",
+        type=int,
+        default=0,
+        help=(
+            "Time-shift pose_hist along the sequence axis before rollout. "
+            "Positive = use earlier frames (delay input), Negative = use later frames (lookahead)."
+        ),
+    )
+    parser.add_argument(
+        "--angvel_ablation",
+        type=str,
+        default="none",
+        choices=("none", "zero"),
+        help="Ablation on angvel input (per-step, before passing into the model).",
+    )
+    parser.add_argument(
         "--with-denorm",
         action="store_true",
         help="Include denormalized predictions (rot6d raw) in the output JSON.",
@@ -222,6 +282,68 @@ def _min_length(*arrays: Optional[np.ndarray]) -> int:
     return min(lengths)
 
 
+def _shift_time_axis(x: np.ndarray, shift: int) -> np.ndarray:
+    """Shift along time axis with edge padding. new[t] = old[clip(t - shift)]."""
+    if x is None or not isinstance(x, np.ndarray):
+        return x
+    shift = int(shift)
+    if shift == 0:
+        return x
+    T = int(x.shape[0])
+    if T <= 0:
+        return x
+    idx = np.arange(T, dtype=np.int64) - shift
+    idx = np.clip(idx, 0, T - 1)
+    return x[idx]
+
+
+def _ablate_pose_hist(
+    pose_hist: np.ndarray,
+    *,
+    pose_hist_len: int,
+    mode: str,
+    keep_last: int,
+) -> np.ndarray:
+    """Ablate flattened pose_hist = [older ... newer] blocks per timestep."""
+    if pose_hist is None or not isinstance(pose_hist, np.ndarray):
+        return pose_hist
+    if pose_hist.size == 0:
+        return pose_hist
+    mode = str(mode or "none").lower().strip()
+    if mode in ("none", ""):
+        return pose_hist
+    if mode == "zero":
+        return np.zeros_like(pose_hist)
+
+    L = int(pose_hist_len)
+    if L <= 0:
+        return pose_hist
+    D = int(pose_hist.shape[1])
+    if D % L != 0:
+        return pose_hist
+    pose_dim = D // L
+    hist = pose_hist.reshape(pose_hist.shape[0], L, pose_dim).copy()
+
+    if mode == "keep_last":
+        k = int(keep_last)
+        k = max(1, min(L, k))
+        if L - k > 0:
+            hist[:, : L - k, :] = 0.0
+        return hist.reshape(pose_hist.shape[0], D)
+
+    if mode == "replicate_last":
+        src = hist[:, -1:, :].copy()
+        hist[:, :, :] = src
+        return hist.reshape(pose_hist.shape[0], D)
+
+    if mode == "replicate_oldest":
+        src = hist[:, :1, :].copy()
+        hist[:, :, :] = src
+        return hist.reshape(pose_hist.shape[0], D)
+
+    return pose_hist
+
+
 class TeacherRolloutRunner:
     def __init__(self, args: argparse.Namespace):
         self.args = args
@@ -248,7 +370,11 @@ class TeacherRolloutRunner:
             self.state_dict = {}
             skipped = 0
             for k, v in raw_state.items():
-                if str(k).startswith("frozen_encoder.") or str(k).startswith("frozen_period_head."):
+                if (
+                    str(k).startswith("frozen_encoder.")
+                    or str(k).startswith("frozen_period_head.")
+                    or str(k).startswith("contact_plan_input_proj.")
+                ):
                     skipped += 1
                     continue
                 self.state_dict[k] = v
@@ -364,17 +490,6 @@ class TeacherRolloutRunner:
                 contact_plan_time_pe_dim = int(w_time.shape[1])
         except Exception:
             contact_plan_time_pe_dim = 0
-        contact_plan_head_mode = "sigmoid"
-        try:
-            w_head = self.state_dict.get("contact_plan_head.4.weight", None)
-            if torch.is_tensor(w_head) and w_head.ndim == 2:
-                out_dim = int(w_head.shape[0])
-                if out_dim == 4 and int(self.contact_dim or 0) == 2:
-                    raise SystemExit("[FATAL] joint4 contact_plan_head_mode is no longer supported.")
-        except SystemExit:
-            raise
-        except Exception:
-            pass
 
         # Infer obs-conditioned contact plan init head (plan_z0 = init_z + init_head(obs0)).
         contact_plan_init_mode = "learnable"
@@ -407,29 +522,41 @@ class TeacherRolloutRunner:
         except Exception:
             contact_plan_inject = "none"
 
+        # ---- Infer contact phase state (prev_phase_vec) ----
+        phase_state_enable = False
+        phase_state_hidden = 64
+        try:
+            phase_state_enable = any(
+                k == "contact_phase_state_init"
+                or k.startswith("contact_phase_state_delta_head.")
+                for k in self.state_dict.keys()
+            )
+            w_h = self.state_dict.get("contact_phase_state_delta_head.1.weight", None)
+            if torch.is_tensor(w_h) and w_h.ndim == 2 and int(w_h.shape[0]) > 0:
+                phase_state_hidden = int(w_h.shape[0])
+            w_out = self.state_dict.get("contact_phase_state_delta_head.3.weight", None)
+            if torch.is_tensor(w_out) and w_out.ndim == 2 and int(w_out.shape[1]) > 0:
+                phase_state_hidden = int(w_out.shape[1])
+        except Exception:
+            phase_state_enable = False
+            phase_state_hidden = 64
+
         contact_meas_enable = any(str(k).startswith("contact_meas_head.") for k in self.state_dict.keys())
         contact_meas_hidden = 64
-        meas_in_features = None
-        try:
-            w1 = self.state_dict.get("contact_meas_head.1.weight", None)
-            if torch.is_tensor(w1) and w1.ndim == 2:
-                contact_meas_hidden = int(w1.shape[0])
-                meas_in_features = int(w1.shape[1])
-        except Exception:
-            pass
-        use_pose_hist = True
-        use_angvel = True
-        if meas_in_features is not None:
-            if meas_in_features == int(self.pose_hist_dim or 0) and int(self.pose_hist_dim or 0) > 0:
-                use_pose_hist, use_angvel = True, False
-            elif meas_in_features == int(self.angvel_dim or 0) and int(self.angvel_dim or 0) > 0:
-                use_pose_hist, use_angvel = False, True
-            elif meas_in_features == int((self.pose_hist_dim or 0) + (self.angvel_dim or 0)) and int((self.pose_hist_dim or 0) + (self.angvel_dim or 0)) > 0:
-                use_pose_hist, use_angvel = True, True
+        if contact_meas_enable:
+            w0 = self.state_dict.get("contact_meas_head.mlp.0.weight", None)
+            if not (torch.is_tensor(w0) and w0.ndim == 2):
+                raise SystemExit(
+                    "[FATAL] This repo now only supports contact_meas_head v1 (lowerbody_nohist_v1). "
+                    "The provided checkpoint seems to contain a legacy contact_meas_head; please retrain."
+                )
+            contact_meas_hidden = int(w0.shape[0])
 
         direct_pose_enable = False
         direct_pose_hidden = 256
-        direct_pose_meas_mode = "none"
+        direct_pose_meas_mode = "concat"
+        direct_pose_feat_source = "cond"
+        direct_pose_time_pe_dim = 0
         try:
             direct_has_weights = any(str(k).startswith("direct_pose_head.") for k in self.state_dict.keys())
             if direct_has_weights and int(Dy) > 0 and int(Dc) > 0 and int(self.contact_dim or 0) > 0:
@@ -439,21 +566,49 @@ class TeacherRolloutRunner:
                     in_dim = int(w_in.shape[1])
                     hid = int(w_in.shape[0])
                     out_dim = int(w_out.shape[0])
-                    expected_in = int(Dc) + int(self.contact_dim or 0)
-                    expected_in_concat = int(Dc) + int(self.contact_dim or 0) * 2
                     expected_out = int(Dy)
                     expected_out_modes = int(Dy) * 2
-                    if hid > 0 and out_dim in (expected_out, expected_out_modes) and in_dim in (expected_in, expected_in_concat):
-                        direct_pose_enable = True
-                        direct_pose_hidden = hid
-                        if in_dim == expected_in_concat and out_dim == expected_out:
-                            direct_pose_meas_mode = "concat"
-                        elif in_dim == expected_in and out_dim == expected_out_modes:
-                            direct_pose_meas_mode = "mode_select"
-                        else:
-                            direct_pose_meas_mode = "none"
+                    base_candidates = [
+                        (int(Dc), "cond"),
+                        (int(self.width), "hidden"),
+                        (int(Dc + self.width), "cond+hidden"),
+                    ]
+                    Cc = int(self.contact_dim or 0)
+
+                    if out_dim == expected_out:
+                        for base_dim, src in base_candidates:
+                            tdim = int(in_dim - base_dim - (2 * Cc))
+                            if tdim >= 0 and tdim % 2 == 0:
+                                direct_pose_enable = True
+                                direct_pose_hidden = hid
+                                direct_pose_meas_mode = "concat"
+                                direct_pose_feat_source = src
+                                direct_pose_time_pe_dim = int(tdim)
+                                break
+                    elif out_dim == expected_out_modes:
+                        for base_dim, src in base_candidates:
+                            tdim = int(in_dim - base_dim - Cc)
+                            if tdim >= 0 and tdim % 2 == 0:
+                                direct_pose_enable = True
+                                direct_pose_hidden = hid
+                                direct_pose_meas_mode = "mode_select"
+                                direct_pose_feat_source = src
+                                direct_pose_time_pe_dim = int(tdim)
+                                break
+                    else:
+                        raise SystemExit(
+                            f"[FATAL] Unrecognized direct_pose_head out_dim={out_dim} (expected {expected_out} or {expected_out_modes})."
+                        )
+
+                    if not direct_pose_enable:
+                        raise SystemExit(
+                            f"[FATAL] Unrecognized direct_pose_head shape: in_dim={in_dim} out_dim={out_dim} "
+                            f"(cond_dim={Dc}, hidden_dim={self.width}, contact_dim={self.contact_dim})."
+                        )
         except Exception:
             direct_pose_enable = False
+            direct_pose_feat_source = "cond"
+            direct_pose_time_pe_dim = 0
 
         model = EventMotionModel(
             in_state_dim=Dx,
@@ -468,6 +623,7 @@ class TeacherRolloutRunner:
             contact_dim=self.contact_dim,
             angvel_dim=self.angvel_dim,
             pose_hist_dim=self.pose_hist_dim,
+            state_layout=getattr(ds, "state_layout", None),
             bone_names=getattr(ds, "bone_names", None),
             output_layout=getattr(ds, "output_layout", None),
             contact_plan_enable=bool(contact_plan_enable or contact_plan_inject != "none" or direct_pose_enable),
@@ -475,11 +631,19 @@ class TeacherRolloutRunner:
             contact_plan_dropout=0.0,
             contact_plan_inject=str(contact_plan_inject),
             contact_plan_inject_detach=True,
-            contact_plan_head_mode=str(contact_plan_head_mode),
             contact_plan_time_pe_dim=int(contact_plan_time_pe_dim),
             contact_plan_init_mode=str(contact_plan_init_mode),
             contact_plan_init_hidden=int(contact_plan_init_hidden),
             contact_plan_init_dropout=0.0,
+            contact_phase_state_enable=bool(phase_state_enable),
+            contact_phase_state_init_mode="obs",
+            contact_phase_state_hidden=int(phase_state_hidden),
+            contact_phase_state_delta_max=0.5,
+            contact_phase_state_delta_init=(6.283185307179586 / 80.0),
+            contact_phase_state_event_kind="touchdown",
+            contact_phase_state_event_thr=0.5,
+            contact_phase_state_event_hyst=0.0,
+            contact_phase_state_event_min_interval=0,
             direct_pose_enable=bool(direct_pose_enable),
             direct_pose_hidden=int(direct_pose_hidden),
             direct_pose_dropout=0.0,
@@ -488,18 +652,18 @@ class TeacherRolloutRunner:
             direct_pose_meas_drop_prob=0.0,
             direct_pose_meas_noise_std=0.0,
             direct_pose_plan_drop_prob=0.0,
+            direct_pose_feat_source=str(direct_pose_feat_source),
+            direct_pose_time_pe_dim=int(direct_pose_time_pe_dim),
             contact_meas_enable=bool(contact_meas_enable),
             contact_meas_hidden=int(contact_meas_hidden),
             contact_meas_dropout=0.0,
-            contact_meas_use_pose_hist=bool(use_pose_hist),
-            contact_meas_use_angvel=bool(use_angvel),
-            # If a learned meas head exists, don't override it with external contacts/whitebox.
-            contacts_as_meas_override=bool(contact_plan_enable or contact_plan_inject != "none" or direct_pose_enable) and (not bool(contact_meas_enable)),
         ).to(self.device)
         validate_and_fix_model_(model, Dx, Dc)
         missing, unexpected = model.load_state_dict(self.state_dict, strict=False)
         if missing or unexpected:
             print(f"[TeacherRollout][WARN] state_dict mismatch: missing={missing}, unexpected={unexpected}")
+        if bool(getattr(self.args, "direct_pose_meas_force_zero", False)):
+            setattr(model, "direct_pose_meas_force_zero", True)
         # Attach frozen motion encoder bundle if提供
         if self.encoder_bundle_path and self.encoder_bundle_path.is_file():
             model.attach_motion_encoder(torch.load(str(self.encoder_bundle_path), map_location="cpu"))
@@ -585,43 +749,91 @@ class TeacherRolloutRunner:
         inputs = session.get_inputs()
         if not inputs:
             raise SystemExit("[FATAL] ONNX model has no inputs.")
-        canonical = ["state", "cond", "contact", "ang", "pose"]
-        mapping: dict[str, str] = {}
+        # Expected signature from `export_onnx_step_stateful_nophase`:
+        #   state, cond, contacts, angvel, pose_hist, (optional) plan_z, (optional) phase_z,
+        #   (optional) td_hazard_acc
+        ort_input_map: dict[str, str] = {}
         for inp in inputs:
             name_l = inp.name.lower()
-            for key in canonical:
-                if key not in mapping and key in name_l:
-                    mapping[key] = inp.name
-                    break
-        # 若基于名字匹配不完整，则回退到按顺序分配至少 state/cond
-        ordered = [inp.name for inp in inputs]
-        if "state" not in mapping and ordered:
-            mapping["state"] = ordered[0]
-        if "cond" not in mapping and len(ordered) > 1:
-            mapping["cond"] = ordered[1]
+            if "state" in name_l and "state" not in ort_input_map:
+                ort_input_map["state"] = inp.name
+            elif "cond" in name_l and "cond" not in ort_input_map:
+                ort_input_map["cond"] = inp.name
+            elif "contact" in name_l and "contacts" not in ort_input_map:
+                ort_input_map["contacts"] = inp.name
+            elif ("angvel" in name_l or "ang" in name_l) and "angvel" not in ort_input_map:
+                ort_input_map["angvel"] = inp.name
+            elif "pose" in name_l and "pose_hist" not in ort_input_map:
+                ort_input_map["pose_hist"] = inp.name
+            elif "plan" in name_l and "plan_z" not in ort_input_map:
+                ort_input_map["plan_z"] = inp.name
+            elif "phase" in name_l and "phase_z" not in ort_input_map:
+                ort_input_map["phase_z"] = inp.name
+            elif ("hazard" in name_l or "td_hazard" in name_l) and "td_hazard_acc" not in ort_input_map:
+                # Exported only when phase_reset_source=td_hazard; keep optional for backward compat.
+                ort_input_map["td_hazard_acc"] = inp.name
 
-        # 仅为实际存在的 canonical 键构建输入映射，兼容旧 ONNX（仅 state/cond）和新 ONNX（5 输入）
-        ort_input_map: dict[str, str] = {}
-        if "state" in mapping:
-            ort_input_map["state"] = mapping["state"]
-        if "cond" in mapping:
-            ort_input_map["cond"] = mapping["cond"]
-        if "contact" in mapping:
-            ort_input_map["contacts"] = mapping["contact"]
-        if "ang" in mapping:
-            ort_input_map["angvel"] = mapping["ang"]
-        if "pose" in mapping:
-            ort_input_map["pose_hist"] = mapping["pose"]
-
-        # 至少必须有 state；其余输入视为可选
-        if "state" not in ort_input_map:
-            raise SystemExit("[FATAL] Unable to identify 'state' input in ONNX model.")
-
+        required = ("state", "cond", "contacts", "angvel", "pose_hist")
+        missing = [k for k in required if k not in ort_input_map]
+        if missing:
+            available = ", ".join([i.name for i in inputs])
+            raise SystemExit(f"[FATAL] ONNX missing inputs {missing}. Available: {available}")
         self.ort_input_map = ort_input_map
+
+        # Best-effort plan_z dim inference (needed to keep plan state across steps).
+        self.ort_plan_dim = None
+        if "plan_z" in ort_input_map:
+            inp_obj = next((i for i in inputs if i.name == ort_input_map["plan_z"]), None)
+            if inp_obj is not None and getattr(inp_obj, "shape", None):
+                try:
+                    last = inp_obj.shape[-1]
+                    if isinstance(last, int) and last > 0:
+                        self.ort_plan_dim = int(last)
+                except Exception:
+                    self.ort_plan_dim = None
+        # Best-effort phase_z dim inference (needed to keep phase state across steps).
+        self.ort_phase_dim = None
+        if "phase_z" in ort_input_map:
+            inp_obj = next((i for i in inputs if i.name == ort_input_map["phase_z"]), None)
+            if inp_obj is not None and getattr(inp_obj, "shape", None):
+                try:
+                    last = inp_obj.shape[-1]
+                    if isinstance(last, int) and last > 0:
+                        self.ort_phase_dim = int(last)
+                except Exception:
+                    self.ort_phase_dim = None
+        # Best-effort td_hazard_acc dim inference (exported only when phase_reset_source=td_hazard).
+        self.ort_td_hazard_acc_dim = None
+        if "td_hazard_acc" in ort_input_map:
+            inp_obj = next((i for i in inputs if i.name == ort_input_map["td_hazard_acc"]), None)
+            if inp_obj is not None and getattr(inp_obj, "shape", None):
+                try:
+                    last = inp_obj.shape[-1]
+                    if isinstance(last, int) and last > 0:
+                        self.ort_td_hazard_acc_dim = int(last)
+                except Exception:
+                    self.ort_td_hazard_acc_dim = None
         outputs = session.get_outputs()
         if not outputs:
             raise SystemExit("[FATAL] ONNX model has no outputs.")
-        self.ort_output_name = outputs[0].name
+        out_motion = None
+        out_plan = None
+        out_phase = None
+        out_td_hazard_acc = None
+        for out in outputs:
+            name_l = out.name.lower()
+            if out_motion is None and ("motion" in name_l or "pred" in name_l):
+                out_motion = out.name
+            if out_plan is None and ("plan_z" in name_l or (("plan" in name_l) and ("phase" not in name_l))):
+                out_plan = out.name
+            if out_phase is None and ("phase_z" in name_l or ("phase" in name_l and "z_next" in name_l)):
+                out_phase = out.name
+            if out_td_hazard_acc is None and ("td_hazard_acc" in name_l or "hazard_acc" in name_l):
+                out_td_hazard_acc = out.name
+        self.ort_output_name = out_motion or outputs[0].name
+        self.ort_plan_output_name = out_plan
+        self.ort_phase_output_name = out_phase
+        self.ort_td_hazard_acc_output_name = out_td_hazard_acc
         self.ort_session = session
 
     def run_clip(self, teacher_path: Path, out_dir: Path, npz_root: Path, quiet: bool = False) -> Optional[Path]:
@@ -651,6 +863,22 @@ class TeacherRolloutRunner:
         angvel = angvel[:usable_len]
         pose_hist = pose_hist[:usable_len]
         gt_norm = gt_norm[:usable_len]
+
+        # ---- Optional input ablations (for debugging history/lag) ----
+        pose_shift = int(getattr(self.args, "pose_hist_time_shift", 0) or 0)
+        if pose_shift != 0 and pose_hist.shape[1] > 0:
+            pose_hist = _shift_time_axis(pose_hist, shift=pose_shift)
+        pose_mode = str(getattr(self.args, "pose_hist_ablation", "none") or "none").lower().strip()
+        if pose_mode not in ("", "none") and pose_hist.shape[1] > 0:
+            pose_hist = _ablate_pose_hist(
+                pose_hist,
+                pose_hist_len=int(self.pose_hist_len),
+                mode=pose_mode,
+                keep_last=int(getattr(self.args, "pose_hist_keep_last", 1) or 1),
+            )
+        ang_mode = str(getattr(self.args, "angvel_ablation", "none") or "none").lower().strip()
+        if ang_mode == "zero" and angvel.shape[1] > 0:
+            angvel = np.zeros_like(angvel)
         teacher_block["state_norm"] = state_arr.tolist()
         teacher_block["cond"] = cond_arr.tolist()
         if isinstance(teacher_block.get("target_norm"), list):
@@ -658,6 +886,8 @@ class TeacherRolloutRunner:
 
         if self.use_onnx:
             pred_norm = self._run_onnx_rollout(state_arr, cond_arr, contacts, angvel, pose_hist, gt_norm)
+            contacts_meas_pred = None
+            contacts_meas_logits_pred = None
         else:
             state_t = torch.from_numpy(state_arr).unsqueeze(0).to(self.device)
             cond_t = torch.from_numpy(cond_arr).unsqueeze(0).to(self.device)
@@ -672,6 +902,27 @@ class TeacherRolloutRunner:
             )
             gt_t = torch.from_numpy(gt_norm).unsqueeze(0).to(self.device)
 
+            # Allow overriding how teacher rollout sources angvel / pose_hist inside Trainer._rollout_sequence.
+            # This is purely for debugging; default behavior stays consistent with deployment.
+            if str(getattr(self.args, "angvel_source", "state") or "state").lower().strip() == "seq":
+                try:
+                    setattr(self.trainer, "use_freerun_state_sync", False)
+                except Exception:
+                    pass
+            if str(getattr(self.args, "pose_hist_source", "buffer") or "buffer").lower().strip() == "seq":
+                try:
+                    setattr(self.trainer, "force_pose_hist_seq", True)
+                except Exception:
+                    pass
+
+            # Forward-time ablations applied inside Trainer._rollout_sequence (works for both state/buffer and seq sources).
+            try:
+                setattr(self.trainer, "rollout_angvel_ablation", str(getattr(self.args, "angvel_ablation", "none")))
+                setattr(self.trainer, "rollout_pose_hist_ablation", str(getattr(self.args, "pose_hist_ablation", "none")))
+                setattr(self.trainer, "rollout_pose_hist_keep_last", int(getattr(self.args, "pose_hist_keep_last", 1) or 1))
+            except Exception:
+                pass
+
             self.model.eval()
             with torch.no_grad():
                 preds, _ = self.trainer._rollout_sequence(
@@ -681,10 +932,30 @@ class TeacherRolloutRunner:
                     angvel_seq=angvel_t,
                     pose_hist_seq=pose_hist_t,
                     gt_seq=gt_t,
-                    mode="teacher",
+                    mode="mixed",
                     tf_ratio=1.0,
                 )
             pred_norm = preds["out"][0].cpu().numpy()
+            contacts_meas_pred = None
+            contacts_meas_logits_pred = None
+            try:
+                cm = preds.get("contacts_meas", None)
+                if torch.is_tensor(cm):
+                    if cm.dim() == 3 and cm.size(0) > 0:
+                        contacts_meas_pred = cm[0].detach().cpu().numpy()
+                    elif cm.dim() == 2:
+                        contacts_meas_pred = cm.detach().cpu().numpy()
+            except Exception:
+                contacts_meas_pred = None
+            try:
+                cml = preds.get("contacts_meas_logits", None)
+                if torch.is_tensor(cml):
+                    if cml.dim() == 3 and cml.size(0) > 0:
+                        contacts_meas_logits_pred = cml[0].detach().cpu().numpy()
+                    elif cml.dim() == 2:
+                        contacts_meas_logits_pred = cml.detach().cpu().numpy()
+            except Exception:
+                contacts_meas_logits_pred = None
 
         mse_norm = float(np.mean((pred_norm - gt_norm) ** 2))
         pred_raw = gt_raw = None
@@ -729,9 +1000,22 @@ class TeacherRolloutRunner:
                 "y_norm": pred_norm.tolist(),
                 "y_raw": pred_raw.tolist() if pred_raw is not None else None,
             },
+            "contacts_pred": {
+                "contacts_meas": contacts_meas_pred.tolist() if contacts_meas_pred is not None else None,
+                "contacts_meas_logits": contacts_meas_logits_pred.tolist() if contacts_meas_logits_pred is not None else None,
+            },
             "diagnostics": {
                 "MSEnormY": mse_norm,
                 "GeoDeg": geo_deg,
+            },
+            "ablation": {
+                "direct_pose_meas_force_zero": bool(getattr(self.args, "direct_pose_meas_force_zero", False)),
+                "angvel_source": str(getattr(self.args, "angvel_source", "state")),
+                "pose_hist_source": str(getattr(self.args, "pose_hist_source", "buffer")),
+                "pose_hist_ablation": str(getattr(self.args, "pose_hist_ablation", "none")),
+                "pose_hist_keep_last": int(getattr(self.args, "pose_hist_keep_last", 1) or 1),
+                "pose_hist_time_shift": int(getattr(self.args, "pose_hist_time_shift", 0) or 0),
+                "angvel_ablation": str(getattr(self.args, "angvel_ablation", "none")),
             },
         }
 
@@ -826,21 +1110,72 @@ class TeacherRolloutRunner:
         if getattr(self.normalizer, "std_y", None) is not None:
             std_y = torch.as_tensor(self.normalizer.std_y, dtype=torch.float32).view(1, -1)
 
-        for t in range(T):
-            # 仅喂给 ONNX 实际声明的输入，兼容旧模型（state/cond）和新模型（state/cond/contacts/angvel/pose_hist）
-            feeds: dict[str, np.ndarray] = {}
-            if "state" in self.ort_input_map:
-                feeds[self.ort_input_map["state"]] = state_arr[t : t + 1]
-            if "cond" in self.ort_input_map and cond_arr.shape[1] > 0:
-                feeds[self.ort_input_map["cond"]] = cond_arr[t : t + 1]
-            if "contacts" in self.ort_input_map and contacts.shape[1] > 0:
-                feeds[self.ort_input_map["contacts"]] = contacts[t : t + 1]
-            if "angvel" in self.ort_input_map and angvel.shape[1] > 0:
-                feeds[self.ort_input_map["angvel"]] = angvel[t : t + 1]
-            if "pose_hist" in self.ort_input_map and pose_hist.shape[1] > 0:
-                feeds[self.ort_input_map["pose_hist"]] = pose_hist[t : t + 1]
+        plan_z = None
+        if "plan_z" in self.ort_input_map:
+            plan_dim = getattr(self, "ort_plan_dim", None)
+            if not isinstance(plan_dim, int) or plan_dim <= 0:
+                raise SystemExit("[FATAL] Unable to infer plan_z dim from ONNX input shapes.")
+            plan_z = np.zeros((1, plan_dim), dtype=np.float32)
+        phase_z = None
+        if "phase_z" in self.ort_input_map:
+            phase_dim = getattr(self, "ort_phase_dim", None)
+            if not isinstance(phase_dim, int) or phase_dim <= 0:
+                raise SystemExit("[FATAL] Unable to infer phase_z dim from ONNX input shapes.")
+            phase_z = np.zeros((1, phase_dim), dtype=np.float32)
+        td_hazard_acc = None
+        if "td_hazard_acc" in self.ort_input_map:
+            hz_dim = getattr(self, "ort_td_hazard_acc_dim", None)
+            if not isinstance(hz_dim, int) or hz_dim <= 0:
+                raise SystemExit("[FATAL] Unable to infer td_hazard_acc dim from ONNX input shapes.")
+            td_hazard_acc = np.zeros((1, hz_dim), dtype=np.float32)
 
-            y = self.ort_session.run([self.ort_output_name], feeds)[0]
+        for t in range(T):
+            feeds: dict[str, np.ndarray] = {
+                self.ort_input_map["state"]: state_arr[t : t + 1],
+                self.ort_input_map["cond"]: cond_arr[t : t + 1],
+                self.ort_input_map["contacts"]: contacts[t : t + 1],
+                self.ort_input_map["angvel"]: angvel[t : t + 1],
+                self.ort_input_map["pose_hist"]: pose_hist[t : t + 1],
+            }
+            out_names = [self.ort_output_name]
+            want_plan_out = False
+            want_phase_out = False
+            want_hz_out = False
+            if plan_z is not None:
+                feeds[self.ort_input_map["plan_z"]] = plan_z
+                if getattr(self, "ort_plan_output_name", None):
+                    want_plan_out = True
+                    out_names.append(self.ort_plan_output_name)
+            if phase_z is not None:
+                feeds[self.ort_input_map["phase_z"]] = phase_z
+                if getattr(self, "ort_phase_output_name", None):
+                    want_phase_out = True
+                    out_names.append(self.ort_phase_output_name)
+            if td_hazard_acc is not None:
+                feeds[self.ort_input_map["td_hazard_acc"]] = td_hazard_acc
+                if getattr(self, "ort_td_hazard_acc_output_name", None):
+                    want_hz_out = True
+                    out_names.append(self.ort_td_hazard_acc_output_name)
+            outs = self.ort_session.run(out_names, feeds)
+            y = outs[0]
+            out_k = 1
+            if want_plan_out and len(outs) > out_k:
+                try:
+                    plan_z = np.asarray(outs[out_k], dtype=np.float32)
+                except Exception:
+                    pass
+                out_k += 1
+            if want_phase_out and len(outs) > out_k:
+                try:
+                    phase_z = np.asarray(outs[out_k], dtype=np.float32)
+                except Exception:
+                    pass
+                out_k += 1
+            if want_hz_out and len(outs) > out_k:
+                try:
+                    td_hazard_acc = np.asarray(outs[out_k], dtype=np.float32)
+                except Exception:
+                    pass
             delta_norm = torch.as_tensor(np.asarray(y, dtype=np.float32), dtype=torch.float32)  # [1, Dy]
 
             # ΔY_norm -> ΔY_raw

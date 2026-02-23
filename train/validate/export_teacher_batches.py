@@ -208,7 +208,6 @@ def main() -> None:
                 smooth_vel=False,
                 traj_keep_idx=None,
                 use_phase_if_missing=False,
-                include_root_yaw=True,
                 include_bone_pos=None,
                 include_lin_vel=None,
                 include_ang_vel=True,

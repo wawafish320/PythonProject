@@ -13,11 +13,13 @@ import torch
 import torch.nn.functional as F
 from typing import Any, Optional, Dict, Mapping, Sequence, Callable, List, Tuple
 
-from .adaptive import (
-    AdaptiveLossManager,
-    build_adaptive_loss,
-    AdaptiveHyperparamScheduler,
-)
+# Allow both:
+# - `python -m train.training_MPL ...` (package execution)
+# - `python train/training_MPL.py ...` or `cd train && python training_MPL.py ...` (script execution)
+if __package__ is None or __package__ == "":
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
+    __package__ = "train"
+
 from .eval_utils import FreeRunSettings, evaluate_teacher, evaluate_freerun
 from .geometry import (
     rot6d_to_matrix,
@@ -392,23 +394,14 @@ class Trainer:
 
             radius_m = float(cfg.get("radius_m", 0.0) or 0.0)
             bottom_z = foot_pos[..., up_axis] - radius_m  # (B, C)
-            ground_z_select = getattr(self, "contact_meas_ground_z_select", None)
-            if ground_z_select is None and isinstance(cfg, dict):
-                ground_z_select = cfg.get("ground_z_select", None)
-            ground_z_select = str(ground_z_select or "min").strip().lower()
-            if ground_z_select in ("stance", "vel", "velocity", "robust"):
-                # Choose the most stance-like foot (low planar+vertical speed) to estimate ground_z_now.
-                stance_score = (vxy_score * vz_score).detach()  # higher => more likely stance
-                idx = stance_score.argmax(dim=-1)  # (B,)
-                ground_z_now = bottom_z.gather(-1, idx.unsqueeze(-1)).squeeze(-1)  # (B,)
-                ground_z_select = "stance"
-            else:
-                ground_z_now = bottom_z.min(dim=-1).values  # (B,)
-                ground_z_select = "min"
+            # Choose the most stance-like foot (low planar+vertical speed) to estimate ground_z_now.
+            stance_score = (vxy_score * vz_score).detach()  # higher => more likely stance
+            idx = stance_score.argmax(dim=-1)  # (B,)
+            ground_z_now = bottom_z.gather(-1, idx.unsqueeze(-1)).squeeze(-1)  # (B,)
             ground_z_prev = getattr(self, "_contact_meas_ground_z", None)
-            mode = str(getattr(self, "contact_meas_ground_z_mode", "min") or "min").strip().lower()
-            if mode not in ("min", "ema", "window", "slew"):
-                mode = "min"
+            mode = str(getattr(self, "contact_meas_ground_z_mode", "window") or "window").strip().lower()
+            if mode not in ("ema", "window", "slew"):
+                mode = "window"
             prev_ok = (
                 torch.is_tensor(ground_z_prev)
                 and ground_z_prev.shape == ground_z_now.shape
@@ -427,9 +420,7 @@ class Trainer:
             else:
                 ground_z_prev = ground_z_prev.to(device=ground_z_now.device, dtype=ground_z_now.dtype)
                 ground_z_cand = ground_z_now
-                if mode == "min":
-                    ground_z_cand = torch.minimum(ground_z_prev, ground_z_now)
-                elif mode == "ema":
+                if mode == "ema":
                     beta = float(getattr(self, "contact_meas_ground_z_beta", 0.05) or 0.05)
                     if (not math.isfinite(beta)) or beta <= 0.0:
                         beta = 0.05
@@ -569,7 +560,7 @@ class Trainer:
                         "FootIdxs": [int(i) for i in foot_idxs],
                         "FootNames": foot_names,
                         "VxyMode": str(vxy_mode),
-                        "GroundZSelect": str(ground_z_select),
+                        "GroundZSelect": "stance",
                         "Cfg": wb_cfg,
                         "GroundZNowMean": float(ground_z_now.detach().mean().item()) if torch.is_tensor(ground_z_now) else None,
                         "GroundZMean": float(ground_z.detach().mean().item()) if torch.is_tensor(ground_z) else None,
@@ -623,13 +614,19 @@ class Trainer:
         assert state_seq.dim() == 3, "state_seq expects [B,T,Dx]"
         B, T, _ = state_seq.shape
         mode = str(mode or 'mixed')
-        valid_modes = {'teacher', 'free', 'mixed', 'train_free'}
+        valid_modes = {'mixed', 'train_free'}
         if mode not in valid_modes:
             raise ValueError(f"_rollout_sequence mode must be one of {valid_modes}, got {mode}")
         self._diag_roll_mode = mode
         allow_grad = mode == 'train_free'
-        mix_state_mode = str(getattr(self, 'mixed_state_mode', 'rot6d')).lower()
-        mix_full_state = bool(getattr(self, 'mix_full_state', mix_state_mode == 'full'))
+
+        # Scheduled sampling: reuse the same sel within each chunk to avoid high-frequency switching.
+        try:
+            ss_chunk_len = int(getattr(self, "ss_chunk_len", 1) or 1)
+        except Exception:
+            ss_chunk_len = 1
+        ss_chunk_len = max(1, ss_chunk_len)
+        ss_sel_hold = None
 
         motion = state_seq[:, 0]  # X in Z-domain at t=0
         try:
@@ -642,9 +639,16 @@ class Trainer:
         period_preds = []
         hidden_preds = []
         contacts_plan_preds = []
+        contacts_plan_logits_preds = []
         direct_pose_preds = []
+        direct_hinge_preds = []
         contacts_meas_preds = []
+        contacts_meas_logits_preds = []
+        contacts_td_hazard_logits_preds = []
         contacts_err_preds = []
+        event_clock_lambda_logit_preds = []
+        event_clock_dynamic_prior_preds = []
+        event_clock_delta_z_preds = []
         last_attn = None
         y_raw_local = None
         Dy = None
@@ -691,6 +695,10 @@ class Trainer:
             and pose_hist_dim > 0
             and pose_hist_stride > 0
         )
+        # Debug override: force using provided pose_hist_seq instead of the internal rolling buffer.
+        # This is useful for ablations that manipulate history blocks without changing model code.
+        if bool(getattr(self, "force_pose_hist_seq", False)):
+            pose_hist_enabled = False
         scales = mu = std = None
         pose_hist_buffer_norm = None
         pose_hist_buffer_raw = None
@@ -718,19 +726,24 @@ class Trainer:
                         )
                         pose_hist_buffer_norm = self._pose_hist_transform_vec(pose_hist_buffer_raw, scales, mu, std)
 
-                if getattr(self.model, 'training', False) and mode == 'teacher':
+                if getattr(self.model, 'training', False):
                     noise_deg = float(getattr(self, 'teacher_rot_noise_deg', 0.0) or 0.0)
                     noise_prob = float(getattr(self, 'teacher_rot_noise_prob', 0.0) or 0.0)
                     noise_deg = noise_deg * float(getattr(self, 'teacher_noise_boost', 1.0) or 1.0)
-                    pose_hist_buffer_norm, pose_hist_buffer_raw = self._inject_pose_hist_noise(
-                        pose_hist_buffer_norm,
-                        pose_hist_buffer_raw,
-                        scales,
-                        mu,
-                        std,
-                        noise_deg=noise_deg,
-                        noise_prob=noise_prob,
-                    )
+                    try:
+                        is_teacher_like = float(tf_ratio) >= 0.999
+                    except Exception:
+                        is_teacher_like = True
+                    if is_teacher_like:
+                        pose_hist_buffer_norm, pose_hist_buffer_raw = self._inject_pose_hist_noise(
+                            pose_hist_buffer_norm,
+                            pose_hist_buffer_raw,
+                            scales,
+                            mu,
+                            std,
+                            noise_deg=noise_deg,
+                            noise_prob=noise_prob,
+                        )
 
         cond_norm_mu = self._prepare_cond_stat(cond_norm_mu, state_seq) if cond_norm_mu is not None else None
         cond_norm_std = self._prepare_cond_stat(cond_norm_std, state_seq) if cond_norm_std is not None else None
@@ -748,6 +761,11 @@ class Trainer:
         plan_z = None
         # NOTE: let the model decide the initial plan_z when plan_z is None.
         # This allows using a learnable contact_plan_init_z (or falling back to zeros).
+        phase_z = None
+        phase_event_age = None
+        td_hazard_acc = None
+        meas_prev_logits = None
+        meas_prev_prob = None
         prev_pose_hist_meas = None
         prev_foot_pos_meas = None
 
@@ -758,12 +776,53 @@ class Trainer:
             except Exception:
                 time_base_local = time_base
 
+        # ---- Rollout-time input ablations (debug knobs; no effect unless explicitly set) ----
+        rollout_angvel_ablation = str(getattr(self, "rollout_angvel_ablation", "none") or "none").lower().strip()
+        rollout_pose_hist_ablation = str(getattr(self, "rollout_pose_hist_ablation", "none") or "none").lower().strip()
+        rollout_pose_hist_keep_last = int(getattr(self, "rollout_pose_hist_keep_last", 1) or 1)
+
+        def _ablate_pose_hist_tensor(pose_hist_in: torch.Tensor) -> torch.Tensor:
+            mode = rollout_pose_hist_ablation
+            if mode in ("", "none"):
+                return pose_hist_in
+            if not torch.is_tensor(pose_hist_in) or pose_hist_in.numel() == 0:
+                return pose_hist_in
+            if mode == "zero":
+                return torch.zeros_like(pose_hist_in)
+
+            L = int(pose_hist_len)
+            if L <= 0:
+                return pose_hist_in
+            D = int(pose_hist_in.shape[-1])
+            if D % L != 0:
+                return pose_hist_in
+            pose_dim = D // L
+            B_local = int(pose_hist_in.shape[0])
+            hist = pose_hist_in.reshape(B_local, L, pose_dim)
+
+            if mode == "keep_last":
+                k = max(1, min(L, int(rollout_pose_hist_keep_last)))
+                if k >= L:
+                    return pose_hist_in
+                out = hist.clone()
+                out[:, : L - k, :] = 0.0
+                return out.reshape(B_local, D)
+
+            if mode == "replicate_last":
+                src = hist[:, -1:, :].clone()
+                out = src.expand(-1, L, -1).contiguous()
+                return out.reshape(B_local, D)
+
+            if mode == "replicate_oldest":
+                src = hist[:, :1, :].clone()
+                out = src.expand(-1, L, -1).contiguous()
+                return out.reshape(B_local, D)
+
+            return pose_hist_in
+
         for t in range(T):
             self._diag_roll_step = int(t)
             cond_input = cond_seq[:, t] if has_time_dim['cond'] else cond_seq
-            # Backward compatibility:
-            # - legacy training may feed GT soft-contacts as an extra input feature;
-            # - the new plan/meas design keeps train/infer loop-closed by NOT depending on external contacts.
             contacts_in_t = None
             use_learned_meas = bool(getattr(self.model, "contact_meas_enable", False))
             if plan_enable and not use_learned_meas:
@@ -771,16 +830,12 @@ class Trainer:
                     contacts_in_t, prev_foot_pos_meas = self._contact_meas_whitebox(motion_raw_local, prev_foot_pos_meas)
                 except Exception:
                     contacts_in_t = None
-            elif not use_learned_meas:
-                try:
-                    if contacts_seq is not None:
-                        contacts_in_t = contacts_seq[:, t] if has_time_dim['contacts'] else contacts_seq
-                except Exception:
-                    contacts_in_t = None
             if getattr(self, "use_freerun_state_sync", False) and isinstance(getattr(self, "angvel_x_slice", None), slice):
                 angvel_t = motion[..., self.angvel_x_slice].detach()
             else:
                 angvel_t = angvel_seq[:, t] if has_time_dim['angvel'] else angvel_seq
+            if rollout_angvel_ablation == "zero" and torch.is_tensor(angvel_t):
+                angvel_t = torch.zeros_like(angvel_t)
             if pose_hist_enabled:
                 pose_hist_t = pose_hist_buffer_norm
             else:
@@ -804,6 +859,8 @@ class Trainer:
                     if noise_std > 0.0:
                         pose_hist_meas_t = pose_hist_meas_t + torch.randn_like(pose_hist_meas_t) * noise_std
                     prev_pose_hist_meas = pose_hist_meas_t.detach()
+            if rollout_pose_hist_ablation not in ("", "none") and torch.is_tensor(pose_hist_meas_t):
+                pose_hist_meas_t = _ablate_pose_hist_tensor(pose_hist_meas_t)
             cond_raw_t = None
             if cond_raw_seq is not None:
                 if has_time_dim['cond_raw']:
@@ -905,6 +962,8 @@ class Trainer:
             except Exception:
                 rollout_step_t = None
 
+            meas_prev_in = meas_prev_logits if (contacts_in_t is None and use_learned_meas) else meas_prev_prob
+
             with self._amp_context(amp_enabled):
                 ret = self.model(
                     motion,
@@ -913,6 +972,10 @@ class Trainer:
                     angvel=angvel_t,
                     pose_history=pose_hist_meas_t,
                     plan_z=plan_z,
+                    phase_z=phase_z,
+                    phase_event_age=phase_event_age,
+                    td_hazard_acc=td_hazard_acc,
+                    meas_logits_prev=meas_prev_in,
                     time_index=time_index_t,
                     rollout_step=rollout_step_t,
                 )
@@ -934,6 +997,16 @@ class Trainer:
                 except Exception:
                     pass
                 try:
+                    cpl = ret.get("contacts_plan_logits", None)
+                    if cpl is not None:
+                        if cpl.dim() == 2:
+                            cpl = cpl.unsqueeze(1)
+                        elif cpl.dim() >= 3 and cpl.size(1) != 1:
+                            cpl = cpl[:, -1:, ...]
+                        contacts_plan_logits_preds.append(cpl)
+                except Exception:
+                    pass
+                try:
                     direct_out = ret.get('out_direct', None)
                     if direct_out is not None:
                         if direct_out.dim() == 2:
@@ -944,11 +1017,42 @@ class Trainer:
                 except Exception:
                     pass
                 try:
+                    hinge_delta = ret.get('direct_hinge_delta', None)
+                    if hinge_delta is not None:
+                        if hinge_delta.dim() == 2:
+                            hinge_delta = hinge_delta.unsqueeze(1)
+                        elif hinge_delta.dim() >= 3 and hinge_delta.size(1) != 1:
+                            hinge_delta = hinge_delta[:, -1:, ...]
+                        direct_hinge_preds.append(hinge_delta)
+                except Exception:
+                    pass
+                try:
                     z_next = ret.get('plan_z_next', None)
                     if z_next is not None:
                         plan_z = z_next if allow_grad else z_next.detach()
+                    p_next = ret.get('phase_z_next', None)
+                    if p_next is not None:
+                        phase_z = p_next if allow_grad else p_next.detach()
+                    a_next = ret.get('phase_event_age_next', None)
+                    if a_next is not None:
+                        phase_event_age = a_next if allow_grad else a_next.detach()
+                    hz_acc_next = ret.get("td_hazard_acc_next", None)
+                    if hz_acc_next is not None:
+                        # Keep hazard accumulator stateful across steps (stop-gradient; inference-aligned).
+                        td_hazard_acc = hz_acc_next.detach()
                 except Exception:
                     pass
+
+            # Event-Clock driver state: keep prev meas for Δmeas when forward runs with T=1.
+            try:
+                meas_logits_step = ret.get("contacts_meas_logits", None)
+                if meas_logits_step is not None:
+                    meas_prev_logits = meas_logits_step.detach()
+                meas_prob_step = ret.get("contacts_meas", None)
+                if meas_prob_step is not None:
+                    meas_prev_prob = meas_prob_step.detach()
+            except Exception:
+                pass
 
             if delta_out is None:
                 raise RuntimeError("Model forward must return 'delta' tensor.")
@@ -996,6 +1100,7 @@ class Trainer:
                     y_raw = self._apply_lambda_fusion_to_raw(
                         y_raw,
                         direct_norm=ret.get("out_direct", None),
+                        direct_hinge_delta=ret.get("direct_hinge_delta", None),
                         lambda_fusion=lam_eff,
                     )
                 except Exception:
@@ -1036,6 +1141,27 @@ class Trainer:
             except Exception:
                 pass
             try:
+                cml = ret.get("contacts_meas_logits", None)
+                if cml is not None:
+                    if cml.dim() == 2:
+                        cml = cml.unsqueeze(1)
+                    elif cml.dim() >= 3 and cml.size(1) != 1:
+                        cml = cml[:, -1:, ...]
+                    contacts_meas_logits_preds.append(cml)
+            except Exception:
+                pass
+            try:
+                # Needed for MotionJointLoss TD-hazard supervision (w_contact_td_hazard_*).
+                hz = ret.get("contacts_td_hazard_logit", None)
+                if hz is not None:
+                    if hz.dim() == 2:
+                        hz = hz.unsqueeze(1)
+                    elif hz.dim() >= 3 and hz.size(1) != 1:
+                        hz = hz[:, -1:, ...]
+                    contacts_td_hazard_logits_preds.append(hz)
+            except Exception:
+                pass
+            try:
                 ce = ret.get("contacts_err", None)
                 if ce is not None:
                     if ce.dim() == 2:
@@ -1043,6 +1169,36 @@ class Trainer:
                     elif ce.dim() >= 3 and ce.size(1) != 1:
                         ce = ce[:, -1:, ...]
                     contacts_err_preds.append(ce)
+            except Exception:
+                pass
+            try:
+                lam_logit = ret.get("event_clock_lambda_logit", None)
+                if lam_logit is not None:
+                    if lam_logit.dim() == 2:
+                        lam_logit = lam_logit.unsqueeze(1)
+                    elif lam_logit.dim() >= 3 and lam_logit.size(1) != 1:
+                        lam_logit = lam_logit[:, -1:, ...]
+                    event_clock_lambda_logit_preds.append(lam_logit)
+            except Exception:
+                pass
+            try:
+                dyn_prior = ret.get("event_clock_dynamic_prior", None)
+                if dyn_prior is not None:
+                    if dyn_prior.dim() == 2:
+                        dyn_prior = dyn_prior.unsqueeze(1)
+                    elif dyn_prior.dim() >= 3 and dyn_prior.size(1) != 1:
+                        dyn_prior = dyn_prior[:, -1:, ...]
+                    event_clock_dynamic_prior_preds.append(dyn_prior)
+            except Exception:
+                pass
+            try:
+                dz = ret.get("event_clock_delta_z", None)
+                if dz is not None:
+                    if dz.dim() == 2:
+                        dz = dz.unsqueeze(1)
+                    elif dz.dim() >= 3 and dz.size(1) != 1:
+                        dz = dz[:, -1:, ...]
+                    event_clock_delta_z_preds.append(dz)
             except Exception:
                 pass
             debug_stats['rot6d_geo_deg'] = None
@@ -1062,50 +1218,39 @@ class Trainer:
             self._last_step_debug_stats = debug_stats
 
             if t < T - 1:
-                if mode == 'teacher':
-                    # Next input is GT (Z-domain); sync RAW for potential later use
-                    motion = state_seq[:, t + 1]
-                    try:
-                        motion_raw_local = self.normalizer.denorm_x(motion, prev_raw=motion_raw_local)
-                    except Exception as exc:
-                        self._raise_norm_error("normalizer.denorm_x 在 teacher forcing 同步时失败", exc)
+                # One scheduled-sampling update rule:
+                #   - p=tf_ratio controls whether next-step X comes from GT (sel=1) or from model carry (sel=0).
+                #   - train_free keeps gradients through the carry; mixed detaches the carry.
+                if motion_raw_local is None:
+                    self._raise_norm_error("rollout 更新需要 DataNormalizer 提供 RAW 状态写回。")
+                free_raw = self._apply_free_carry(motion_raw_local, y_raw, cond_next_raw=cond_raw_for_env)
+                if allow_grad:
+                    free_raw = free_raw.clone()
+                else:
+                    free_raw = free_raw.detach()
+                free_z = self._diag_norm_x(free_raw)
+                gt_next = state_seq[:, t + 1]
+                if ss_sel_hold is None or ss_chunk_len <= 1 or (t % ss_chunk_len == 0):
+                    ss_sel_hold = (torch.rand(B, device=self.device) < float(tf_ratio)).float().unsqueeze(-1)
+                sel = ss_sel_hold
+                if sel.dtype != gt_next.dtype:
+                    sel = sel.to(gt_next.dtype)
+                motion = sel * gt_next + (1.0 - sel) * free_z
 
-                elif mode in ('free', 'train_free'):
-                    if motion_raw_local is None:
-                        self._raise_norm_error("free-run 模式需要 DataNormalizer 提供 RAW 状态写回。")
-                    next_raw = self._apply_free_carry(motion_raw_local, y_raw, cond_next_raw=cond_raw_for_env)
-                    if mode == 'free':
-                        next_raw = next_raw.detach()
-                    else:
-                        next_raw = next_raw.clone()
-                    motion_raw_local = next_raw
-                    motion = self._diag_norm_x(motion_raw_local)
-                # For teacher mode, allow ground-truth raw to override for next delta composition if available
-                if mode == 'teacher' and gt_seq is not None:
-                    y_next = self._denorm(gt_seq[:, t + 1])
-                    y_raw_local = y_next.detach()
+                # Sync RAW state for the next step.
+                try:
+                    gt_raw_next = self.normalizer.denorm_x(gt_next, prev_raw=motion_raw_local)
+                    motion_raw_local = sel * gt_raw_next + (1.0 - sel) * free_raw
+                except Exception as exc:
+                    self._raise_norm_error("normalizer.denorm_x 在 rollout 更新时失败", exc)
 
-                elif mode == 'mixed':  # scheduled sampling (rot6d-only legacy vs full-state)
-                    if motion_raw_local is None:
-                        self._raise_norm_error("mixed 模式需要 DataNormalizer 提供 RAW 状态写回。")
-                    free_raw = self._apply_free_carry(motion_raw_local, y_raw, cond_next_raw=cond_raw_for_env).detach()
-                    free_z = self._diag_norm_x(free_raw)
-                    gt_next   = state_seq[:, t + 1]
-                    sel = (torch.rand(B, device=self.device) < float(tf_ratio)).float().unsqueeze(-1)
-                    if sel.dtype != gt_next.dtype:
-                        sel = sel.to(gt_next.dtype)
-                    if mix_full_state:
-                        motion = sel * gt_next + (1.0 - sel) * free_z
-                    else:
-                        sx = rot6d_slice
-                        motion_next = gt_next.clone()
-                        motion_next[..., sx] = sel * gt_next[..., sx] + (1.0 - sel) * free_z[..., sx]
-                        motion = motion_next
-                    # resync RAW for next step
+                # When we use GT as next input, also reset the raw-y carrier to GT to match teacher forcing.
+                if gt_seq is not None and gt_seq.dim() == 3:
                     try:
-                        motion_raw_local = self.normalizer.denorm_x(motion, prev_raw=motion_raw_local)
-                    except Exception as exc:
-                        self._raise_norm_error("normalizer.denorm_x 在 mixed 模式同步时失败", exc)
+                        y_next = self._denorm(gt_seq[:, t + 1]).detach()
+                        y_raw_local = sel * y_next + (1.0 - sel) * y_raw_local
+                    except Exception:
+                        pass
                 if pose_hist_enabled and pose_hist_stride > 0:
                     with torch.no_grad():
                         pose_hist_buffer_raw = torch.roll(pose_hist_buffer_raw, shifts=-pose_hist_stride, dims=-1)
@@ -1126,9 +1271,19 @@ class Trainer:
                 preds['contacts_plan'] = torch.cat(contacts_plan_preds, dim=1)
             except Exception:
                 pass
+        if contacts_plan_logits_preds:
+            try:
+                preds["contacts_plan_logits"] = torch.cat(contacts_plan_logits_preds, dim=1)
+            except Exception:
+                pass
         if direct_pose_preds:
             try:
                 preds['out_direct'] = torch.cat(direct_pose_preds, dim=1)
+            except Exception:
+                pass
+        if direct_hinge_preds:
+            try:
+                preds['direct_hinge_delta'] = torch.cat(direct_hinge_preds, dim=1)
             except Exception:
                 pass
         if contacts_meas_preds:
@@ -1136,9 +1291,34 @@ class Trainer:
                 preds['contacts_meas'] = torch.cat(contacts_meas_preds, dim=1)
             except Exception:
                 pass
+        if contacts_meas_logits_preds:
+            try:
+                preds["contacts_meas_logits"] = torch.cat(contacts_meas_logits_preds, dim=1)
+            except Exception:
+                pass
+        if contacts_td_hazard_logits_preds:
+            try:
+                preds["contacts_td_hazard_logit"] = torch.cat(contacts_td_hazard_logits_preds, dim=1)
+            except Exception:
+                pass
         if contacts_err_preds:
             try:
                 preds['contacts_err'] = torch.cat(contacts_err_preds, dim=1)
+            except Exception:
+                pass
+        if event_clock_lambda_logit_preds:
+            try:
+                preds["event_clock_lambda_logit"] = torch.cat(event_clock_lambda_logit_preds, dim=1)
+            except Exception:
+                pass
+        if event_clock_dynamic_prior_preds:
+            try:
+                preds["event_clock_dynamic_prior"] = torch.cat(event_clock_dynamic_prior_preds, dim=1)
+            except Exception:
+                pass
+        if event_clock_delta_z_preds:
+            try:
+                preds["event_clock_delta_z"] = torch.cat(event_clock_delta_z_preds, dim=1)
             except Exception:
                 pass
 
@@ -1372,7 +1552,7 @@ class Trainer:
         angvel_sub = _slice_tensor(angvel_seq)
         pose_hist_sub = _slice_tensor(pose_hist_seq)
 
-        mode = 'train_free' if train_mode else 'free'
+        mode = 'train_free' if train_mode else 'mixed'
         time_base = None
         try:
             if isinstance(batch, dict):
@@ -1997,10 +2177,6 @@ class Trainer:
             if "hierarchy_alpha" in loss_cfg:
                 self.loss_fn.hierarchy_alpha = float(loss_cfg["hierarchy_alpha"])
                 self.loss_fn._invalidate_weight_cache()
-            if "combine_space" in loss_cfg:
-                self.loss_fn.combine_space = str(loss_cfg["combine_space"])
-                self.loss_fn._invalidate_weight_cache()
-
         # Handle loss_groups (e.g., "core" group weight overrides)
         loss_groups = stage.get("loss_groups", {})
         if hasattr(self, 'loss_fn') and self.loss_fn is not None:
@@ -2009,13 +2185,11 @@ class Trainer:
                     for weight_name, weight_value in group_weights.items():
                         if weight_name in (
                             'adaptive_bone_weights', 'use_hierarchy_weights', 'hierarchy_mode',
-                            'max_weight_ratio', 'weight_gamma', 'hierarchy_alpha', 'combine_space'
+                            'max_weight_ratio', 'weight_gamma', 'hierarchy_alpha'
                         ):
                             # handle bool/str specially
                             if weight_name == 'hierarchy_mode':
                                 self.loss_fn.hierarchy_mode = str(weight_value)
-                            elif weight_name == 'combine_space':
-                                self.loss_fn.combine_space = str(weight_value)
                             elif weight_name == 'hierarchy_alpha':
                                 self.loss_fn.hierarchy_alpha = float(weight_value)
                             elif weight_name == 'weight_gamma':
@@ -2415,10 +2589,16 @@ class Trainer:
         # Make MuY/StdY available on Trainer for _denorm()
         self.mu_y = getattr(loss_fn, 'mu_y', None)
         self.std_y = getattr(loss_fn, 'std_y', None)
+        # Direct pose hinge correction metadata (optional).
+        self.direct_pose_hinge_joint_idx: list[int] = []
+        self.direct_pose_hinge_axis: str = "Z"
+        self.direct_pose_hinge_max_rad: Optional[float] = None
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
         print(f"[LR-DBG:init] arg_lr={lr:.2e} opt_pg0={self.optimizer.param_groups[0]['lr']:.2e}")
         # Autoreg tuning knobs
         self.use_freerun_state_sync = True
+        # Scheduled sampling (mixed mode): hold sel for N frames to reduce high-frequency switching.
+        self.ss_chunk_len: int = 1
         self.history_debug_steps: int = 0
         self.freerun_stage_schedule = []
         self._stage_active_idx: Optional[int] = None
@@ -2505,7 +2685,7 @@ class Trainer:
         self.grad_conn_detect_anomaly: bool = True
         self._carry_debug_buffer: list[dict[str, float]] = []
         self.adaptive_loss_module = None
-        self.hyperparam_scheduler: Optional[AdaptiveHyperparamScheduler] = None
+        self.hyperparam_scheduler: Optional[Any] = None
         self.teacher_forcing_ratio: float = 1.0
         # 自由运行时根部 yaw 的参考策略：
         #   - 'trajectory': 使用 cond_dir 定义世界/轨迹坐标系的 yaw（推荐）
@@ -2557,9 +2737,9 @@ class Trainer:
         raise RuntimeError(msg) from exc
 
     @torch.no_grad()
-    def eval_epoch(self, loader, mode='teacher', max_batches=None):
+    def eval_epoch(self, loader, mode='mixed', max_batches=None):
         self.model.eval()
-        return evaluate_teacher(self, loader, mode=mode, max_batches=max_batches)
+        return evaluate_teacher(self, loader, mode='mixed', max_batches=max_batches)
 
     def fit(self, train_loader, epochs=10, log_every=50, out_dir=None, patience=10, run_name='run'):
         import torch, os
@@ -2749,6 +2929,17 @@ class Trainer:
                     stats = {} if stats is None else dict(stats)
 
                 loss, stats = self._maybe_apply_adaptive_loss(loss, stats)
+                # Smoke-friendly diagnostic: confirm BCE-on-logits contact losses are actually being computed.
+                # (Without propagating contacts_*_logits through rollout, these keys will be missing and training
+                # silently falls back to MSE-on-probabilities.)
+                if ep == 1 and bi == 1:
+                    try:
+                        cp_bce = stats.get("contact_plan_bce", None)
+                        cm_bce = stats.get("contact_meas_bce", None)
+                        if cp_bce is not None or cm_bce is not None:
+                            print(f"[Smoke] contact_plan_bce={cp_bce} contact_meas_bce={cm_bce}")
+                    except Exception:
+                        pass
 
                 log_grad = self._should_log_freerun_gradients(bi)
                 freerun_payload = self.compute_freerun_loss(
@@ -3428,11 +3619,96 @@ class Trainer:
         lam_eff = (lam * r_view).clamp(0.0, 1.0)
         return lam_eff, r.detach()
 
+    def _apply_direct_hinge_correction_raw(self, y_raw, hinge_delta):
+        """
+        Apply joint-local hinge correction (axis twist) to RAW Y (rot6d slice only).
+        """
+        import torch
+
+        if y_raw is None or (not torch.is_tensor(y_raw)):
+            return y_raw
+        if hinge_delta is None or (not torch.is_tensor(hinge_delta)):
+            return y_raw
+
+        idxs = getattr(self, "direct_pose_hinge_joint_idx", None)
+        if not idxs:
+            return y_raw
+        idxs = [int(i) for i in idxs]
+
+        rot_slice = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
+        if not isinstance(rot_slice, slice):
+            rot_slice = slice(0, y_raw.shape[-1])
+        rot_len = int(rot_slice.stop - rot_slice.start)
+        if rot_len <= 0 or (rot_len % 6) != 0:
+            return y_raw
+        J = rot_len // 6
+
+        hinge = hinge_delta
+        while hinge.dim() > y_raw.dim() and hinge.shape[-2] == 1:
+            hinge = hinge.squeeze(-2)
+        if hinge.dim() == y_raw.dim() - 1:
+            hinge = hinge.unsqueeze(-2)
+        if hinge.shape[-1] != len(idxs):
+            return y_raw
+        lead_shape = y_raw.shape[:-1]
+        if hinge.shape[:-1] != lead_shape:
+            try:
+                hinge = hinge.expand(*lead_shape, hinge.shape[-1])
+            except Exception:
+                pass
+
+        max_rad = getattr(self, "direct_pose_hinge_max_rad", None)
+        try:
+            max_rad = float(max_rad) if max_rad is not None else None
+        except Exception:
+            max_rad = None
+        if max_rad is not None and max_rad > 0.0 and _math.isfinite(max_rad):
+            hinge = hinge.clamp(-max_rad, max_rad)
+
+        axis = str(getattr(self, "direct_pose_hinge_axis", "Z") or "Z").strip().upper()
+        axis_idx = {"X": 0, "Y": 1, "Z": 2}.get(axis, 2)
+
+        try:
+            rot_flat = y_raw[..., rot_slice]
+            rot6 = reproject_rot6d(rot_flat).view(*lead_shape, J, 6)
+            cols = getattr(getattr(self, "loss_fn", None), "_rot6d_columns", ("X", "Z"))
+            cols = tuple(cols) if isinstance(cols, (list, tuple)) and len(cols) >= 2 else ("X", "Z")
+            R_base = rot6d_to_matrix(rot6, columns=cols)
+            omega = rot6.new_zeros(*lead_shape, J, 3)
+            for k, j in enumerate(idxs):
+                if 0 <= j < J:
+                    omega[..., j, axis_idx] = hinge[..., k]
+            R_delta = so3_exp_map(omega)
+            R_corr = torch.matmul(R_base, R_delta)
+            rot_corr = matrix_to_rot6d(R_corr, columns=cols).reshape(*lead_shape, rot_len)
+            y_corr = y_raw.clone()
+            y_corr[..., rot_slice] = rot_corr
+            return y_corr
+        except Exception:
+            return y_raw
+
+    def _apply_direct_hinge_correction_norm(self, direct_norm, hinge_delta):
+        """
+        Apply hinge correction in RAW space and return corrected normalized Y.
+        """
+        if direct_norm is None:
+            return direct_norm
+        try:
+            direct_raw = self._denorm(direct_norm)
+        except Exception:
+            return direct_norm
+        direct_raw_corr = self._apply_direct_hinge_correction_raw(direct_raw, hinge_delta)
+        try:
+            return self._norm_y(direct_raw_corr)
+        except Exception:
+            return direct_norm
+
     def _apply_lambda_fusion_to_raw(
         self,
         y_inc_raw,
         *,
         direct_norm=None,
+        direct_hinge_delta=None,
         lambda_fusion=None,
     ):
         """
@@ -3441,6 +3717,7 @@ class Trainer:
         Given:
             - y_inc_raw: RAW next pose from incremental expert (Δ branch), shape (B, Dy)
             - direct_norm: normalized absolute Y from direct head, shape (B, Dy) or (B,1,Dy)
+            - direct_hinge_delta: optional hinge correction (rad), shape (B,K) or (B,1,K)
             - lambda_fusion: gate in [0,1], shape (B,J) / (B,1) / (B,1,J)
 
         Returns:
@@ -3475,6 +3752,12 @@ class Trainer:
             return y_inc_raw
         if not torch.is_tensor(direct_raw) or direct_raw.shape != y_inc_raw.shape:
             return y_inc_raw
+        # Optional: apply hinge correction to direct branch in RAW space.
+        if torch.is_tensor(direct_hinge_delta):
+            try:
+                direct_raw = self._apply_direct_hinge_correction_raw(direct_raw, direct_hinge_delta)
+            except Exception:
+                pass
 
         columns = getattr(getattr(self, "loss_fn", None), '_rot6d_columns', ("X", "Z"))
         cols = tuple(columns) if isinstance(columns, (list, tuple)) and len(columns) >= 2 else ("X", "Z")
@@ -3696,7 +3979,6 @@ class Trainer:
         x_next[..., rx] = y_denorm[..., ry]
 
         # 预解析 cond 原始信息：动作维度 + dir(2) + speed(1) —— 必须存在
-        yaw_sl = getattr(self, 'yaw_x_slice', None)
         if cond_next_raw is None:
             self._raise_norm_error("_apply_free_carry 缺少 cond_next_raw（应包含方向与速度信息）")
         cond_raw = torch.as_tensor(cond_next_raw, device=device, dtype=dtype)
@@ -3716,38 +3998,8 @@ class Trainer:
 
         # cond_dir 已是世界系（转换脚本 convert_json_to_npz 已旋到 UE 世界坐标）
         cond_dir_world = cond_dir
-        offset = float(getattr(self, 'yaw_forward_axis_offset', 0.0) or 0.0)
         dir_norm = cond_dir_world.norm(dim=-1, keepdim=True).clamp_min(1e-6)
         dir_unit_world = cond_dir_world / dir_norm
-        yaw_cmd_world = torch.atan2(dir_unit_world[..., 1], dir_unit_world[..., 0])
-        yaw_cmd_vals = torch.atan2(torch.sin(yaw_cmd_world - offset), torch.cos(yaw_cmd_world - offset))
-
-        # --- 2) 根部朝向（yaw） --- （若无 RootYaw 切片则跳过）
-        yaw_strategy = str(getattr(self, 'freerun_yaw_strategy', 'trajectory') or 'trajectory')
-        yaw_vals = None
-        yaw_write = None
-        if isinstance(yaw_sl, slice):
-            if yaw_strategy == 'trajectory':
-                # 使用轨迹方向（cond_dir）定义世界/轨迹坐标系的 yaw
-                yaw_vals = yaw_cmd_vals
-                if yaw_vals.dim() == 1:
-                    yaw_write = yaw_vals.unsqueeze(-1)
-                else:
-                    yaw_write = yaw_vals
-                x_next[..., yaw_sl] = yaw_write.to(device=device, dtype=dtype)
-            else:
-                # 旧行为：从骨骼(pelvis)推断 yaw，坐标系随骨骼旋转
-                yaw_pred_rot6d = self._infer_root_yaw_from_rot6d(y_denorm)
-                if yaw_pred_rot6d is not None:
-                    yaw_vals = torch.atan2(torch.sin(yaw_pred_rot6d), torch.cos(yaw_pred_rot6d))
-                    if yaw_vals.dim() == 1:
-                        yaw_write = yaw_vals.unsqueeze(-1)
-                    else:
-                        yaw_write = yaw_vals
-                    x_next[..., yaw_sl] = yaw_write.to(device=device, dtype=dtype)
-                elif not getattr(self, '_warned_no_yaw_slice', False):
-                    self._warned_no_yaw_slice = True
-                    print("[FreeCarry][WARN] yaw slice missing or cannot infer yaw; skip yaw write-back.")
 
         # --- 3) 衍生角速度 ---
         av_sl = getattr(self, 'angvel_x_slice', None)
@@ -3996,7 +4248,6 @@ class Trainer:
             _n(getattr(self, 'rot6d_x_slice', None))
             _n(getattr(self, 'rootvel_x_slice', None))
             _n(getattr(self, 'angvel_x_slice', None))
-            _n(getattr(self, 'yaw_x_slice', None))
 
         return state_seq, gt_seq, cond_seq
 
@@ -4989,8 +5240,6 @@ def train_entry():
     p.add_argument('--tf_end_epoch', type=int, default=10)
     p.add_argument('--tf_max', type=float, default=1.0)
     p.add_argument('--tf_min', type=float, default=0.1)
-    p.add_argument('--mixed_state_mode', type=str, default='full', choices=['rot6d', 'full'],
-                   help='控制 scheduled sampling 混合的特征范围：仅 rot6d 或整条 state。')
     p.add_argument('--freerun_horizon', type=int, default=0,
                    help='>0 时，在每个 batch 内追加该长度的自由滚动序列并复用原 loss。')
     p.add_argument('--freerun_weight', type=float, default=0.1,
@@ -5017,7 +5266,7 @@ def train_entry():
                    help='>0 时，在 freerun 评估中打印前 N 个自回归步的 yaw/速度诊断')
     p.add_argument('--history_debug_steps', type=int, default=0,
                    help='>1 时，在训练批次中额外运行 train_free rollout 诊断历史漂移步数')
-    p.add_argument('--history_adaptive_export_frames', type=int, default=0,
+    p.add_argument('--  ', type=int, default=0,
                    help='>0 时启用 adaptive history 模块，并指定推理期固定历史帧数')
     p.add_argument('--history_adaptive_max_frames', type=int, default=None,
                    help='训练期允许的最大历史帧数（默认使用 norm_template 中的 pose_hist_len）')
@@ -5033,28 +5282,6 @@ def train_entry():
                    help='在 adaptive history 中显式注入历史 drift/趋势特征。')
     p.add_argument('--freerun_stage_schedule', type=str, default=None,
                    help='分阶段调度（freerun/tf/损失等）的 JSON/字符串配置。')
-    p.add_argument('--adaptive_loss_method', type=str, default='none', choices=['none', 'gradnorm', 'uncertainty', 'dwa'],
-                   help='在线损失权重策略（none/gradnorm/uncertainty/dwa）。')
-    p.add_argument('--adaptive_loss_alpha', type=float, default=1.5,
-                   help='GradNorm 等策略的调节超参。')
-    p.add_argument('--adaptive_loss_temperature', type=float, default=2.0,
-                   help='DWA 策略温度，默认 2.0。')
-    p.add_argument('--adaptive_loss_ema_beta', type=float, default=0.5,
-                   help='自适应权重显示的 EMA 平滑系数（0 关闭；建议 0.3~0.7）。')
-    p.add_argument('--adaptive_loss_terms', type=str, default='rot_local,rot_ortho,root_vel,root_speed',
-                   help='需要自适应权重的 loss 名称，逗号分隔。留空则使用全部可用 loss。')
-    p.add_argument('--config_path', type=str, default=None,
-                   help='完整配置 JSON 路径（包含阶段调度配置），用于自适应调整。')
-    p.add_argument('--adaptive_scheduler', action='store_true',
-                   help='启用在线超参调度器（freerun horizon / tf 比例）。')
-    p.add_argument('--adaptive_sched_loss_spike', type=float, default=1.5,
-                   help='判定 loss spike 的倍数阈值。')
-    p.add_argument('--adaptive_sched_convergence', type=float, default=0.02,
-                   help='判定收敛的相对标准差阈值。')
-    p.add_argument('--adaptive_sched_adjustment', type=float, default=0.1,
-                   help='调度器每次调整的相对幅度。')
-    p.add_argument('--adaptive_sched_interval', type=int, default=50,
-                   help='调度器检查周期（batch 数）。')
     p.add_argument('--teacher_rot_noise_deg', type=float, default=0.0,
                    help='Teacher 阶段对上一帧 rot6d 注入的最大扰动角度（度）。0 = 不扰动。')
     p.add_argument('--teacher_rot_noise_prob', type=float, default=0.0,
@@ -5063,6 +5290,8 @@ def train_entry():
                    help='mixed/train_free 模式下，每个时间步注入自回归噪声的概率。')
     p.add_argument('--input_noise_deg_mix', type=str, default=None,
                    help='重尾噪声配置（JSON/List），格式为 [{"prob":0.8,"min":3,"max":8}, ...]。')
+    p.add_argument('--ss_chunk_len', type=int, default=1,
+                   help='scheduled sampling 的 chunk 长度（>1 启用 sticky 采样：每 chunk 采一次 use_gt）。')
     p.add_argument('--tf_warmup_steps', type=int, default=5000)
     p.add_argument('--tf_total_steps', type=int, default=200000)
     p.add_argument('--width', type=int, default=512)
@@ -5106,6 +5335,61 @@ def train_entry():
                    help='contact plan init MLP hidden dim（仅 init_mode=obs/learnable+obs 生效）')
     p.add_argument('--contact_plan_init_dropout', type=float, default=0.0,
                    help='contact plan init MLP dropout（仅 init_mode=obs/learnable+obs 生效）')
+    # ---- Contact phase state (prev_phase_vec clock; step-stateful like plan_z) ----
+    p.add_argument(
+        '--contact_phase_state_enable',
+        action='store_true',
+        default=False,
+        help='启用显式相位状态 prev_phase_vec（phase_z）并作为 contact_plan GRU 输入的一部分；见 docs/contact_phase_state_prevphase_tta.md',
+    )
+    p.add_argument(
+        '--contact_phase_state_init_mode',
+        type=str,
+        default='obs',
+        choices=['zeros', 'learnable', 'obs', 'learnable+obs'],
+        help='phase_z 冷启动 init：obs(默认)|learnable+obs|learnable|zeros',
+    )
+    p.add_argument('--contact_phase_state_hidden', type=int, default=64,
+                   help='phase Δφ head hidden dim')
+    p.add_argument('--contact_phase_state_delta_max', type=float, default=0.5,
+                   help='每步相位推进 Δφ 的最大幅度（rad/step，tanh 缩放）')
+    p.add_argument('--contact_phase_state_delta_init', type=float, default=(6.283185307179586 / 80.0),
+                   help='Δφ 初始 bias（rad/step；默认约等于 80 帧一周期）')
+    p.add_argument(
+        '--contact_phase_state_event_kind',
+        type=str,
+        default='touchdown',
+        choices=['touchdown', 'liftoff', 'both', 'none'],
+        help='用 contacts_meas 的阈值过零事件对 phase 做 reset 的类型',
+    )
+    p.add_argument('--contact_phase_state_event_thr', type=float, default=0.5,
+                   help='phase event reset 的阈值（contacts_meas in [0,1]）')
+    p.add_argument('--contact_phase_state_event_hyst', type=float, default=0.0,
+                   help='phase event reset hysteresis（去抖动）：touchdown/liftoff 触发需要 prev_meas 远离阈值 (thr±hyst)，0=关闭')
+    p.add_argument('--contact_phase_state_event_min_interval', type=int, default=0,
+                   help='phase event reset 最小间隔（frames，左右脚独立计时），0=关闭')
+    p.add_argument(
+        '--phase_reset_source',
+        type=str,
+        default='contacts_meas',
+        choices=['contacts_meas', 'td_hazard', 'none'],
+        help='phase_z reset 信号源：contacts_meas(阈值过零；易受 OOD jitter/flip 影响) | td_hazard(integrate-to-1 clock-anchor) | none(不 reset)',
+    )
+    # ---- Event-Clock v3 (contact_plan residual correction) ----
+    p.add_argument('--use_event_clock', action='store_true', default=False,
+                   help='启用 Event-Clock v3：在 contact_plan GRU loop 内做 gated residual correction')
+    p.add_argument('--event_clock_max_delta', type=float, default=0.5,
+                   help='Event-Clock Δz clip 幅度（0=不 clip）')
+    p.add_argument('--event_clock_hidden_dim', type=int, default=64,
+                   help='Event-Clock Δz head hidden dim')
+    p.add_argument('--event_clock_gate_hidden_dim', type=int, default=32,
+                   help='Event-Clock gate head hidden dim')
+    p.add_argument('--event_clock_lambda_entropy_weight', type=float, default=0.01,
+                   help='Event-Clock λ entropy 正则权重')
+    p.add_argument('--event_clock_lambda_prior_weight', type=float, default=0.01,
+                   help='Event-Clock λ dynamic prior 正则权重')
+    p.add_argument('--event_clock_delta_z_l2_weight', type=float, default=0.001,
+                   help='Event-Clock Δz L2 正则权重')
     # ---- Direct pose head (cond + contacts_plan -> absolute pose) ----
     p.add_argument('--direct_pose_enable', action='store_true', default=False,
                    help='启用 direct pose head（cond+contacts_plan -> out_direct，不走自回归）')
@@ -5118,9 +5402,9 @@ def train_entry():
     p.add_argument(
         '--direct_pose_meas_mode',
         type=str,
-        default='none',
-        choices=['none', 'concat', 'mode_select'],
-        help='Phase bridge: direct head 是否引入 contacts_meas（none=legacy; concat=D0; mode_select=D1）',
+        default='concat',
+        choices=['concat', 'mode_select'],
+        help='Phase bridge: direct head 是否引入 contacts_meas（concat=D0; mode_select=D1）',
     )
     p.add_argument('--direct_pose_meas_drop_prob', type=float, default=0.0,
                    help='D2: 训练时对 direct 输入的 contacts_meas 执行整向量 drop(置0) 概率')
@@ -5128,17 +5412,62 @@ def train_entry():
                    help='D2: 训练时对 direct 输入的 contacts_meas 加高斯噪声 std（随后 clamp 到[0,1]）')
     p.add_argument('--direct_pose_plan_drop_prob', type=float, default=0.0,
                    help='D2: 训练时对 direct 输入的 contacts_plan 执行整向量 drop(置0) 概率（防止 plan 成为 shortcut）')
+    p.add_argument('--direct_pose_split_enable', action='store_true', default=False,
+                   help='启用 direct_pose 输出分头（shared trunk + leg/non-leg split output heads）')
+    p.add_argument('--direct_pose_hinge_enable', action='store_true', default=False,
+                   help='Enable hinge-style 1D correction for direct head (joint-local axis twist).')
+    p.add_argument('--direct_pose_hinge_bones', type=str, default="calf_r",
+                   help='Comma-separated bone names/indices for hinge correction (default: calf_r).')
+    p.add_argument('--direct_pose_hinge_axis', type=str, default="z", choices=['x', 'y', 'z'],
+                   help='Local axis for hinge correction (default: z).')
+    p.add_argument('--direct_pose_hinge_max_deg', type=float, default=45.0,
+                   help='Max hinge correction magnitude in degrees (tanh-scaled).')
+    p.add_argument('--direct_pose_hinge_hidden', type=int, default=0,
+                   help='Hidden dim for hinge head (0=auto).')
+    p.add_argument(
+        '--direct_pose_meas_force_zero',
+        action='store_true',
+        default=False,
+        help='Ablation: force direct head to ignore contacts_meas (concat->zeros, mode_select->uniform).',
+    )
+    p.add_argument(
+        '--direct_pose_meas_detach',
+        action='store_true',
+        default=False,
+        help='Ablation: stop-grad from direct head into contacts_meas (keeps meas values but blocks gradients).',
+    )
     p.add_argument('--w_direct_pose', type=float, default=0.0,
                    help='direct pose 监督权重（geodesic vs GT pose；0=关闭）')
     # ---- Meas head (pose-derived contacts; no physics) ----
     p.add_argument('--contact_meas_enable', action='store_true', default=False,
-                   help='启用 contacts_meas head（从 pose_hist/angvel 推导 soft contact）')
+                   help='启用 contacts_meas head（v1: 从 state_t 的下肢 pose6d + 下肢 angvel 推导 soft contact；无 pose_hist）')
     p.add_argument('--contact_meas_hidden', type=int, default=64,
                    help='contacts_meas MLP hidden dim')
     p.add_argument('--contact_meas_dropout', type=float, default=0.0,
                    help='contacts_meas head dropout')
     p.add_argument('--w_contact_meas', type=float, default=0.0,
                    help='contacts_meas 监督权重（小权重对齐 GT soft_contacts；0=关闭）')
+    p.add_argument(
+        '--train_only_contact_meas_head',
+        action='store_true',
+        default=False,
+        help='Ablation: freeze all parameters except contact_meas_head (use with --w_contact_meas>0).',
+    )
+    # ---- TD hazard head (pose-derived touchdown hazard; clock anchor reset) ----
+    p.add_argument(
+        '--contact_td_hazard_enable',
+        action='store_true',
+        default=False,
+        help='启用 contacts_td_hazard head（预测 touchdown hazard mass；用于 integrate-to-1 phase reset anchor）',
+    )
+    p.add_argument('--contact_td_hazard_hidden', type=int, default=64, help='contacts_td_hazard MLP hidden dim')
+    p.add_argument('--contact_td_hazard_dropout', type=float, default=0.0, help='contacts_td_hazard head dropout')
+    p.add_argument('--w_contact_td_hazard_bce', type=float, default=0.0,
+                   help='contacts_td_hazard 监督权重（BCE vs ttc_td_events；0=关闭）')
+    p.add_argument('--w_contact_td_hazard_mass', type=float, default=0.0,
+                   help='contacts_td_hazard per-cycle mass matching 权重（(sum p - sum events)^2；0=关闭）')
+    p.add_argument('--w_contact_td_hazard_unimodal', type=float, default=0.0,
+                   help='contacts_td_hazard unimodal penalty 权重（抑制多峰；0=关闭）')
     # ---- White-box contacts_meas knobs (P2 ground_z stability / ablations) ----
     # NOTE: when contact_plan_enable=True, training/rollout will compute contacts_in_t via _contact_meas_whitebox,
     # which uses these knobs (and feeds it to the model as meas override).
@@ -5152,9 +5481,9 @@ def train_entry():
     p.add_argument(
         '--contact_meas_ground_z_mode',
         type=str,
-        default='min',
-        choices=('min', 'ema', 'window', 'slew'),
-        help="White-box ground_z update mode: min(legacy monotonic-min) | ema | window(quantile) | slew(rate-limit).",
+        default='window',
+        choices=('ema', 'window', 'slew'),
+        help="White-box ground_z update mode: ema | window(quantile) | slew(rate-limit).",
     )
     p.add_argument('--contact_meas_ground_z_beta', type=float, default=0.05,
                    help='EMA beta for contact_meas_ground_z_mode=ema.')
@@ -5186,8 +5515,6 @@ def train_entry():
                    help='权重平滑系数（0~1，越小压缩差异）。')
     p.add_argument('--hierarchy_alpha', type=float, default=0.5,
                    help='log 空间融合系数：1=只用 motion，0=只用 hierarchy。')
-    p.add_argument('--combine_space', type=str, default='log', choices=['log', 'linear'],
-                   help='权重组合空间：log=推荐，linear=旧的直接乘法。')
     p.add_argument('--bone_prior_mode', type=str, default='geodesic', choices=['geodesic', 'mean6d'],
                    help='prior_per_dim 转为运动尺度的方式：geodesic=MC测地距离（默认），mean6d=简单均值。')
     p.add_argument('--bone_prior_samples', type=int, default=1024,
@@ -5401,6 +5728,7 @@ def train_entry():
         contact_dim=getattr(ds_train, 'contact_dim', 0),
         angvel_dim=getattr(ds_train, 'angvel_dim', 0),
         pose_hist_dim=pose_hist_dim_model,
+        state_layout=getattr(ds_train, 'state_layout', None),
         bone_names=getattr(ds_train, 'bone_names', None),
         output_layout=getattr(ds_train, 'output_layout', None),
         contact_plan_enable=bool(_arg('contact_plan_enable', False)),
@@ -5413,20 +5741,48 @@ def train_entry():
         contact_plan_init_mode=str(_arg('contact_plan_init_mode', 'learnable') or 'learnable'),
         contact_plan_init_hidden=int(_arg('contact_plan_init_hidden', 128) or 128),
         contact_plan_init_dropout=float(_arg('contact_plan_init_dropout', 0.0) or 0.0),
+        contact_phase_state_enable=bool(_arg('contact_phase_state_enable', False)),
+        contact_phase_state_init_mode=str(_arg('contact_phase_state_init_mode', 'obs') or 'obs'),
+        contact_phase_state_hidden=int(_arg('contact_phase_state_hidden', 64) or 64),
+        contact_phase_state_delta_max=float(_arg('contact_phase_state_delta_max', 0.5) or 0.5),
+        contact_phase_state_delta_init=float(_arg('contact_phase_state_delta_init', (6.283185307179586 / 80.0)) or (6.283185307179586 / 80.0)),
+        contact_phase_state_event_kind=str(_arg('contact_phase_state_event_kind', 'touchdown') or 'touchdown'),
+        contact_phase_state_event_thr=float(_arg('contact_phase_state_event_thr', 0.5) or 0.5),
+        contact_phase_state_event_hyst=float(_arg('contact_phase_state_event_hyst', 0.0) or 0.0),
+        contact_phase_state_event_min_interval=int(_arg('contact_phase_state_event_min_interval', 0) or 0),
+        phase_reset_source=str(_arg('phase_reset_source', 'contacts_meas') or 'contacts_meas'),
+        use_event_clock=bool(_arg('use_event_clock', False)),
+        event_clock_max_delta=float(_arg('event_clock_max_delta', 0.5) or 0.5),
+        event_clock_hidden_dim=int(_arg('event_clock_hidden_dim', 64) or 64),
+        event_clock_gate_hidden_dim=int(_arg('event_clock_gate_hidden_dim', 32) or 32),
         direct_pose_enable=bool(_arg('direct_pose_enable', False)),
         direct_pose_hidden=int(_arg('direct_pose_hidden', 256) or 256),
         direct_pose_dropout=float(_arg('direct_pose_dropout', 0.0) or 0.0),
         direct_pose_detach_plan=bool(_arg('direct_pose_detach_plan', True)),
-        direct_pose_meas_mode=str(_arg('direct_pose_meas_mode', 'none') or 'none'),
+        direct_pose_meas_mode=str(_arg('direct_pose_meas_mode', 'concat') or 'concat'),
         direct_pose_meas_drop_prob=float(_arg('direct_pose_meas_drop_prob', 0.0) or 0.0),
         direct_pose_meas_noise_std=float(_arg('direct_pose_meas_noise_std', 0.0) or 0.0),
         direct_pose_plan_drop_prob=float(_arg('direct_pose_plan_drop_prob', 0.0) or 0.0),
+        direct_pose_feat_source=str(_arg('direct_pose_feat_source', 'cond') or 'cond'),
+        direct_pose_time_pe_dim=int(_arg('direct_pose_time_pe_dim', 0) or 0),
+        direct_pose_time_pe_base=float(_arg('direct_pose_time_pe_base', 10000.0) or 10000.0),
+        direct_pose_split_enable=bool(_arg('direct_pose_split_enable', False)),
+        direct_pose_hinge_enable=bool(_arg('direct_pose_hinge_enable', False)),
+        direct_pose_hinge_bones=_arg('direct_pose_hinge_bones', None),
+        direct_pose_hinge_axis=str(_arg('direct_pose_hinge_axis', 'z') or 'z'),
+        direct_pose_hinge_max_deg=float(_arg('direct_pose_hinge_max_deg', 45.0) or 45.0),
+        direct_pose_hinge_hidden=int(_arg('direct_pose_hinge_hidden', 0) or 0),
         contact_meas_enable=bool(_arg('contact_meas_enable', False)),
         contact_meas_hidden=int(_arg('contact_meas_hidden', 64) or 64),
         contact_meas_dropout=float(_arg('contact_meas_dropout', 0.0) or 0.0),
-        # When a learned meas head exists, do NOT override it with external contacts/whitebox.
-        contacts_as_meas_override=bool(_arg('contact_plan_enable', False)) and (not bool(_arg('contact_meas_enable', False))),
+        contact_td_hazard_enable=bool(_arg('contact_td_hazard_enable', False)),
+        contact_td_hazard_hidden=int(_arg('contact_td_hazard_hidden', 64) or 64),
+        contact_td_hazard_dropout=float(_arg('contact_td_hazard_dropout', 0.0) or 0.0),
     ).to(device)
+    if bool(_arg('direct_pose_meas_force_zero', False)):
+        setattr(model, 'direct_pose_meas_force_zero', True)
+    if bool(_arg('direct_pose_meas_detach', False)):
+        setattr(model, 'direct_pose_meas_detach', True)
     if history_export_frames > 0:
         if pose_hist_dim_raw <= 0 or pose_hist_len_raw <= 0:
             print("[AdaptiveHistory][WARN] pose history not available; adaptive history disabled.")
@@ -5503,6 +5859,10 @@ def train_entry():
                 if not isinstance(state_dict, dict):
                     print(f"[Resume][WARN] checkpoint has no state_dict: {ckpt_path}")
                 else:
+                    try:
+                        model.adapt_legacy_state_dict_(state_dict)
+                    except Exception:
+                        pass
                     cur = model.state_dict()
                     filtered = {}
                     skipped = []
@@ -5518,6 +5878,24 @@ def train_entry():
                     )
         except Exception as err:
             print(f"[Resume][WARN] failed to load checkpoint: {err}")
+
+    # Experimental: isolate meas-head training by freezing everything else.
+    if bool(_arg('train_only_contact_meas_head', False)):
+        try:
+            for _, p in model.named_parameters():
+                p.requires_grad_(False)
+            meas_head = getattr(model, 'contact_meas_head', None)
+            if meas_head is None:
+                print("[Freeze][WARN] train_only_contact_meas_head set but model.contact_meas_head is None.")
+            else:
+                for _, p in meas_head.named_parameters():
+                    p.requires_grad_(True)
+            total = sum(int(p.numel()) for p in model.parameters())
+            trainable = sum(int(p.numel()) for p in model.parameters() if bool(getattr(p, 'requires_grad', False)))
+            frac = (float(trainable) / float(total)) if total > 0 else 0.0
+            print(f"[Freeze] train_only_contact_meas_head: trainable={trainable}/{total} ({frac:.3%})")
+        except Exception as exc:
+            print(f"[Freeze][WARN] failed to apply train_only_contact_meas_head: {exc}")
 
     with torch.no_grad():
         _l0 = model.shared_encoder[0]
@@ -5557,7 +5935,6 @@ def train_entry():
     max_weight_ratio = float(_arg('max_weight_ratio', 25.0))
     weight_gamma = float(_arg('weight_gamma', 0.7))
     hierarchy_alpha = float(_arg('hierarchy_alpha', 0.5))
-    combine_space = str(_arg('combine_space', 'log') or 'log')
 
     loss_fn = MotionJointLoss(
         output_layout=ds_train.output_layout,
@@ -5570,14 +5947,19 @@ def train_entry():
         w_root_speed=w_root_speed,
         w_contact_plan=float(_arg('w_contact_plan', 0.0) or 0.0),
         w_contact_meas=float(_arg('w_contact_meas', 0.0) or 0.0),
+        w_contact_td_hazard_bce=float(_arg('w_contact_td_hazard_bce', 0.0) or 0.0),
+        w_contact_td_hazard_mass=float(_arg('w_contact_td_hazard_mass', 0.0) or 0.0),
+        w_contact_td_hazard_unimodal=float(_arg('w_contact_td_hazard_unimodal', 0.0) or 0.0),
         w_direct_pose=float(_arg('w_direct_pose', 0.0) or 0.0),
+        event_clock_lambda_entropy_weight=float(_arg('event_clock_lambda_entropy_weight', 0.01) or 0.01),
+        event_clock_lambda_prior_weight=float(_arg('event_clock_lambda_prior_weight', 0.01) or 0.01),
+        event_clock_delta_z_l2_weight=float(_arg('event_clock_delta_z_l2_weight', 0.001) or 0.001),
 
         adaptive_bone_weights=adaptive_bone_weights,
         bone_prior_stds=bone_prior_stds,
         use_hierarchy_weights=use_hierarchy_weights,
         hierarchy_mode=hierarchy_mode,
         hierarchy_alpha=hierarchy_alpha,
-        combine_space=combine_space,
         max_weight_ratio=max_weight_ratio,
         weight_gamma=weight_gamma,
     )
@@ -5597,6 +5979,15 @@ def train_entry():
             loss_fn.set_bone_names(ds_train.bone_names)
         except Exception:
             pass
+    # Direct pose hinge correction metadata (optional).
+    try:
+        hinge_idx = getattr(model, "direct_pose_hinge_joint_idx", None)
+        if hinge_idx:
+            loss_fn.direct_pose_hinge_joint_idx = list(hinge_idx)
+            loss_fn.direct_pose_hinge_axis = str(getattr(model, "direct_pose_hinge_axis", "Z") or "Z")
+            loss_fn.direct_pose_hinge_max_rad = getattr(model, "direct_pose_hinge_max_rad", None)
+    except Exception:
+        pass
     if getattr(ds_train, 'parents', None):
         try:
             loss_fn.set_skeleton(ds_train.parents, getattr(ds_train, 'bone_offsets', None))
@@ -5619,7 +6010,6 @@ def train_entry():
         f"adaptive_bone_weights={loss_fn.use_adaptive_weights} "
         f"use_hierarchy_weights={loss_fn.use_hierarchy_weights} "
         f"hier_mode={loss_fn.hierarchy_mode} "
-        f"combine_space={loss_fn.combine_space} "
         f"hier_alpha={loss_fn.hierarchy_alpha} "
         f"max_weight_ratio={loss_fn.max_weight_ratio} "
         f"weight_gamma={loss_fn.weight_gamma}"
@@ -5633,6 +6023,14 @@ def train_entry():
         loss_fn.rot6d_eps = 1e-6
     augmentor = MotionAugmentation(noise_std=_arg('aug_noise_std', 0.0), time_warp_prob=_arg('aug_time_warp_prob', 0.0))
     trainer = Trainer(model=model, loss_fn=loss_fn, lr=_arg('lr', 0.0001), grad_clip=_arg('grad_clip', 0.0), weight_decay=_arg('weight_decay', 0.01), tf_warmup_steps=_arg('tf_warmup_steps', 5000), tf_total_steps=_arg('tf_total_steps', 200000), augmentor=augmentor, use_amp=_arg('amp', False), accum_steps=_arg('accum_steps', 1), pin_memory=pin, args=GLOBAL_ARGS)
+    try:
+        hinge_idx = getattr(model, "direct_pose_hinge_joint_idx", None)
+        if hinge_idx:
+            trainer.direct_pose_hinge_joint_idx = list(hinge_idx)
+            trainer.direct_pose_hinge_axis = str(getattr(model, "direct_pose_hinge_axis", "Z") or "Z")
+            trainer.direct_pose_hinge_max_rad = getattr(model, "direct_pose_hinge_max_rad", None)
+    except Exception:
+        pass
     trainer._norm_template_path = str(norm_template_path) if norm_template_path else None
     trainer._bundle_json_path = bundle_json_path
     trainer.out_dir = str(out_dir)
@@ -5673,7 +6071,7 @@ def train_entry():
         trainer.contact_meas_gate_by_hit_override = False
     else:
         trainer.contact_meas_gate_by_hit_override = None
-    trainer.contact_meas_ground_z_mode = str(_arg('contact_meas_ground_z_mode', 'min') or 'min').strip().lower()
+    trainer.contact_meas_ground_z_mode = str(_arg('contact_meas_ground_z_mode', 'window') or 'window').strip().lower()
     trainer.contact_meas_ground_z_beta = float(_arg('contact_meas_ground_z_beta', 0.05) or 0.05)
     trainer.contact_meas_ground_z_window = int(_arg('contact_meas_ground_z_window', 5) or 5)
     trainer.contact_meas_ground_z_quantile = float(_arg('contact_meas_ground_z_quantile', 0.2) or 0.2)
@@ -5688,9 +6086,6 @@ def train_entry():
     trainer.contact_meas_ground_z_max_up_m = max(0.0, up_cm) / 100.0
     trainer.contact_meas_ground_z_max_down_m = max(0.0, down_cm) / 100.0
 
-
-    # RootYaw 不再参与训练/损失，默认跳过；仍保留字段以兼容旧模型，需时可显式设置
-    safe_set_slice(trainer, 'yaw_x_slice', None)
     safe_set_slice(trainer, 'rootvel_x_slice', parse_layout_entry(trainer._x_layout.get('RootVelocity'), 'RootVelocity'))
     safe_set_slice(trainer, 'angvel_x_slice', parse_layout_entry(trainer._x_layout.get('BoneAngularVelocities'), 'BoneAngularVelocities'))
 
@@ -5724,14 +6119,13 @@ def train_entry():
         horizon=_arg('eval_horizon', None),
         max_batches=trainer.monitor_batches,
     )
+    trainer.ss_chunk_len = int(_arg('ss_chunk_len', getattr(trainer, 'ss_chunk_len', 1)) or 1)
     trainer.tf_mode = _arg('tf_mode', 'epoch_linear')
     trainer.tf_warmup_epochs = _arg('tf_warmup_epochs', 3)
     trainer.tf_start_epoch = _arg('tf_start_epoch', 0)
     trainer.tf_end_epoch = _arg('tf_end_epoch', 10)
     trainer.tf_max = _arg('tf_max', 1.0)
     trainer.tf_min = _arg('tf_min', 0.1)
-    trainer.mixed_state_mode = str(_arg('mixed_state_mode', 'full')).lower()
-    trainer.mix_full_state = trainer.mixed_state_mode != 'rot6d'
     trainer.freerun_horizon = int(_arg('freerun_horizon', 0) or 0)
     trainer.freerun_weight = float(_arg('freerun_weight', 0.1))
     trainer.freerun_horizon_min = int(_arg('freerun_horizon_min', 6) or 6)
@@ -5779,42 +6173,12 @@ def train_entry():
     trainer.freerun_grad_log = bool(_arg('freerun_grad_log', False))
     trainer.freerun_grad_log_interval = int(_arg('freerun_grad_log_interval', 50) or 50)
     trainer.freerun_grad_ratio_alert = float(_arg('freerun_grad_ratio_alert', 0.01) or 0.01)
-    adaptive_loss_method = str(_arg('adaptive_loss_method', 'none') or 'none').lower()
-    adaptive_loss_terms = [
-        term.strip()
-        for term in str(_arg('adaptive_loss_terms', 'rot_local,rot_ortho,root_vel,root_speed') or '').split(',')
-        if term.strip()
-    ]
-    if not adaptive_loss_terms:
-        adaptive_loss_terms = None  # 运行时自动根据 loss payload 决定
-    sched_params = None
-    if _arg('adaptive_scheduler', False):
-        sched_params = dict(
-            freerun_horizon=trainer.freerun_horizon,
-            freerun_min=trainer.freerun_horizon_min,
-            freerun_max=int(_arg('freerun_horizon_max', trainer.freerun_horizon or 0) or max(trainer.freerun_horizon or 0, 0)),
-            teacher_forcing_ratio=float(_arg('tf_max', 1.0)),
-            loss_spike_threshold=float(_arg('adaptive_sched_loss_spike', 1.5)),
-            convergence_threshold=float(_arg('adaptive_sched_convergence', 0.02)),
-            adjustment_rate=float(_arg('adaptive_sched_adjustment', 0.1)),
-            check_interval=int(_arg('adaptive_sched_interval', 50) or 50),
-        )
-    adaptive_manager = AdaptiveLossManager(
-        adaptive_loss_terms,
-        adaptive_loss_method,
-        loss_alpha=float(_arg('adaptive_loss_alpha', 1.5)),
-        loss_temperature=float(_arg('adaptive_loss_temperature', 2.0)),
-        scheduler_params=sched_params,
-        weight_ema_beta=float(_arg('adaptive_loss_ema_beta', 0.5)),
-    )
-    trainer.adaptive_loss_module = adaptive_manager.loss_module
-    trainer.hyperparam_scheduler = adaptive_manager.scheduler
+    trainer.adaptive_loss_module = None
+    trainer.hyperparam_scheduler = None
     trainer.teacher_rot_noise_deg = float(_arg('teacher_rot_noise_deg', 0.0))
     trainer.teacher_rot_noise_prob = float(_arg('teacher_rot_noise_prob', 0.0))
     trainer.input_step_noise_prob = float(_arg('input_step_noise_prob', trainer.input_step_noise_prob) or 0.0)
     trainer.input_noise_profile = _sanitize_noise_profile_spec(_arg('input_noise_deg_mix', None))
-    trainer.disable_auto_tune_freerun = bool(_arg('disable_auto_tune_freerun', False))
-
     trainer.freerun_debug_path = _arg('freerun_debug_path', None)
     trainer.enable_grad_connection_test = not bool(_arg('no_grad_conn_test', False))
     trainer._current_run_name = run_name
@@ -5895,8 +6259,11 @@ def train_entry():
 def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path: str, opset: int = 18, dynamic_batch: bool = False):
     """
     单步（无隐式状态）ONNX 导出：
-      输入:  state[B,Dx], cond[B,Dc], contacts[B,C], angvel[B,A], pose_hist[B,P], (optional) plan_z[B,Hp]
-      输出:  motion_pred[B,Dy], (optional) plan_z_next[B,Hp]
+      输入:  state[B,Dx], cond[B,Dc], contacts[B,C], angvel[B,A], pose_hist[B,P],
+            (optional) plan_z[B,Hp], (optional) phase_z[B,2C],
+            (optional) td_hazard_acc[B,C] (only when phase_reset_source=td_hazard)
+      输出:  motion_pred[B,Dy], (optional) plan_z_next[B,Hp], (optional) phase_z_next[B,2C],
+            (optional) td_hazard_acc_next[B,C]
 
     训练与推理均使用显式历史缓冲，对应 UE 中的 PoseHistoryBuffer。
     """
@@ -5970,17 +6337,110 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
     angvel_dim = int(getattr(model, 'angvel_dim', angvel_seq.shape[-1] if isinstance(angvel_seq, torch.Tensor) else 0))
     pose_hist_dim = int(getattr(model, 'pose_hist_dim', pose_hist_seq.shape[-1] if isinstance(pose_hist_seq, torch.Tensor) else 0))
     plan_dim = int(getattr(model, 'contact_plan_hidden', 0) or 0) if bool(getattr(model, 'contact_plan_enable', False)) else 0
+    phase_dim = int(getattr(model, '_contact_phase_state_dim', 0) or 0) if bool(getattr(model, 'contact_phase_state_enable', False)) else 0
 
     cond0 = _frame_or_zero(cond_seq, cond_dim, torch.float32)
     contacts0 = _frame_or_zero(contacts_seq, contact_dim, torch.float32)
     angvel0 = _frame_or_zero(angvel_seq, angvel_dim, torch.float32)
     pose_hist0 = _frame_or_zero(pose_hist_seq, pose_hist_dim, torch.float32)
     plan_z0 = torch.zeros((1, plan_dim), dtype=torch.float32) if plan_dim > 0 else None
+    phase_z0 = torch.zeros((1, phase_dim), dtype=torch.float32) if phase_dim > 0 else None
+    td_hazard_dim = int(contact_dim) if (phase_dim > 0 and str(getattr(model, "phase_reset_source", "")).strip().lower() == "td_hazard") else 0
+    td_hazard_acc0 = torch.zeros((1, td_hazard_dim), dtype=torch.float32) if td_hazard_dim > 0 else None
 
     device = torch.device('cpu')
     model = model.to(device).eval()
 
-    if plan_dim > 0:
+    if plan_dim > 0 and phase_dim > 0 and td_hazard_dim > 0:
+        class _StatelessWrapper(torch.nn.Module):
+            def __init__(self, core):
+                super().__init__()
+                self.core = core
+
+            def forward(self, state, cond, contacts, angvel, pose_hist, plan_z, phase_z, td_hazard_acc):
+                cond_in = cond if cond.shape[-1] > 0 else None
+                contacts_in = contacts if contacts.shape[-1] > 0 else None
+                angvel_in = angvel if angvel.shape[-1] > 0 else None
+                pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
+                plan_z_in = plan_z if plan_z.shape[-1] > 0 else None
+                phase_z_in = phase_z if phase_z.shape[-1] > 0 else None
+                td_hazard_acc_in = td_hazard_acc if td_hazard_acc.shape[-1] > 0 else None
+                out = self.core(
+                    state,
+                    cond_in,
+                    contacts=contacts_in,
+                    angvel=angvel_in,
+                    pose_history=pose_hist_in,
+                    plan_z=plan_z_in,
+                    phase_z=phase_z_in,
+                    td_hazard_acc=td_hazard_acc_in,
+                )
+                if isinstance(out, dict):
+                    pred = out.get('out')
+                    if pred is None:
+                        raise RuntimeError("Model dict output missing 'out'.")
+                    z_next = out.get('plan_z_next')
+                    if z_next is None:
+                        z_next = plan_z.new_zeros(plan_z.shape)
+                    p_next = out.get('phase_z_next')
+                    if p_next is None:
+                        p_next = phase_z.new_zeros(phase_z.shape)
+                    hz_next = out.get("td_hazard_acc_next")
+                    if hz_next is None:
+                        hz_next = td_hazard_acc
+                    return pred, z_next, p_next, hz_next
+                return out, plan_z, phase_z, td_hazard_acc
+
+        wrapper = _StatelessWrapper(model).cpu().eval()
+        sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0, plan_z0, phase_z0, td_hazard_acc0)
+        Dy = int(sample_out[0].shape[-1])
+
+        inputs = (state0, cond0, contacts0, angvel0, pose_hist0, plan_z0, phase_z0, td_hazard_acc0)
+        input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'plan_z', 'phase_z', 'td_hazard_acc']
+        output_names = ['motion_pred', 'plan_z_next', 'phase_z_next', 'td_hazard_acc_next']
+    elif plan_dim > 0 and phase_dim > 0:
+        class _StatelessWrapper(torch.nn.Module):
+            def __init__(self, core):
+                super().__init__()
+                self.core = core
+
+            def forward(self, state, cond, contacts, angvel, pose_hist, plan_z, phase_z):
+                cond_in = cond if cond.shape[-1] > 0 else None
+                contacts_in = contacts if contacts.shape[-1] > 0 else None
+                angvel_in = angvel if angvel.shape[-1] > 0 else None
+                pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
+                plan_z_in = plan_z if plan_z.shape[-1] > 0 else None
+                phase_z_in = phase_z if phase_z.shape[-1] > 0 else None
+                out = self.core(
+                    state,
+                    cond_in,
+                    contacts=contacts_in,
+                    angvel=angvel_in,
+                    pose_history=pose_hist_in,
+                    plan_z=plan_z_in,
+                    phase_z=phase_z_in,
+                )
+                if isinstance(out, dict):
+                    pred = out.get('out')
+                    if pred is None:
+                        raise RuntimeError("Model dict output missing 'out'.")
+                    z_next = out.get('plan_z_next')
+                    if z_next is None:
+                        z_next = plan_z.new_zeros(plan_z.shape)
+                    p_next = out.get('phase_z_next')
+                    if p_next is None:
+                        p_next = phase_z.new_zeros(phase_z.shape)
+                    return pred, z_next, p_next
+                return out, plan_z, phase_z
+
+        wrapper = _StatelessWrapper(model).cpu().eval()
+        sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0, plan_z0, phase_z0)
+        Dy = int(sample_out[0].shape[-1])
+
+        inputs = (state0, cond0, contacts0, angvel0, pose_hist0, plan_z0, phase_z0)
+        input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'plan_z', 'phase_z']
+        output_names = ['motion_pred', 'plan_z_next', 'phase_z_next']
+    elif plan_dim > 0:
         class _StatelessWrapper(torch.nn.Module):
             def __init__(self, core):
                 super().__init__()
@@ -6017,6 +6477,85 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
         inputs = (state0, cond0, contacts0, angvel0, pose_hist0, plan_z0)
         input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'plan_z']
         output_names = ['motion_pred', 'plan_z_next']
+    elif phase_dim > 0 and td_hazard_dim > 0:
+        class _StatelessWrapper(torch.nn.Module):
+            def __init__(self, core):
+                super().__init__()
+                self.core = core
+
+            def forward(self, state, cond, contacts, angvel, pose_hist, phase_z, td_hazard_acc):
+                cond_in = cond if cond.shape[-1] > 0 else None
+                contacts_in = contacts if contacts.shape[-1] > 0 else None
+                angvel_in = angvel if angvel.shape[-1] > 0 else None
+                pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
+                phase_z_in = phase_z if phase_z.shape[-1] > 0 else None
+                td_hazard_acc_in = td_hazard_acc if td_hazard_acc.shape[-1] > 0 else None
+                out = self.core(
+                    state,
+                    cond_in,
+                    contacts=contacts_in,
+                    angvel=angvel_in,
+                    pose_history=pose_hist_in,
+                    phase_z=phase_z_in,
+                    td_hazard_acc=td_hazard_acc_in,
+                )
+                if isinstance(out, dict):
+                    pred = out.get('out')
+                    if pred is None:
+                        raise RuntimeError("Model dict output missing 'out'.")
+                    p_next = out.get('phase_z_next')
+                    if p_next is None:
+                        p_next = phase_z.new_zeros(phase_z.shape)
+                    hz_next = out.get("td_hazard_acc_next")
+                    if hz_next is None:
+                        hz_next = td_hazard_acc
+                    return pred, p_next, hz_next
+                return out, phase_z, td_hazard_acc
+
+        wrapper = _StatelessWrapper(model).cpu().eval()
+        sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0, phase_z0, td_hazard_acc0)
+        Dy = int(sample_out[0].shape[-1])
+
+        inputs = (state0, cond0, contacts0, angvel0, pose_hist0, phase_z0, td_hazard_acc0)
+        input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'phase_z', 'td_hazard_acc']
+        output_names = ['motion_pred', 'phase_z_next', 'td_hazard_acc_next']
+    elif phase_dim > 0:
+        class _StatelessWrapper(torch.nn.Module):
+            def __init__(self, core):
+                super().__init__()
+                self.core = core
+
+            def forward(self, state, cond, contacts, angvel, pose_hist, phase_z):
+                cond_in = cond if cond.shape[-1] > 0 else None
+                contacts_in = contacts if contacts.shape[-1] > 0 else None
+                angvel_in = angvel if angvel.shape[-1] > 0 else None
+                pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
+                phase_z_in = phase_z if phase_z.shape[-1] > 0 else None
+                out = self.core(
+                    state,
+                    cond_in,
+                    contacts=contacts_in,
+                    angvel=angvel_in,
+                    pose_history=pose_hist_in,
+                    phase_z=phase_z_in,
+                )
+                if isinstance(out, dict):
+                    pred = out.get('out')
+                    if pred is None:
+                        raise RuntimeError("Model dict output missing 'out'.")
+                    p_next = out.get('phase_z_next')
+                    if p_next is None:
+                        p_next = phase_z.new_zeros(phase_z.shape)
+                    return pred, p_next
+                return out, phase_z
+
+        wrapper = _StatelessWrapper(model).cpu().eval()
+        sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0, phase_z0)
+        Dy = int(sample_out[0].shape[-1])
+
+        inputs = (state0, cond0, contacts0, angvel0, pose_hist0, phase_z0)
+        input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'phase_z']
+        output_names = ['motion_pred', 'phase_z_next']
     else:
         class _StatelessWrapper(torch.nn.Module):
             def __init__(self, core):
