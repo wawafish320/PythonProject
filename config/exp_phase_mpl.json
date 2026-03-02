@@ -9,19 +9,18 @@
   "seq_len": 60,
   "amp": true,
   "tf_mode": "epoch_linear",
-  "tf_start_epoch": 1,
-  "tf_end_epoch": 21,
+  "tf_start_epoch": 5,
+  "tf_end_epoch": 8,
   "tf_max": 1.0,
-  "tf_min": 1.0,
+  "tf_min": 0.5,
+  "ss_chunk_len": 1,
   "encoder_path": "./models/motion_encoder_equiv.pt",
   "foot_contact_threshold": 2.0,
   "diag_input_stats": true,
   "freerun_debug_path": "debug_output/freerun_diag_ep002.pt",
   "freerun_horizon": 0,
-  "freerun_horizon_ramp_epochs": 8,
   "freerun_weight": 0.0,
-  "freerun_grad_log": true,
-  "freerun_grad_log_interval": 200,
+  "freerun_grad_log": false,
   "monitor_batches": 2,
   "eval_horizon": 14,
   "eval_warmup": 0,
@@ -52,221 +51,46 @@
   "meas_pose_hist_noise_std": 0.0,
   "freerun_stage_schedule": [
     {
-      "range": [
-        1,
-        6
-      ],
-      "label": "stage1_pure_convergence",
+      "range": [1, 4],
+      "label": "stage1_warmup_tf1",
       "trainer": {
         "freerun_weight": 0.0,
-        "freerun_horizon": 0,
-        "eval_horizon": 8,
-        "teacher_rot_noise_prob": 0.0,
-        "teacher_rot_noise_deg": 0.0,
-        "input_noise_profile": [],
-        "tf_max": 1.0,
-        "tf_min": 1.0
+        "freerun_horizon": 0
       },
       "params": {
-        "freerun_weight": 0.0,
-        "freerun_horizon": 0,
-        "teacher_rot_noise_prob": 0.0,
-        "teacher_rot_noise_deg": 0.0,
-        "input_noise_profile": [],
         "tf_max": 1.0,
         "tf_min": 1.0,
+        "ss_chunk_len": 1,
         "opt_lr": 0.001
-      },
-      "loss_groups": {
-        "core": {
-          "w_rot_local": 0.18,
-          "rot_local_tail_weight": 0.05,
-          "rot_local_tail_k": 3,
-          "rot_local_tail_scope": "keybones",
-          "rot_local_tail_select": "ema",
-          "rot_local_tail_ema_beta": 0.9,
-          "w_root_vel": 0.0,
-          "w_root_speed": 0.0
-        }
       }
     },
     {
-      "range": [
-        7,
-        9
-      ],
-      "label": "stage2a_fine_convergence_a",
+      "range": [5, 8],
+      "label": "stage2_transition_tf1_to_p05",
       "trainer": {
         "freerun_weight": 0.0,
-        "freerun_horizon": 0,
-        "eval_horizon": 8,
-        "teacher_rot_noise_prob": 0.0,
-        "teacher_rot_noise_deg": 0.0,
-        "input_noise_profile": [],
-        "tf_max": 1.0,
-        "tf_min": 1.0
+        "freerun_horizon": 0
       },
       "params": {
-        "freerun_weight": 0.0,
-        "freerun_horizon": 0,
-        "teacher_rot_noise_prob": 0.0,
-        "teacher_rot_noise_deg": 0.0,
-        "input_noise_profile": [],
         "tf_max": 1.0,
-        "tf_min": 1.0,
-        "eval_horizon": 8,
+        "tf_min": 0.5,
+        "ss_chunk_len": 1,
         "opt_lr": 0.0005
-      },
-	      "loss_groups": {
-	        "core": {
-	          "w_rot_local": 0.22,
-              "rot_local_tail_weight": 0.05,
-	          "rot_local_tail_k": 3,
-	          "rot_local_tail_scope": "keybones",
-	          "rot_local_tail_select": "ema",
-	          "rot_local_tail_ema_beta": 0.9,
-	          "w_root_vel": 0.0,
-	          "w_root_speed": 0.0
-	        }
       }
     },
-	    {
-	      "range": [
-	        10,
-	        12
-	      ],
-	      "label": "stage2a_fine_convergence_b_root_warmup",
-	      "trainer": {
-	        "freerun_weight": 0.0,
-	        "freerun_horizon": 0,
-	        "eval_horizon": 8,
-        "teacher_rot_noise_prob": 0.0,
-        "teacher_rot_noise_deg": 0.0,
-        "input_noise_profile": [],
-        "tf_max": 1.0,
-        "tf_min": 1.0
-      },
-      "params": {
-        "freerun_weight": 0.0,
-        "freerun_horizon": 0,
-        "teacher_rot_noise_prob": 0.0,
-        "teacher_rot_noise_deg": 0.0,
-        "input_noise_profile": [],
-        "tf_max": 1.0,
-        "tf_min": 1.0,
-        "eval_horizon": 8,
-        "opt_lr": 0.0004
-      },
-		      "loss_groups": {
-		        "core": {
-		          "w_rot_local": 0.22,
-		          "rot_local_tail_weight": 0.08,
-		          "rot_local_tail_k": 3,
-		          "rot_local_tail_scope": "keybones",
-		          "rot_local_tail_select": "ema",
-		          "rot_local_tail_ema_beta": 0.9,
-		          "w_root_vel": 0.05,
-		          "w_root_speed": 0.03
-		        }
-	      }
-	    },
-	    {
-	      "range": [
-	        13,
-	        15
-	      ],
-	      "label": "stage2b_maintain_expose_a",
-	      "trainer": {
-	        "freerun_weight": 0.04,
-	        "freerun_horizon": 6,
-	        "eval_horizon": 10,
-	        "teacher_rot_noise_prob": 0.0,
-	        "teacher_rot_noise_deg": 0.0,
-	        "input_noise_profile": [],
-	        "tf_max": 0.95,
-	        "tf_min": 0.95
-	      },
-	      "params": {
-	        "freerun_weight": 0.04,
-	        "freerun_horizon": 6,
-	        "teacher_rot_noise_prob": 0.0,
-	        "teacher_rot_noise_deg": 0.0,
-	        "input_noise_profile": [],
-	        "tf_max": 0.95,
-	        "tf_min": 0.95,
-	        "opt_lr": 0.0002
-	      },
-	      "loss_groups": {
-	        "core": {
-	          "w_rot_local": 0.26,
-	          "rot_local_tail_weight": 0.1,
-	          "rot_local_tail_k": 3,
-	          "rot_local_tail_scope": "keybones",
-	          "rot_local_tail_select": "ema",
-	          "rot_local_tail_ema_beta": 0.9,
-	          "w_root_vel": 0.05,
-	          "w_root_speed": 0.03
-	        }
-	      }
-	    },
-	    {
-	      "range": [
-	        16,
-	        18
-      ],
-      "label": "stage2b_maintain_expose_b_finetune",
+    {
+      "range": [9, 18],
+      "label": "stage3_p05",
       "trainer": {
-        "freerun_weight": 0.04,
-        "freerun_horizon": 6,
-        "eval_horizon": 10,
-        "teacher_rot_noise_prob": 0.0,
-        "teacher_rot_noise_deg": 0.0,
-        "input_noise_profile": [],
-        "tf_max": 0.95,
-        "tf_min": 0.95
+        "freerun_weight": 0.0,
+        "freerun_horizon": 0
       },
       "params": {
-        "freerun_weight": 0.04,
-        "freerun_horizon": 6,
-        "teacher_rot_noise_prob": 0.0,
-        "teacher_rot_noise_deg": 0.0,
-        "input_noise_profile": [],
-        "tf_max": 0.95,
-        "tf_min": 0.95,
+        "tf_max": 0.5,
+        "tf_min": 0.5,
+        "ss_chunk_len": 1,
         "opt_lr": 0.0002
-      },
-      "loss_groups": {
-        "core": {
-          "w_rot_local": 0.24,
-          "rot_local_tail_weight": 0.12,
-          "rot_local_tail_k": 3,
-          "rot_local_tail_scope": "keybones",
-          "rot_local_tail_select": "ema",
-          "rot_local_tail_ema_beta": 0.9,
-          "w_root_vel": 0.05,
-          "w_root_speed": 0.03
-        }
       }
     }
-  ],
-  "dataset_profile": {
-    "n_clips": 5,
-    "total_frames": 375,
-    "avg_seq_len": 75,
-    "median_seq_len": 87,
-    "yaw_mean_deg": 21.960117048813697,
-    "yaw_std_deg": 19.507139252993206,
-    "speed_mean": 0.7564205562314779,
-    "speed_std": 0.12590480883983501,
-    "bone_angle_mean_deg": 49.91174236268155,
-    "bone_angle_std_deg": 52.584285248060155,
-    "complexity": 0.5349603356162784
-  },
-  "strategy_meta": {
-    "reference_targets": {
-      "yaw": 21.960117048813697,
-      "root": 0.7564205562314779,
-      "rot": 1.996469694507262
-    }
-  }
+  ]
 }

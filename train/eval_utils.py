@@ -484,7 +484,6 @@ def evaluate_freerun(
                         y_raw = trainer._apply_lambda_fusion_to_raw(
                             y_inc_raw,
                             direct_norm=ret.get("out_direct", None),
-                            direct_hinge_delta=ret.get("direct_hinge_delta", None),
                             lambda_fusion=lam_eff,
                         )
                 except Exception:

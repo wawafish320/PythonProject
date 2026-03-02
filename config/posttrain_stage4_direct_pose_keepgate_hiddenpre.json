@@ -1,0 +1,45 @@
+{
+  "ckpt_in": "models/STAGE3_CKPT_PATH.pth",
+  "out_dir": "models/posttrain",
+  "run_name": "posttrain_stage4_direct_pose_keepgate",
+
+  "data": "raw_data/processed_data",
+  "paths": null,
+  "bundle_json": "raw_data/processed_data/norm_template.json",
+  "pretrain_template": "models/pretrain_template.json",
+  "encoder_bundle": "models/motion_encoder_equiv_stageA.pt",
+
+  "device": "auto",
+  "batch": 8,
+  "seq_len": 50,
+  "rollout_steps": 0,
+  "depth": 3,
+  "num_heads": 4,
+  "dropout": 0.1,
+  "context_len": 16,
+  "epochs": 3,
+  "steps_per_epoch": 200,
+  "lr": 0.0002,
+  "weight_decay": 0.0,
+
+  "detach_rollout_state": true,
+  "phase_reset_source": "none",
+
+  "train_so3_corrector": false,
+  "train_lambda_head": false,
+  "train_direct_pose": true,
+  "train_contact_plan_init": false,
+  "train_contact_plan": false,
+  "train_contact_meas": false,
+  "train_contact_ttc": false,
+  "train_contact_td_hazard": false,
+
+  "direct_pose_feat_source": "hidden_pre",
+  "direct_pose_reinit": true,
+  "direct_pose_hinge_enable": false,
+
+  "so3_corr_gate_force": null,
+  "so3_corr_gate_logit_reset": null,
+
+  "seed": 0
+}

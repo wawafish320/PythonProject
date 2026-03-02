@@ -99,6 +99,65 @@ except ImportError:  # pragma: no cover - fallback for script execution
 
 _arg = get_global_arg
 
+LEGACY_LOSS_KEYS: tuple[str, ...] = (
+    "ignore_motion_groups",
+    "bone_prior_stds",
+    "use_hierarchy_weights",
+    "hierarchy_mode",
+    "hierarchy_alpha",
+    "max_weight_ratio",
+    "weight_gamma",
+)
+
+LEGACY_LOSS_TOPLEVEL_KEYS: tuple[str, ...] = LEGACY_LOSS_KEYS + (
+    "bone_prior_mode",
+    "bone_prior_samples",
+)
+
+LEGACY_LOSS_CLI_FLAGS: dict[str, str] = {
+    "--use_hierarchy_weights": "use_hierarchy_weights",
+    "--hierarchy_mode": "hierarchy_mode",
+    "--hierarchy_alpha": "hierarchy_alpha",
+    "--max_weight_ratio": "max_weight_ratio",
+    "--weight_gamma": "weight_gamma",
+    "--bone_prior_mode": "bone_prior_mode",
+    "--bone_prior_samples": "bone_prior_samples",
+}
+
+
+def _legacy_loss_keys_msg(keys: Sequence[str], *, context: str) -> str:
+    keys_sorted = ", ".join(sorted({str(k) for k in keys}))
+    return (
+        f"[LegacyLossConfig] {context} contains removed keys: {keys_sorted}. "
+        "Please remove them; MotionJointLoss now uses unified weights only "
+        "(adaptive_bone_weights + unified_* knobs)."
+    )
+
+
+def _assert_no_legacy_loss_keys_in_schedule(schedule: Any, *, context: str) -> None:
+    if not isinstance(schedule, Sequence):
+        return
+    for idx, stage in enumerate(schedule):
+        if not isinstance(stage, Mapping):
+            continue
+        loss_cfg = stage.get("loss", {})
+        if isinstance(loss_cfg, Mapping):
+            hits = [k for k in LEGACY_LOSS_KEYS if k in loss_cfg]
+            if hits:
+                raise ValueError(_legacy_loss_keys_msg(hits, context=f"{context}.stage[{idx}].loss"))
+        loss_groups = stage.get("loss_groups", {})
+        if isinstance(loss_groups, Mapping):
+            for group_name, group_cfg in loss_groups.items():
+                if isinstance(group_cfg, Mapping):
+                    hits = [k for k in LEGACY_LOSS_KEYS if k in group_cfg]
+                    if hits:
+                        raise ValueError(
+                            _legacy_loss_keys_msg(
+                                hits,
+                                context=f"{context}.stage[{idx}].loss_groups[{group_name!r}]",
+                            )
+                        )
+
 
 def __apply_layout_center(ds_train, trainer):
     bundle_path = _arg('bundle_json', None)
@@ -641,7 +700,6 @@ class Trainer:
         contacts_plan_preds = []
         contacts_plan_logits_preds = []
         direct_pose_preds = []
-        direct_hinge_preds = []
         contacts_meas_preds = []
         contacts_meas_logits_preds = []
         contacts_td_hazard_logits_preds = []
@@ -1017,16 +1075,6 @@ class Trainer:
                 except Exception:
                     pass
                 try:
-                    hinge_delta = ret.get('direct_hinge_delta', None)
-                    if hinge_delta is not None:
-                        if hinge_delta.dim() == 2:
-                            hinge_delta = hinge_delta.unsqueeze(1)
-                        elif hinge_delta.dim() >= 3 and hinge_delta.size(1) != 1:
-                            hinge_delta = hinge_delta[:, -1:, ...]
-                        direct_hinge_preds.append(hinge_delta)
-                except Exception:
-                    pass
-                try:
                     z_next = ret.get('plan_z_next', None)
                     if z_next is not None:
                         plan_z = z_next if allow_grad else z_next.detach()
@@ -1100,7 +1148,6 @@ class Trainer:
                     y_raw = self._apply_lambda_fusion_to_raw(
                         y_raw,
                         direct_norm=ret.get("out_direct", None),
-                        direct_hinge_delta=ret.get("direct_hinge_delta", None),
                         lambda_fusion=lam_eff,
                     )
                 except Exception:
@@ -1279,11 +1326,6 @@ class Trainer:
         if direct_pose_preds:
             try:
                 preds['out_direct'] = torch.cat(direct_pose_preds, dim=1)
-            except Exception:
-                pass
-        if direct_hinge_preds:
-            try:
-                preds['direct_hinge_delta'] = torch.cat(direct_hinge_preds, dim=1)
             except Exception:
                 pass
         if contacts_meas_preds:
@@ -2147,6 +2189,10 @@ class Trainer:
             return
         trainer_cfg = stage.get("trainer", {})
         loss_cfg = stage.get("loss", {})
+        if isinstance(loss_cfg, Mapping):
+            legacy_in_loss = [k for k in LEGACY_LOSS_KEYS if k in loss_cfg]
+            if legacy_in_loss:
+                raise ValueError(_legacy_loss_keys_msg(legacy_in_loss, context="freerun_stage_schedule.loss"))
 
         if "freerun_weight" in trainer_cfg:
             self.freerun_weight = float(trainer_cfg["freerun_weight"])
@@ -2162,42 +2208,22 @@ class Trainer:
             if "adaptive_bone_weights" in loss_cfg:
                 self.loss_fn.use_adaptive_weights = bool(loss_cfg["adaptive_bone_weights"])
                 self.loss_fn._invalidate_weight_cache()
-            if "use_hierarchy_weights" in loss_cfg:
-                self.loss_fn.use_hierarchy_weights = bool(loss_cfg["use_hierarchy_weights"])
-                self.loss_fn._invalidate_weight_cache()
-            if "hierarchy_mode" in loss_cfg:
-                self.loss_fn.hierarchy_mode = str(loss_cfg["hierarchy_mode"])
-                self.loss_fn._invalidate_weight_cache()
-            if "max_weight_ratio" in loss_cfg:
-                self.loss_fn.max_weight_ratio = float(loss_cfg["max_weight_ratio"])
-                self.loss_fn._invalidate_weight_cache()
-            if "weight_gamma" in loss_cfg:
-                self.loss_fn.weight_gamma = float(loss_cfg["weight_gamma"])
-                self.loss_fn._invalidate_weight_cache()
-            if "hierarchy_alpha" in loss_cfg:
-                self.loss_fn.hierarchy_alpha = float(loss_cfg["hierarchy_alpha"])
-                self.loss_fn._invalidate_weight_cache()
         # Handle loss_groups (e.g., "core" group weight overrides)
         loss_groups = stage.get("loss_groups", {})
         if hasattr(self, 'loss_fn') and self.loss_fn is not None:
             for group_name, group_weights in loss_groups.items():
                 if isinstance(group_weights, dict):
+                    legacy_in_group = [k for k in LEGACY_LOSS_KEYS if k in group_weights]
+                    if legacy_in_group:
+                        raise ValueError(
+                            _legacy_loss_keys_msg(
+                                legacy_in_group,
+                                context=f"freerun_stage_schedule.loss_groups[{group_name!r}]",
+                            )
+                        )
                     for weight_name, weight_value in group_weights.items():
-                        if weight_name in (
-                            'adaptive_bone_weights', 'use_hierarchy_weights', 'hierarchy_mode',
-                            'max_weight_ratio', 'weight_gamma', 'hierarchy_alpha'
-                        ):
-                            # handle bool/str specially
-                            if weight_name == 'hierarchy_mode':
-                                self.loss_fn.hierarchy_mode = str(weight_value)
-                            elif weight_name == 'hierarchy_alpha':
-                                self.loss_fn.hierarchy_alpha = float(weight_value)
-                            elif weight_name == 'weight_gamma':
-                                self.loss_fn.weight_gamma = float(weight_value)
-                            elif weight_name == 'max_weight_ratio':
-                                self.loss_fn.max_weight_ratio = float(weight_value)
-                            else:
-                                setattr(self.loss_fn, 'use_adaptive_weights' if weight_name == 'adaptive_bone_weights' else 'use_hierarchy_weights', bool(weight_value))
+                        if weight_name == 'adaptive_bone_weights':
+                            self.loss_fn.use_adaptive_weights = bool(weight_value)
                             self.loss_fn._invalidate_weight_cache()
                         elif hasattr(self.loss_fn, weight_name):
                             setattr(self.loss_fn, weight_name, float(weight_value))
@@ -2589,10 +2615,6 @@ class Trainer:
         # Make MuY/StdY available on Trainer for _denorm()
         self.mu_y = getattr(loss_fn, 'mu_y', None)
         self.std_y = getattr(loss_fn, 'std_y', None)
-        # Direct pose hinge correction metadata (optional).
-        self.direct_pose_hinge_joint_idx: list[int] = []
-        self.direct_pose_hinge_axis: str = "Z"
-        self.direct_pose_hinge_max_rad: Optional[float] = None
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
         print(f"[LR-DBG:init] arg_lr={lr:.2e} opt_pg0={self.optimizer.param_groups[0]['lr']:.2e}")
         # Autoreg tuning knobs
@@ -3619,96 +3641,11 @@ class Trainer:
         lam_eff = (lam * r_view).clamp(0.0, 1.0)
         return lam_eff, r.detach()
 
-    def _apply_direct_hinge_correction_raw(self, y_raw, hinge_delta):
-        """
-        Apply joint-local hinge correction (axis twist) to RAW Y (rot6d slice only).
-        """
-        import torch
-
-        if y_raw is None or (not torch.is_tensor(y_raw)):
-            return y_raw
-        if hinge_delta is None or (not torch.is_tensor(hinge_delta)):
-            return y_raw
-
-        idxs = getattr(self, "direct_pose_hinge_joint_idx", None)
-        if not idxs:
-            return y_raw
-        idxs = [int(i) for i in idxs]
-
-        rot_slice = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
-        if not isinstance(rot_slice, slice):
-            rot_slice = slice(0, y_raw.shape[-1])
-        rot_len = int(rot_slice.stop - rot_slice.start)
-        if rot_len <= 0 or (rot_len % 6) != 0:
-            return y_raw
-        J = rot_len // 6
-
-        hinge = hinge_delta
-        while hinge.dim() > y_raw.dim() and hinge.shape[-2] == 1:
-            hinge = hinge.squeeze(-2)
-        if hinge.dim() == y_raw.dim() - 1:
-            hinge = hinge.unsqueeze(-2)
-        if hinge.shape[-1] != len(idxs):
-            return y_raw
-        lead_shape = y_raw.shape[:-1]
-        if hinge.shape[:-1] != lead_shape:
-            try:
-                hinge = hinge.expand(*lead_shape, hinge.shape[-1])
-            except Exception:
-                pass
-
-        max_rad = getattr(self, "direct_pose_hinge_max_rad", None)
-        try:
-            max_rad = float(max_rad) if max_rad is not None else None
-        except Exception:
-            max_rad = None
-        if max_rad is not None and max_rad > 0.0 and _math.isfinite(max_rad):
-            hinge = hinge.clamp(-max_rad, max_rad)
-
-        axis = str(getattr(self, "direct_pose_hinge_axis", "Z") or "Z").strip().upper()
-        axis_idx = {"X": 0, "Y": 1, "Z": 2}.get(axis, 2)
-
-        try:
-            rot_flat = y_raw[..., rot_slice]
-            rot6 = reproject_rot6d(rot_flat).view(*lead_shape, J, 6)
-            cols = getattr(getattr(self, "loss_fn", None), "_rot6d_columns", ("X", "Z"))
-            cols = tuple(cols) if isinstance(cols, (list, tuple)) and len(cols) >= 2 else ("X", "Z")
-            R_base = rot6d_to_matrix(rot6, columns=cols)
-            omega = rot6.new_zeros(*lead_shape, J, 3)
-            for k, j in enumerate(idxs):
-                if 0 <= j < J:
-                    omega[..., j, axis_idx] = hinge[..., k]
-            R_delta = so3_exp_map(omega)
-            R_corr = torch.matmul(R_base, R_delta)
-            rot_corr = matrix_to_rot6d(R_corr, columns=cols).reshape(*lead_shape, rot_len)
-            y_corr = y_raw.clone()
-            y_corr[..., rot_slice] = rot_corr
-            return y_corr
-        except Exception:
-            return y_raw
-
-    def _apply_direct_hinge_correction_norm(self, direct_norm, hinge_delta):
-        """
-        Apply hinge correction in RAW space and return corrected normalized Y.
-        """
-        if direct_norm is None:
-            return direct_norm
-        try:
-            direct_raw = self._denorm(direct_norm)
-        except Exception:
-            return direct_norm
-        direct_raw_corr = self._apply_direct_hinge_correction_raw(direct_raw, hinge_delta)
-        try:
-            return self._norm_y(direct_raw_corr)
-        except Exception:
-            return direct_norm
-
     def _apply_lambda_fusion_to_raw(
         self,
         y_inc_raw,
         *,
         direct_norm=None,
-        direct_hinge_delta=None,
         lambda_fusion=None,
     ):
         """
@@ -3717,7 +3654,6 @@ class Trainer:
         Given:
             - y_inc_raw: RAW next pose from incremental expert (Δ branch), shape (B, Dy)
             - direct_norm: normalized absolute Y from direct head, shape (B, Dy) or (B,1,Dy)
-            - direct_hinge_delta: optional hinge correction (rad), shape (B,K) or (B,1,K)
             - lambda_fusion: gate in [0,1], shape (B,J) / (B,1) / (B,1,J)
 
         Returns:
@@ -3752,13 +3688,6 @@ class Trainer:
             return y_inc_raw
         if not torch.is_tensor(direct_raw) or direct_raw.shape != y_inc_raw.shape:
             return y_inc_raw
-        # Optional: apply hinge correction to direct branch in RAW space.
-        if torch.is_tensor(direct_hinge_delta):
-            try:
-                direct_raw = self._apply_direct_hinge_correction_raw(direct_raw, direct_hinge_delta)
-            except Exception:
-                pass
-
         columns = getattr(getattr(self, "loss_fn", None), '_rot6d_columns', ("X", "Z"))
         cols = tuple(columns) if isinstance(columns, (list, tuple)) and len(columns) >= 2 else ("X", "Z")
 
@@ -5158,8 +5087,18 @@ def train_entry():
             parser.error(f"[config_json] 根对象必须是 JSON dict，当前类型 {type(payload).__name__}")
         valid_dests = {action.dest for action in parser._actions if action.dest and action.dest != 'help'}
         unknown_keys = sorted(k for k in payload.keys() if k not in valid_dests and k not in META_KEYS)
+        legacy_unknown = [k for k in unknown_keys if k in LEGACY_LOSS_TOPLEVEL_KEYS]
+        if legacy_unknown:
+            parser.error(_legacy_loss_keys_msg(legacy_unknown, context="config_json(top-level)"))
         if unknown_keys:
             parser.error(f"[config_json] 存在未识别字段: {', '.join(unknown_keys)}")
+        try:
+            _assert_no_legacy_loss_keys_in_schedule(
+                payload.get("freerun_stage_schedule"),
+                context="config_json.freerun_stage_schedule",
+            )
+        except ValueError as err:
+            parser.error(str(err))
         print(f"[config_json] Loaded defaults from {cfg_path} ({len(payload)} keys)")
         return dict(payload)
 
@@ -5414,16 +5353,6 @@ def train_entry():
                    help='D2: 训练时对 direct 输入的 contacts_plan 执行整向量 drop(置0) 概率（防止 plan 成为 shortcut）')
     p.add_argument('--direct_pose_split_enable', action='store_true', default=False,
                    help='启用 direct_pose 输出分头（shared trunk + leg/non-leg split output heads）')
-    p.add_argument('--direct_pose_hinge_enable', action='store_true', default=False,
-                   help='Enable hinge-style 1D correction for direct head (joint-local axis twist).')
-    p.add_argument('--direct_pose_hinge_bones', type=str, default="calf_r",
-                   help='Comma-separated bone names/indices for hinge correction (default: calf_r).')
-    p.add_argument('--direct_pose_hinge_axis', type=str, default="z", choices=['x', 'y', 'z'],
-                   help='Local axis for hinge correction (default: z).')
-    p.add_argument('--direct_pose_hinge_max_deg', type=float, default=45.0,
-                   help='Max hinge correction magnitude in degrees (tanh-scaled).')
-    p.add_argument('--direct_pose_hinge_hidden', type=int, default=0,
-                   help='Hidden dim for hinge head (0=auto).')
     p.add_argument(
         '--direct_pose_meas_force_zero',
         action='store_true',
@@ -5505,20 +5434,6 @@ def train_entry():
                    help='mixed/train_free 下给 pose_hist 输入加高斯噪声 std（增强 plan!=meas）')
     p.add_argument('--adaptive_bone_weights', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
                    help='是否根据骨骼运动幅度自适应权重（默认开启）。')
-    p.add_argument('--use_hierarchy_weights', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
-                   help='是否使用骨骼层级（子孙数）权重（默认开启）。')
-    p.add_argument('--hierarchy_mode', type=str, default='multiply', choices=['multiply', 'add', 'none'],
-                   help='骨骼权重融合方式：multiply=相乘，add=加权求和，none=仅运动幅度。')
-    p.add_argument('--max_weight_ratio', type=float, default=25.0,
-                   help='权重相对均值的最大倍数（和倒数），防止极端权重。')
-    p.add_argument('--weight_gamma', type=float, default=0.7,
-                   help='权重平滑系数（0~1，越小压缩差异）。')
-    p.add_argument('--hierarchy_alpha', type=float, default=0.5,
-                   help='log 空间融合系数：1=只用 motion，0=只用 hierarchy。')
-    p.add_argument('--bone_prior_mode', type=str, default='geodesic', choices=['geodesic', 'mean6d'],
-                   help='prior_per_dim 转为运动尺度的方式：geodesic=MC测地距离（默认），mean6d=简单均值。')
-    p.add_argument('--bone_prior_samples', type=int, default=1024,
-                   help='bone_prior_mode=geodesic 时的采样数，数值越大越精确。')
     # unified bone weight (new)
     p.add_argument('--unified_downstream_power', type=float, default=0.6,
                    help='下游影响指数压缩 power (0.5~0.7 recommended)')
@@ -5567,6 +5482,13 @@ def train_entry():
             action.required = False
 
     config_defaults = _load_config_defaults(config_args.config_json, p)
+    legacy_cli_hits: list[str] = []
+    for token in remaining_argv:
+        for flag, key in LEGACY_LOSS_CLI_FLAGS.items():
+            if token == flag or token.startswith(f"{flag}="):
+                legacy_cli_hits.append(key)
+    if legacy_cli_hits:
+        p.error(_legacy_loss_keys_msg(legacy_cli_hits, context="CLI args"))
     namespace = argparse.Namespace(**config_defaults)
     namespace.config_json = config_args.config_json
     GLOBAL_ARGS = p.parse_args(remaining_argv, namespace=namespace)
@@ -5610,57 +5532,6 @@ def train_entry():
         except Exception as err:
             print(f"[Spec][WARN] failed to read {label} {path}: {err}")
             return None
-
-    def _load_bone_prior_stds(path: Path, mode: str = 'geodesic', samples: int = 1024, rot6d_columns: Tuple[str, str] = ("X", "Z")):
-        """Load per-bone motion scale from norm_template.
-
-        Args:
-            path: norm_template path
-            mode: 'geodesic' (Monte Carlo in SO(3)) or 'mean6d' (simple mean of 6D stds)
-            samples: MC sample count when mode='geodesic'
-            rot6d_columns: column order for 6D -> matrix conversion
-        """
-        if path is None or not path.is_file():
-            print(f"[Loss][WARN] norm_template not found at {path}")
-            return None
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                tpl = json.load(f)
-        except Exception as err:
-            print(f"[Loss][WARN] failed to read norm_template {path}: {err}")
-            return None
-
-        priors = tpl.get('group_priors_rot6d', {}) if isinstance(tpl, dict) else {}
-        prior_per_dim = priors.get('prior_per_dim') if isinstance(priors, dict) else None
-        if not prior_per_dim:
-            print("[Loss][WARN] 'prior_per_dim' missing in norm_template; fallback to uniform weights")
-            return None
-
-        arr = np.asarray(prior_per_dim, dtype=np.float64)
-        if arr.size % 6 != 0:
-            print(f"[Loss][WARN] prior_per_dim length {arr.size} not divisible by 6")
-            return None
-        num_bones = arr.size // 6
-        arr = arr.reshape(num_bones, 6)
-
-        mode = (mode or 'geodesic').lower()
-        if mode == 'mean6d':
-            bone_stds = arr.mean(axis=1).tolist()
-        else:  # geodesic Monte Carlo (default)
-            S = max(16, int(samples) if samples is not None else 1024)
-            sigma = torch.as_tensor(arr, dtype=torch.float64)
-            noise = torch.randn(S, num_bones, 6, dtype=torch.float64) * sigma
-            R = rot6d_to_matrix(noise, columns=rot6d_columns)  # (S,J,3,3)
-            eye = torch.eye(3, dtype=torch.float64).view(1, 1, 3, 3).expand(1, num_bones, 3, 3)
-            geo = geodesic_R(R, eye)  # (S, J)
-            bone_stds = geo.mean(dim=0).cpu().tolist()
-
-        try:
-            lo, hi = float(min(bone_stds)), float(max(bone_stds))
-            print(f"[Loss] Loaded bone_prior_stds ({mode}) for {num_bones} bones: range [{lo:.4f}, {hi:.4f}]")
-        except Exception:
-            print(f"[Loss] Loaded bone_prior_stds ({mode}) for {num_bones} bones")
-        return bone_stds
 
     norm_template_arg = _arg('norm_template')
     norm_template_path = Path(norm_template_arg).expanduser() if norm_template_arg else None
@@ -5767,11 +5638,6 @@ def train_entry():
         direct_pose_time_pe_dim=int(_arg('direct_pose_time_pe_dim', 0) or 0),
         direct_pose_time_pe_base=float(_arg('direct_pose_time_pe_base', 10000.0) or 10000.0),
         direct_pose_split_enable=bool(_arg('direct_pose_split_enable', False)),
-        direct_pose_hinge_enable=bool(_arg('direct_pose_hinge_enable', False)),
-        direct_pose_hinge_bones=_arg('direct_pose_hinge_bones', None),
-        direct_pose_hinge_axis=str(_arg('direct_pose_hinge_axis', 'z') or 'z'),
-        direct_pose_hinge_max_deg=float(_arg('direct_pose_hinge_max_deg', 45.0) or 45.0),
-        direct_pose_hinge_hidden=int(_arg('direct_pose_hinge_hidden', 0) or 0),
         contact_meas_enable=bool(_arg('contact_meas_enable', False)),
         contact_meas_hidden=int(_arg('contact_meas_hidden', 64) or 64),
         contact_meas_dropout=float(_arg('contact_meas_dropout', 0.0) or 0.0),
@@ -5919,22 +5785,7 @@ def train_entry():
     w_root_vel = float(_arg('w_root_vel', 0.0) or 0.0)
     w_root_speed = float(_arg('w_root_speed', 0.0) or 0.0)
 
-    bone_prior_mode = str(_arg('bone_prior_mode', 'geodesic') or 'geodesic')
-    bone_prior_samples = int(_arg('bone_prior_samples', 1024) or 1024)
-    rot6d_cols = tuple(getattr(ds_train, 'rot6d_spec', {}).get('columns', ("X", "Z")))
-    bone_prior_stds = _load_bone_prior_stds(
-        norm_template_path,
-        mode=bone_prior_mode,
-        samples=bone_prior_samples,
-        rot6d_columns=rot6d_cols if len(rot6d_cols) == 2 else ("X", "Z"),
-    )
-
     adaptive_bone_weights = bool(_arg('adaptive_bone_weights', True))
-    use_hierarchy_weights = bool(_arg('use_hierarchy_weights', True))
-    hierarchy_mode = str(_arg('hierarchy_mode', 'multiply') or 'multiply')
-    max_weight_ratio = float(_arg('max_weight_ratio', 25.0))
-    weight_gamma = float(_arg('weight_gamma', 0.7))
-    hierarchy_alpha = float(_arg('hierarchy_alpha', 0.5))
 
     loss_fn = MotionJointLoss(
         output_layout=ds_train.output_layout,
@@ -5956,12 +5807,6 @@ def train_entry():
         event_clock_delta_z_l2_weight=float(_arg('event_clock_delta_z_l2_weight', 0.001) or 0.001),
 
         adaptive_bone_weights=adaptive_bone_weights,
-        bone_prior_stds=bone_prior_stds,
-        use_hierarchy_weights=use_hierarchy_weights,
-        hierarchy_mode=hierarchy_mode,
-        hierarchy_alpha=hierarchy_alpha,
-        max_weight_ratio=max_weight_ratio,
-        weight_gamma=weight_gamma,
     )
     # Unified bone weight parameters (new scheme)
     loss_fn.unified_downstream_power = float(_arg('unified_downstream_power', 0.6) or 0.6)
@@ -5979,15 +5824,6 @@ def train_entry():
             loss_fn.set_bone_names(ds_train.bone_names)
         except Exception:
             pass
-    # Direct pose hinge correction metadata (optional).
-    try:
-        hinge_idx = getattr(model, "direct_pose_hinge_joint_idx", None)
-        if hinge_idx:
-            loss_fn.direct_pose_hinge_joint_idx = list(hinge_idx)
-            loss_fn.direct_pose_hinge_axis = str(getattr(model, "direct_pose_hinge_axis", "Z") or "Z")
-            loss_fn.direct_pose_hinge_max_rad = getattr(model, "direct_pose_hinge_max_rad", None)
-    except Exception:
-        pass
     if getattr(ds_train, 'parents', None):
         try:
             loss_fn.set_skeleton(ds_train.parents, getattr(ds_train, 'bone_offsets', None))
@@ -6007,12 +5843,7 @@ def train_entry():
         f"rot_local_tail_scope={getattr(loss_fn, 'rot_local_tail_scope', 'all')} "
         f"rot_local_tail_select={getattr(loss_fn, 'rot_local_tail_select', 'batch')} "
         f"rot_local_tail_ema_beta={getattr(loss_fn, 'rot_local_tail_ema_beta', 0.9)} "
-        f"adaptive_bone_weights={loss_fn.use_adaptive_weights} "
-        f"use_hierarchy_weights={loss_fn.use_hierarchy_weights} "
-        f"hier_mode={loss_fn.hierarchy_mode} "
-        f"hier_alpha={loss_fn.hierarchy_alpha} "
-        f"max_weight_ratio={loss_fn.max_weight_ratio} "
-        f"weight_gamma={loss_fn.weight_gamma}"
+        f"adaptive_bone_weights={loss_fn.use_adaptive_weights}"
     )
 
     loss_fn.dt_traj = 1.0 / max(1e-6, fps_data)
@@ -6023,14 +5854,6 @@ def train_entry():
         loss_fn.rot6d_eps = 1e-6
     augmentor = MotionAugmentation(noise_std=_arg('aug_noise_std', 0.0), time_warp_prob=_arg('aug_time_warp_prob', 0.0))
     trainer = Trainer(model=model, loss_fn=loss_fn, lr=_arg('lr', 0.0001), grad_clip=_arg('grad_clip', 0.0), weight_decay=_arg('weight_decay', 0.01), tf_warmup_steps=_arg('tf_warmup_steps', 5000), tf_total_steps=_arg('tf_total_steps', 200000), augmentor=augmentor, use_amp=_arg('amp', False), accum_steps=_arg('accum_steps', 1), pin_memory=pin, args=GLOBAL_ARGS)
-    try:
-        hinge_idx = getattr(model, "direct_pose_hinge_joint_idx", None)
-        if hinge_idx:
-            trainer.direct_pose_hinge_joint_idx = list(hinge_idx)
-            trainer.direct_pose_hinge_axis = str(getattr(model, "direct_pose_hinge_axis", "Z") or "Z")
-            trainer.direct_pose_hinge_max_rad = getattr(model, "direct_pose_hinge_max_rad", None)
-    except Exception:
-        pass
     trainer._norm_template_path = str(norm_template_path) if norm_template_path else None
     trainer._bundle_json_path = bundle_json_path
     trainer.out_dir = str(out_dir)
@@ -6141,6 +5964,10 @@ def train_entry():
         # 保底：无配置或解析失败时使用空列表，而不是抛异常
         trainer.freerun_stage_schedule = []
         print(f"[StageSchedule][WARN] failed to parse freerun_stage_schedule ({exc}); fallback to empty schedule.")
+    _assert_no_legacy_loss_keys_in_schedule(
+        trainer.freerun_stage_schedule,
+        context="freerun_stage_schedule",
+    )
     _init_h_arg = _arg('freerun_init_horizon', None)
     if _init_h_arg is None:
         if trainer.freerun_horizon > 0:

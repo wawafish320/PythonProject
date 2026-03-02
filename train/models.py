@@ -17,15 +17,11 @@ from .utils import build_mlp
 from .history import AdaptiveHistoryModule
 from .geometry import (
     rot6d_to_matrix,
-    matrix_to_rot6d,
     geodesic_R,
-    so3_exp_map,
     angvel_vec_from_R_seq,
-    angvel_vec_from_delta_R,
     reproject_rot6d,
     root_relative_matrices,
     parent_relative_matrices,
-    normalize_rot6d_delta,
 )
 from .layout import parse_layout_entry
 
@@ -586,6 +582,11 @@ class EventMotionModel(nn.Module):
         # When >0: h_nonleg = ReLU(Linear(hid, proj)); out_nonleg = Linear(proj, D_nonleg)
         # When <=0: out_nonleg = Linear(hid, D_nonleg) (legacy split behavior).
         direct_pose_nonleg_proj_dim: int = 0,
+        # Optional: split the non-leg branch into arm/else readouts (three-way: leg/arm/else).
+        # Arm/else branches share the same trunk as leg branch, but use independent readouts (and optional
+        # independent proj bottlenecks) to reduce gradient competition in a single non-leg head.
+        direct_pose_arm_split_enable: bool = False,
+        direct_pose_arm_bones: Optional[Sequence[str]] = None,
         # Optional: leg-specific residual head for direct pose (extra capacity for lower-body joints).
         # This head predicts a 6D residual that is added only on selected leg joints' BoneRotations6D slice.
         direct_pose_leg_enable: bool = False,
@@ -608,14 +609,12 @@ class EventMotionModel(nn.Module):
         #                (per-joint gate in [0,1], attenuation only)
         # - scale       : omega_eff = exp(clamp(log_mag, [-clip,+clip])) * omega_raw
         #                (per-joint positive scale in [exp(-clip),exp(+clip)])
-        # - signed_scale: omega_eff = (2*sigmoid(sign_logit)-1) * exp(softclip(log_mag, [-clip,+clip])) * omega_raw
-        #                (per-joint signed scale in (-inf,+inf), can attenuate/amplify/flip and also learn "off" via sign≈0)
-        direct_pose_leg_gate_mode: str = "none",  # 'none' | 'learned' | 'scale' | 'signed_scale'
+        direct_pose_leg_gate_mode: str = "none",  # 'none' | 'learned' | 'scale'
         direct_pose_leg_gate_power: float = 1.0,
         # Only used when direct_pose_leg_gate_mode='scale' (exp(log_mag)).
         direct_pose_leg_scale_log_clip: float = 4.0,
         # Optional hard clamp on leg scale magnitude (k>1 => [1/k, k], 0/1 disables).
-        # Applied to positive scale in mode='scale', and to magnitude before sign in mode='signed_scale'.
+        # Applied to positive scale in mode='scale'.
         direct_pose_leg_scale_clamp_k: float = 0.0,
         # Optional: explicit per-side routing + shared omega head for leg residuals.
         # Motivation: avoid implicit joint->side routing failures during contact transitions / double-support.
@@ -653,46 +652,6 @@ class EventMotionModel(nn.Module):
         #   omega_side,j = softplus(s_side,j) * normalize(v_side)
         # Only applies when direct_pose_leg_side_routing=true (SO3-only).
         direct_pose_leg_side_rank1: bool = False,
-        # Optional: hinge-style 1D correction on direct head output (joint-local axis twist).
-        direct_pose_hinge_enable: bool = False,
-        direct_pose_hinge_bones: Optional[Sequence[str]] = None,
-        direct_pose_hinge_axis: str = "z",  # x|y|z (joint-local)
-        direct_pose_hinge_max_deg: float = 45.0,
-        direct_pose_hinge_hidden: Optional[int] = None,
-        # Optional: hinge head feature selection (defaults to direct_pose_feat_source).
-        # - cond: only use external conditioning C
-        # - hidden: use internal shared representation h_final (includes PASA)
-        # - hidden_pre: use pre-PASA representation h_temporal (no temporal aggregation)
-        # - cond+hidden: concatenate [cond, h_final]
-        # - cond+hidden_pre: concatenate [cond, h_temporal]
-        # - none: do not use (cond/h_final); hinge sees only (time_pe + contacts_plan(+meas))
-        direct_pose_hinge_feat_source: Optional[str] = None,  # 'cond' | 'hidden' | 'hidden_pre' | 'cond+hidden' | 'cond+hidden_pre' | 'none'
-        # Optional: expose base direct prediction to hinge head.
-        # - none (default): hinge_in does NOT include y_direct features (legacy behavior)
-        # - rot6d: append the predicted BoneRotations6D (6D per hinge joint) from y_direct
-        direct_pose_hinge_base_feat: Optional[str] = None,  # 'none' | 'rot6d'
-        # Optional: "clean" hinge split:
-        #   delta_total = delta_nonhidden(time_pe + rot6d + plan + meas) + eps_hidden(hidden)
-        # This avoids letting hidden(512) dominate late-swing hinge outputs.
-        direct_pose_hinge_clean: bool = False,
-        # Max magnitude for eps(hidden) branch. If set (deg>0), uses that value.
-        # Otherwise uses eps_max_scale * direct_pose_hinge_max_deg.
-        direct_pose_hinge_eps_max_deg: Optional[float] = None,
-        direct_pose_hinge_eps_max_scale: float = 0.5,
-        direct_pose_hinge_eps_hidden: Optional[int] = None,
-        direct_pose_hinge_eps_dropout: float = 0.0,
-        # Which representation to feed to eps(hidden) branch in clean hinge split:
-        # - hidden: h_final (post-PASA; includes temporal aggregation)  [default; backward-compatible]
-        # - hidden_pre: h_temporal (pre-PASA; per-step only)
-        direct_pose_hinge_eps_source: str = "hidden",  # 'hidden' | 'hidden_pre'
-        # Optional: gate hinge correction by contact state (to avoid "fixing" stance frames).
-        # delta_eff = delta * gate, where gate is derived from contacts_{plan|meas}.
-        # - none: no gating (default; backward-compatible)
-        # - contact: gate = (1 - contact_prob) ** power
-        # - learned: gate = sigmoid(gate_head(...))  (end-to-end; safety valve)
-        direct_pose_hinge_gate_mode: str = "none",  # 'none' | 'contact' | 'learned'
-        direct_pose_hinge_gate_source: str = "plan",  # 'plan' | 'meas' | 'plan_or_meas'
-        direct_pose_hinge_gate_power: float = 1.0,
         # ===== Stage2: λ Fusion Gate (incremental vs direct) =====
         lambda_fusion_enable: bool = False,
         lambda_fusion_mode: str = "per_joint",  # "global" | "per_joint"
@@ -738,7 +697,6 @@ class EventMotionModel(nn.Module):
         self.contact_plan_inject_detach = bool(contact_plan_inject_detach)
         self._contact_plan_logits_dim = self.contact_dim
         self.adaptive_history_module: Optional[AdaptiveHistoryModule] = None
-        self._adaptive_history_diag: Optional[dict[str, torch.Tensor | float]] = None
         self.pose_hist_len: int = 0
         self._adaptive_history_device: Optional[torch.device] = None
         self.contact_plan_time_pe_dim = int(contact_plan_time_pe_dim or 0)
@@ -856,12 +814,20 @@ class EventMotionModel(nn.Module):
                     "(it replaces plan+meas phase hint)."
                 )
         self.direct_pose_split_enable = bool(direct_pose_split_enable) and bool(self.direct_pose_enable)
+        self.direct_pose_arm_split_enable = bool(direct_pose_arm_split_enable) and bool(self.direct_pose_split_enable)
+        self.direct_pose_arm_bones = direct_pose_arm_bones
         self.direct_pose_out_leg: Optional[nn.Module] = None
         self.direct_pose_out_nonleg: Optional[nn.Module] = None
         self.direct_pose_nonleg_proj: Optional[nn.Module] = None
+        self.direct_pose_out_arm: Optional[nn.Module] = None
+        self.direct_pose_out_else: Optional[nn.Module] = None
+        self.direct_pose_arm_proj: Optional[nn.Module] = None
+        self.direct_pose_else_proj: Optional[nn.Module] = None
         self.direct_pose_nonleg_proj_dim = max(0, int(direct_pose_nonleg_proj_dim or 0))
         self.register_buffer("direct_pose_leg_out_idx", torch.empty(0, dtype=torch.long), persistent=True)
         self.register_buffer("direct_pose_nonleg_out_idx", torch.empty(0, dtype=torch.long), persistent=True)
+        self.register_buffer("direct_pose_arm_out_idx", torch.empty(0, dtype=torch.long), persistent=True)
+        self.register_buffer("direct_pose_else_out_idx", torch.empty(0, dtype=torch.long), persistent=True)
 
         # NOTE: these attributes are needed by the leg-bone parsing below. They must exist before we
         # potentially append to `direct_pose_leg_joint_idx` when direct_pose_leg_enable=True.
@@ -915,13 +881,11 @@ class EventMotionModel(nn.Module):
             gm = "none"
         if gm in ("mlp", "net", "nn", "learn", "learned", "gate"):
             gm = "learned"
-        if gm in ("signed_scale", "signedscale", "signed", "signmag", "sign_mag", "signmagscale", "signedmag", "sscale"):
-            gm = "signed_scale"
         if gm in ("scale", "mag", "magnitude", "logmag", "log_mag", "exp", "alpha"):
             gm = "scale"
         if gm in ("", "none", "off", "disable", "disabled", "0"):
             gm = "none"
-        if gm not in ("none", "learned", "scale", "signed_scale"):
+        if gm not in ("none", "learned", "scale"):
             gm = "none"
         self.direct_pose_leg_gate_mode: str = str(gm)
         try:
@@ -1148,6 +1112,29 @@ class EventMotionModel(nn.Module):
                     seen_split.add(int(idx))
                     split_leg_joint_idx.append(int(idx))
 
+            # Keep split leg joint indices available to posttrain loss even when
+            # direct_pose_leg_enable=false (split-head-only training).
+            if split_leg_joint_idx:
+                self.direct_pose_leg_joint_idx = [int(i) for i in split_leg_joint_idx]
+                if not self.direct_pose_leg_joint_names:
+                    try:
+                        if bone_names is not None:
+                            self.direct_pose_leg_joint_names = [
+                                str(bone_names[int(i)])
+                                for i in self.direct_pose_leg_joint_idx
+                                if 0 <= int(i) < len(bone_names)
+                            ]
+                    except Exception:
+                        pass
+                try:
+                    leg_idx_tensor = torch.as_tensor(self.direct_pose_leg_joint_idx, dtype=torch.long)
+                    if hasattr(self, "direct_pose_leg_joint_idx_tensor"):
+                        self.direct_pose_leg_joint_idx_tensor = leg_idx_tensor
+                    else:
+                        self.register_buffer("direct_pose_leg_joint_idx_tensor", leg_idx_tensor, persistent=True)
+                except Exception:
+                    pass
+
             rot_sl = None
             if isinstance(output_layout, dict):
                 rot_sl = parse_layout_entry(output_layout.get("BoneRotations6D"), "BoneRotations6D", self.out_motion_dim)
@@ -1187,6 +1174,69 @@ class EventMotionModel(nn.Module):
                 raise ValueError("direct split head index coverage mismatch (D_leg + D_nonleg != out_motion_dim).")
             self.direct_pose_leg_out_idx = leg_out_idx
             self.direct_pose_nonleg_out_idx = nonleg_out_idx
+            if bool(getattr(self, "direct_pose_arm_split_enable", False)):
+                arm_items: list[Any] = []
+                arm_spec = getattr(self, "direct_pose_arm_bones", None)
+                if arm_spec is None:
+                    arm_items = [
+                        "upperarm_l", "lowerarm_l", "hand_l", "thumb_01_l", "pinky_01_l",
+                        "upperarm_r", "lowerarm_r", "hand_r", "thumb_01_r", "pinky_01_r",
+                    ]
+                elif isinstance(arm_spec, str):
+                    arm_items = [s.strip() for s in arm_spec.split(",") if s.strip()]
+                elif isinstance(arm_spec, (list, tuple)):
+                    arm_items = list(arm_spec)
+                else:
+                    arm_items = [arm_spec]
+
+                name_to_idx_arm = {str(n): int(i) for i, n in enumerate(bone_names or [])}
+                arm_joint_idx: list[int] = []
+                seen_arm: set[int] = set()
+                for item in arm_items:
+                    idx = None
+                    if isinstance(item, (int, np.integer)):
+                        idx = int(item)
+                    else:
+                        s = str(item).strip()
+                        if s.isdigit() or (s.startswith("-") and s[1:].isdigit()):
+                            try:
+                                idx = int(s)
+                            except Exception:
+                                idx = None
+                        else:
+                            idx = name_to_idx_arm.get(s, None)
+                    if idx is None:
+                        continue
+                    if idx < 0 or idx >= J_rot:
+                        continue
+                    if int(idx) in seen_arm:
+                        continue
+                    seen_arm.add(int(idx))
+                    arm_joint_idx.append(int(idx))
+
+                arm_dim_mask = torch.zeros((out_dim_total,), dtype=torch.bool)
+                for j_idx in arm_joint_idx:
+                    d0 = int(rot_start + int(j_idx) * 6)
+                    d1 = int(d0 + 6)
+                    if d0 < 0 or d1 > out_dim_total:
+                        continue
+                    arm_dim_mask[d0:d1] = True
+                # arm branch must be a subset of non-leg dims.
+                arm_dim_mask = arm_dim_mask & nonleg_dim_mask
+                else_dim_mask = nonleg_dim_mask & (~arm_dim_mask)
+                if not bool(arm_dim_mask.any().item()):
+                    raise ValueError(
+                        "direct_pose_arm_split_enable resolved empty arm output dims; "
+                        "check direct_pose_arm_bones mapping."
+                    )
+                if not bool(else_dim_mask.any().item()):
+                    raise ValueError("direct_pose_arm_split_enable resolved empty else output dims.")
+                arm_out_idx = torch.nonzero(arm_dim_mask, as_tuple=False).flatten().to(dtype=torch.long)
+                else_out_idx = torch.nonzero(else_dim_mask, as_tuple=False).flatten().to(dtype=torch.long)
+                if int(arm_out_idx.numel() + else_out_idx.numel()) != int(nonleg_out_idx.numel()):
+                    raise ValueError("direct arm/else split index coverage mismatch (D_arm + D_else != D_nonleg).")
+                self.direct_pose_arm_out_idx = arm_out_idx
+                self.direct_pose_else_out_idx = else_out_idx
 
         # Derive per-side leg joint positions for explicit routing (optional).
         # Positions are in the K-leg list order (direct_pose_leg_joint_idx order).
@@ -1245,215 +1295,6 @@ class EventMotionModel(nn.Module):
                         self.direct_pose_leg_side_embed.weight.zero_()
                 except Exception:
                     pass
-        # Hinge head feature source (defaults to direct_pose_feat_source).
-        self.direct_pose_hinge_feat_source = direct_pose_hinge_feat_source
-        try:
-            src = self.direct_pose_feat_source if self.direct_pose_hinge_feat_source is None else str(self.direct_pose_hinge_feat_source)
-            src = str(src or "cond").lower().strip()
-        except Exception:
-            src = str(self.direct_pose_feat_source or "cond").lower().strip()
-        if src in ("h", "h_final", "hidden_only"):
-            src = "hidden"
-        if src in ("h_pre", "h_temporal", "hidden_pre", "pre", "temporal", "mid"):
-            src = "hidden_pre"
-        if src in ("cond_hidden", "hidden_cond", "concat", "cond+hidden", "hidden+cond"):
-            src = "cond+hidden"
-        if src in ("cond+hidden_pre", "cond_hidden_pre", "hidden_pre+cond", "cond+pre", "pre+cond"):
-            src = "cond+hidden_pre"
-        if src in ("none", "null", "off", "disable", "disabled", "0"):
-            src = "none"
-        if src not in ("cond", "hidden", "hidden_pre", "cond+hidden", "cond+hidden_pre", "none"):
-            src = "cond"
-        self.direct_pose_hinge_feat_source = src
-        # Optional: include direct_out base pose features into hinge input.
-        self.direct_pose_hinge_base_feat = str(direct_pose_hinge_base_feat or "none").strip().lower()
-        if self.direct_pose_hinge_base_feat in ("", "auto", "off", "disable", "disabled", "0", "none", "null"):
-            self.direct_pose_hinge_base_feat = "none"
-        elif self.direct_pose_hinge_base_feat in ("rot6d", "rot_6d", "base_rot6d", "y_rot6d", "y_direct_rot6d"):
-            self.direct_pose_hinge_base_feat = "rot6d"
-        else:
-            self.direct_pose_hinge_base_feat = "none"
-        # Optional: clean split for hinge head to reduce hidden-driven collapse.
-        self.direct_pose_hinge_clean = bool(direct_pose_hinge_clean)
-        try:
-            self.direct_pose_hinge_eps_max_deg = float((direct_pose_hinge_eps_max_deg or 0.0) if direct_pose_hinge_eps_max_deg is not None else 0.0)
-        except Exception:
-            self.direct_pose_hinge_eps_max_deg = 0.0
-        if not _math.isfinite(self.direct_pose_hinge_eps_max_deg) or self.direct_pose_hinge_eps_max_deg <= 0.0:
-            self.direct_pose_hinge_eps_max_deg = 0.0
-        try:
-            self.direct_pose_hinge_eps_max_scale = float(direct_pose_hinge_eps_max_scale or 0.0)
-        except Exception:
-            self.direct_pose_hinge_eps_max_scale = 0.5
-        # Allow 0.0 to explicitly disable eps(hidden) in clean hinge mode.
-        if not _math.isfinite(self.direct_pose_hinge_eps_max_scale) or self.direct_pose_hinge_eps_max_scale < 0.0:
-            self.direct_pose_hinge_eps_max_scale = 0.5
-        try:
-            self.direct_pose_hinge_eps_hidden = int(direct_pose_hinge_eps_hidden or 0)
-        except Exception:
-            self.direct_pose_hinge_eps_hidden = 0
-        self.direct_pose_hinge_eps_dropout = float(direct_pose_hinge_eps_dropout or 0.0)
-        if not _math.isfinite(self.direct_pose_hinge_eps_dropout) or self.direct_pose_hinge_eps_dropout < 0.0:
-            self.direct_pose_hinge_eps_dropout = 0.0
-        self.direct_pose_hinge_eps_dropout = max(0.0, min(1.0, self.direct_pose_hinge_eps_dropout))
-        # Clean hinge eps(hidden) input source.
-        try:
-            eps_src = str(direct_pose_hinge_eps_source or "hidden").lower().strip()
-        except Exception:
-            eps_src = "hidden"
-        if eps_src in ("h_final", "post", "hidden", "final"):
-            eps_src = "hidden"
-        if eps_src in ("h_pre", "h_temporal", "pre", "temporal", "mid", "hidden_pre"):
-            eps_src = "hidden_pre"
-        if eps_src not in ("hidden", "hidden_pre"):
-            eps_src = "hidden"
-        self.direct_pose_hinge_eps_source = eps_src
-        # Cache: parsed BoneRotations6D slice for y_direct extraction in forward (if available).
-        self.direct_pose_rot6d_slice: Optional[slice] = None
-        self.direct_pose_hinge_base_feat_dim: int = 0
-        # Optional gating for hinge correction (prevents "fixing" stance frames).
-        self.direct_pose_hinge_gate_mode = str(direct_pose_hinge_gate_mode or "none").lower().strip()
-        if self.direct_pose_hinge_gate_mode in ("off", "disable", "disabled", "0"):
-            self.direct_pose_hinge_gate_mode = "none"
-        if self.direct_pose_hinge_gate_mode in ("mlp", "net", "nn"):
-            self.direct_pose_hinge_gate_mode = "learned"
-        if self.direct_pose_hinge_gate_mode not in ("none", "contact", "learned"):
-            self.direct_pose_hinge_gate_mode = "none"
-        self.direct_pose_hinge_gate_source = str(direct_pose_hinge_gate_source or "plan").lower().strip()
-        if self.direct_pose_hinge_gate_source in ("contacts_plan", "plan"):
-            self.direct_pose_hinge_gate_source = "plan"
-        elif self.direct_pose_hinge_gate_source in ("contacts_meas", "meas", "contact_meas"):
-            self.direct_pose_hinge_gate_source = "meas"
-        elif self.direct_pose_hinge_gate_source in ("plan_or_meas", "auto"):
-            self.direct_pose_hinge_gate_source = "plan_or_meas"
-        else:
-            self.direct_pose_hinge_gate_source = "plan"
-        try:
-            self.direct_pose_hinge_gate_power = float(direct_pose_hinge_gate_power or 1.0)
-        except Exception:
-            self.direct_pose_hinge_gate_power = 1.0
-        if not _math.isfinite(self.direct_pose_hinge_gate_power) or self.direct_pose_hinge_gate_power <= 0.0:
-            self.direct_pose_hinge_gate_power = 1.0
-        self.direct_pose_hinge_enable = bool(direct_pose_hinge_enable)
-        self.direct_pose_hinge_axis = str(direct_pose_hinge_axis or "z").strip().lower()
-        if self.direct_pose_hinge_axis in ("x", "y", "z"):
-            self.direct_pose_hinge_axis = self.direct_pose_hinge_axis.upper()
-        else:
-            self.direct_pose_hinge_axis = "Z"
-        self.direct_pose_hinge_max_deg = float(direct_pose_hinge_max_deg or 0.0)
-        if not _math.isfinite(self.direct_pose_hinge_max_deg) or self.direct_pose_hinge_max_deg <= 0.0:
-            self.direct_pose_hinge_max_deg = 45.0
-        self.direct_pose_hinge_max_rad = float(self.direct_pose_hinge_max_deg) * (_math.pi / 180.0)
-        # Max magnitude for eps(hidden) branch in clean hinge mode.
-        try:
-            eps_max_rad = (
-                (float(self.direct_pose_hinge_eps_max_deg) * (_math.pi / 180.0))
-                if float(self.direct_pose_hinge_eps_max_deg) > 0.0
-                else (float(self.direct_pose_hinge_max_rad) * float(self.direct_pose_hinge_eps_max_scale))
-            )
-        except Exception:
-            eps_max_rad = 0.0
-        if not _math.isfinite(eps_max_rad) or eps_max_rad < 0.0:
-            eps_max_rad = 0.0
-        self.direct_pose_hinge_eps_max_rad = float(min(float(eps_max_rad), float(self.direct_pose_hinge_max_rad)))
-        self.direct_pose_hinge_hidden = int(direct_pose_hinge_hidden or 0)
-        self.direct_pose_hinge_joint_idx: list[int] = []
-        self.direct_pose_hinge_joint_names: list[str] = []
-        # Per-hinge joint mapping to contact channel index for gating:
-        # -1 means "no gating"
-        self.direct_pose_hinge_gate_contact_idx: list[int] = []
-        self.direct_pose_hinge_head: Optional[nn.Module] = None
-        self.direct_pose_hinge_nonhidden_head: Optional[nn.Module] = None
-        self.direct_pose_hinge_eps_head: Optional[nn.Module] = None
-        self.direct_pose_hinge_gate_head: Optional[nn.Module] = None
-        self.direct_pose_hinge_gate_head_clean: Optional[nn.Module] = None
-        if self.direct_pose_hinge_enable:
-            hinge_items: list[Any] = []
-            if direct_pose_hinge_bones is None:
-                hinge_items = ["calf_r"]
-            elif isinstance(direct_pose_hinge_bones, str):
-                hinge_items = [s.strip() for s in direct_pose_hinge_bones.split(",") if s.strip()]
-            elif isinstance(direct_pose_hinge_bones, (list, tuple)):
-                hinge_items = list(direct_pose_hinge_bones)
-            else:
-                hinge_items = [direct_pose_hinge_bones]
-
-            rot_sl = None
-            if isinstance(output_layout, dict):
-                rot_sl = parse_layout_entry(
-                    output_layout.get("BoneRotations6D"),
-                    "BoneRotations6D",
-                    self.out_motion_dim,
-                )
-            if rot_sl is None and bone_names is not None and len(bone_names) > 0:
-                rot_sl = slice(0, min(self.out_motion_dim, int(len(bone_names) * 6)))
-            if isinstance(rot_sl, slice):
-                self.direct_pose_rot6d_slice = rot_sl
-            J = 0
-            try:
-                if isinstance(rot_sl, slice) and rot_sl.start is not None and rot_sl.stop is not None:
-                    rot_len = int(rot_sl.stop - rot_sl.start)
-                    if rot_len > 0 and rot_len % 6 == 0:
-                        J = int(rot_len // 6)
-            except Exception:
-                J = 0
-            if J <= 0 and bone_names is not None:
-                try:
-                    J = int(len(bone_names))
-                except Exception:
-                    J = 0
-
-            name_to_idx = {str(n): int(i) for i, n in enumerate(bone_names or [])}
-            for item in hinge_items:
-                idx = None
-                name = None
-                if isinstance(item, (int, np.integer)):
-                    idx = int(item)
-                else:
-                    s = str(item).strip()
-                    if s.isdigit() or (s.startswith("-") and s[1:].isdigit()):
-                        try:
-                            idx = int(s)
-                        except Exception:
-                            idx = None
-                    else:
-                        name = s
-                        idx = name_to_idx.get(s, None)
-                if idx is None:
-                    continue
-                if idx < 0 or (J > 0 and idx >= J):
-                    continue
-                self.direct_pose_hinge_joint_idx.append(int(idx))
-                if name is None and bone_names is not None and idx < len(bone_names):
-                    name = str(bone_names[idx])
-                if name is not None:
-                    self.direct_pose_hinge_joint_names.append(str(name))
-            # Infer which contact channel (L/R) should gate each hinge joint.
-            # This is a best-effort heuristic based on joint name suffixes.
-            self.direct_pose_hinge_gate_contact_idx = []
-            if self.direct_pose_hinge_joint_idx:
-                for k, j_idx in enumerate(self.direct_pose_hinge_joint_idx):
-                    nm = None
-                    try:
-                        if bone_names is not None and 0 <= int(j_idx) < len(bone_names):
-                            nm = str(bone_names[int(j_idx)])
-                    except Exception:
-                        nm = None
-                    if nm is None:
-                        try:
-                            if 0 <= int(k) < len(self.direct_pose_hinge_joint_names):
-                                nm = str(self.direct_pose_hinge_joint_names[int(k)])
-                        except Exception:
-                            nm = None
-                    s = str(nm or "").lower()
-                    if "_l" in s or s.endswith("l"):
-                        self.direct_pose_hinge_gate_contact_idx.append(0)
-                    elif "_r" in s or s.endswith("r"):
-                        self.direct_pose_hinge_gate_contact_idx.append(1)
-                    else:
-                        self.direct_pose_hinge_gate_contact_idx.append(-1)
-            if not self.direct_pose_hinge_joint_idx:
-                self.direct_pose_hinge_enable = False
         self.lambda_fusion_enable = bool(lambda_fusion_enable)
         self.lambda_fusion_mode = str(lambda_fusion_mode or "per_joint").lower().strip()
         if self.lambda_fusion_mode not in ("global", "per_joint"):
@@ -1716,15 +1557,42 @@ class EventMotionModel(nn.Module):
                         nn.Dropout(drop) if drop > 0 else nn.Identity(),
                     )
                     self.direct_pose_out_leg = nn.Linear(hid, int(leg_out_dim))
-                    nonleg_in_dim = int(hid)
-                    proj_dim = int(getattr(self, "direct_pose_nonleg_proj_dim", 0) or 0)
-                    if proj_dim > 0:
-                        nonleg_in_dim = int(proj_dim)
-                        self.direct_pose_nonleg_proj = nn.Sequential(
-                            nn.Linear(hid, int(proj_dim)),
-                            nn.ReLU(),
-                        )
-                    self.direct_pose_out_nonleg = nn.Linear(int(nonleg_in_dim), int(nonleg_out_dim))
+                    if bool(getattr(self, "direct_pose_arm_split_enable", False)):
+                        arm_out_dim = int(getattr(self, "direct_pose_arm_out_idx", torch.empty(0, dtype=torch.long)).numel())
+                        else_out_dim = int(getattr(self, "direct_pose_else_out_idx", torch.empty(0, dtype=torch.long)).numel())
+                        if arm_out_dim <= 0 or else_out_dim <= 0:
+                            raise ValueError("direct_pose_arm_split_enable requires non-empty arm/else output indices.")
+                        if int(arm_out_dim + else_out_dim) != int(nonleg_out_dim):
+                            raise ValueError(
+                                f"direct arm/else split index mismatch: D_arm={arm_out_dim} D_else={else_out_dim} "
+                                f"D_nonleg={nonleg_out_dim}"
+                            )
+                        arm_in_dim = int(hid)
+                        else_in_dim = int(hid)
+                        proj_dim = int(getattr(self, "direct_pose_nonleg_proj_dim", 0) or 0)
+                        if proj_dim > 0:
+                            arm_in_dim = int(proj_dim)
+                            else_in_dim = int(proj_dim)
+                            self.direct_pose_arm_proj = nn.Sequential(
+                                nn.Linear(hid, int(proj_dim)),
+                                nn.ReLU(),
+                            )
+                            self.direct_pose_else_proj = nn.Sequential(
+                                nn.Linear(hid, int(proj_dim)),
+                                nn.ReLU(),
+                            )
+                        self.direct_pose_out_arm = nn.Linear(int(arm_in_dim), int(arm_out_dim))
+                        self.direct_pose_out_else = nn.Linear(int(else_in_dim), int(else_out_dim))
+                    else:
+                        nonleg_in_dim = int(hid)
+                        proj_dim = int(getattr(self, "direct_pose_nonleg_proj_dim", 0) or 0)
+                        if proj_dim > 0:
+                            nonleg_in_dim = int(proj_dim)
+                            self.direct_pose_nonleg_proj = nn.Sequential(
+                                nn.Linear(hid, int(proj_dim)),
+                                nn.ReLU(),
+                            )
+                        self.direct_pose_out_nonleg = nn.Linear(int(nonleg_in_dim), int(nonleg_out_dim))
                 else:
                     out_dim = int(self.out_motion_dim)
                     if self.direct_pose_meas_mode == "mode_select":
@@ -1767,8 +1635,8 @@ class EventMotionModel(nn.Module):
                             pass
                         # Optional: learned gate/scale head (predicts per-joint logits; applied in forward).
                         gm_leg = str(getattr(self, "direct_pose_leg_gate_mode", "none") or "none").lower().strip()
-                        if gm_leg in ("learned", "scale", "signed_scale"):
-                            gate_out = int(leg_k) if gm_leg != "signed_scale" else int(leg_k) * 2
+                        if gm_leg in ("learned", "scale"):
+                            gate_out = int(leg_k)
                             self.direct_pose_leg_gate_head = nn.Sequential(
                                 nn.Linear(in_dim, hid),
                                 nn.ReLU(),
@@ -1781,7 +1649,6 @@ class EventMotionModel(nn.Module):
                             # Safe init:
                             # - learned gate: start mostly "open" but not fully saturated (sigmoid(2)≈0.881)
                             # - scale: start as identity scaling (exp(0)=1)
-                            # - signed_scale: start as identity scaling (sign≈+1, log_mag≈0)
                             try:
                                 last = self.direct_pose_leg_gate_head[-1]
                                 if isinstance(last, nn.Linear):
@@ -1790,11 +1657,6 @@ class EventMotionModel(nn.Module):
                                         if last.bias is not None:
                                             if gm_leg == "learned":
                                                 last.bias.fill_(2.0)
-                                            elif gm_leg == "signed_scale":
-                                                k = int(leg_k)
-                                                # First half: sign logits -> sign≈+1; second half: log_mag -> mag≈1.
-                                                last.bias[:k].fill_(4.0)  # sigmoid(4)≈0.982 => sign≈0.964
-                                                last.bias[k:].zero_()
                                             else:
                                                 last.bias.zero_()
                             except Exception:
@@ -1854,8 +1716,8 @@ class EventMotionModel(nn.Module):
                                 pass
                             # Optional: learned gate/scale head for routed shared leg omega (per-joint logits per side).
                             gm_leg = str(getattr(self, "direct_pose_leg_gate_mode", "none") or "none").lower().strip()
-                            if gm_leg in ("learned", "scale", "signed_scale"):
-                                gate_out = int(leg_side_k) if gm_leg != "signed_scale" else int(leg_side_k) * 2
+                            if gm_leg in ("learned", "scale"):
+                                gate_out = int(leg_side_k)
                                 self.direct_pose_leg_gate_head_shared = nn.Sequential(
                                     nn.Linear(leg_in_dim, hid),
                                     nn.ReLU(),
@@ -1874,10 +1736,6 @@ class EventMotionModel(nn.Module):
                                             if last.bias is not None:
                                                 if gm_leg == "learned":
                                                     last.bias.fill_(2.0)
-                                                elif gm_leg == "signed_scale":
-                                                    k = int(leg_side_k)
-                                                    last.bias[:k].fill_(4.0)  # sign logits
-                                                    last.bias[k:].zero_()     # log_mag
                                                 else:
                                                     last.bias.zero_()
                                 except Exception:
@@ -1901,115 +1759,6 @@ class EventMotionModel(nn.Module):
                                                 last.bias.fill_(2.0)  # tanh(2)≈0.964
                                 except Exception:
                                     pass
-                if self.direct_pose_hinge_enable and self.direct_pose_hinge_joint_idx:
-                    hinge_out = int(len(self.direct_pose_hinge_joint_idx))
-                    h_hinge = int(self.direct_pose_hinge_hidden or max(8, hid // 4))
-                    hinge_base_feat_dim = 0
-                    if str(getattr(self, "direct_pose_hinge_base_feat", "none") or "none").strip().lower() == "rot6d":
-                        # 6D per hinge joint (same ordering as direct_pose_hinge_joint_idx).
-                        hinge_base_feat_dim = int(6 * hinge_out)
-                    self.direct_pose_hinge_base_feat_dim = int(hinge_base_feat_dim)
-                    if bool(getattr(self, "direct_pose_hinge_clean", False)):
-                        # Clean split: delta_base(nonhidden) + eps(hidden).
-                        # - base branch sees only nonhidden features: time_pe + rot6d(+plan+meas)
-                        # - eps branch sees only hidden (h_final) and is range-limited (eps_max_rad)
-                        hinge_in_dim = int(hinge_base_feat_dim + self.contact_dim + (self.contact_dim if want_meas else 0) + time_dim)
-                        self.direct_pose_hinge_nonhidden_head = nn.Sequential(
-                            nn.Linear(hinge_in_dim, h_hinge),
-                            nn.ReLU(),
-                            nn.Linear(h_hinge, hinge_out),
-                        )
-                        eps_h = int(getattr(self, "direct_pose_hinge_eps_hidden", 0) or 0)
-                        if eps_h <= 0:
-                            eps_h = int(h_hinge)
-                        eps_drop = float(getattr(self, "direct_pose_hinge_eps_dropout", 0.0) or 0.0)
-                        if not _math.isfinite(eps_drop) or eps_drop < 0.0:
-                            eps_drop = 0.0
-                        eps_drop = max(0.0, min(1.0, eps_drop))
-                        self.direct_pose_hinge_eps_head = nn.Sequential(
-                            nn.Dropout(eps_drop) if eps_drop > 0 else nn.Identity(),
-                            nn.Linear(int(self.hidden_dim), int(eps_h)),
-                            nn.ReLU(),
-                            nn.Dropout(eps_drop) if eps_drop > 0 else nn.Identity(),
-                            nn.Linear(int(eps_h), hinge_out),
-                        )
-                        # Safe init: start with zero correction for both branches.
-                        for head in (self.direct_pose_hinge_nonhidden_head, self.direct_pose_hinge_eps_head):
-                            try:
-                                last = head[-1]  # type: ignore[index]
-                                if isinstance(last, nn.Linear):
-                                    with torch.no_grad():
-                                        last.weight.zero_()
-                                        if last.bias is not None:
-                                            last.bias.zero_()
-                            except Exception:
-                                pass
-                        # Optional learned gate: predict g_logit per hinge joint, g=sigmoid(g_logit).
-                        if str(getattr(self, "direct_pose_hinge_gate_mode", "none") or "none").lower().strip() == "learned":
-                            self.direct_pose_hinge_gate_head_clean = nn.Sequential(
-                                nn.Linear(hinge_in_dim, h_hinge),
-                                nn.ReLU(),
-                                nn.Linear(h_hinge, hinge_out),
-                            )
-                            # Safe init: start mostly "open" but not fully saturated (so the gate can learn quickly).
-                            try:
-                                last = self.direct_pose_hinge_gate_head_clean[-1]
-                                if isinstance(last, nn.Linear):
-                                    with torch.no_grad():
-                                        last.weight.zero_()
-                                        if last.bias is not None:
-                                            last.bias.fill_(2.0)  # sigmoid(2)≈0.881
-                            except Exception:
-                                pass
-                    else:
-                        # Legacy single-branch hinge head (can use cond/hidden features).
-                        hinge_src = str(getattr(self, "direct_pose_hinge_feat_source", "cond") or "cond").lower().strip()
-                        hinge_base_dim = int(self.cond_dim)
-                        if hinge_src == "none":
-                            hinge_base_dim = 0
-                        elif hinge_src in ("hidden", "hidden_pre"):
-                            hinge_base_dim = int(self.hidden_dim)
-                        elif hinge_src in ("cond+hidden", "cond+hidden_pre"):
-                            hinge_base_dim = int(self.cond_dim + self.hidden_dim)
-                        hinge_in_dim = int(
-                            hinge_base_dim
-                            + hinge_base_feat_dim
-                            + self.contact_dim
-                            + (self.contact_dim if want_meas else 0)
-                            + time_dim
-                        )
-                        self.direct_pose_hinge_head = nn.Sequential(
-                            nn.Linear(hinge_in_dim, h_hinge),
-                            nn.ReLU(),
-                            nn.Linear(h_hinge, hinge_out),
-                        )
-                        # Safe init: start with zero correction.
-                        try:
-                            last = self.direct_pose_hinge_head[-1]
-                            if isinstance(last, nn.Linear):
-                                with torch.no_grad():
-                                    last.weight.zero_()
-                                    if last.bias is not None:
-                                        last.bias.zero_()
-                        except Exception:
-                            pass
-                        # Optional learned gate: predict g_logit per hinge joint, g=sigmoid(g_logit).
-                        if str(getattr(self, "direct_pose_hinge_gate_mode", "none") or "none").lower().strip() == "learned":
-                            self.direct_pose_hinge_gate_head = nn.Sequential(
-                                nn.Linear(hinge_in_dim, h_hinge),
-                                nn.ReLU(),
-                                nn.Linear(h_hinge, hinge_out),
-                            )
-                            # Safe init: start mostly "open" but not fully saturated (so the gate can learn quickly).
-                            try:
-                                last = self.direct_pose_hinge_gate_head[-1]
-                                if isinstance(last, nn.Linear):
-                                    with torch.no_grad():
-                                        last.weight.zero_()
-                                        if last.bias is not None:
-                                            last.bias.fill_(2.0)  # sigmoid(2)≈0.881
-                            except Exception:
-                                pass
 
         if self.lambda_fusion_enable:
             try:
@@ -2188,15 +1937,13 @@ class EventMotionModel(nn.Module):
         # Optional frozen encoder from预训练，用于提供 soft hint（接触提示 embedding）
         self.frozen_encoder: Optional['MotionEncoder'] = None
         self.frozen_period_head: Optional['PeriodHead'] = None
-        self._encoder_meta: dict[str, Any] = {}
-        self._frozen_hidden_dim: Optional[int] = None
 
     def _forward_direct_pose_readout(self, direct_flat: torch.Tensor, *, B: int, Tq: int) -> torch.Tensor:
         if not bool(getattr(self, "direct_pose_split_enable", False)):
             return self.direct_pose_head(direct_flat).view(B, Tq, -1)
 
-        if self.direct_pose_head is None or self.direct_pose_out_leg is None or self.direct_pose_out_nonleg is None:
-            raise RuntimeError("direct_pose_split_enable=true but split head modules are missing.")
+        if self.direct_pose_head is None or self.direct_pose_out_leg is None:
+            raise RuntimeError("direct_pose_split_enable=true but split trunk/leg head modules are missing.")
         idx_leg = getattr(self, "direct_pose_leg_out_idx", None)
         idx_nonleg = getattr(self, "direct_pose_nonleg_out_idx", None)
         if not torch.is_tensor(idx_leg) or not torch.is_tensor(idx_nonleg):
@@ -2204,18 +1951,54 @@ class EventMotionModel(nn.Module):
 
         hidden = self.direct_pose_head(direct_flat)
         leg_out = self.direct_pose_out_leg(hidden)
+        out_flat = hidden.new_zeros((hidden.shape[0], int(self.out_motion_dim)))
+        idx_leg_use = idx_leg.to(device=out_flat.device)
+        out_flat = out_flat.index_copy(1, idx_leg_use, leg_out)
+
+        if bool(getattr(self, "direct_pose_arm_split_enable", False)):
+            idx_arm = getattr(self, "direct_pose_arm_out_idx", None)
+            idx_else = getattr(self, "direct_pose_else_out_idx", None)
+            out_arm = getattr(self, "direct_pose_out_arm", None)
+            out_else = getattr(self, "direct_pose_out_else", None)
+            if (
+                (not torch.is_tensor(idx_arm))
+                or (not torch.is_tensor(idx_else))
+                or out_arm is None
+                or out_else is None
+            ):
+                raise RuntimeError("direct_pose_arm_split_enable=true but arm/else head modules are missing.")
+            arm_in = hidden
+            else_in = hidden
+            arm_proj = getattr(self, "direct_pose_arm_proj", None)
+            else_proj = getattr(self, "direct_pose_else_proj", None)
+            if arm_proj is not None:
+                arm_in = arm_proj(arm_in)
+            if else_proj is not None:
+                else_in = else_proj(else_in)
+            arm_out = out_arm(arm_in)
+            else_out = out_else(else_in)
+            if (
+                int(leg_out.shape[-1]) != int(idx_leg.numel())
+                or int(arm_out.shape[-1]) != int(idx_arm.numel())
+                or int(else_out.shape[-1]) != int(idx_else.numel())
+                or int(idx_arm.numel() + idx_else.numel()) != int(idx_nonleg.numel())
+            ):
+                raise RuntimeError("direct split-head (leg/arm/else) output dim mismatch with index buffers.")
+            out_flat = out_flat.index_copy(1, idx_arm.to(device=out_flat.device), arm_out)
+            out_flat = out_flat.index_copy(1, idx_else.to(device=out_flat.device), else_out)
+            return out_flat.view(B, Tq, -1)
+
+        out_nonleg = getattr(self, "direct_pose_out_nonleg", None)
+        if out_nonleg is None:
+            raise RuntimeError("direct_pose_split_enable=true but non-leg head module is missing.")
         nonleg_in = hidden
         nonleg_proj = getattr(self, "direct_pose_nonleg_proj", None)
         if nonleg_proj is not None:
             nonleg_in = nonleg_proj(nonleg_in)
-        nonleg_out = self.direct_pose_out_nonleg(nonleg_in)
+        nonleg_out = out_nonleg(nonleg_in)
         if int(leg_out.shape[-1]) != int(idx_leg.numel()) or int(nonleg_out.shape[-1]) != int(idx_nonleg.numel()):
             raise RuntimeError("direct split-head output dim mismatch with index buffers.")
-
-        out_flat = hidden.new_zeros((hidden.shape[0], int(self.out_motion_dim)))
-        idx_leg_use = idx_leg.to(device=out_flat.device)
         idx_nonleg_use = idx_nonleg.to(device=out_flat.device)
-        out_flat = out_flat.index_copy(1, idx_leg_use, leg_out)
         out_flat = out_flat.index_copy(1, idx_nonleg_use, nonleg_out)
         return out_flat.view(B, Tq, -1)
 
@@ -2224,12 +2007,33 @@ class EventMotionModel(nn.Module):
             return False
         if not isinstance(state_dict, dict):
             return False
+        arm_split = bool(getattr(self, "direct_pose_arm_split_enable", False))
         leg_head = getattr(self, "direct_pose_out_leg", None)
-        nonleg_head = getattr(self, "direct_pose_out_nonleg", None)
         idx_leg = getattr(self, "direct_pose_leg_out_idx", None)
         idx_nonleg = getattr(self, "direct_pose_nonleg_out_idx", None)
-        if leg_head is None or nonleg_head is None or (not torch.is_tensor(idx_leg)) or (not torch.is_tensor(idx_nonleg)):
+        if leg_head is None or (not torch.is_tensor(idx_leg)) or (not torch.is_tensor(idx_nonleg)):
             return False
+        nonleg_head = None
+        arm_head = None
+        else_head = None
+        idx_arm = None
+        idx_else = None
+        if arm_split:
+            arm_head = getattr(self, "direct_pose_out_arm", None)
+            else_head = getattr(self, "direct_pose_out_else", None)
+            idx_arm = getattr(self, "direct_pose_arm_out_idx", None)
+            idx_else = getattr(self, "direct_pose_else_out_idx", None)
+            if (
+                arm_head is None
+                or else_head is None
+                or (not torch.is_tensor(idx_arm))
+                or (not torch.is_tensor(idx_else))
+            ):
+                return False
+        else:
+            nonleg_head = getattr(self, "direct_pose_out_nonleg", None)
+            if nonleg_head is None:
+                return False
 
         old_w = state_dict.get("direct_pose_head.6.weight", None)
         old_b = state_dict.get("direct_pose_head.6.bias", None)
@@ -2237,7 +2041,52 @@ class EventMotionModel(nn.Module):
         ref_device = old_w.device if has_old else leg_head.weight.device
         idx_leg_use = idx_leg.to(device=ref_device, dtype=torch.long)
         idx_nonleg_use = idx_nonleg.to(device=ref_device, dtype=torch.long)
+        idx_arm_use = None
+        idx_else_use = None
+        arm_nonleg_local = None
+        else_nonleg_local = None
+        if arm_split:
+            idx_arm_use = idx_arm.to(device=ref_device, dtype=torch.long)
+            idx_else_use = idx_else.to(device=ref_device, dtype=torch.long)
+            try:
+                pos_map = {int(v): i for i, v in enumerate(idx_nonleg_use.detach().cpu().tolist())}
+                arm_local = [int(pos_map[int(v)]) for v in idx_arm_use.detach().cpu().tolist()]
+                else_local = [int(pos_map[int(v)]) for v in idx_else_use.detach().cpu().tolist()]
+                arm_nonleg_local = torch.as_tensor(arm_local, dtype=torch.long, device=ref_device)
+                else_nonleg_local = torch.as_tensor(else_local, dtype=torch.long, device=ref_device)
+            except Exception:
+                return False
+            if (
+                int(arm_nonleg_local.numel()) != int(idx_arm_use.numel())
+                or int(else_nonleg_local.numel()) != int(idx_else_use.numel())
+            ):
+                return False
         converted = False
+
+        # Legacy/non-split checkpoints may persist empty split-index buffers.
+        # Keep the model-computed split mapping by dropping incompatible ckpt buffers.
+        idx_pairs = [
+            ("direct_pose_leg_out_idx", idx_leg),
+            ("direct_pose_nonleg_out_idx", idx_nonleg),
+        ]
+        if arm_split:
+            idx_pairs.append(("direct_pose_arm_out_idx", idx_arm))
+            idx_pairs.append(("direct_pose_else_out_idx", idx_else))
+        for key, idx_tgt in idx_pairs:
+            v = state_dict.get(key, None)
+            if not torch.is_tensor(v):
+                continue
+            if tuple(v.shape) != tuple(idx_tgt.shape):
+                state_dict.pop(key, None)
+                converted = True
+                continue
+            if v.dtype != idx_tgt.dtype:
+                try:
+                    state_dict[key] = v.to(dtype=idx_tgt.dtype)
+                    converted = True
+                except Exception:
+                    state_dict.pop(key, None)
+                    converted = True
 
         if has_old:
             tgt_leg_w = leg_head.weight
@@ -2248,78 +2097,29 @@ class EventMotionModel(nn.Module):
                     state_dict["direct_pose_out_leg.weight"] = leg_w
                     converted = True
 
-            tgt_nonleg_w = nonleg_head.weight
-            cur_nonleg_w = state_dict.get("direct_pose_out_nonleg.weight", None)
-            if (not torch.is_tensor(cur_nonleg_w)) or tuple(cur_nonleg_w.shape) != tuple(tgt_nonleg_w.shape):
-                nonleg_w = old_w.index_select(0, idx_nonleg_use)
-                if tuple(nonleg_w.shape) == tuple(tgt_nonleg_w.shape):
-                    state_dict["direct_pose_out_nonleg.weight"] = nonleg_w
-                    converted = True
-
-        # Optional projection bottleneck for non-leg branch:
-        # if checkpoint has legacy non-leg readout W_old: (D_nonleg, hid),
-        # factorize it to W_old ~= W_out @ W_proj with rank=proj_dim.
-        # This keeps initialization close when switching to h_nonleg=ReLU(Linear(hid, proj)).
-        nonleg_proj = getattr(self, "direct_pose_nonleg_proj", None)
-        proj_linear = None
-        if isinstance(nonleg_proj, nn.Sequential) and len(nonleg_proj) > 0 and isinstance(nonleg_proj[0], nn.Linear):
-            proj_linear = nonleg_proj[0]
-        elif isinstance(nonleg_proj, nn.Linear):
-            proj_linear = nonleg_proj
-
-        if proj_linear is not None:
-            src_nonleg_w = None
-            if has_old:
-                try:
-                    src_nonleg_w = old_w.index_select(0, idx_nonleg_use)
-                except Exception:
-                    src_nonleg_w = None
-            if src_nonleg_w is None:
-                w_ckpt_nonleg = state_dict.get("direct_pose_out_nonleg.weight", None)
-                if torch.is_tensor(w_ckpt_nonleg) and w_ckpt_nonleg.ndim == 2:
-                    src_nonleg_w = w_ckpt_nonleg
-
-            tgt_proj_w = proj_linear.weight
-            tgt_nonleg_w = nonleg_head.weight
-            cur_proj_w = state_dict.get("direct_pose_nonleg_proj.0.weight", None)
-            cur_nonleg_w = state_dict.get("direct_pose_out_nonleg.weight", None)
-            need_proj = (not torch.is_tensor(cur_proj_w)) or tuple(cur_proj_w.shape) != tuple(tgt_proj_w.shape)
-            need_nonleg = (not torch.is_tensor(cur_nonleg_w)) or tuple(cur_nonleg_w.shape) != tuple(tgt_nonleg_w.shape)
-
-            if (
-                (need_proj or need_nonleg)
-                and torch.is_tensor(src_nonleg_w)
-                and src_nonleg_w.ndim == 2
-                and int(src_nonleg_w.shape[0]) == int(tgt_nonleg_w.shape[0])
-                and int(src_nonleg_w.shape[1]) == int(tgt_proj_w.shape[1])
-            ):
-                try:
-                    src = src_nonleg_w.detach().to(dtype=torch.float32)
-                    u, s, vh = torch.linalg.svd(src, full_matrices=False)
-                    rank = int(min(int(tgt_proj_w.shape[0]), int(s.numel())))
-                    proj_w = torch.zeros(
-                        tuple(tgt_proj_w.shape),
-                        dtype=src_nonleg_w.dtype,
-                        device=src_nonleg_w.device,
-                    )
-                    out_w = torch.zeros(
-                        tuple(tgt_nonleg_w.shape),
-                        dtype=src_nonleg_w.dtype,
-                        device=src_nonleg_w.device,
-                    )
-                    if rank > 0:
-                        out_w[:, :rank] = (u[:, :rank] * s[:rank].unsqueeze(0)).to(dtype=out_w.dtype, device=out_w.device)
-                        proj_w[:rank, :] = vh[:rank, :].to(dtype=proj_w.dtype, device=proj_w.device)
-                    state_dict["direct_pose_nonleg_proj.0.weight"] = proj_w
-                    state_dict["direct_pose_nonleg_proj.0.bias"] = torch.zeros(
-                        (int(tgt_proj_w.shape[0]),),
-                        dtype=src_nonleg_w.dtype,
-                        device=src_nonleg_w.device,
-                    )
-                    state_dict["direct_pose_out_nonleg.weight"] = out_w
-                    converted = True
-                except Exception:
-                    pass
+            if not arm_split:
+                tgt_nonleg_w = nonleg_head.weight
+                cur_nonleg_w = state_dict.get("direct_pose_out_nonleg.weight", None)
+                if (not torch.is_tensor(cur_nonleg_w)) or tuple(cur_nonleg_w.shape) != tuple(tgt_nonleg_w.shape):
+                    nonleg_w = old_w.index_select(0, idx_nonleg_use)
+                    if tuple(nonleg_w.shape) == tuple(tgt_nonleg_w.shape):
+                        state_dict["direct_pose_out_nonleg.weight"] = nonleg_w
+                        converted = True
+            else:
+                tgt_arm_w = arm_head.weight
+                tgt_else_w = else_head.weight
+                cur_arm_w = state_dict.get("direct_pose_out_arm.weight", None)
+                cur_else_w = state_dict.get("direct_pose_out_else.weight", None)
+                if (not torch.is_tensor(cur_arm_w)) or tuple(cur_arm_w.shape) != tuple(tgt_arm_w.shape):
+                    arm_w = old_w.index_select(0, idx_arm_use)
+                    if tuple(arm_w.shape) == tuple(tgt_arm_w.shape):
+                        state_dict["direct_pose_out_arm.weight"] = arm_w
+                        converted = True
+                if (not torch.is_tensor(cur_else_w)) or tuple(cur_else_w.shape) != tuple(tgt_else_w.shape):
+                    else_w = old_w.index_select(0, idx_else_use)
+                    if tuple(else_w.shape) == tuple(tgt_else_w.shape):
+                        state_dict["direct_pose_out_else.weight"] = else_w
+                        converted = True
 
         if has_old and torch.is_tensor(old_b):
             tgt_leg_b = leg_head.bias
@@ -2333,15 +2133,202 @@ class EventMotionModel(nn.Module):
                     state_dict["direct_pose_out_leg.bias"] = leg_b
                     converted = True
 
-            tgt_nonleg_b = nonleg_head.bias
-            cur_nonleg_b = state_dict.get("direct_pose_out_nonleg.bias", None)
-            if (
-                torch.is_tensor(tgt_nonleg_b)
-                and ((not torch.is_tensor(cur_nonleg_b)) or tuple(cur_nonleg_b.shape) != tuple(tgt_nonleg_b.shape))
+            if not arm_split:
+                tgt_nonleg_b = nonleg_head.bias
+                cur_nonleg_b = state_dict.get("direct_pose_out_nonleg.bias", None)
+                if (
+                    torch.is_tensor(tgt_nonleg_b)
+                    and ((not torch.is_tensor(cur_nonleg_b)) or tuple(cur_nonleg_b.shape) != tuple(tgt_nonleg_b.shape))
+                ):
+                    nonleg_b = old_b.index_select(0, idx_nonleg_use)
+                    if tuple(nonleg_b.shape) == tuple(tgt_nonleg_b.shape):
+                        state_dict["direct_pose_out_nonleg.bias"] = nonleg_b
+                        converted = True
+            else:
+                tgt_arm_b = arm_head.bias
+                tgt_else_b = else_head.bias
+                cur_arm_b = state_dict.get("direct_pose_out_arm.bias", None)
+                cur_else_b = state_dict.get("direct_pose_out_else.bias", None)
+                if (
+                    torch.is_tensor(tgt_arm_b)
+                    and ((not torch.is_tensor(cur_arm_b)) or tuple(cur_arm_b.shape) != tuple(tgt_arm_b.shape))
+                ):
+                    arm_b = old_b.index_select(0, idx_arm_use)
+                    if tuple(arm_b.shape) == tuple(tgt_arm_b.shape):
+                        state_dict["direct_pose_out_arm.bias"] = arm_b
+                        converted = True
+                if (
+                    torch.is_tensor(tgt_else_b)
+                    and ((not torch.is_tensor(cur_else_b)) or tuple(cur_else_b.shape) != tuple(tgt_else_b.shape))
+                ):
+                    else_b = old_b.index_select(0, idx_else_use)
+                    if tuple(else_b.shape) == tuple(tgt_else_b.shape):
+                        state_dict["direct_pose_out_else.bias"] = else_b
+                        converted = True
+
+        src_nonleg_w = None
+        src_nonleg_b = None
+        if has_old:
+            try:
+                src_nonleg_w = old_w.index_select(0, idx_nonleg_use)
+            except Exception:
+                src_nonleg_w = None
+            if torch.is_tensor(old_b):
+                try:
+                    src_nonleg_b = old_b.index_select(0, idx_nonleg_use)
+                except Exception:
+                    src_nonleg_b = None
+        if src_nonleg_w is None:
+            w_ckpt_nonleg = state_dict.get("direct_pose_out_nonleg.weight", None)
+            if torch.is_tensor(w_ckpt_nonleg) and w_ckpt_nonleg.ndim == 2:
+                src_nonleg_w = w_ckpt_nonleg
+        if src_nonleg_b is None:
+            b_ckpt_nonleg = state_dict.get("direct_pose_out_nonleg.bias", None)
+            if torch.is_tensor(b_ckpt_nonleg) and b_ckpt_nonleg.ndim == 1:
+                src_nonleg_b = b_ckpt_nonleg
+
+        if arm_split and torch.is_tensor(src_nonleg_w):
+            try:
+                tgt_arm_w = arm_head.weight
+                tgt_else_w = else_head.weight
+                cur_arm_w = state_dict.get("direct_pose_out_arm.weight", None)
+                cur_else_w = state_dict.get("direct_pose_out_else.weight", None)
+                if (
+                    int(src_nonleg_w.shape[0]) == int(idx_nonleg_use.numel())
+                    and int(arm_nonleg_local.numel()) == int(tgt_arm_w.shape[0])
+                    and int(else_nonleg_local.numel()) == int(tgt_else_w.shape[0])
+                ):
+                    if (not torch.is_tensor(cur_arm_w)) or tuple(cur_arm_w.shape) != tuple(tgt_arm_w.shape):
+                        arm_w = src_nonleg_w.index_select(0, arm_nonleg_local.to(device=src_nonleg_w.device))
+                        if tuple(arm_w.shape) == tuple(tgt_arm_w.shape):
+                            state_dict["direct_pose_out_arm.weight"] = arm_w
+                            converted = True
+                    if (not torch.is_tensor(cur_else_w)) or tuple(cur_else_w.shape) != tuple(tgt_else_w.shape):
+                        else_w = src_nonleg_w.index_select(0, else_nonleg_local.to(device=src_nonleg_w.device))
+                        if tuple(else_w.shape) == tuple(tgt_else_w.shape):
+                            state_dict["direct_pose_out_else.weight"] = else_w
+                            converted = True
+            except Exception:
+                pass
+        if arm_split and torch.is_tensor(src_nonleg_b):
+            try:
+                tgt_arm_b = arm_head.bias
+                tgt_else_b = else_head.bias
+                cur_arm_b = state_dict.get("direct_pose_out_arm.bias", None)
+                cur_else_b = state_dict.get("direct_pose_out_else.bias", None)
+                if (
+                    int(src_nonleg_b.shape[0]) == int(idx_nonleg_use.numel())
+                    and int(arm_nonleg_local.numel()) == int(tgt_arm_b.shape[0])
+                    and int(else_nonleg_local.numel()) == int(tgt_else_b.shape[0])
+                ):
+                    if (not torch.is_tensor(cur_arm_b)) or tuple(cur_arm_b.shape) != tuple(tgt_arm_b.shape):
+                        arm_b = src_nonleg_b.index_select(0, arm_nonleg_local.to(device=src_nonleg_b.device))
+                        if tuple(arm_b.shape) == tuple(tgt_arm_b.shape):
+                            state_dict["direct_pose_out_arm.bias"] = arm_b
+                            converted = True
+                    if (not torch.is_tensor(cur_else_b)) or tuple(cur_else_b.shape) != tuple(tgt_else_b.shape):
+                        else_b = src_nonleg_b.index_select(0, else_nonleg_local.to(device=src_nonleg_b.device))
+                        if tuple(else_b.shape) == tuple(tgt_else_b.shape):
+                            state_dict["direct_pose_out_else.bias"] = else_b
+                            converted = True
+            except Exception:
+                pass
+
+        def _first_linear(m: Any) -> Optional[nn.Linear]:
+            if isinstance(m, nn.Sequential) and len(m) > 0 and isinstance(m[0], nn.Linear):
+                return m[0]
+            if isinstance(m, nn.Linear):
+                return m
+            return None
+
+        if not arm_split:
+            # Optional projection bottleneck for non-leg branch:
+            # if checkpoint has legacy non-leg readout W_old: (D_nonleg, hid),
+            # factorize it to W_old ~= W_out @ W_proj with rank=proj_dim.
+            nonleg_proj = getattr(self, "direct_pose_nonleg_proj", None)
+            proj_linear = _first_linear(nonleg_proj)
+            if proj_linear is not None:
+                tgt_proj_w = proj_linear.weight
+                tgt_nonleg_w = nonleg_head.weight
+                cur_proj_w = state_dict.get("direct_pose_nonleg_proj.0.weight", None)
+                cur_nonleg_w = state_dict.get("direct_pose_out_nonleg.weight", None)
+                need_proj = (not torch.is_tensor(cur_proj_w)) or tuple(cur_proj_w.shape) != tuple(tgt_proj_w.shape)
+                need_nonleg = (not torch.is_tensor(cur_nonleg_w)) or tuple(cur_nonleg_w.shape) != tuple(tgt_nonleg_w.shape)
+
+                if (
+                    (need_proj or need_nonleg)
+                    and torch.is_tensor(src_nonleg_w)
+                    and src_nonleg_w.ndim == 2
+                    and int(src_nonleg_w.shape[0]) == int(tgt_nonleg_w.shape[0])
+                    and int(src_nonleg_w.shape[1]) == int(tgt_proj_w.shape[1])
+                ):
+                    try:
+                        src = src_nonleg_w.detach().to(dtype=torch.float32)
+                        u, s, vh = torch.linalg.svd(src, full_matrices=False)
+                        rank = int(min(int(tgt_proj_w.shape[0]), int(s.numel())))
+                        proj_w = torch.zeros(
+                            tuple(tgt_proj_w.shape),
+                            dtype=src_nonleg_w.dtype,
+                            device=src_nonleg_w.device,
+                        )
+                        out_w = torch.zeros(
+                            tuple(tgt_nonleg_w.shape),
+                            dtype=src_nonleg_w.dtype,
+                            device=src_nonleg_w.device,
+                        )
+                        if rank > 0:
+                            out_w[:, :rank] = (u[:, :rank] * s[:rank].unsqueeze(0)).to(dtype=out_w.dtype, device=out_w.device)
+                            proj_w[:rank, :] = vh[:rank, :].to(dtype=proj_w.dtype, device=proj_w.device)
+                        state_dict["direct_pose_nonleg_proj.0.weight"] = proj_w
+                        state_dict["direct_pose_nonleg_proj.0.bias"] = torch.zeros(
+                            (int(tgt_proj_w.shape[0]),),
+                            dtype=src_nonleg_w.dtype,
+                            device=src_nonleg_w.device,
+                        )
+                        state_dict["direct_pose_out_nonleg.weight"] = out_w
+                        converted = True
+                    except Exception:
+                        pass
+        else:
+            # Warm-start arm/else projection layers by copying legacy non-leg projection when available.
+            src_proj_w = state_dict.get("direct_pose_nonleg_proj.0.weight", None)
+            src_proj_b = state_dict.get("direct_pose_nonleg_proj.0.bias", None)
+            for branch, key in (
+                (getattr(self, "direct_pose_arm_proj", None), "direct_pose_arm_proj"),
+                (getattr(self, "direct_pose_else_proj", None), "direct_pose_else_proj"),
             ):
-                nonleg_b = old_b.index_select(0, idx_nonleg_use)
-                if tuple(nonleg_b.shape) == tuple(tgt_nonleg_b.shape):
-                    state_dict["direct_pose_out_nonleg.bias"] = nonleg_b
+                lin = _first_linear(branch)
+                if lin is None:
+                    continue
+                k_w = f"{key}.0.weight"
+                k_b = f"{key}.0.bias"
+                cur_w = state_dict.get(k_w, None)
+                cur_b = state_dict.get(k_b, None)
+                if (
+                    torch.is_tensor(src_proj_w)
+                    and src_proj_w.ndim == 2
+                    and ((not torch.is_tensor(cur_w)) or tuple(cur_w.shape) != tuple(lin.weight.shape))
+                    and tuple(src_proj_w.shape) == tuple(lin.weight.shape)
+                ):
+                    state_dict[k_w] = src_proj_w
+                    converted = True
+                if (
+                    torch.is_tensor(src_proj_b)
+                    and src_proj_b.ndim == 1
+                    and ((not torch.is_tensor(cur_b)) or tuple(cur_b.shape) != tuple(lin.bias.shape))
+                    and tuple(src_proj_b.shape) == tuple(lin.bias.shape)
+                ):
+                    state_dict[k_b] = src_proj_b
+                    converted = True
+            # Remove stale two-way branch tensors when loading into three-way model.
+            for k in (
+                "direct_pose_out_nonleg.weight",
+                "direct_pose_out_nonleg.bias",
+                "direct_pose_nonleg_proj.0.weight",
+                "direct_pose_nonleg_proj.0.bias",
+            ):
+                if k in state_dict:
+                    state_dict.pop(k, None)
                     converted = True
 
         if converted:
@@ -2745,12 +2732,11 @@ class EventMotionModel(nn.Module):
                         hist_device = self._adaptive_history_device or pose_hist_for_module.device
                         context_feat = state.mean(dim=1).to(hist_device)
                         pose_hist_for_module = pose_hist_for_module.to(hist_device)
-                        pose_hist_flat, diag = self.adaptive_history_module(
+                        pose_hist_flat, _ = self.adaptive_history_module(
                             pose_hist_for_module,
                             context=context_feat,
                         )
                         pose_history = pose_hist_flat.to(device).unsqueeze(1)
-                        self._adaptive_history_diag = diag
                         _pose_hist_processed = True
                     except Exception:
                         pass
@@ -3739,12 +3725,11 @@ class EventMotionModel(nn.Module):
                 hist_device = self._adaptive_history_device or pose_hist_for_module.device
                 context_feat = state.mean(dim=1).to(hist_device)
                 pose_hist_for_module = pose_hist_for_module.to(hist_device)
-                pose_hist_flat, diag = self.adaptive_history_module(
+                pose_hist_flat, _ = self.adaptive_history_module(
                     pose_hist_for_module,
                     context=context_feat,
                 )
                 pose_history = pose_hist_flat.to(device).unsqueeze(1)
-                self._adaptive_history_diag = diag
                 _pose_hist_processed = True
             encoder_feats.append(pose_history)
         encoder_input = torch.cat(encoder_feats, dim=-1) if encoder_feats else None
@@ -4207,7 +4192,7 @@ class EventMotionModel(nn.Module):
                 # Optional: leg-specific residual head output (kept separate from out_direct).
                 # NOTE: out_direct is in normalized Y space; do NOT apply SO(3) composition here.
                 # Any on-manifold leg correction must be applied in RAW space (denorm -> compose -> renorm)
-                # by the training/eval harness (similar to hinge correction).
+                # by the training/eval harness after denorm/compose/renorm.
                 direct_leg_omega = None
                 direct_leg_omega_raw = None
                 direct_leg_gate = None
@@ -4215,8 +4200,6 @@ class EventMotionModel(nn.Module):
                 direct_leg_scale = None
                 direct_leg_scale_log = None
                 direct_leg_scale_log_raw = None
-                direct_leg_scale_sign = None
-                direct_leg_scale_sign_logit = None
                 direct_leg_side_sign_gate = None
 
                 # Optional: add a leg-specific residual on BoneRotations6D only.
@@ -4557,69 +4540,6 @@ class EventMotionModel(nn.Module):
                                                     direct_leg_scale_log = None
                                                     direct_leg_scale_log_raw = None
                                                     omega_eff = omega_leg
-                                            elif gm_leg == "signed_scale":
-                                                # Signed per-joint scale:
-                                                #   scale = sign * exp(softclip(log_mag, [-clip,+clip]))
-                                                # where sign = 2*sigmoid(sign_logit)-1 in (-1,1).
-                                                try:
-                                                    scale_head = getattr(self, "direct_pose_leg_gate_head_shared", None)
-                                                    if scale_head is None:
-                                                        raise RuntimeError(
-                                                            "signed leg scale enabled but direct_pose_leg_gate_head_shared is missing"
-                                                        )
-                                                    out_r = scale_head(leg_flat_r).view(B, Tq, int(K_side) * 2)
-                                                    out_l = scale_head(leg_flat_l).view(B, Tq, int(K_side) * 2)
-                                                    sign_logit_r, log_mag_raw_r = out_r.split(int(K_side), dim=-1)
-                                                    sign_logit_l, log_mag_raw_l = out_l.split(int(K_side), dim=-1)
-
-                                                    sign_r = (2.0 * torch.sigmoid(sign_logit_r) - 1.0)
-                                                    sign_l = (2.0 * torch.sigmoid(sign_logit_l) - 1.0)
-
-                                                    clip = float(getattr(self, "direct_pose_leg_scale_log_clip", 4.0) or 4.0)
-                                                    if (not _math.isfinite(clip)) or clip <= 0.0:
-                                                        clip = 4.0
-                                                    # Smoothly bound log_mag to avoid exp overflow without hard-clamping gradients.
-                                                    log_mag_r = float(clip) * torch.tanh(log_mag_raw_r / float(clip))
-                                                    log_mag_l = float(clip) * torch.tanh(log_mag_raw_l / float(clip))
-                                                    mag_r = torch.exp(log_mag_r)
-                                                    mag_l = torch.exp(log_mag_l)
-                                                    if use_scale_clamp:
-                                                        mag_r = mag_r.clamp(scale_min, scale_max)
-                                                        mag_l = mag_l.clamp(scale_min, scale_max)
-                                                        log_mag_r = torch.log(mag_r)
-                                                        log_mag_l = torch.log(mag_l)
-                                                    scale_r = sign_r * mag_r
-                                                    scale_l = sign_l * mag_l
-
-                                                    scale_leg = omega_leg.new_zeros((B, Tq, K))
-                                                    scale_leg = scale_leg.index_copy(2, pos_r_use, scale_r)
-                                                    scale_leg = scale_leg.index_copy(2, pos_l_use, scale_l)
-                                                    log_leg = omega_leg.new_zeros((B, Tq, K))
-                                                    log_leg = log_leg.index_copy(2, pos_r_use, log_mag_r)
-                                                    log_leg = log_leg.index_copy(2, pos_l_use, log_mag_l)
-                                                    log_raw_leg = omega_leg.new_zeros((B, Tq, K))
-                                                    log_raw_leg = log_raw_leg.index_copy(2, pos_r_use, log_mag_raw_r)
-                                                    log_raw_leg = log_raw_leg.index_copy(2, pos_l_use, log_mag_raw_l)
-                                                    sign_leg = omega_leg.new_zeros((B, Tq, K))
-                                                    sign_leg = sign_leg.index_copy(2, pos_r_use, sign_r)
-                                                    sign_leg = sign_leg.index_copy(2, pos_l_use, sign_l)
-                                                    sign_logit_leg = omega_leg.new_zeros((B, Tq, K))
-                                                    sign_logit_leg = sign_logit_leg.index_copy(2, pos_r_use, sign_logit_r)
-                                                    sign_logit_leg = sign_logit_leg.index_copy(2, pos_l_use, sign_logit_l)
-
-                                                    direct_leg_scale = scale_leg
-                                                    direct_leg_scale_log = log_leg
-                                                    direct_leg_scale_log_raw = log_raw_leg
-                                                    direct_leg_scale_sign = sign_leg
-                                                    direct_leg_scale_sign_logit = sign_logit_leg
-                                                    omega_eff = omega_leg * scale_leg.unsqueeze(-1)
-                                                except Exception:
-                                                    direct_leg_scale = None
-                                                    direct_leg_scale_log = None
-                                                    direct_leg_scale_log_raw = None
-                                                    direct_leg_scale_sign = None
-                                                    direct_leg_scale_sign_logit = None
-                                                    omega_eff = omega_leg
 
                                             direct_leg_omega = omega_eff
                     except Exception:
@@ -4851,41 +4771,6 @@ class EventMotionModel(nn.Module):
                                                         direct_leg_scale_log = None
                                                         direct_leg_scale_log_raw = None
                                                         omega_eff = omega_leg
-                                                elif gm_leg == "signed_scale":
-                                                    # Signed per-joint scale:
-                                                    #   scale = sign * exp(softclip(log_mag, [-clip,+clip]))
-                                                    # where sign = 2*sigmoid(sign_logit)-1 in (-1,1).
-                                                    try:
-                                                        scale_head = getattr(self, "direct_pose_leg_gate_head", None)
-                                                        if scale_head is None:
-                                                            raise RuntimeError(
-                                                                "signed leg scale enabled but direct_pose_leg_gate_head is missing"
-                                                            )
-                                                        out = scale_head(leg_in).view(B, Tq, int(K) * 2)  # type: ignore[arg-type]
-                                                        sign_logit, log_mag_raw = out.split(int(K), dim=-1)
-                                                        sign = (2.0 * torch.sigmoid(sign_logit) - 1.0)
-                                                        clip = float(getattr(self, "direct_pose_leg_scale_log_clip", 4.0) or 4.0)
-                                                        if (not _math.isfinite(clip)) or clip <= 0.0:
-                                                            clip = 4.0
-                                                        log_mag = float(clip) * torch.tanh(log_mag_raw / float(clip))
-                                                        mag = torch.exp(log_mag)
-                                                        if use_scale_clamp:
-                                                            mag = mag.clamp(scale_min, scale_max)
-                                                            log_mag = torch.log(mag)
-                                                        scale = sign * mag
-                                                        direct_leg_scale = scale
-                                                        direct_leg_scale_log = log_mag
-                                                        direct_leg_scale_log_raw = log_mag_raw
-                                                        direct_leg_scale_sign = sign
-                                                        direct_leg_scale_sign_logit = sign_logit
-                                                        omega_eff = omega_leg * scale.unsqueeze(-1)
-                                                    except Exception:
-                                                        direct_leg_scale = None
-                                                        direct_leg_scale_log = None
-                                                        direct_leg_scale_log_raw = None
-                                                        direct_leg_scale_sign = None
-                                                        direct_leg_scale_sign_logit = None
-                                                        omega_eff = omega_leg
 
                                                 direct_leg_omega = omega_eff
                                             # else: unexpected shape; skip (keeps direct_leg_omega=None)
@@ -4900,231 +4785,6 @@ class EventMotionModel(nn.Module):
                     except Exception:
                         pass
 
-                hinge_delta = None
-                hinge_delta_raw = None
-                hinge_delta_base_raw = None
-                hinge_delta_eps_raw = None
-                hinge_gate = None
-                hinge_gate_logits = None
-                use_clean_hinge = bool(getattr(self, "direct_pose_hinge_clean", False)) and (
-                    getattr(self, "direct_pose_hinge_nonhidden_head", None) is not None
-                    and getattr(self, "direct_pose_hinge_eps_head", None) is not None
-                )
-                if (self.direct_pose_hinge_head is not None) or use_clean_hinge:
-                    try:
-                        # Optional: append base direct pose rotation features for the hinge joints.
-                        hinge_base_feat = None
-                        try:
-                            if str(getattr(self, "direct_pose_hinge_base_feat", "none") or "none").strip().lower() == "rot6d":
-                                rot_sl = getattr(self, "direct_pose_rot6d_slice", None)
-                                hinge_idx = getattr(self, "direct_pose_hinge_joint_idx", None)
-                                if torch.is_tensor(direct_out) and isinstance(rot_sl, slice) and hinge_idx:
-                                    rot_flat = direct_out.detach()[..., rot_sl]
-                                    rot_len = int(rot_flat.shape[-1])
-                                    if rot_len > 0 and (rot_len % 6) == 0:
-                                        J = int(rot_len // 6)
-                                        rot6 = rot_flat.view(B, Tq, J, 6)
-                                        feats = []
-                                        for j in hinge_idx:
-                                            try:
-                                                jj = int(j)
-                                            except Exception:
-                                                continue
-                                            if 0 <= jj < J:
-                                                feats.append(rot6[..., jj, :])
-                                        if feats:
-                                            hinge_base_feat = torch.cat(feats, dim=-1)
-                        except Exception:
-                            hinge_base_feat = None
-                        max_rad = float(getattr(self, "direct_pose_hinge_max_rad", 0.0) or 0.0)
-                        if not _math.isfinite(max_rad) or max_rad <= 0.0:
-                            max_rad = 0.0
-
-                        hinge_flat_for_gate = None
-                        if use_clean_hinge:
-                            # Clean split:
-                            #   delta_raw = clamp(delta_base + eps, [-max_rad, +max_rad])
-                            # where:
-                            #   delta_base = tanh(head_nonhidden(nonhidden_feats)) * max_rad
-                            #   eps        = tanh(head_eps(hidden)) * eps_max_rad
-                            parts = []
-                            if torch.is_tensor(time_pe_direct):
-                                parts.append(time_pe_direct.to(device=device, dtype=dtype))
-                            if torch.is_tensor(hinge_base_feat):
-                                parts.append(hinge_base_feat)
-                            parts.append(plan_in.to(device=device, dtype=dtype))
-                            if mode != "mode_select" and torch.is_tensor(meas_in):
-                                parts.append(meas_in)
-                            hinge_in = torch.cat(parts, dim=-1) if len(parts) > 1 else parts[0]
-                            hinge_flat = hinge_in.reshape(-1, hinge_in.shape[-1])
-                            hinge_flat_for_gate = hinge_flat
-
-                            base_raw = self.direct_pose_hinge_nonhidden_head(hinge_flat).view(B, Tq, -1)  # type: ignore[operator]
-                            if max_rad > 0.0 and _math.isfinite(max_rad):
-                                hinge_delta_base_raw = torch.tanh(base_raw) * max_rad
-                            else:
-                                hinge_delta_base_raw = base_raw
-
-                            # eps(hidden) input routing:
-                            # - hidden:     use h_final (post-PASA)
-                            # - hidden_pre: use h_temporal (pre-PASA)
-                            try:
-                                eps_src = str(getattr(self, "direct_pose_hinge_eps_source", "hidden") or "hidden").lower().strip()
-                            except Exception:
-                                eps_src = "hidden"
-                            eps_in = h_temporal if eps_src == "hidden_pre" else h_final
-                            if torch.is_tensor(eps_in) and eps_in.ndim == 2:
-                                eps_in = eps_in.unsqueeze(1)
-                            eps_flat = eps_in.reshape(-1, eps_in.shape[-1])
-                            eps_raw = self.direct_pose_hinge_eps_head(eps_flat).view(B, Tq, -1)  # type: ignore[operator]
-                            eps_max_rad = float(getattr(self, "direct_pose_hinge_eps_max_rad", 0.0) or 0.0)
-                            if not _math.isfinite(eps_max_rad) or eps_max_rad <= 0.0:
-                                eps_max_rad = 0.0
-                            if eps_max_rad > 0.0 and _math.isfinite(eps_max_rad):
-                                hinge_delta_eps_raw = torch.tanh(eps_raw) * eps_max_rad
-                            else:
-                                # eps_max_rad==0 explicitly disables eps(hidden) contribution.
-                                hinge_delta_eps_raw = torch.zeros_like(eps_raw)
-
-                            if torch.is_tensor(hinge_delta_base_raw) and torch.is_tensor(hinge_delta_eps_raw):
-                                hinge_delta_raw = hinge_delta_base_raw + hinge_delta_eps_raw
-                            elif torch.is_tensor(hinge_delta_base_raw):
-                                hinge_delta_raw = hinge_delta_base_raw
-                            else:
-                                hinge_delta_raw = hinge_delta_eps_raw
-
-                            if torch.is_tensor(hinge_delta_raw) and max_rad > 0.0 and _math.isfinite(max_rad):
-                                hinge_delta_raw = hinge_delta_raw.clamp(-max_rad, max_rad)
-                            hinge_delta = hinge_delta_raw
-                        else:
-                            # Legacy single-branch hinge head (can differ from direct head input to reduce overfit).
-                            try:
-                                hinge_src = str(getattr(self, "direct_pose_hinge_feat_source", "cond") or "cond").lower().strip()
-                            except Exception:
-                                hinge_src = "cond"
-                            hinge_feat = None
-                            if hinge_src == "hidden":
-                                hinge_feat = h_final
-                            elif hinge_src == "hidden_pre":
-                                hinge_feat = h_temporal
-                            elif hinge_src == "cond+hidden":
-                                hinge_feat = torch.cat([cond, h_final], dim=-1)
-                            elif hinge_src == "cond+hidden_pre":
-                                hinge_feat = torch.cat([cond, h_temporal], dim=-1)
-                            elif hinge_src == "none":
-                                hinge_feat = None
-                            else:
-                                hinge_feat = cond
-
-                            if torch.is_tensor(time_pe_direct):
-                                tp = time_pe_direct.to(device=device, dtype=dtype)
-                                hinge_feat = tp if hinge_feat is None else torch.cat([hinge_feat, tp], dim=-1)
-
-                            if mode == "mode_select":
-                                parts = []
-                                if torch.is_tensor(hinge_feat):
-                                    parts.append(hinge_feat)
-                                if torch.is_tensor(hinge_base_feat):
-                                    parts.append(hinge_base_feat)
-                                parts.append(plan_in.to(device=device, dtype=dtype))
-                                hinge_in = torch.cat(parts, dim=-1) if len(parts) > 1 else parts[0]
-                            else:
-                                parts = []
-                                if torch.is_tensor(hinge_feat):
-                                    parts.append(hinge_feat)
-                                if torch.is_tensor(hinge_base_feat):
-                                    parts.append(hinge_base_feat)
-                                parts.append(plan_in.to(device=device, dtype=dtype))
-                                if torch.is_tensor(meas_in):
-                                    parts.append(meas_in)
-                                hinge_in = torch.cat(parts, dim=-1) if len(parts) > 1 else parts[0]
-
-                            hinge_flat = hinge_in.reshape(-1, hinge_in.shape[-1])
-                            hinge_flat_for_gate = hinge_flat
-                            hinge_raw = self.direct_pose_hinge_head(hinge_flat).view(B, Tq, -1)
-                            if max_rad > 0.0 and _math.isfinite(max_rad):
-                                hinge_delta_raw = torch.tanh(hinge_raw) * max_rad
-                            else:
-                                hinge_delta_raw = hinge_raw
-                            hinge_delta = hinge_delta_raw
-
-                        # Optional: contact-based gating for hinge correction.
-                        try:
-                            gate_mode = str(getattr(self, "direct_pose_hinge_gate_mode", "none") or "none").lower().strip()
-                        except Exception:
-                            gate_mode = "none"
-                        if gate_mode == "learned" and torch.is_tensor(hinge_delta_raw):
-                            try:
-                                gate_head = (
-                                    getattr(self, "direct_pose_hinge_gate_head_clean", None)
-                                    if use_clean_hinge
-                                    else getattr(self, "direct_pose_hinge_gate_head", None)
-                                )
-                                if gate_head is None or hinge_flat_for_gate is None:
-                                    raise RuntimeError("learned hinge gate enabled but gate_head is missing")
-                                gate_logits = gate_head(hinge_flat_for_gate).view(B, Tq, -1)
-                                hinge_gate_logits = gate_logits
-                                g = torch.sigmoid(gate_logits)
-                                try:
-                                    power = float(getattr(self, "direct_pose_hinge_gate_power", 1.0) or 1.0)
-                                except Exception:
-                                    power = 1.0
-                                if not _math.isfinite(power) or power <= 0.0:
-                                    power = 1.0
-                                if abs(power - 1.0) > 1e-12:
-                                    g = g.pow(power)
-                                hinge_gate = g
-                                hinge_delta = hinge_delta_raw * g
-                            except Exception:
-                                hinge_gate = None
-                                hinge_gate_logits = None
-                                hinge_delta = hinge_delta_raw
-                        elif gate_mode == "contact" and torch.is_tensor(hinge_delta_raw):
-                            try:
-                                gate_src = str(getattr(self, "direct_pose_hinge_gate_source", "plan") or "plan").lower().strip()
-                            except Exception:
-                                gate_src = "plan"
-
-                            contact_gate = None
-                            if gate_src == "meas":
-                                contact_gate = meas_in if torch.is_tensor(meas_in) else plan_in
-                            elif gate_src == "plan_or_meas":
-                                contact_gate = plan_in if torch.is_tensor(plan_in) else meas_in
-                            else:
-                                contact_gate = plan_in
-                            if torch.is_tensor(contact_gate):
-                                contact_gate = contact_gate.detach()
-
-                            idxs = getattr(self, "direct_pose_hinge_gate_contact_idx", None)
-                            if torch.is_tensor(contact_gate) and isinstance(idxs, list) and idxs and contact_gate.shape[-1] > 0:
-                                g = hinge_delta_raw.new_ones(hinge_delta_raw.shape)
-                                try:
-                                    power = float(getattr(self, "direct_pose_hinge_gate_power", 1.0) or 1.0)
-                                except Exception:
-                                    power = 1.0
-                                if not _math.isfinite(power) or power <= 0.0:
-                                    power = 1.0
-                                for k, cidx in enumerate(idxs):
-                                    try:
-                                        cidx = int(cidx)
-                                    except Exception:
-                                        cidx = -1
-                                    if cidx < 0 or cidx >= int(contact_gate.shape[-1]) or k >= int(g.shape[-1]):
-                                        continue
-                                    c = contact_gate[..., cidx].clamp(0.0, 1.0)
-                                    gg = (1.0 - c).clamp(0.0, 1.0)
-                                    if abs(power - 1.0) > 1e-12:
-                                        gg = gg.pow(power)
-                                    g[..., k] = gg
-                                hinge_gate = g.detach()
-                                hinge_delta = hinge_delta_raw * g
-                    except Exception:
-                        hinge_delta = None
-                        hinge_delta_raw = None
-                        hinge_delta_base_raw = None
-                        hinge_delta_eps_raw = None
-                        hinge_gate = None
-                        hinge_gate_logits = None
 
                 if is_single:
                     direct_out = direct_out.squeeze(1)
@@ -5150,34 +4810,10 @@ class EventMotionModel(nn.Module):
                 if torch.is_tensor(direct_leg_scale_log_raw):
                     dls = direct_leg_scale_log_raw.squeeze(1) if is_single else direct_leg_scale_log_raw
                     result["direct_leg_scale_log_raw"] = dls
-                if torch.is_tensor(direct_leg_scale_sign):
-                    dls = direct_leg_scale_sign.squeeze(1) if is_single else direct_leg_scale_sign
-                    result["direct_leg_scale_sign"] = dls
-                if torch.is_tensor(direct_leg_scale_sign_logit):
-                    dls = direct_leg_scale_sign_logit.squeeze(1) if is_single else direct_leg_scale_sign_logit
-                    result["direct_leg_scale_sign_logit"] = dls
                 if torch.is_tensor(direct_leg_side_sign_gate):
                     dsg = direct_leg_side_sign_gate.squeeze(1) if is_single else direct_leg_side_sign_gate
                     result["direct_leg_side_sign_gate"] = dsg
-                if torch.is_tensor(hinge_delta):
-                    if is_single:
-                        hinge_delta = hinge_delta.squeeze(1)
-                    result['direct_hinge_delta'] = hinge_delta
-                    if torch.is_tensor(hinge_delta_raw):
-                        hd_raw = hinge_delta_raw.squeeze(1) if is_single else hinge_delta_raw
-                        result["direct_hinge_delta_raw"] = hd_raw
-                    if torch.is_tensor(hinge_delta_base_raw):
-                        hd_base = hinge_delta_base_raw.squeeze(1) if is_single else hinge_delta_base_raw
-                        result["direct_hinge_delta_base_raw"] = hd_base
-                    if torch.is_tensor(hinge_delta_eps_raw):
-                        hd_eps = hinge_delta_eps_raw.squeeze(1) if is_single else hinge_delta_eps_raw
-                        result["direct_hinge_delta_eps_raw"] = hd_eps
-                    if torch.is_tensor(hinge_gate):
-                        hg = hinge_gate.squeeze(1) if is_single else hinge_gate
-                        result["direct_hinge_gate"] = hg
-                    if torch.is_tensor(hinge_gate_logits):
-                        gl = hinge_gate_logits.squeeze(1) if is_single else hinge_gate_logits
-                        result["direct_hinge_gate_logits"] = gl
+
             except Exception:
                 pass
 
@@ -5327,8 +4963,6 @@ class EventMotionModel(nn.Module):
         device = self._target_device()
         self.frozen_encoder = encoder.to(device)
         self.frozen_period_head = period_head.to(device)
-        self._frozen_hidden_dim = hidden_dim
-        self._encoder_meta = meta
 
         if self.period_dim != period_dim or self.period_encoder is None:
             self.period_dim = period_dim
@@ -5344,7 +4978,6 @@ class MotionJointLoss(nn.Module):
         fps: float = 60.0,
         rot6d_spec: Dict[str, Any] = None,
         w_rot_ortho: float = 0.0,
-        ignore_motion_groups: str = '',
         meta: Optional[Dict[str, Any]] = None,
         w_rot_local: float = 0.0,
         w_root_vel: float = 0.0,
@@ -5368,14 +5001,28 @@ class MotionJointLoss(nn.Module):
 
         # ===== Adaptive bone weighting =====
         adaptive_bone_weights: bool = False,
-        bone_prior_stds: Optional[Sequence[float]] = None,
-        use_hierarchy_weights: bool = False,
-        hierarchy_mode: str = 'multiply',  # 'multiply' | 'add' | 'none'
-        hierarchy_alpha: float = 0.5,       # log-space blend between motion / hierarchy
-        max_weight_ratio: float = 50.0,
-        weight_gamma: float = 0.7,
+        **legacy_kwargs: Any,
     ):
         super().__init__()
+        legacy_loss_keys = (
+            "ignore_motion_groups",
+            "bone_prior_stds",
+            "use_hierarchy_weights",
+            "hierarchy_mode",
+            "hierarchy_alpha",
+            "max_weight_ratio",
+            "weight_gamma",
+        )
+        if legacy_kwargs:
+            legacy_hits = sorted(k for k in legacy_kwargs.keys() if k in legacy_loss_keys)
+            if legacy_hits:
+                joined = ", ".join(legacy_hits)
+                raise ValueError(
+                    f"MotionJointLoss deprecated loss keys are no longer supported: {joined}. "
+                    "Please remove them from config/CLI and use unified bone weighting knobs only."
+                )
+            unknown = ", ".join(sorted(legacy_kwargs.keys()))
+            raise TypeError(f"MotionJointLoss got unexpected keyword arguments: {unknown}")
         self.meta = dict(meta) if isinstance(meta, dict) else {}
         self.w_attn_reg = float(w_attn_reg)
         self.w_rot_ortho = float(w_rot_ortho)
@@ -5404,15 +5051,10 @@ class MotionJointLoss(nn.Module):
         self.output_layout = output_layout or {}
         self.rot6d_spec = rot6d_spec or {}
         self._rot6d_columns = self._resolve_rot6d_columns(self.rot6d_spec)
-        # Optional: hinge correction metadata for direct pose loss (set by Trainer if used).
-        self.direct_pose_hinge_joint_idx: list[int] = []
-        self.direct_pose_hinge_axis: str = "Z"
-        self.direct_pose_hinge_max_rad: Optional[float] = None
         layout = self.output_layout or {}
         inner = layout.get('slices') if isinstance(layout.get('slices'), dict) else layout
         total_dim_hint = next((int(inner[k]) for k in ('output_dim','D','dim','size','total_dim') if isinstance(inner.get(k), int)), None)
         self.group_slices = {name: sl for name, sl in ((n, parse_layout_entry(v, n, total_dim_hint)) for n, v in inner.items()) if isinstance(name, str) and isinstance(sl, slice)}
-        self.ignore_groups = [g.strip() for g in (ignore_motion_groups or '').split(',') if g.strip()]
         self.attn_lambda_local = getattr(self, 'attn_lambda_local', 0.02)
         self.attn_lambda_entropy = getattr(self, 'attn_lambda_entropy', 0.0)
         self._warned_bad_rot6d = False
@@ -5470,17 +5112,6 @@ class MotionJointLoss(nn.Module):
 
         # === adaptive bone weight params ===
         self.use_adaptive_weights = bool(adaptive_bone_weights)
-        self.bone_prior_stds: Optional[torch.Tensor] = None
-        if bone_prior_stds is not None:
-            try:
-                self.bone_prior_stds = torch.as_tensor(bone_prior_stds, dtype=torch.float32)
-            except Exception:
-                self.bone_prior_stds = None
-        self.use_hierarchy_weights = bool(use_hierarchy_weights)
-        self.hierarchy_mode = str(hierarchy_mode)
-        self.hierarchy_alpha = float(hierarchy_alpha)
-        self.max_weight_ratio = float(max_weight_ratio)
-        self.weight_gamma = float(weight_gamma)
 
         # skeleton parents may be set later via set_skeleton; avoid early fallback here
 
@@ -5528,44 +5159,8 @@ class MotionJointLoss(nn.Module):
         self._tail_candidate_cache = {}
 
     def _invalidate_weight_cache(self) -> None:
-        """Drop cached joint weights / hierarchy weights when configuration changes."""
+        """Drop cached joint weights when configuration changes."""
         self._joint_weight_cache = {}
-        if hasattr(self, '_hierarchy_weights_cache'):
-            delattr(self, '_hierarchy_weights_cache')
-
-    def _compute_hierarchy_weights(self) -> Optional[torch.Tensor]:
-        """Compute log-scaled descendant counts for each bone.
-
-        Returns:
-            Tensor[J] or None if parents are missing.
-        """
-        if not self.parents:
-            return None
-        J = len(self.parents)
-        counts = torch.zeros(J, dtype=torch.float32)
-        for j in range(J):
-            ancestor = j
-            visited: set[int] = set()
-            while 0 <= ancestor < J and ancestor not in visited:
-                visited.add(ancestor)
-                counts[ancestor] += 1.0
-                parent_idx = self.parents[ancestor]
-                if not isinstance(parent_idx, int):
-                    break
-                ancestor = parent_idx
-            # root sentinel reached
-        # log smoothing, minimum 1.0 for leaves
-        weights = torch.log(counts.clamp(min=1.0)) + 1.0
-        return weights
-
-    def _load_hierarchy_weights(self) -> Optional[torch.Tensor]:
-        cached = getattr(self, '_hierarchy_weights_cache', None)
-        if cached is not None:
-            return cached
-        w = self._compute_hierarchy_weights()
-        if w is not None:
-            self._hierarchy_weights_cache = w
-        return w
 
     def _resolve_limb_masks(self, joint_count: int, device) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
         import torch
@@ -5918,18 +5513,6 @@ class MotionJointLoss(nn.Module):
 
         return None
 
-    @staticmethod
-    def _build_ignore_mask(D: int, group_slices: Dict[str, slice], ignore_groups: list, device) -> torch.Tensor:
-        """
-        返回一个布尔 mask，True=参与计算，False=忽略。
-        """
-        mask = torch.ones(D, dtype=torch.bool, device=device)
-        for g in ignore_groups:
-            sl = group_slices.get(g, None)
-            if sl is not None:
-                mask[sl] = False
-        return mask
-
     def compute_attention_regularization(self, attn_weights, geomask=None):
         """
         返回一个标量 loss：
@@ -6085,10 +5668,6 @@ class MotionJointLoss(nn.Module):
         gt: torch.Tensor,
         *,
         return_per_joint: bool = False,
-        hinge_delta: Optional[torch.Tensor] = None,
-        hinge_joint_idx: Optional[Sequence[int]] = None,
-        hinge_axis: str = "Z",
-        hinge_max_rad: Optional[float] = None,
     ):
         Z = lambda v: gt.new_tensor(float(v))
         sl = self.group_slices.get('BoneRotations6D', None)
@@ -6114,45 +5693,6 @@ class MotionJointLoss(nn.Module):
             return Z(0.0)
         pr = pr.view(*pr.shape[:-1], J, 6)  # (…, J, 6)
         gr = gr.view(*gr.shape[:-1], J, 6)  # (…, J, 6)
-
-        # Optional: hinge-style local-axis correction on pred (joint-local twist).
-        if hinge_delta is not None and hinge_joint_idx:
-            try:
-                idxs = [int(i) for i in hinge_joint_idx]
-                if idxs:
-                    hinge = hinge_delta
-                    if torch.is_tensor(hinge):
-                        while hinge.dim() > (pr.dim() - 1) and hinge.shape[-2] == 1:
-                            hinge = hinge.squeeze(-2)
-                        if hinge.dim() == pr.dim() - 2:
-                            hinge = hinge.unsqueeze(-2)
-                    if not torch.is_tensor(hinge) or hinge.shape[-1] != len(idxs):
-                        hinge = None
-                    if torch.is_tensor(hinge):
-                        lead_shape = pr.shape[:-2]
-                        if hinge.shape[:-1] != lead_shape:
-                            try:
-                                hinge = hinge.expand(*lead_shape, hinge.shape[-1])
-                            except Exception:
-                                pass
-                        if hinge_max_rad is not None:
-                            try:
-                                max_rad = float(hinge_max_rad)
-                                if _math.isfinite(max_rad) and max_rad > 0.0:
-                                    hinge = hinge.clamp(-max_rad, max_rad)
-                            except Exception:
-                                pass
-                        axis = str(hinge_axis or "Z").strip().upper()
-                        axis_idx = {"X": 0, "Y": 1, "Z": 2}.get(axis, 2)
-                        omega = pr.new_zeros(*lead_shape, J, 3)
-                        for k, j in enumerate(idxs):
-                            if 0 <= j < J:
-                                omega[..., j, axis_idx] = hinge[..., k]
-                        R_base = rot6d_to_matrix(pr)
-                        R_delta = so3_exp_map(omega)
-                        pr = matrix_to_rot6d(torch.matmul(R_base, R_delta))
-            except Exception:
-                pass
 
         # Geodesic kernel is centralized in train.geometry.
         Rp = rot6d_to_matrix(pr)
@@ -6205,53 +5745,6 @@ class MotionJointLoss(nn.Module):
         if hz <= 0.0:
             hz = float(getattr(self, 'fps', 60.0) or 60.0)
         return max(hz, 1e-6)
-
-    def _angular_velocity_from_mats(self, R_seq: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
-        if R_seq is None or R_seq.dim() < 5:
-            return None
-        if int(R_seq.shape[-4]) < 2:
-            return None
-        hz = self._angvel_hz()
-        return angvel_vec_from_R_seq(R_seq, fps=hz)
-
-    def _angular_velocity_from_delta(self, delta: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
-        if delta is None:
-            return None
-        rot_delta = self._maybe_get_rot6d(delta)
-        if rot_delta is None:
-            return None
-        D = rot_delta.shape[-1]
-        if D % 6 != 0:
-            return None
-        delta_proj = normalize_rot6d_delta(rot_delta, columns=self._rot6d_columns)
-        dR = rot6d_to_matrix(delta_proj, columns=self._rot6d_columns)
-        if dR.dim() < 5:
-            return None
-        hz = self._angvel_hz()
-        return angvel_vec_from_delta_R(dR, fps=hz)
-
-    def _align_angvel_pair(self, pred: torch.Tensor, gt: torch.Tensor) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
-        if pred.shape[:-3] != gt.shape[:-3]:
-            return None
-        Tp = pred.shape[-3]
-        Tg = gt.shape[-3]
-        if Tp == 0 or Tg == 0:
-            return None
-        if Tp == Tg:
-            return pred, gt
-        if Tp == Tg + 1:
-            pred = pred[..., 1:, :, :]
-        elif Tg == Tp + 1:
-            gt = gt[..., 1:, :, :]
-        else:
-            L = min(Tp, Tg)
-            if L <= 0:
-                return None
-            pred = pred[..., :L, :, :]
-            gt = gt[..., :L, :, :]
-        if pred.shape[-3] == 0:
-            return None
-        return pred, gt
 
     def compute_rot6d_log_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
         Z = lambda v: pred.new_tensor(float(v))
@@ -6401,7 +5894,6 @@ class MotionJointLoss(nn.Module):
         if self.w_direct_pose > 0.0 and isinstance(pred_motion, dict):
             try:
                 direct = pred_motion.get('out_direct', None)
-                hinge_delta = pred_motion.get('direct_hinge_delta', None)
                 if torch.is_tensor(direct):
                     if direct.dim() == 2 and gm.dim() == 3:
                         direct = direct.unsqueeze(1)
@@ -6411,29 +5903,7 @@ class MotionJointLoss(nn.Module):
                     if direct.dim() == 3 and gm_direct.dim() == 3:
                         T = min(int(direct.shape[1]), int(gm_direct.shape[1]))
                         if T > 0:
-                            hinge_use = None
-                            if torch.is_tensor(hinge_delta):
-                                try:
-                                    if hinge_delta.dim() == 2 and direct.dim() == 3:
-                                        hinge_delta = hinge_delta.unsqueeze(1)
-                                    if hinge_delta.dim() == 3:
-                                        hinge_use = hinge_delta[:, :T]
-                                except Exception:
-                                    hinge_use = None
-                            hinge_idx = getattr(self, "direct_pose_hinge_joint_idx", None)
-                            hinge_axis = getattr(self, "direct_pose_hinge_axis", "Z")
-                            hinge_max = getattr(self, "direct_pose_hinge_max_rad", None)
-                            if torch.is_tensor(hinge_use) and hinge_idx:
-                                l_direct = self.compute_rot6d_geo_loss(
-                                    direct[:, :T],
-                                    gm_direct[:, :T],
-                                    hinge_delta=hinge_use,
-                                    hinge_joint_idx=hinge_idx,
-                                    hinge_axis=hinge_axis,
-                                    hinge_max_rad=hinge_max,
-                                )
-                            else:
-                                l_direct = self.compute_rot6d_geo_loss(direct[:, :T], gm_direct[:, :T])
+                            l_direct = self.compute_rot6d_geo_loss(direct[:, :T], gm_direct[:, :T])
                             loss = loss + self.w_direct_pose * l_direct
                             self._accumulate_loss_contrib('direct_pose', l_direct, self.w_direct_pose, group='core')
                             stats['direct_pose_geo'] = float(l_direct.detach().cpu())

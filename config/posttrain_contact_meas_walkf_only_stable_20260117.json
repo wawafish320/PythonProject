@@ -1,0 +1,52 @@
+{
+  "ckpt_in": "models/MLPL2_DirectBranch_v1/ckpt_last_posttrain_lambda_gate_sup_WalkF_only_20260117.pth",
+  "out_dir": "models/MLPL2_DirectBranch_v1",
+  "run_name": "posttrain_contact_meas_WalkF_only_stable_20260117",
+
+  "data": "raw_data/processed_data",
+  "paths": ["raw_data/processed_data/Walk_F.npz"],
+  "bundle_json": "raw_data/processed_data/norm_template.json",
+  "pretrain_template": "models/pretrain_template.json",
+  "encoder_bundle": "models/motion_encoder_equiv_stageA.pt",
+
+  "device": "auto",
+  "batch": 1,
+  "seq_len": 87,
+  "rollout_steps": 30,
+  "rollout_cycles": 1,
+  "rollout_include_boundary": false,
+  "rollout_random_offset": false,
+  "time_index_mode": "cycle",
+  "phase_reset_source": "td_hazard",
+
+  "depth": 3,
+  "num_heads": 4,
+  "dropout": 0.1,
+  "context_len": 16,
+
+  "epochs": 1,
+  "steps_per_epoch": 200,
+  "lr": 0.0002,
+  "weight_decay": 0.0,
+
+  "detach_rollout_state": true,
+
+  "train_so3_corrector": false,
+  "train_lambda_head": false,
+  "train_direct_pose": false,
+  "train_contact_plan_init": false,
+  "train_contact_plan": false,
+
+  "train_contact_meas": true,
+  "contact_meas_weight": 1.0,
+  "contact_meas_rollout": false,
+  "contact_meas_rollout_weight": 0.2,
+
+  "contact_meas_smooth_weight": 0.01,
+  "contact_meas_smooth_kind": "l1",
+  "contact_meas_margin_weight": 0.01,
+  "contact_meas_margin_logit": 1.0,
+  "contact_meas_transition_band": 0.2,
+
+  "seed": 0
+}

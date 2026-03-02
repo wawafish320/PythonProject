@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -815,6 +816,8 @@ class FreeRunCycleRunner:
         direct_pose_use_phase_z = False
         direct_pose_phase_z_mode = "concat"
         direct_pose_split_enable = False
+        direct_pose_arm_split_enable = False
+        direct_pose_arm_bones = None
         direct_pose_nonleg_proj_dim = 0
         try:
             if isinstance(self._ckpt_posttrain_cfg, dict):
@@ -823,6 +826,8 @@ class FreeRunCycleRunner:
                 if v is not None:
                     direct_pose_phase_z_mode = str(v).strip().lower() or "concat"
                 direct_pose_split_enable = bool(self._ckpt_posttrain_cfg.get("direct_pose_split_enable", False))
+                direct_pose_arm_split_enable = bool(self._ckpt_posttrain_cfg.get("direct_pose_arm_split_enable", False))
+                direct_pose_arm_bones = self._ckpt_posttrain_cfg.get("direct_pose_arm_bones", None)
                 try:
                     direct_pose_nonleg_proj_dim = int(self._ckpt_posttrain_cfg.get("direct_pose_nonleg_proj_dim", 0) or 0)
                 except Exception:
@@ -831,19 +836,29 @@ class FreeRunCycleRunner:
             direct_pose_use_phase_z = False
             direct_pose_phase_z_mode = "concat"
             direct_pose_split_enable = False
+            direct_pose_arm_split_enable = False
+            direct_pose_arm_bones = None
             direct_pose_nonleg_proj_dim = 0
         try:
             direct_has_weights = any(str(k).startswith("direct_pose_head.") for k in self.state_dict.keys())
-            split_has_weights = bool(
+            split_has_weights_nonleg = bool(
                 any(str(k).startswith("direct_pose_out_leg.") for k in self.state_dict.keys())
                 and any(str(k).startswith("direct_pose_out_nonleg.") for k in self.state_dict.keys())
             )
+            split_has_weights_arm = bool(
+                any(str(k).startswith("direct_pose_out_leg.") for k in self.state_dict.keys())
+                and any(str(k).startswith("direct_pose_out_arm.") for k in self.state_dict.keys())
+                and any(str(k).startswith("direct_pose_out_else.") for k in self.state_dict.keys())
+            )
+            split_has_weights = bool(split_has_weights_nonleg or split_has_weights_arm)
             direct_has_weights = bool(direct_has_weights or split_has_weights)
             if direct_has_weights and int(Dy) > 0 and int(Dc) > 0 and int(self.contact_dim) > 0:
                 w_in = self.state_dict.get("direct_pose_head.0.weight", None)
                 w_out = self.state_dict.get("direct_pose_head.6.weight", None)
                 w_out_leg = self.state_dict.get("direct_pose_out_leg.weight", None)
                 w_out_nonleg = self.state_dict.get("direct_pose_out_nonleg.weight", None)
+                w_out_arm = self.state_dict.get("direct_pose_out_arm.weight", None)
+                w_out_else = self.state_dict.get("direct_pose_out_else.weight", None)
                 if torch.is_tensor(w_in) and w_in.ndim == 2:
                     in_dim = int(w_in.shape[1])
                     hid = int(w_in.shape[0])
@@ -851,6 +866,7 @@ class FreeRunCycleRunner:
                     if torch.is_tensor(w_out) and w_out.ndim == 2:
                         out_dim = int(w_out.shape[0])
                         direct_pose_split_enable = False
+                        direct_pose_arm_split_enable = False
                     elif (
                         torch.is_tensor(w_out_leg)
                         and w_out_leg.ndim == 2
@@ -859,6 +875,7 @@ class FreeRunCycleRunner:
                     ):
                         out_dim = int(w_out_leg.shape[0] + w_out_nonleg.shape[0])
                         direct_pose_split_enable = True
+                        direct_pose_arm_split_enable = False
                         # Split readout must share the same hidden trunk output dim.
                         if int(w_out_leg.shape[1]) > 0:
                             hid = int(w_out_leg.shape[1])
@@ -868,12 +885,38 @@ class FreeRunCycleRunner:
                                 direct_pose_nonleg_proj_dim = int(nonleg_in_dim)
                         except Exception:
                             pass
+                    elif (
+                        torch.is_tensor(w_out_leg)
+                        and w_out_leg.ndim == 2
+                        and torch.is_tensor(w_out_arm)
+                        and w_out_arm.ndim == 2
+                        and torch.is_tensor(w_out_else)
+                        and w_out_else.ndim == 2
+                    ):
+                        out_dim = int(w_out_leg.shape[0] + w_out_arm.shape[0] + w_out_else.shape[0])
+                        direct_pose_split_enable = True
+                        direct_pose_arm_split_enable = True
+                        # Split readout must share the same hidden trunk output dim.
+                        if int(w_out_leg.shape[1]) > 0:
+                            hid = int(w_out_leg.shape[1])
+                        try:
+                            arm_in_dim = int(w_out_arm.shape[1])
+                            if arm_in_dim > 0 and int(arm_in_dim) != int(hid):
+                                direct_pose_nonleg_proj_dim = int(arm_in_dim)
+                        except Exception:
+                            pass
                     if out_dim is None:
                         raise SystemExit("[FATAL] direct_pose_head weights found but output readout weights are missing.")
                     try:
                         w_proj = self.state_dict.get("direct_pose_nonleg_proj.0.weight", None)
+                        w_proj_arm = self.state_dict.get("direct_pose_arm_proj.0.weight", None)
+                        w_proj_else = self.state_dict.get("direct_pose_else_proj.0.weight", None)
                         if torch.is_tensor(w_proj) and w_proj.ndim == 2 and int(w_proj.shape[0]) > 0:
                             direct_pose_nonleg_proj_dim = int(w_proj.shape[0])
+                        elif torch.is_tensor(w_proj_arm) and w_proj_arm.ndim == 2 and int(w_proj_arm.shape[0]) > 0:
+                            direct_pose_nonleg_proj_dim = int(w_proj_arm.shape[0])
+                        elif torch.is_tensor(w_proj_else) and w_proj_else.ndim == 2 and int(w_proj_else.shape[0]) > 0:
+                            direct_pose_nonleg_proj_dim = int(w_proj_else.shape[0])
                     except Exception:
                         pass
                     expected_out = int(Dy)
@@ -1302,9 +1345,7 @@ class FreeRunCycleRunner:
                 v = self._ckpt_posttrain_cfg.get("direct_pose_leg_gate_mode", None)
                 if v is not None:
                     s = str(v).strip().lower()
-                    if s in ("learned", "on", "true", "1", "yes", "y"):
-                        direct_pose_leg_gate_mode = "learned"
-                    elif s in (
+                    if s in (
                         "signed_scale",
                         "signedscale",
                         "signed",
@@ -1314,7 +1355,13 @@ class FreeRunCycleRunner:
                         "signedmag",
                         "sscale",
                     ):
-                        direct_pose_leg_gate_mode = "signed_scale"
+                        raise SystemExit(
+                            "[FATAL] ckpt posttrain_cfg uses direct_pose_leg_gate_mode='signed_scale', "
+                            "which is removed in current train/eval main chain. "
+                            "Migrate to direct_pose_leg_gate_mode='scale' (or 'learned')."
+                        )
+                    if s in ("learned", "on", "true", "1", "yes", "y"):
+                        direct_pose_leg_gate_mode = "learned"
                     elif s in ("scale", "mag", "magnitude", "logmag", "log_mag", "exp", "alpha"):
                         direct_pose_leg_gate_mode = "scale"
                     elif s in ("", "auto", "none", "off", "false", "0", "no", "n", "disable", "disabled"):
@@ -1411,7 +1458,7 @@ class FreeRunCycleRunner:
         except Exception:
             pass
 
-        model = EventMotionModel(
+        model_kwargs = dict(
             in_state_dim=Dx,
             out_motion_dim=Dy,
             cond_dim=Dc,
@@ -1463,6 +1510,8 @@ class FreeRunCycleRunner:
             direct_pose_phase_z_mode=str(direct_pose_phase_z_mode),
             direct_pose_split_enable=bool(direct_pose_split_enable),
             direct_pose_nonleg_proj_dim=int(max(0, int(direct_pose_nonleg_proj_dim or 0))),
+            direct_pose_arm_split_enable=bool(direct_pose_arm_split_enable),
+            direct_pose_arm_bones=direct_pose_arm_bones,
             direct_pose_leg_enable=bool(direct_pose_leg_enable),
             direct_pose_leg_bones=direct_pose_leg_bones,
             direct_pose_leg_mode=str(direct_pose_leg_mode),
@@ -1512,7 +1561,30 @@ class FreeRunCycleRunner:
             contact_td_hazard_enable=bool(contact_td_hazard_enable),
             contact_td_hazard_hidden=int(contact_td_hazard_hidden),
             contact_td_hazard_dropout=0.0,
-        ).to(self.device)
+        )
+        try:
+            model = EventMotionModel(**model_kwargs).to(self.device)
+        except TypeError as exc:
+            # Compat path: keep freerun robust when EventMotionModel signature
+            # removes/renames options that still exist in older checkpoints/configs.
+            if "unexpected keyword argument" not in str(exc):
+                raise
+            import inspect
+
+            allowed = set(inspect.signature(EventMotionModel.__init__).parameters.keys())
+            allowed.discard("self")
+            dropped = sorted(k for k in model_kwargs.keys() if k not in allowed)
+            if dropped:
+                preview = ", ".join(dropped[:12])
+                more = len(dropped) - min(len(dropped), 12)
+                if more > 0:
+                    preview = f"{preview}, ... (+{more})"
+                print(
+                    "[FreeRun][WARN] dropping unsupported EventMotionModel kwargs: "
+                    f"{preview}"
+                )
+            filtered_kwargs = {k: v for k, v in model_kwargs.items() if k in allowed}
+            model = EventMotionModel(**filtered_kwargs).to(self.device)
         # Validate basic shapes then load weights (allow extra frozen encoder keys).
         validate_and_fix_model_(model, Dx, Dc)
         # Attach frozen motion encoder BEFORE loading weights (period_dim/period_encoder may be created here).
@@ -1852,6 +1924,16 @@ class FreeRunCycleRunner:
             export_direct_hinge_series=bool(getattr(self.args, "export_direct_hinge_series", False)),
             export_direct_leg_omega_series=bool(getattr(self.args, "export_direct_leg_omega_series", False)),
             export_direct_leg_head_io=bool(getattr(self.args, "export_direct_leg_head_io", False)),
+            export_direct_nonleg_probe=bool(getattr(self.args, "export_direct_nonleg_probe", False)),
+            direct_nonleg_probe_bones=str(
+                getattr(
+                    self.args,
+                    "direct_nonleg_probe_bones",
+                    "upperarm_l,lowerarm_l,hand_l,pinky_01_l",
+                )
+                or "upperarm_l,lowerarm_l,hand_l,pinky_01_l"
+            ),
+            direct_nonleg_probe_sics=str(getattr(self.args, "direct_nonleg_probe_sics", "") or ""),
             export_direct_leg_omega_alpha_sweep=bool(getattr(self.args, "export_direct_leg_omega_alpha_sweep", False)),
             direct_leg_omega_alpha_sweep_alphas=str(getattr(self.args, "direct_leg_omega_alpha_sweep_alphas", "0,0.25,0.5,1,-1") or ""),
             direct_leg_omega_alpha_sweep_steps=str(getattr(self.args, "direct_leg_omega_alpha_sweep_steps", "") or ""),
@@ -1867,12 +1949,6 @@ class FreeRunCycleRunner:
             direct_pose_leg_apply_scale=float(getattr(self.args, "direct_pose_leg_apply_scale", 1.0) or 1.0),
             direct_pose_leg_apply_sign=float(getattr(self.args, "direct_pose_leg_apply_sign", 1.0) or 1.0),
             direct_pose_leg_apply_side=str(getattr(self.args, "direct_pose_leg_apply_side", "left") or "left"),
-            direct_pose_leg_alpha_table_json=str(getattr(self.args, "direct_pose_leg_alpha_table_json", "") or ""),
-            direct_pose_leg_alpha_table_cycle_gte=int(getattr(self.args, "direct_pose_leg_alpha_table_cycle_gte", 1) or 1),
-            direct_pose_leg_alpha_table_drop_wrap=str(getattr(self.args, "direct_pose_leg_alpha_table_drop_wrap", "on") or "on"),
-            direct_pose_leg_sign_table_json=str(getattr(self.args, "direct_pose_leg_sign_table_json", "") or ""),
-            direct_pose_leg_sign_table_cycle_gte=int(getattr(self.args, "direct_pose_leg_sign_table_cycle_gte", 1) or 1),
-            direct_pose_leg_sign_table_drop_wrap=str(getattr(self.args, "direct_pose_leg_sign_table_drop_wrap", "on") or "on"),
             direct_pose_leg_contact_gate=bool(getattr(self.args, "direct_pose_leg_contact_gate", False)),
             direct_pose_leg_contact_gate_mode=str(getattr(self.args, "direct_pose_leg_contact_gate_mode", "delta") or "delta"),
             direct_pose_leg_contact_gate_order=str(getattr(self.args, "direct_pose_leg_contact_gate_order", "rl") or "rl"),
@@ -2197,6 +2273,9 @@ def _run_freerun_cycles(
     export_direct_hinge_series: bool = False,
     export_direct_leg_omega_series: bool = False,
     export_direct_leg_head_io: bool = False,
+    export_direct_nonleg_probe: bool = False,
+    direct_nonleg_probe_bones: str = "upperarm_l,lowerarm_l,hand_l,pinky_01_l",
+    direct_nonleg_probe_sics: str = "",
     export_direct_leg_omega_alpha_sweep: bool = False,
     direct_leg_omega_alpha_sweep_alphas: str = "0,0.25,0.5,1,-1",
     direct_leg_omega_alpha_sweep_steps: str = "",
@@ -2212,12 +2291,6 @@ def _run_freerun_cycles(
     direct_pose_leg_apply_scale: float = 1.0,
     direct_pose_leg_apply_sign: float = 1.0,
     direct_pose_leg_apply_side: str = "left",
-    direct_pose_leg_alpha_table_json: str = "",
-    direct_pose_leg_alpha_table_cycle_gte: int = 1,
-    direct_pose_leg_alpha_table_drop_wrap: str = "on",
-    direct_pose_leg_sign_table_json: str = "",
-    direct_pose_leg_sign_table_cycle_gte: int = 1,
-    direct_pose_leg_sign_table_drop_wrap: str = "on",
     direct_pose_leg_contact_gate: bool = False,
     direct_pose_leg_contact_gate_mode: str = "delta",
     direct_pose_leg_contact_gate_order: str = "rl",
@@ -2466,7 +2539,6 @@ def _run_freerun_cycles(
     direct_leg_scale_step_log: List[Optional[List[float]]] = []
     direct_leg_scale_log_step_log: List[Optional[List[float]]] = []
     direct_leg_scale_log_raw_step_log: List[Optional[List[float]]] = []
-    direct_leg_scale_sign_step_log: List[Optional[List[float]]] = []
     # Debug-only: keep pre-leg-apply direct output and raw omega tensors (per step) so we can run
     # alpha-sweeps/oracle-alignment on the *same* rollout stream without re-running the model.
     direct_pre_leg_norm_step_log: List[Optional[torch.Tensor]] = []
@@ -2612,6 +2684,168 @@ def _run_freerun_cycles(
             direct_leg_head_io_enabled = False
             direct_leg_head_io = {}
 
+    # Debug-only: direct non-leg feature probe export.
+    # Goal: inspect whether non-leg branch features carry enough information for selected upper-limb bones.
+    # We record:
+    #   - pre_proj_in: input to direct_pose_nonleg_proj first Linear (i.e., shared hidden before non-leg projection)
+    #   - proj_pre0: first Linear pre-activation of direct_pose_nonleg_proj
+    #   - out_in: input to direct_pose_out_nonleg (post-proj feature actually used by non-leg readout)
+    # plus per-step GT/direct rot6d targets for selected bones.
+    direct_nonleg_probe_enabled = bool(export_direct_nonleg_probe)
+    direct_nonleg_probe_steps: Dict[int, Dict[str, Any]] = {}
+    direct_nonleg_probe_handles: List[Any] = []
+    _direct_nonleg_probe_cur_t: int = -1
+    _direct_nonleg_probe_active: bool = False
+    direct_nonleg_probe_sic_sel: Set[int] = set()
+    direct_nonleg_probe_bone_names_full: List[str] = []
+    direct_nonleg_probe_bones_req: List[str] = []
+    direct_nonleg_probe_all_nonleg: bool = False
+
+    # Resolve selected bones and indices (J-space).
+    direct_nonleg_probe_bone_names_sel: List[str] = []
+    direct_nonleg_probe_joint_idx_sel: List[int] = []
+    direct_nonleg_probe_leg_set: Set[str] = set()
+    if direct_nonleg_probe_enabled:
+        try:
+            _bn = getattr(getattr(trainer, "loss_fn", None), "bone_names", None)
+            if _bn is None:
+                _bn = getattr(trainer, "_bone_names", None)
+            if _bn is None:
+                _meta = getattr(trainer, "bundle_meta", None)
+                if isinstance(_meta, dict):
+                    _bn = _meta.get("bone_names") or _meta.get("skeleton", {}).get("bone_names")
+            direct_nonleg_probe_bone_names_full = [str(b) for b in _bn] if isinstance(_bn, (list, tuple)) else []
+        except Exception:
+            direct_nonleg_probe_bone_names_full = []
+        try:
+            for n in list(getattr(model, "direct_pose_leg_joint_names", None) or []):
+                direct_nonleg_probe_leg_set.add(str(n))
+        except Exception:
+            direct_nonleg_probe_leg_set = set()
+        try:
+            req = [t.strip() for t in str(direct_nonleg_probe_bones or "").split(",") if t.strip()]
+        except Exception:
+            req = []
+        if not req:
+            req = ["upperarm_l", "lowerarm_l", "hand_l", "pinky_01_l"]
+        direct_nonleg_probe_bones_req = [str(x) for x in req]
+        direct_nonleg_probe_all_nonleg = bool(
+            len(req) == 1 and req[0].strip().lower() in ("all_nonleg", "nonleg", "all")
+        )
+        if direct_nonleg_probe_all_nonleg:
+            for j, nm in enumerate(direct_nonleg_probe_bone_names_full):
+                nn = str(nm)
+                if int(j) == int(root_idx):
+                    continue
+                if nn in direct_nonleg_probe_leg_set:
+                    continue
+                direct_nonleg_probe_bone_names_sel.append(nn)
+                direct_nonleg_probe_joint_idx_sel.append(int(j))
+        else:
+            name_to_idx = {str(n): int(i) for i, n in enumerate(direct_nonleg_probe_bone_names_full)}
+            for nm in req:
+                if nm in name_to_idx:
+                    j = int(name_to_idx[nm])
+                    if int(j) == int(root_idx):
+                        continue
+                    direct_nonleg_probe_bone_names_sel.append(str(nm))
+                    direct_nonleg_probe_joint_idx_sel.append(int(j))
+
+        # Optional SIC selector.
+        try:
+            for tok in str(direct_nonleg_probe_sics or "").split(","):
+                tok = tok.strip()
+                if tok and tok.lstrip("-").isdigit():
+                    direct_nonleg_probe_sic_sel.add(int(tok))
+        except Exception:
+            direct_nonleg_probe_sic_sel = set()
+
+        def _want_nonleg_probe_t(tt: int) -> bool:
+            if tt < 0:
+                return False
+            if int(T_cycle) > 0:
+                cyc = int(tt // int(T_cycle))
+                sic = int(tt % int(T_cycle))
+                if cyc < 1:
+                    return False
+                if sic == int(T_cycle) - 1:
+                    return False
+                if direct_nonleg_probe_sic_sel and (sic not in direct_nonleg_probe_sic_sel):
+                    return False
+            return True
+
+        def _nonleg_probe_mean_vec(x: Any) -> Optional[List[float]]:
+            if not torch.is_tensor(x):
+                return None
+            v = x.detach()
+            if v.ndim == 2:
+                v = v.mean(dim=0)
+            elif v.ndim > 2:
+                v = v.reshape(-1)
+            try:
+                return [float(t) for t in v.cpu().tolist()]
+            except Exception:
+                return None
+
+        def _nonleg_probe_ent(tt: int) -> Dict[str, Any]:
+            cyc = int(tt // int(T_cycle)) if int(T_cycle) > 0 else 0
+            sic = int(tt % int(T_cycle)) if int(T_cycle) > 0 else int(tt)
+            ent = direct_nonleg_probe_steps.get(int(tt))
+            if ent is None:
+                ent = {
+                    "step": int(tt),
+                    "cycle": int(cyc),
+                    "step_in_cycle": int(sic),
+                    "features": {},
+                    "targets": {},
+                }
+                direct_nonleg_probe_steps[int(tt)] = ent
+            return ent
+
+        def _hook_nonleg_proj(_mod: Any, _inputs: Tuple[Any, ...], _output: Any) -> None:
+            if (not _direct_nonleg_probe_active) or (not direct_nonleg_probe_enabled):
+                return
+            tt = int(_direct_nonleg_probe_cur_t)
+            if not _want_nonleg_probe_t(tt):
+                return
+            if not _inputs:
+                return
+            xin = _nonleg_probe_mean_vec(_inputs[0])
+            ypre = _nonleg_probe_mean_vec(_output)
+            ent = _nonleg_probe_ent(tt)
+            if xin is not None:
+                ent["features"]["pre_proj_in"] = xin
+            if ypre is not None:
+                ent["features"]["proj_pre0"] = ypre
+
+        def _hook_nonleg_out(_mod: Any, _inputs: Tuple[Any, ...], _output: Any) -> None:
+            if (not _direct_nonleg_probe_active) or (not direct_nonleg_probe_enabled):
+                return
+            tt = int(_direct_nonleg_probe_cur_t)
+            if not _want_nonleg_probe_t(tt):
+                return
+            if not _inputs:
+                return
+            xin = _nonleg_probe_mean_vec(_inputs[0])
+            if xin is None:
+                return
+            ent = _nonleg_probe_ent(tt)
+            ent["features"]["out_in"] = xin
+
+        try:
+            import torch.nn as nn
+
+            nonleg_proj = getattr(model, "direct_pose_nonleg_proj", None)
+            if isinstance(nonleg_proj, nn.Sequential) and len(nonleg_proj) > 0 and isinstance(nonleg_proj[0], nn.Linear):
+                direct_nonleg_probe_handles.append(nonleg_proj[0].register_forward_hook(_hook_nonleg_proj))
+            out_nonleg = getattr(model, "direct_pose_out_nonleg", None)
+            if isinstance(out_nonleg, nn.Linear):
+                direct_nonleg_probe_handles.append(out_nonleg.register_forward_hook(_hook_nonleg_out))
+        except Exception:
+            direct_nonleg_probe_handles = []
+            direct_nonleg_probe_enabled = False
+            direct_nonleg_probe_steps = {}
+
     # Debug-only: contact-plan gating diagnostics for direct_leg_omega apply.
     # We gate per side (right/left) using the plan transition magnitude:
     #   delta_c = |contacts_plan[t] - contacts_plan[t-1]|
@@ -2702,290 +2936,6 @@ def _run_freerun_cycles(
                 direct_leg_omega_flip_mask_r = None
                 direct_leg_omega_flip_mask_l = None
                 direct_leg_omega_flip_apply_mask = None
-
-    # Debug-only: per-(sic,bone) alpha override table for direct_leg_omega apply.
-    # This is meant for offline A/B testing without retraining (freerun only).
-    direct_leg_omega_alpha_table_step_log: List[Optional[Dict[str, float]]] = []
-    direct_leg_omega_alpha_table_meta: Optional[Dict[str, Any]] = None
-    alpha_table_enabled = False
-    alpha_table_cycle_gte = 1
-    alpha_table_drop_wrap = True
-    alpha_table_sic_to_kalpha: Dict[int, Dict[int, float]] = {}
-    alpha_table_sic_to_bonealpha: Dict[int, Dict[str, float]] = {}
-
-    alpha_table_path = str(direct_pose_leg_alpha_table_json or "").strip()
-    if alpha_table_path:
-        try:
-            alpha_table_cycle_gte = int(direct_pose_leg_alpha_table_cycle_gte)
-        except Exception:
-            alpha_table_cycle_gte = 1
-        alpha_table_cycle_gte = max(0, int(alpha_table_cycle_gte))
-        s_drop = str(direct_pose_leg_alpha_table_drop_wrap or "on").strip().lower()
-        alpha_table_drop_wrap = s_drop not in ("off", "false", "0", "disable", "disabled")
-
-        p_table = Path(alpha_table_path).expanduser()
-        if not p_table.exists():
-            raise FileNotFoundError(f"direct_pose_leg_alpha_table_json not found: {p_table}")
-        table_obj = json.loads(p_table.read_text(encoding="utf-8"))
-
-        # Parse schema (sic-only; phase-bin support reverted on 2026-02-06):
-        # - Legacy dict : {"alpha_by_sic_bone": {"54": {"ball_r": 4.0}}}
-        # - Legacy alias: {"alpha": {...}}
-        # - Optional list: {"entries": [{"sic": 54, "bone": "ball_r", "alpha": 4.0}, ...]}
-        # Reject phase-bin migrated schemas (sic-only tables are supported here).
-        if isinstance(table_obj, dict):
-            keys_norm = {str(k).replace("_", "").replace("-", "").strip().lower() for k in table_obj.keys()}
-            if any(("phasebin" in k) or ("phaseanchor" in k) for k in keys_norm):
-                raise ValueError(
-                    "direct_pose_leg_alpha_table_json: phase-bin table schema is no longer supported. "
-                    "Expected sic-keyed table via 'alpha_by_sic_bone' (legacy) or 'alpha'."
-                )
-
-        parsed: Dict[int, Dict[str, float]] = {}
-        raw = None
-        if isinstance(table_obj, dict):
-            raw = table_obj.get("alpha_by_sic_bone", None)
-            if raw is None:
-                raw = table_obj.get("alpha", None)
-        if isinstance(raw, dict):
-            for key_k, bone_map in raw.items():
-                try:
-                    key_i = int(key_k)
-                except Exception:
-                    continue
-                if not isinstance(bone_map, dict):
-                    continue
-                for bone_k, a in bone_map.items():
-                    bone_s = str(bone_k).strip()
-                    if not bone_s:
-                        continue
-                    try:
-                        a_f = float(a)
-                    except Exception:
-                        continue
-                    if not math.isfinite(a_f):
-                        continue
-                    parsed.setdefault(int(key_i), {})[bone_s] = float(a_f)
-        elif isinstance(table_obj, dict) and isinstance(table_obj.get("entries", None), list):
-            ents = table_obj.get("entries", [])
-            def _ent_uses_phasebin(ent: Any) -> bool:
-                if not isinstance(ent, dict):
-                    return False
-                for k in ent.keys():
-                    kn = str(k).replace("_", "").replace("-", "").strip().lower()
-                    if ("phasebin" in kn) or (kn == "bin"):
-                        return True
-                return False
-
-            if any(_ent_uses_phasebin(ent) for ent in ents):
-                raise ValueError(
-                    "direct_pose_leg_alpha_table_json: phase-bin entry schema is no longer supported. "
-                    "Use 'entries[*].sic' instead."
-                )
-            for ent in ents:
-                if not isinstance(ent, dict):
-                    continue
-                key = ent.get("sic", None)
-                if key is None:
-                    key = ent.get("step_in_cycle", None)  # tolerate explicit naming
-                bone = ent.get("bone", None)
-                a = ent.get("alpha", None)
-                if key is None or bone is None or a is None:
-                    continue
-                try:
-                    key_i = int(key)
-                    bone_s = str(bone).strip()
-                    a_f = float(a)
-                except Exception:
-                    continue
-                if not bone_s or not math.isfinite(a_f):
-                    continue
-                parsed.setdefault(int(key_i), {})[bone_s] = float(a_f)
-        else:
-            raise ValueError(
-                "direct_pose_leg_alpha_table_json: unsupported schema. Expected dict with "
-                "'alpha_by_sic_bone' (legacy) or 'alpha', or list 'entries' with 'sic'."
-            )
-
-        try:
-            leg_joint_names = list(getattr(model, "direct_pose_leg_joint_names", None) or [])
-        except Exception:
-            leg_joint_names = []
-        if not leg_joint_names:
-            raise ValueError("direct_pose_leg_alpha_table_json requested but model has no direct_pose_leg_joint_names.")
-
-        name_to_k = {str(n).strip().lower(): int(i) for i, n in enumerate(leg_joint_names)}
-        unknown_bones: List[str] = []
-        entries: List[Dict[str, Any]] = []
-        for key_i, bone_map in sorted(parsed.items(), key=lambda kv: int(kv[0])):
-            for bone_s, a_f in sorted(bone_map.items(), key=lambda kv: str(kv[0])):
-                k = name_to_k.get(str(bone_s).strip().lower(), None)
-                if k is None:
-                    unknown_bones.append(str(bone_s))
-                    continue
-                # For logging, keep the model's canonical bone name if possible.
-                bone_canon = str(leg_joint_names[int(k)]) if 0 <= int(k) < len(leg_joint_names) else str(bone_s)
-                alpha_table_sic_to_kalpha.setdefault(int(key_i), {})[int(k)] = float(a_f)
-                alpha_table_sic_to_bonealpha.setdefault(int(key_i), {})[bone_canon] = float(a_f)
-                entries.append({"sic": int(key_i), "bone": bone_canon, "alpha": float(a_f), "k": int(k)})
-
-        alpha_table_enabled = bool(entries)
-        if not alpha_table_enabled:
-            raise ValueError(
-                "direct_pose_leg_alpha_table_json parsed but no valid entries matched leg joints."
-            )
-
-        direct_leg_omega_alpha_table_meta = {
-            "enabled": True,
-            "path": str(p_table),
-            "mask": {"cycle_gte": int(alpha_table_cycle_gte), "drop_wrap": bool(alpha_table_drop_wrap)},
-            "coord": "sic",
-            "entries": entries,
-            "unknown_bones": sorted(set(unknown_bones)),
-        }
-
-    # Debug-only: per-(sic,bone) sign override table for direct_leg_omega apply.
-    # This is meant for offline A/B testing without retraining (freerun only),
-    # and is designed to isolate direction/flip issues from amplitude issues.
-    direct_leg_omega_sign_table_step_log: List[Optional[Dict[str, float]]] = []
-    direct_leg_omega_sign_table_meta: Optional[Dict[str, Any]] = None
-    sign_table_enabled = False
-    sign_table_cycle_gte = 1
-    sign_table_drop_wrap = True
-    sign_table_sic_to_ksign: Dict[int, Dict[int, float]] = {}
-    sign_table_sic_to_bonesign: Dict[int, Dict[str, float]] = {}
-
-    sign_table_path = str(direct_pose_leg_sign_table_json or "").strip()
-    if sign_table_path:
-        try:
-            sign_table_cycle_gte = int(direct_pose_leg_sign_table_cycle_gte)
-        except Exception:
-            sign_table_cycle_gte = 1
-        sign_table_cycle_gte = max(0, int(sign_table_cycle_gte))
-        s_drop = str(direct_pose_leg_sign_table_drop_wrap or "on").strip().lower()
-        sign_table_drop_wrap = s_drop not in ("off", "false", "0", "disable", "disabled")
-
-        p_table = Path(sign_table_path).expanduser()
-        if not p_table.exists():
-            raise FileNotFoundError(f"direct_pose_leg_sign_table_json not found: {p_table}")
-        table_obj = json.loads(p_table.read_text(encoding="utf-8"))
-
-        # Parse schema (sic-only; phase-bin support reverted on 2026-02-06):
-        # - Legacy dict : {"sign_by_sic_bone": {"54": {"foot_r": -1}}}
-        # - Legacy alias: {"sign": {...}}
-        # - Optional list: {"entries": [{"sic": 54, "bone": "foot_r", "sign": -1}, ...]}
-        # Reject phase-bin migrated schemas (sic-only tables are supported here).
-        if isinstance(table_obj, dict):
-            keys_norm = {str(k).replace("_", "").replace("-", "").strip().lower() for k in table_obj.keys()}
-            if any(("phasebin" in k) or ("phaseanchor" in k) for k in keys_norm):
-                raise ValueError(
-                    "direct_pose_leg_sign_table_json: phase-bin table schema is no longer supported. "
-                    "Expected sic-keyed table via 'sign_by_sic_bone' (legacy) or 'sign'."
-                )
-
-        parsed: Dict[int, Dict[str, float]] = {}
-        raw = None
-        if isinstance(table_obj, dict):
-            raw = table_obj.get("sign_by_sic_bone", None)
-            if raw is None:
-                raw = table_obj.get("sign", None)
-        if isinstance(raw, dict):
-            for key_k, bone_map in raw.items():
-                try:
-                    key_i = int(key_k)
-                except Exception:
-                    continue
-                if not isinstance(bone_map, dict):
-                    continue
-                for bone_k, s in bone_map.items():
-                    bone_s = str(bone_k).strip()
-                    if not bone_s:
-                        continue
-                    try:
-                        s_f = float(s)
-                    except Exception:
-                        continue
-                    if not math.isfinite(s_f):
-                        continue
-                    parsed.setdefault(int(key_i), {})[bone_s] = float(s_f)
-        elif isinstance(table_obj, dict) and isinstance(table_obj.get("entries", None), list):
-            ents = table_obj.get("entries", [])
-            def _ent_uses_phasebin(ent: Any) -> bool:
-                if not isinstance(ent, dict):
-                    return False
-                for k in ent.keys():
-                    kn = str(k).replace("_", "").replace("-", "").strip().lower()
-                    if ("phasebin" in kn) or (kn == "bin"):
-                        return True
-                return False
-
-            if any(_ent_uses_phasebin(ent) for ent in ents):
-                raise ValueError(
-                    "direct_pose_leg_sign_table_json: phase-bin entry schema is no longer supported. "
-                    "Use 'entries[*].sic' instead."
-                )
-            for ent in ents:
-                if not isinstance(ent, dict):
-                    continue
-                key = ent.get("sic", None)
-                if key is None:
-                    key = ent.get("step_in_cycle", None)  # tolerate explicit naming
-                bone = ent.get("bone", None)
-                s = ent.get("sign", None)
-                if key is None or bone is None or s is None:
-                    continue
-                try:
-                    key_i = int(key)
-                    bone_s = str(bone).strip()
-                    s_f = float(s)
-                except Exception:
-                    continue
-                if not bone_s or not math.isfinite(s_f):
-                    continue
-                parsed.setdefault(int(key_i), {})[bone_s] = float(s_f)
-        else:
-            raise ValueError(
-                "direct_pose_leg_sign_table_json: unsupported schema. Expected dict with "
-                "'sign_by_sic_bone' (legacy) or 'sign', or list 'entries' with 'sic'."
-            )
-
-        try:
-            leg_joint_names = list(getattr(model, "direct_pose_leg_joint_names", None) or [])
-        except Exception:
-            leg_joint_names = []
-        if not leg_joint_names:
-            raise ValueError("direct_pose_leg_sign_table_json requested but model has no direct_pose_leg_joint_names.")
-
-        name_to_k = {str(n).strip().lower(): int(i) for i, n in enumerate(leg_joint_names)}
-        unknown_bones: List[str] = []
-        entries: List[Dict[str, Any]] = []
-        for key_i, bone_map in sorted(parsed.items(), key=lambda kv: int(kv[0])):
-            for bone_s, s_f in sorted(bone_map.items(), key=lambda kv: str(kv[0])):
-                k = name_to_k.get(str(bone_s).strip().lower(), None)
-                if k is None:
-                    unknown_bones.append(str(bone_s))
-                    continue
-                # Force it to a sign-only multiplier, i.e. +/-1.
-                s_canon = -1.0 if float(s_f) < 0.0 else 1.0
-                bone_canon = str(leg_joint_names[int(k)]) if 0 <= int(k) < len(leg_joint_names) else str(bone_s)
-                sign_table_sic_to_ksign.setdefault(int(key_i), {})[int(k)] = float(s_canon)
-                sign_table_sic_to_bonesign.setdefault(int(key_i), {})[bone_canon] = float(s_canon)
-                entries.append({"sic": int(key_i), "bone": bone_canon, "sign": float(s_canon), "k": int(k)})
-
-        sign_table_enabled = bool(entries)
-        if not sign_table_enabled:
-            raise ValueError(
-                "direct_pose_leg_sign_table_json parsed but no valid entries matched leg joints."
-            )
-
-        direct_leg_omega_sign_table_meta = {
-            "enabled": True,
-            "path": str(p_table),
-            "mask": {"cycle_gte": int(sign_table_cycle_gte), "drop_wrap": bool(sign_table_drop_wrap)},
-            "coord": "sic",
-            "entries": entries,
-            "unknown_bones": sorted(set(unknown_bones)),
-        }
 
     # Initialize motion & raw state
     motion = state_seq[:, start_t]  # [B, Dx]
@@ -4080,6 +4030,9 @@ def _run_freerun_cycles(
         if bool(direct_leg_head_io_enabled):
             _leg_head_io_cur_t = int(t)
             _leg_head_io_side_call = 0
+        if bool(direct_nonleg_probe_enabled):
+            _direct_nonleg_probe_cur_t = int(t)
+            _direct_nonleg_probe_active = True
 
         with amp_ctx:
             ret = model(
@@ -4096,6 +4049,8 @@ def _run_freerun_cycles(
                 time_index=time_index_t,
                 rollout_step=rollout_step_t,
             )
+        if bool(direct_nonleg_probe_enabled):
+            _direct_nonleg_probe_active = False
 
         if not isinstance(ret, dict):
             raise RuntimeError("Model forward must return a dict with at least 'out'.")
@@ -4119,7 +4074,6 @@ def _run_freerun_cycles(
         direct_leg_scale_step = None
         direct_leg_scale_log_step = None
         direct_leg_scale_log_raw_step = None
-        direct_leg_scale_sign_step = None
         try:
             omega_out = ret.get("direct_leg_omega", None)
             if torch.is_tensor(omega_out):
@@ -4156,15 +4110,6 @@ def _run_freerun_cycles(
                     direct_leg_scale_log_raw_step = scale_out
         except Exception:
             direct_leg_scale_log_raw_step = None
-        try:
-            sign_out = ret.get("direct_leg_scale_sign", None)
-            if torch.is_tensor(sign_out):
-                if sign_out.dim() == 3 and sign_out.size(1) == 1:
-                    sign_out = sign_out[:, 0]
-                if sign_out.dim() == 2 and sign_out.shape[0] == motion.shape[0]:
-                    direct_leg_scale_sign_step = sign_out
-        except Exception:
-            direct_leg_scale_sign_step = None
         direct_hinge_step = None
         direct_hinge_raw_step = None
         direct_hinge_base_raw_step = None
@@ -4283,22 +4228,6 @@ def _run_freerun_cycles(
                     direct_leg_scale_log_raw_step_log.append(None)
             else:
                 direct_leg_scale_log_raw_step_log.append(None)
-
-            if torch.is_tensor(direct_leg_scale_sign_step):
-                try:
-                    v = direct_leg_scale_sign_step.detach()
-                    if v.ndim == 3 and int(v.shape[1]) == 1:
-                        v = v[:, 0]
-                    if v.ndim == 2 and int(v.shape[0]) > 0:
-                        v = v.mean(dim=0)
-                    if v.ndim == 1:
-                        direct_leg_scale_sign_step_log.append([float(x) for x in v.cpu().tolist()])
-                    else:
-                        direct_leg_scale_sign_step_log.append(None)
-                except Exception:
-                    direct_leg_scale_sign_step_log.append(None)
-            else:
-                direct_leg_scale_sign_step_log.append(None)
 
         # Diagnostics: compute an axis-oracle hinge delta from GT and use it instead of the hinge head output.
         # This intentionally uses GT (information leak) and is ONLY for debugging apply/target consistency.
@@ -4425,6 +4354,77 @@ def _run_freerun_cycles(
         if torch.is_tensor(direct_norm_step) and torch.is_tensor(direct_hinge_step):
             try:
                 direct_norm_step = trainer._apply_direct_hinge_correction_norm(direct_norm_step, direct_hinge_step)
+            except Exception:
+                pass
+
+        if bool(direct_nonleg_probe_enabled):
+            try:
+                tt = int(t)
+                if (not direct_nonleg_probe_joint_idx_sel) and direct_nonleg_probe_bones_req:
+                    cand_names: List[str] = []
+                    try:
+                        if "rot_gain_bone_names" in locals() and isinstance(rot_gain_bone_names, (list, tuple)):
+                            cand_names = [str(x) for x in rot_gain_bone_names]
+                    except Exception:
+                        cand_names = []
+                    if not cand_names:
+                        cand_names = list(direct_nonleg_probe_bone_names_full)
+                    if not cand_names:
+                        try:
+                            _bn = getattr(trainer, "_bone_names", None)
+                            if isinstance(_bn, (list, tuple)):
+                                cand_names = [str(x) for x in _bn]
+                        except Exception:
+                            cand_names = []
+                    if cand_names:
+                        if direct_nonleg_probe_all_nonleg:
+                            for j, nm in enumerate(cand_names):
+                                if int(j) == int(root_idx):
+                                    continue
+                                if str(nm) in direct_nonleg_probe_leg_set:
+                                    continue
+                                direct_nonleg_probe_bone_names_sel.append(str(nm))
+                                direct_nonleg_probe_joint_idx_sel.append(int(j))
+                        else:
+                            name_to_idx = {str(n): int(i) for i, n in enumerate(cand_names)}
+                            for nm in direct_nonleg_probe_bones_req:
+                                if nm in name_to_idx:
+                                    j = int(name_to_idx[nm])
+                                    if int(j) == int(root_idx):
+                                        continue
+                                    direct_nonleg_probe_bone_names_sel.append(str(nm))
+                                    direct_nonleg_probe_joint_idx_sel.append(int(j))
+
+                if _want_nonleg_probe_t(tt) and torch.is_tensor(direct_norm_step):
+                    if isinstance(rot_slice, slice):
+                        gt_norm_step = gt_seq[:, tt]
+                        gt_raw_step = trainer._denorm(gt_norm_step)
+                        direct_raw_step = trainer._denorm(direct_norm_step)
+
+                        B_probe = int(gt_raw_step.shape[0])
+                        gt6 = reproject_rot6d(gt_raw_step[..., rot_slice].reshape(B_probe, int(J), 6))
+                        dr6 = reproject_rot6d(direct_raw_step[..., rot_slice].reshape(B_probe, int(J), 6))
+                        ent = _nonleg_probe_ent(tt)
+                        ent_targets = ent.get("targets")
+                        if not isinstance(ent_targets, dict):
+                            ent_targets = {}
+                            ent["targets"] = ent_targets
+                        ent_targets["gt_rot6d_all"] = [
+                            float(x) for x in gt6.reshape(B_probe, -1).mean(dim=0).detach().cpu().tolist()
+                        ]
+                        ent_targets["direct_rot6d_all"] = [
+                            float(x) for x in dr6.reshape(B_probe, -1).mean(dim=0).detach().cpu().tolist()
+                        ]
+                        if direct_nonleg_probe_joint_idx_sel:
+                            sel = torch.as_tensor(
+                                direct_nonleg_probe_joint_idx_sel,
+                                device=gt6.device,
+                                dtype=torch.long,
+                            )
+                            gt_sel = gt6.index_select(1, sel).reshape(B_probe, -1).mean(dim=0)
+                            dr_sel = dr6.index_select(1, sel).reshape(B_probe, -1).mean(dim=0)
+                            ent_targets["gt_rot6d"] = [float(x) for x in gt_sel.detach().cpu().tolist()]
+                            ent_targets["direct_rot6d"] = [float(x) for x in dr_sel.detach().cpu().tolist()]
             except Exception:
                 pass
         # Snapshot the direct output (after hinge, before leg omega) for debug-only alpha sweep / oracle alignment.
@@ -4674,104 +4674,6 @@ def _run_freerun_cycles(
             except Exception:
                 gate_entry = None
             direct_leg_omega_plan_gate_step_log.append(gate_entry)
-
-        # Debug-only: per-(sic,bone) alpha override for direct_leg_omega (masked to match eval protocol).
-        if bool(alpha_table_enabled):
-            alpha_entry: Optional[Dict[str, float]] = None
-            try:
-                if (not bool(direct_pose_leg_noapply)) and torch.is_tensor(omega_leg_apply):
-                    try:
-                        T_cycle_i = int(T_cycle)
-                    except Exception:
-                        T_cycle_i = 0
-                    if int(T_cycle_i) > 0:
-                        cyc_i = int(t // int(T_cycle_i))
-                        sic_i = int(t % int(T_cycle_i))
-                    else:
-                        cyc_i = 0
-                        sic_i = int(t)
-                    wrap_i = bool((rounds > 1) and (int(T_cycle_i) > 0) and (int(sic_i) == (int(T_cycle_i) - 1)))
-                    if (int(cyc_i) >= int(alpha_table_cycle_gte)) and (not bool(alpha_table_drop_wrap) or not wrap_i):
-                        m = alpha_table_sic_to_kalpha.get(int(sic_i), None)
-                        if isinstance(m, dict) and m:
-                            # Build per-joint alpha scale and multiply omega.
-                            K = 0
-                            if omega_leg_apply.dim() == 4 and int(omega_leg_apply.size(1)) == 1:
-                                K = int(omega_leg_apply.size(2))
-                            elif omega_leg_apply.dim() == 3:
-                                K = int(omega_leg_apply.size(1))
-                            if int(K) > 0:
-                                alpha_joint = torch.ones(
-                                    (1, int(K), 1), device=omega_leg_apply.device, dtype=omega_leg_apply.dtype
-                                )
-                                for kk, a in m.items():
-                                    try:
-                                        k_i = int(kk)
-                                        a_f = float(a)
-                                    except Exception:
-                                        continue
-                                    if 0 <= int(k_i) < int(K) and math.isfinite(a_f):
-                                        alpha_joint[0, int(k_i), 0] = float(a_f)
-                                if omega_leg_apply.dim() == 4 and int(omega_leg_apply.size(1)) == 1:
-                                    omega_leg_apply = omega_leg_apply * alpha_joint.unsqueeze(1)
-                                elif omega_leg_apply.dim() == 3:
-                                    omega_leg_apply = omega_leg_apply * alpha_joint
-                                # Log only when we actually applied.
-                                bb = alpha_table_sic_to_bonealpha.get(int(sic_i), None)
-                                if isinstance(bb, dict) and bb:
-                                    alpha_entry = {str(k): float(v) for k, v in bb.items() if math.isfinite(float(v))}
-            except Exception:
-                alpha_entry = None
-            direct_leg_omega_alpha_table_step_log.append(alpha_entry)
-
-        # Debug-only: per-(sic,bone) sign override for direct_leg_omega (masked to match eval protocol).
-        if bool(sign_table_enabled):
-            sign_entry: Optional[Dict[str, float]] = None
-            try:
-                if (not bool(direct_pose_leg_noapply)) and torch.is_tensor(omega_leg_apply):
-                    try:
-                        T_cycle_i = int(T_cycle)
-                    except Exception:
-                        T_cycle_i = 0
-                    if int(T_cycle_i) > 0:
-                        cyc_i = int(t // int(T_cycle_i))
-                        sic_i = int(t % int(T_cycle_i))
-                    else:
-                        cyc_i = 0
-                        sic_i = int(t)
-                    wrap_i = bool((rounds > 1) and (int(T_cycle_i) > 0) and (int(sic_i) == (int(T_cycle_i) - 1)))
-                    if (int(cyc_i) >= int(sign_table_cycle_gte)) and (not bool(sign_table_drop_wrap) or not wrap_i):
-                        m = sign_table_sic_to_ksign.get(int(sic_i), None)
-                        if isinstance(m, dict) and m:
-                            # Build per-joint sign scale (+/-1) and multiply omega.
-                            K = 0
-                            if omega_leg_apply.dim() == 4 and int(omega_leg_apply.size(1)) == 1:
-                                K = int(omega_leg_apply.size(2))
-                            elif omega_leg_apply.dim() == 3:
-                                K = int(omega_leg_apply.size(1))
-                            if int(K) > 0:
-                                sign_joint = torch.ones(
-                                    (1, int(K), 1), device=omega_leg_apply.device, dtype=omega_leg_apply.dtype
-                                )
-                                for kk, s in m.items():
-                                    try:
-                                        k_i = int(kk)
-                                        s_f = float(s)
-                                    except Exception:
-                                        continue
-                                    if 0 <= int(k_i) < int(K) and math.isfinite(s_f):
-                                        sign_joint[0, int(k_i), 0] = -1.0 if float(s_f) < 0.0 else 1.0
-                                if omega_leg_apply.dim() == 4 and int(omega_leg_apply.size(1)) == 1:
-                                    omega_leg_apply = omega_leg_apply * sign_joint.unsqueeze(1)
-                                elif omega_leg_apply.dim() == 3:
-                                    omega_leg_apply = omega_leg_apply * sign_joint
-                                # Log only when we actually applied.
-                                bb = sign_table_sic_to_bonesign.get(int(sic_i), None)
-                                if isinstance(bb, dict) and bb:
-                                    sign_entry = {str(k): float(v) for k, v in bb.items() if math.isfinite(float(v))}
-            except Exception:
-                sign_entry = None
-            direct_leg_omega_sign_table_step_log.append(sign_entry)
 
         if (not bool(direct_pose_leg_noapply)) and torch.is_tensor(direct_norm_step) and torch.is_tensor(direct_leg_omega_step):
             try:
@@ -6127,7 +6029,6 @@ def _run_freerun_cycles(
                     y_blend_raw = trainer._apply_lambda_fusion_to_raw(
                         y_inc_raw,
                         direct_norm=direct_norm_step,
-                        direct_hinge_delta=direct_hinge_step,
                         lambda_fusion=lam_for_blend,
                     )
                 except Exception:
@@ -6298,10 +6199,6 @@ def _run_freerun_cycles(
     extra["direct_alignment_max_shift"] = int(direct_alignment_max_shift)
     extra["direct_alignment_joints"] = str(direct_alignment_joints or "")
     extra["direct_alignment_include_round0"] = bool(direct_alignment_include_round0)
-    if isinstance(direct_leg_omega_alpha_table_meta, dict) and direct_leg_omega_alpha_table_meta:
-        extra["direct_leg_omega_alpha_table"] = direct_leg_omega_alpha_table_meta
-    if isinstance(direct_leg_omega_sign_table_meta, dict) and direct_leg_omega_sign_table_meta:
-        extra["direct_leg_omega_sign_table"] = direct_leg_omega_sign_table_meta
     if bool(export_direct_leg_omega_grad) and (direct_leg_omega_grad_meta or direct_leg_omega_grad_steps):
         payload = dict(direct_leg_omega_grad_meta) if isinstance(direct_leg_omega_grad_meta, dict) else {"enabled": True}
         payload["steps"] = direct_leg_omega_grad_steps
@@ -6568,11 +6465,9 @@ def _run_freerun_cycles(
             scale: Dict[str, List[float]] = {str(n): [] for n in leg_names}
             scale_log: Dict[str, List[float]] = {str(n): [] for n in leg_names}
             scale_log_raw: Dict[str, List[float]] = {str(n): [] for n in leg_names}
-            scale_sign: Dict[str, List[float]] = {str(n): [] for n in leg_names}
             valid_scale: List[int] = []
             valid_scale_log: List[int] = []
             valid_scale_log_raw: List[int] = []
-            valid_scale_sign: List[int] = []
 
             for t in range(int(free_steps)):
                 v = direct_leg_omega_step_log[t] if t < len(direct_leg_omega_step_log) else None
@@ -6593,9 +6488,6 @@ def _run_freerun_cycles(
                 )
                 ok_scale_log_raw = isinstance(v_scale_log_raw, list) and int(len(v_scale_log_raw)) == int(K)
                 valid_scale_log_raw.append(1 if ok_scale_log_raw else 0)
-                v_scale_sign = direct_leg_scale_sign_step_log[t] if t < len(direct_leg_scale_sign_step_log) else None
-                ok_scale_sign = isinstance(v_scale_sign, list) and int(len(v_scale_sign)) == int(K)
-                valid_scale_sign.append(1 if ok_scale_sign else 0)
                 for i, name in enumerate(leg_names):
                     row = v[i] if ok else [0.0, 0.0, 0.0]
                     x = float(row[0]) if len(row) > 0 else 0.0
@@ -6609,7 +6501,6 @@ def _run_freerun_cycles(
                     scale[str(name)].append(float(v_scale[i]) if ok_scale else 0.0)
                     scale_log[str(name)].append(float(v_scale_log[i]) if ok_scale_log else 0.0)
                     scale_log_raw[str(name)].append(float(v_scale_log_raw[i]) if ok_scale_log_raw else 0.0)
-                    scale_sign[str(name)].append(float(v_scale_sign[i]) if ok_scale_sign else 0.0)
 
             # Small summary to quickly spot saturation / spikes.
             sat_thr_ratio = 0.98
@@ -6652,17 +6543,15 @@ def _run_freerun_cycles(
                     "scale": "unitless",
                     "scale_log": "log-scale",
                     "scale_log_raw": "log-scale (pre-clip/pre-clamp)",
-                    "scale_sign": "unitless",
                 },
                 "note": (
                     "direct_leg_omega is the model's predicted axis-angle residual for selected leg joints.\n"
                     "IMPORTANT: the model already applies a smooth tanh-based magnitude bound using direct_pose_leg_max_deg.\n"
                     "Series are mean-over-batch per step; missing values are zero-filled with a valid mask.\n"
-                    "When leg gate mode is scale/signed_scale, this export also includes scale diagnostics:\n"
+                    "When leg gate mode is scale, this export also includes scale diagnostics:\n"
                     "- scale: effective multiplicative scale applied to omega.\n"
                     "- scale_log: effective log-scale after internal clipping/clamp.\n"
-                    "- scale_log_raw: raw log-scale head output before clipping/clamp.\n"
-                    "- scale_sign: signed_scale sign factor in [-1,1] (if available)."
+                    "- scale_log_raw: raw log-scale head output before clipping/clamp."
                 ),
                 "series": {
                     "omega_xyz_rad": omega_xyz_rad,
@@ -6672,11 +6561,9 @@ def _run_freerun_cycles(
                     "scale": scale,
                     "scale_log": scale_log,
                     "scale_log_raw": scale_log_raw,
-                    "scale_sign": scale_sign,
                     "valid_scale": valid_scale,
                     "valid_scale_log": valid_scale_log,
                     "valid_scale_log_raw": valid_scale_log_raw,
-                    "valid_scale_sign": valid_scale_sign,
                 },
                 "stats": stats,
             }
@@ -6704,6 +6591,33 @@ def _run_freerun_cycles(
         except Exception:
             pass
 
+    # Optional: export direct non-leg probe bundle.
+    if bool(direct_nonleg_probe_enabled) and isinstance(direct_nonleg_probe_steps, dict) and direct_nonleg_probe_steps:
+        try:
+            steps_sorted = [direct_nonleg_probe_steps[t] for t in sorted(direct_nonleg_probe_steps.keys())]
+            extra["direct_nonleg_probe"] = {
+                "enabled": True,
+                "bones": [str(x) for x in direct_nonleg_probe_bone_names_sel],
+                "joint_idx": [int(x) for x in direct_nonleg_probe_joint_idx_sel],
+                "features": ["pre_proj_in", "proj_pre0", "out_in"],
+                "target": "rot6d_gt_vs_direct",
+                "mask": {
+                    "cycle_gte": 1,
+                    "drop_wrap": True,
+                    "sics": str(direct_nonleg_probe_sics or ""),
+                },
+                "note": (
+                    "Captured via forward hooks for the non-leg branch.\n"
+                    "- pre_proj_in: input to direct_pose_nonleg_proj first Linear (shared hidden).\n"
+                    "- proj_pre0: first Linear pre-activation of direct_pose_nonleg_proj.\n"
+                    "- out_in: input to direct_pose_out_nonleg (post-proj feature).\n"
+                    "Targets are mean-over-batch rot6d vectors for selected bones: gt_rot6d vs direct_rot6d."
+                ),
+                "steps": steps_sorted,
+            }
+        except Exception:
+            pass
+
     # Remove any debug hooks to avoid leaking across clips.
     if _leg_head_io_handles:
         for h in list(_leg_head_io_handles):
@@ -6712,6 +6626,13 @@ def _run_freerun_cycles(
             except Exception:
                 pass
         _leg_head_io_handles = []
+    if direct_nonleg_probe_handles:
+        for h in list(direct_nonleg_probe_handles):
+            try:
+                h.remove()
+            except Exception:
+                pass
+        direct_nonleg_probe_handles = []
 
     # Debug-only: alpha-sweep and oracle alignment for direct_leg_omega.
     # - Uses the *pre-leg-apply* direct output captured during rollout, so the sweep is on a fixed rollout stream.
@@ -8817,14 +8738,6 @@ def _run_freerun_cycles(
             if isinstance(f, dict):
                 for k, v in f.items():
                     entry[k] = v
-        if direct_leg_omega_alpha_table_step_log:
-            a = direct_leg_omega_alpha_table_step_log[t] if t < len(direct_leg_omega_alpha_table_step_log) else None
-            if isinstance(a, dict) and a:
-                entry["DirectLegOmegaAlphaTable"] = a
-        if direct_leg_omega_sign_table_step_log:
-            s = direct_leg_omega_sign_table_step_log[t] if t < len(direct_leg_omega_sign_table_step_log) else None
-            if isinstance(s, dict) and s:
-                entry["DirectLegOmegaSignTable"] = s
         if contact_steps:
             c = contact_steps[t] if t < len(contact_steps) else None
             if isinstance(c, dict):
@@ -9494,7 +9407,32 @@ def _run_freerun_cycles(
 # ---- CLI --------------------------------------------------------------------
 
 
+def _failfast_removed_stage74_freerun_cli_args(argv: Sequence[str]) -> None:
+    removed_flags = (
+        "--direct_pose_leg_alpha_table_json",
+        "--direct_pose_leg_alpha_table_cycle_gte",
+        "--direct_pose_leg_alpha_table_drop_wrap",
+        "--direct_pose_leg_sign_table_json",
+        "--direct_pose_leg_sign_table_cycle_gte",
+        "--direct_pose_leg_sign_table_drop_wrap",
+    )
+    found: List[str] = []
+    for tok in argv:
+        key = str(tok).split("=", 1)[0].strip()
+        if key in removed_flags:
+            found.append(key)
+    if found:
+        uniq = sorted(set(found))
+        raise SystemExit(
+            "[FATAL] Removed Stage7.3/7.4 CLI args detected in run_freerun_cycles: "
+            + ", ".join(uniq)
+            + ". These alpha/sign table apply paths are archived. "
+              "Use main-chain diagnostics (e.g., direct_leg_omega_alpha_sweep or contact-gate/flip probes)."
+        )
+
+
 def parse_args() -> argparse.Namespace:
+    _failfast_removed_stage74_freerun_cli_args(sys.argv[1:])
     parser = argparse.ArgumentParser(
         description="Run multi‑cycle free‑run diagnostics on teacher batches.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -10062,6 +10000,32 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--export_direct_nonleg_probe",
+        action="store_true",
+        help=(
+            "Debug-only: export non-leg probe bundle into output JSON under 'direct_nonleg_probe'. "
+            "Includes non-leg branch features (pre_proj_in/proj_pre0/out_in) and selected-bone rot6d targets."
+        ),
+    )
+    parser.add_argument(
+        "--direct_nonleg_probe_bones",
+        type=str,
+        default="upperarm_l,lowerarm_l,hand_l,pinky_01_l",
+        help=(
+            "Comma-separated bones for --export_direct_nonleg_probe targets "
+            "(default: upperarm_l,lowerarm_l,hand_l,pinky_01_l; use 'all_nonleg' for all non-leg joints)."
+        ),
+    )
+    parser.add_argument(
+        "--direct_nonleg_probe_sics",
+        type=str,
+        default="",
+        help=(
+            "Optional comma-separated step_in_cycle filter for --export_direct_nonleg_probe "
+            "(default empty => all valid SICs with cycle>=1 and drop_wrap)."
+        ),
+    )
+    parser.add_argument(
         "--export_direct_leg_omega_alpha_sweep",
         action="store_true",
         help=(
@@ -10171,54 +10135,6 @@ def parse_args() -> argparse.Namespace:
             "Debug-only: choose SO(3) composition side for direct_leg_omega. "
             "left: Exp(omega) @ R_base (default); right: R_base @ Exp(omega)."
         ),
-    )
-    parser.add_argument(
-        "--direct_pose_leg_alpha_table_json",
-        type=str,
-        default="",
-        help=(
-            "Debug-only: apply a per-(sic,bone) alpha override table to direct_leg_omega before apply. "
-            "Supported keys: step_in_cycle (sic) via 'alpha_by_sic_bone' (legacy) or legacy key 'alpha'. "
-            "Example: {\"alpha_by_sic_bone\": {\"54\": {\"ball_r\": 4.0}}}. "
-            "At masked steps, we do omega_leg_apply[joint] *= alpha. (No training impact.)"
-        ),
-    )
-    parser.add_argument(
-        "--direct_pose_leg_alpha_table_cycle_gte",
-        type=int,
-        default=1,
-        help="Mask for alpha-table apply: only apply when cycle >= N (default: 1; matches eval protocol).",
-    )
-    parser.add_argument(
-        "--direct_pose_leg_alpha_table_drop_wrap",
-        type=str,
-        default="on",
-        choices=("on", "off"),
-        help="Mask for alpha-table apply: drop wrap_boundary_step steps (default: on; matches eval protocol).",
-    )
-    parser.add_argument(
-        "--direct_pose_leg_sign_table_json",
-        type=str,
-        default="",
-        help=(
-            "Debug-only: apply a per-(sic,bone) sign override table to direct_leg_omega before apply. "
-            "Supported keys: step_in_cycle (sic) via 'sign_by_sic_bone' (legacy) or legacy key 'sign'. "
-            "Example: {\"sign_by_sic_bone\": {\"54\": {\"foot_r\": -1}}}. "
-            "At masked steps, we do omega_leg_apply[joint] *= sign (sign coerced to +/-1). (No training impact.)"
-        ),
-    )
-    parser.add_argument(
-        "--direct_pose_leg_sign_table_cycle_gte",
-        type=int,
-        default=1,
-        help="Mask for sign-table apply: only apply when cycle >= N (default: 1; matches eval protocol).",
-    )
-    parser.add_argument(
-        "--direct_pose_leg_sign_table_drop_wrap",
-        type=str,
-        default="on",
-        choices=("on", "off"),
-        help="Mask for sign-table apply: drop wrap_boundary_step steps (default: on; matches eval protocol).",
     )
     parser.add_argument(
         "--direct_pose_leg_contact_gate",

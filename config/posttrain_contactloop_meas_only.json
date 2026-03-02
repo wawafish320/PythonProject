@@ -1,0 +1,39 @@
+{
+  "ckpt_in": "./models/MLPL2_uncertainty_v2/exp_phase_MLPL2_uncertainty_v2_contactloop_openloop/ckpt_last_exp_phase_MLPL2_uncertainty_v2_contactloop_openloop.pth",
+  "out_dir": "./models/MLPL2_uncertainty_v2",
+  "run_name": "posttrain_contactloop_meas_only",
+
+  "data": "./raw_data/processed_data",
+  "bundle_json": "./raw_data/processed_data/norm_template.json",
+  "pretrain_template": "./models/pretrain_template.json",
+  "encoder_bundle": "./models/motion_encoder_equiv_stageA.pt",
+
+  "device": "auto",
+  "batch": 8,
+  "seq_len": 50,
+  "depth": 3,
+  "num_heads": 4,
+  "dropout": 0.1,
+  "context_len": 16,
+
+  "epochs": 3,
+  "steps_per_epoch": 200,
+  "lr": 0.0002,
+  "weight_decay": 0.0,
+
+  "so3_corr_gate_force": null,
+  "so3_corr_gate_logit_reset": null,
+  "gate_warmup_steps": 0,
+  "gate_warmup_value": null,
+  "so3_corr_max_deg": 10.0,
+  "so3_corr_omega_l2_weight": 0.0,
+  "corr_time_weight_max": 2.0,
+  "detach_rollout_state": true,
+
+  "train_so3_corrector": false,
+  "train_contact_meas": true,
+  "contact_meas_weight": 1.0,
+
+  "seed": 0
+}
+

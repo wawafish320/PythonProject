@@ -1,0 +1,49 @@
+{
+  "ckpt_in": "models/STAGE1_CKPT_PATH.pth",
+  "out_dir": "models/posttrain",
+  "run_name": "posttrain_contact_ttc_only",
+
+  "data": "raw_data/processed_data",
+  "paths": null,
+  "bundle_json": "raw_data/processed_data/norm_template.json",
+  "pretrain_template": "models/pretrain_template.json",
+  "encoder_bundle": "models/motion_encoder_equiv_stageA.pt",
+
+  "device": "auto",
+  "batch": 8,
+  "seq_len": 87,
+  "rollout_steps": 0,
+  "rollout_cycles": 2,
+  "rollout_include_boundary": true,
+  "rollout_random_offset": true,
+  "time_index_mode": "auto",
+  "phase_reset_source": "none",
+  "depth": 3,
+  "num_heads": 4,
+  "dropout": 0.1,
+  "context_len": 16,
+
+  "epochs": 3,
+  "steps_per_epoch": 200,
+  "lr": 0.0002,
+  "weight_decay": 0.0,
+
+  "detach_rollout_state": true,
+
+  "train_so3_corrector": false,
+  "train_lambda_head": false,
+  "train_direct_pose": false,
+  "train_contact_plan_init": false,
+  "train_contact_plan": false,
+
+  "train_contact_ttc": true,
+  "contact_ttc_weight": 1.0,
+  "contact_ttc_consistency_weight": 0.1,
+  "contact_ttc_event_weight": 5.0,
+  "contact_ttc_small_weight": 1.0,
+  "contact_ttc_small_power": 1.0,
+  "contact_ttc_rollout": true,
+  "contact_ttc_rollout_weight": 0.0,
+
+  "seed": 0
+}
