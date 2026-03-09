@@ -44,6 +44,59 @@ from train.models import EventMotionModel, MotionJointLoss
 from train.training_MPL import Trainer, validate_and_fix_model_
 
 
+_LEG_ALIGN_DISTAL_JOINTS: tuple[str, ...] = (
+    "foot_r",
+    "ball_r",
+    "foot_l",
+    "ball_l",
+)
+
+_LEG_ALIGN_PROXIMAL_JOINTS: tuple[str, ...] = (
+    "thigh_r",
+    "calf_r",
+    "thigh_l",
+    "calf_l",
+)
+
+_LEG_ALIGN_FOOT_JOINTS: tuple[str, ...] = (
+    "foot_r",
+    "foot_l",
+)
+
+_LEG_ALIGN_BALL_JOINTS: tuple[str, ...] = (
+    "ball_r",
+    "ball_l",
+)
+
+_LEG_ALIGN_CALF_JOINTS: tuple[str, ...] = (
+    "calf_r",
+    "calf_l",
+)
+
+_LEG_ALIGN_THIGH_JOINTS: tuple[str, ...] = (
+    "thigh_r",
+    "thigh_l",
+)
+
+_LEG_ALIGN_SELECTOR_GROUPS: Dict[str, tuple[str, ...]] = {
+    "all": _LEG_ALIGN_PROXIMAL_JOINTS + _LEG_ALIGN_DISTAL_JOINTS,
+    "leg": _LEG_ALIGN_PROXIMAL_JOINTS + _LEG_ALIGN_DISTAL_JOINTS,
+    "legs": _LEG_ALIGN_PROXIMAL_JOINTS + _LEG_ALIGN_DISTAL_JOINTS,
+    "distal": _LEG_ALIGN_DISTAL_JOINTS,
+    "distals": _LEG_ALIGN_DISTAL_JOINTS,
+    "proximal": _LEG_ALIGN_PROXIMAL_JOINTS,
+    "proximals": _LEG_ALIGN_PROXIMAL_JOINTS,
+    "foot": _LEG_ALIGN_FOOT_JOINTS,
+    "feet": _LEG_ALIGN_FOOT_JOINTS,
+    "ball": _LEG_ALIGN_BALL_JOINTS,
+    "balls": _LEG_ALIGN_BALL_JOINTS,
+    "calf": _LEG_ALIGN_CALF_JOINTS,
+    "calves": _LEG_ALIGN_CALF_JOINTS,
+    "thigh": _LEG_ALIGN_THIGH_JOINTS,
+    "thighs": _LEG_ALIGN_THIGH_JOINTS,
+}
+
+
 @dataclass(frozen=True)
 class PostTrainConfig:
     ckpt_in: Path
@@ -83,8 +136,7 @@ class PostTrainConfig:
     # - none  : disable time_index (no time-PE bias)
     time_index_mode: str
     # Internal phase reset source for contact_phase_state (train/infer consistency):
-    # - contacts_meas: threshold-crossing event from contacts_meas (compat mode)
-    # - td_hazard    : integrate-to-1 clock-anchor from contact_td_hazard_head (stable)
+    # - contacts_meas: threshold-crossing event from contacts_meas
     # - none         : disable event resets
     phase_reset_source: str
     depth: int
@@ -93,6 +145,7 @@ class PostTrainConfig:
     context_len: int
     epochs: int
     steps_per_epoch: int
+    save_step_ckpts: Optional[str]
     lr: float
     weight_decay: float
 
@@ -157,6 +210,21 @@ class PostTrainConfig:
     # Optional: focus alignment on direction-misaligned cases only by masking joints where
     # cos(omega_pred, omega_oracle) >= thresh. 0 disables.
     direct_pose_leg_align_cos_thresh: float
+    # Optional: restrict the main leg_align objective to a joint subset. Supports preset tokens
+    # such as "distal", "proximal", "calf", "thigh", "foot", "ball", plus explicit joint names.
+    # Empty/None means "all leg joints".
+    direct_pose_leg_align_target_joints: Optional[str]
+    # Optional: add a small auxiliary anchor on top of the main leg_align target subset.
+    # Useful for experiments like "distal-only proj + tiny calf anchor".
+    direct_pose_leg_align_anchor_joints: Optional[str]
+    direct_pose_leg_align_anchor_weight: float
+    # Optional curriculum for leg align weight.
+    # - none   : keep direct_pose_leg_align_weight constant
+    # - linear : hold start_weight for warmup_steps, then linearly ramp to target weight
+    direct_pose_leg_align_schedule: str
+    direct_pose_leg_align_start_weight: float
+    direct_pose_leg_align_warmup_steps: int
+    direct_pose_leg_align_ramp_steps: int
     # Optional: per-side routing + shared leg head (see train/models.py).
     direct_pose_leg_side_routing: bool
     direct_pose_leg_contact_order: str  # "lr" (default) or "rl"
@@ -234,6 +302,10 @@ class PostTrainConfig:
     # Optional: monitor split-head gradient allocation during direct-pose training.
     direct_pose_grad_monitor_enable: bool
     direct_pose_grad_ratio_gate: float
+    # Optional: probe early-step gradient conflict between distal/proximal leg_align groups
+    # on the shared leg head parameters.
+    direct_pose_leg_align_grad_probe_enable: bool
+    direct_pose_leg_align_grad_probe_steps: int
 
     lambda_fusion_mode: str
     lambda_fusion_hidden: int
@@ -274,15 +346,6 @@ class PostTrainConfig:
 
     # Optional rollout auxiliary supervision on contact_meas prediction (only active in direct/lambda objectives).
     contact_meas_weight: float
-    # TD hazard head hyperparams (only used when initializing head without weights).
-    contact_td_hazard_hidden: int
-    contact_td_hazard_dropout: float
-
-    # Direct<->meas ablations (training-time): keep values, change gradient/data flow only.
-    # - direct_pose_meas_force_zero: direct head ignores contacts_meas (concat->zeros, mode_select->uniform)
-    # - direct_pose_meas_detach: stop-grad from direct head into contacts_meas (prevents co-adaptation)
-    direct_pose_meas_force_zero: bool
-    direct_pose_meas_detach: bool
 
     # White-box contacts_meas runtime knobs (P2 ground_z stability / ablations).
     # Used when rollouts call Trainer._contact_meas_whitebox.
@@ -295,6 +358,11 @@ class PostTrainConfig:
     contact_meas_ground_z_slew_up_cm: float
     contact_meas_ground_z_slew_down_cm: float
 
+    # Posttrain rollout contacts source (fixed mainline contract).
+    posttrain_contacts_source: str  # pretrain_contact
+    posttrain_contacts_pretrain_clamp: float
+    posttrain_contacts_pretrain_affine_stats: Optional[str]
+
     seed: int
 
 
@@ -304,6 +372,15 @@ _RETIRED_POSTTRAIN_TARGET_KEYS: tuple[str, ...] = (
     "train_contact_plan",
     "train_contact_meas",
     "train_contact_td_hazard",
+)
+_RETIRED_POSTTRAIN_SHELL_KEY_PREFIXES: tuple[str, ...] = (
+    "direct_pose_hinge_",
+    "contact_td_hazard_",
+    "contact_ttc_",
+)
+_RETIRED_POSTTRAIN_SHELL_EXACT_KEYS: tuple[str, ...] = (
+    "train_contact_ttc",
+    "direct_hinge_delta",
 )
 
 _CLI_BOOL_OVERRIDE_KEYS: tuple[str, ...] = (
@@ -403,14 +480,28 @@ def _normalize_optional_csv(val: Any) -> Optional[str]:
     return s if s else None
 
 
-def _normalize_optional_sic_spec(val: Any) -> Optional[str]:
-    if isinstance(val, (list, tuple)):
-        ints = _as_int_list(val) or []
-        return ",".join(str(int(x)) for x in ints) if ints else None
-    if val is None:
-        return None
-    s = str(val).strip()
-    return s if s else None
+def _parse_int_set_spec(spec: Any) -> set[int]:
+    if spec is None:
+        return set()
+    out: set[int] = set()
+    for tok in str(spec).replace(";", ",").split(","):
+        t = tok.strip()
+        if not t:
+            continue
+        if "-" in t or ":" in t:
+            sep = "-" if "-" in t else ":"
+            a, b = [x.strip() for x in t.split(sep, 1)]
+            if a.lstrip("-").isdigit() and b.lstrip("-").isdigit():
+                lo = int(a)
+                hi = int(b)
+                if lo > hi:
+                    lo, hi = hi, lo
+                for v in range(lo, hi + 1):
+                    out.add(int(v))
+            continue
+        if t.lstrip("-").isdigit():
+            out.add(int(t))
+    return out
 
 
 def _normalize_direct_pose_feat_source(val: Any) -> Optional[str]:
@@ -462,108 +553,116 @@ def _as_float_list(val: Any) -> Optional[list[float]]:
     return out if out else None
 
 
-def _as_int_list(val: Any) -> Optional[list[int]]:
-    """
-    Parse a list of integers from:
-      - list/tuple: [1,2,3]
-      - csv-ish string: "1,2,3" (also supports ';' and whitespace)
-      - range tokens: "49-55", "49..55", "49:55" (inclusive)
-      - JSON list string: "[1,2,3]"
-    """
-    if val is None:
+def _parse_pretrain_contact_affine_spec(spec: Any) -> Optional[Dict[str, Any]]:
+    if spec is None:
         return None
-    if isinstance(val, (list, tuple)):
-        out: list[int] = []
-        for x in val:
-            try:
-                out.append(int(x))
-            except Exception:
-                continue
-        return out if out else None
-    s = str(val).strip()
-    if not s:
-        return None
-    # Allow JSON list strings like "[1,2,3]".
-    if (s.startswith("[") and s.endswith("]")) or (s.startswith("{") and s.endswith("}")):
+    raw = spec
+    if isinstance(raw, Path):
+        raw = str(raw)
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return None
         try:
-            payload = json.loads(s)
-        except Exception:
-            payload = None
-        if isinstance(payload, dict):
-            payload = payload.get("values") or payload.get("sics") or payload.get("list")
-        if isinstance(payload, (list, tuple)):
-            out = []
-            for x in payload:
-                try:
-                    out.append(int(x))
-                except Exception:
-                    continue
-            return out if out else None
-        # Fallthrough: treat as a plain string spec.
-
-    # Tokenize: allow commas, semicolons, and whitespace.
-    spec = s.replace(";", ",").replace("\n", ",").replace("\t", ",").replace(" ", ",")
-    toks = [t.strip() for t in spec.split(",") if t.strip()]
-    if not toks:
-        return None
-    out_vals: list[int] = []
-    for tok in toks:
-        if not tok:
-            continue
-        # Inclusive range tokens: a-b, a..b, a:b
-        sep = None
-        if ".." in tok:
-            sep = ".."
-        elif ":" in tok:
-            sep = ":"
-        elif "-" in tok and not tok.startswith("-"):
-            sep = "-"
-        if sep is not None:
-            try:
-                a_str, b_str = tok.split(sep, 1)
-                a = int(a_str.strip())
-                b = int(b_str.strip())
-            except Exception:
-                continue
-            if a <= b:
-                out_vals.extend(list(range(a, b + 1)))
+            p = Path(s).expanduser()
+            if p.is_file():
+                raw = load_json(p)
             else:
-                out_vals.extend(list(range(a, b - 1, -1)))
-            continue
-        try:
-            out_vals.append(int(tok))
+                raw = json.loads(s)
         except Exception:
-            continue
+            return None
+    if not isinstance(raw, dict):
+        return None
+    scale = raw.get("scale", None)
+    bias = raw.get("bias", None)
+    if not isinstance(scale, (list, tuple)) or not isinstance(bias, (list, tuple)):
+        return None
+    try:
+        scale_vals = [float(x) for x in scale]
+        bias_vals = [float(x) for x in bias]
+    except Exception:
+        return None
+    if len(scale_vals) <= 0 or len(scale_vals) != len(bias_vals):
+        return None
+    if not all(math.isfinite(float(x)) for x in scale_vals):
+        return None
+    if not all(math.isfinite(float(x)) for x in bias_vals):
+        return None
+    try:
+        eps = float(raw.get("eps", 1e-4) or 1e-4)
+    except Exception:
+        eps = 1e-4
+    if not math.isfinite(float(eps)):
+        eps = 1e-4
+    eps = float(min(1e-2, max(1e-8, eps)))
+    return {"scale": scale_vals, "bias": bias_vals, "eps": eps}
 
-    # De-dup while preserving order.
-    seen: set[int] = set()
-    out: list[int] = []
-    for v in out_vals:
-        if v in seen:
-            continue
-        seen.add(v)
-        out.append(v)
-    return out if out else None
+
+def _cfg_reject_retired_direct_pose_highorder(payload: Dict[str, Any]) -> None:
+    active_keys: list[str] = []
+
+    side_bool_keys = (
+        "direct_pose_leg_side_routing",
+        "direct_pose_leg_side_plan_other",
+        "direct_pose_leg_side_phase_other",
+        "direct_pose_leg_side_phase_rel",
+        "direct_pose_leg_side_sign_gate",
+        "direct_pose_leg_side_rank1",
+    )
+    for key in side_bool_keys:
+        if _cfg_get_bool(payload, key, False):
+            active_keys.append(key)
+
+    if int(_cfg_get_int(payload, "direct_pose_leg_side_embed_dim", 0, min_value=0)) > 0:
+        active_keys.append("direct_pose_leg_side_embed_dim")
+
+    side_cue = str(payload.get("direct_pose_leg_side_cue") or "none").strip().lower()
+    if side_cue not in ("", "none", "off", "disable", "disabled"):
+        active_keys.append("direct_pose_leg_side_cue")
+
+    if float(_cfg_get_float(payload, "direct_pose_leg_side_sign_gate_reg_weight", 0.0, min_value=0.0)) > 0.0:
+        active_keys.append("direct_pose_leg_side_sign_gate_reg_weight")
+
+    sic_raw = payload.get("direct_pose_loss_sics", None)
+    if isinstance(sic_raw, (list, tuple)):
+        if any(str(x).strip() for x in sic_raw):
+            active_keys.append("direct_pose_loss_sics")
+    elif sic_raw is not None and str(sic_raw).strip().lower() not in ("", "none", "null"):
+        active_keys.append("direct_pose_loss_sics")
+
+    if int(_cfg_get_int(payload, "direct_pose_loss_cycle_gte", 0, min_value=0)) > 0:
+        active_keys.append("direct_pose_loss_cycle_gte")
+
+    sic_mode = str(payload.get("direct_pose_loss_sic_mode") or "mask").strip().lower()
+    if sic_mode not in ("", "mask", "none", "off", "disable", "disabled"):
+        active_keys.append("direct_pose_loss_sic_mode")
+
+    sic_boost = float(_cfg_get_float(payload, "direct_pose_loss_sic_boost", 1.0))
+    if math.isfinite(sic_boost) and abs(float(sic_boost) - 1.0) > 1e-12:
+        active_keys.append("direct_pose_loss_sic_boost")
+
+    if active_keys:
+        keys_txt = ", ".join(sorted(set(active_keys)))
+        raise SystemExit(
+            "[FATAL][RETIRED_DIRECT_POSE_HIGHORDER] posttrain mainline no longer accepts active direct_pose "
+            f"high-order branches: {keys_txt}. "
+            "Keep side-routing/sign-gate/rank1/SIC-focus at inert defaults, or use archived repro/validate lanes."
+        )
 
 
 def _canon_phase_reset_source(val: Any) -> str:
-    s = str(val or "contacts_meas").strip().lower()
+    s = str(val or "none").strip().lower()
     # External TTC-driven resets (handled in posttrain rollout loops, similar to run_freerun_cycles):
     # - ttc_gt  : use GT touchdown events (ttc_td_events) to reset phase_z to the anchor [0,1]
-    if s in ("ttc", "ttc_gt", "ttcgt"):
-        return "ttc_gt"
-    if s in ("ttc_pred", "ttcpred"):
-        raise SystemExit(
-            "[FATAL] phase_reset_source=ttc_pred is no longer supported (TTC path removed; 2026-02-07). "
-            "Use --phase_reset_source none (recommended) or td_hazard."
-        )
-    if s in ("hazard", "tdhazard", "td_hazard", "tdhaz"):
-        return "td_hazard"
     if s in ("none", "null", "off", "disable", "disabled"):
         return "none"
+    if s in ("ttc", "ttc_gt", "ttcgt"):
+        return "ttc_gt"
     if s in ("contacts", "contacts_meas", "meas", "contact_meas"):
         return "contacts_meas"
-    return "contacts_meas"
+    raise SystemExit(
+        f"[FATAL] unsupported phase_reset_source={s!r}; allowed values: none | contacts_meas | ttc_gt."
+    )
 
 
 def _cfg_pick(payload: Dict[str, Any], key: str, *, aliases: Tuple[str, ...] = ()) -> Any:
@@ -736,7 +835,7 @@ def _cfg_reject_retired_targets(payload: Dict[str, Any]) -> None:
     if bool(_ttc_train) or any(float(x) > 0.0 for x in (_ttc_w, _ttc_cw, _ttc_evtw, _ttc_smallw, _ttc_rollw)):
         raise SystemExit(
             "[FATAL] TTC loss/training has been removed (Stage7 cleanup; 2026-02-07). "
-            "Migrate to phase_reset_source=none (no-reset) or phase_reset_source=td_hazard with hazard weights from checkpoint."
+            "Migrate to phase_reset_source=none (no-reset) or phase_reset_source=contacts_meas."
         )
 
     present_retired_keys = [k for k in _RETIRED_POSTTRAIN_TARGET_KEYS if k in payload]
@@ -746,6 +845,24 @@ def _cfg_reject_retired_targets(payload: Dict[str, Any]) -> None:
             "[FATAL][RETIRED_TARGET_KEY_PRESENT] active posttrain config must not contain retired target keys: "
             f"{keys_txt}. "
             "Use exactly one newflow target: train_direct_pose=true or train_lambda_head=true."
+        )
+
+
+def _cfg_reject_retired_shell_keys(payload: Dict[str, Any]) -> None:
+    present_retired_shell_keys = [
+        str(k)
+        for k in payload.keys()
+        if (
+            str(k) in _RETIRED_POSTTRAIN_SHELL_EXACT_KEYS
+            or any(str(k).startswith(prefix) for prefix in _RETIRED_POSTTRAIN_SHELL_KEY_PREFIXES)
+        )
+    ]
+    if present_retired_shell_keys:
+        keys_txt = ", ".join(sorted(present_retired_shell_keys))
+        raise SystemExit(
+            "[FATAL][RETIRED_SHELL_KEY_PRESENT] posttrain mainline config must not contain retired shell keys: "
+            f"{keys_txt}. "
+            "Remove hinge/contact_td_hazard/contact_ttc shells and keep only current newflow keys."
         )
 
 
@@ -774,6 +891,7 @@ def _cfg_parse_path_basic(payload: Dict[str, Any]) -> Dict[str, Any]:
         "run_name": str(payload.get("run_name") or f"posttrain_{time.strftime('%Y%m%d-%H%M%S')}"),
         "data": data,
         "paths": paths,
+        "save_step_ckpts": _normalize_optional_csv(payload.get("save_step_ckpts", None)),
         "bundle_json": bundle,
         "pretrain_template": _as_path(payload.get("pretrain_template")),
         "encoder_bundle": _as_path(payload.get("encoder_bundle") or payload.get("encoder_path")),
@@ -897,8 +1015,63 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
                 _cfg_get_float,
                 {"key": "direct_pose_leg_align_cos_thresh", "default": 0.0, "min_value": 0.0},
             ),
+            (
+                "direct_pose_leg_align_target_joints",
+                _cfg_get_or,
+                {"key": "direct_pose_leg_align_target_joints", "default": None},
+            ),
+            (
+                "direct_pose_leg_align_anchor_joints",
+                _cfg_get_or,
+                {"key": "direct_pose_leg_align_anchor_joints", "default": None},
+            ),
+            (
+                "direct_pose_leg_align_anchor_weight",
+                _cfg_get_float,
+                {"key": "direct_pose_leg_align_anchor_weight", "default": 0.0, "min_value": 0.0},
+            ),
+            (
+                "direct_pose_leg_align_schedule",
+                _cfg_get_enum,
+                {
+                    "key": "direct_pose_leg_align_schedule",
+                    "default": "none",
+                    "alias_map": {
+                        "": "none",
+                        "off": "none",
+                        "false": "none",
+                        "0": "none",
+                    },
+                    "choices": ("none", "linear"),
+                },
+            ),
+            (
+                "direct_pose_leg_align_start_weight",
+                _cfg_get_float,
+                {"key": "direct_pose_leg_align_start_weight", "default": 0.0, "min_value": 0.0},
+            ),
+            (
+                "direct_pose_leg_align_warmup_steps",
+                _cfg_get_int,
+                {"key": "direct_pose_leg_align_warmup_steps", "default": 0, "min_value": 0},
+            ),
+            (
+                "direct_pose_leg_align_ramp_steps",
+                _cfg_get_int,
+                {"key": "direct_pose_leg_align_ramp_steps", "default": 0, "min_value": 0},
+            ),
         ],
     )
+    direct_pose_leg_align_target_joints = leg_align_cfg["direct_pose_leg_align_target_joints"]
+    if direct_pose_leg_align_target_joints is not None:
+        direct_pose_leg_align_target_joints = str(direct_pose_leg_align_target_joints).strip()
+        if str(direct_pose_leg_align_target_joints).lower() in ("", "none", "null", "off", "disabled"):
+            direct_pose_leg_align_target_joints = None
+    direct_pose_leg_align_anchor_joints = leg_align_cfg["direct_pose_leg_align_anchor_joints"]
+    if direct_pose_leg_align_anchor_joints is not None:
+        direct_pose_leg_align_anchor_joints = str(direct_pose_leg_align_anchor_joints).strip()
+        if str(direct_pose_leg_align_anchor_joints).lower() in ("", "none", "null", "off", "disabled"):
+            direct_pose_leg_align_anchor_joints = None
     cfg.update(
         direct_pose_leg_align_weight=float(leg_align_cfg["direct_pose_leg_align_weight"]),
         direct_pose_leg_align_oracle_min_deg=float(leg_align_cfg["direct_pose_leg_align_oracle_min_deg"]),
@@ -908,83 +1081,35 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
         direct_pose_leg_align_res_weight=float(leg_align_cfg["direct_pose_leg_align_res_weight"]),
         direct_pose_leg_align_sign_weight=float(leg_align_cfg["direct_pose_leg_align_sign_weight"]),
         direct_pose_leg_align_cos_thresh=float(leg_align_cfg["direct_pose_leg_align_cos_thresh"]),
+        direct_pose_leg_align_target_joints=direct_pose_leg_align_target_joints,
+        direct_pose_leg_align_anchor_joints=direct_pose_leg_align_anchor_joints,
+        direct_pose_leg_align_anchor_weight=float(leg_align_cfg["direct_pose_leg_align_anchor_weight"]),
+        direct_pose_leg_align_schedule=str(leg_align_cfg["direct_pose_leg_align_schedule"]),
+        direct_pose_leg_align_start_weight=float(leg_align_cfg["direct_pose_leg_align_start_weight"]),
+        direct_pose_leg_align_warmup_steps=int(leg_align_cfg["direct_pose_leg_align_warmup_steps"]),
+        direct_pose_leg_align_ramp_steps=int(leg_align_cfg["direct_pose_leg_align_ramp_steps"]),
     )
 
-    # Optional: per-side routing + shared leg head (SO(3) only; see train/models.py).
-    side_cfg = _cfg_from_schema(
-        payload,
-        [
-            ("direct_pose_leg_side_routing", _cfg_get_bool, {"key": "direct_pose_leg_side_routing", "default": False}),
-            (
-                "direct_pose_leg_contact_order",
-                _cfg_get_enum,
-                {
-                    "key": "direct_pose_leg_contact_order",
-                    "default": "lr",
-                    "alias_map": {"rl": "rl", "r,l": "rl", "r l": "rl", "lr": "lr"},
-                    "choices": ("lr", "rl"),
-                },
-            ),
-            ("direct_pose_leg_side_embed_dim", _cfg_get_int, {"key": "direct_pose_leg_side_embed_dim", "default": 0, "min_value": 0}),
-            ("direct_pose_leg_side_plan_other", _cfg_get_bool, {"key": "direct_pose_leg_side_plan_other", "default": False}),
-            ("direct_pose_leg_side_phase_other", _cfg_get_bool, {"key": "direct_pose_leg_side_phase_other", "default": False}),
-            ("direct_pose_leg_side_phase_rel", _cfg_get_bool, {"key": "direct_pose_leg_side_phase_rel", "default": False}),
-            (
-                "direct_pose_leg_side_cue",
-                _cfg_get_enum,
-                {
-                    "key": "direct_pose_leg_side_cue",
-                    "default": "none",
-                    "alias_map": {"": "none", "off": "none", "disable": "none", "disabled": "none"},
-                },
-            ),
-            ("direct_pose_leg_side_cue_tau", _cfg_get_float, {"key": "direct_pose_leg_side_cue_tau", "default": 30.0}),
-            ("direct_pose_leg_side_sign_gate", _cfg_get_bool, {"key": "direct_pose_leg_side_sign_gate", "default": False}),
-            ("direct_pose_leg_side_rank1", _cfg_get_bool, {"key": "direct_pose_leg_side_rank1", "default": False}),
-            (
-                "direct_pose_leg_side_sign_gate_reg_weight",
-                _cfg_get_float,
-                {"key": "direct_pose_leg_side_sign_gate_reg_weight", "default": 0.0, "min_value": 0.0},
-            ),
-        ],
-    )
-    direct_pose_leg_side_cue_tau = float(side_cfg["direct_pose_leg_side_cue_tau"])
-    if (not math.isfinite(direct_pose_leg_side_cue_tau)) or direct_pose_leg_side_cue_tau <= 0.0:
-        direct_pose_leg_side_cue_tau = 30.0
     cfg.update(
-        direct_pose_leg_side_routing=bool(side_cfg["direct_pose_leg_side_routing"]),
-        direct_pose_leg_contact_order=str(side_cfg["direct_pose_leg_contact_order"]),
-        direct_pose_leg_side_embed_dim=int(side_cfg["direct_pose_leg_side_embed_dim"]),
-        direct_pose_leg_side_plan_other=bool(side_cfg["direct_pose_leg_side_plan_other"]),
-        direct_pose_leg_side_phase_other=bool(side_cfg["direct_pose_leg_side_phase_other"]),
-        direct_pose_leg_side_phase_rel=bool(side_cfg["direct_pose_leg_side_phase_rel"]),
-        direct_pose_leg_side_cue=str(side_cfg["direct_pose_leg_side_cue"]),
-        direct_pose_leg_side_cue_tau=direct_pose_leg_side_cue_tau,
-        direct_pose_leg_side_sign_gate=bool(side_cfg["direct_pose_leg_side_sign_gate"]),
-        direct_pose_leg_side_rank1=bool(side_cfg["direct_pose_leg_side_rank1"]),
-        direct_pose_leg_side_sign_gate_reg_weight=float(side_cfg["direct_pose_leg_side_sign_gate_reg_weight"]),
+        direct_pose_leg_side_routing=False,
+        direct_pose_leg_contact_order="lr",
+        direct_pose_leg_side_embed_dim=0,
+        direct_pose_leg_side_plan_other=False,
+        direct_pose_leg_side_phase_other=False,
+        direct_pose_leg_side_phase_rel=False,
+        direct_pose_leg_side_cue="none",
+        direct_pose_leg_side_cue_tau=30.0,
+        direct_pose_leg_side_sign_gate=False,
+        direct_pose_leg_side_rank1=False,
+        direct_pose_leg_side_sign_gate_reg_weight=0.0,
     )
 
     cfg["direct_pose_loss_leg_split"] = _cfg_get_bool(payload, "direct_pose_loss_leg_split", False)
     cfg["direct_pose_nonleg_focus_bones"] = _normalize_optional_csv(payload.get("direct_pose_nonleg_focus_bones", None))
 
-    # Optional: direct objective step_in_cycle (sic) focus list.
-    cfg["direct_pose_loss_sics"] = _normalize_optional_sic_spec(payload.get("direct_pose_loss_sics", None))
     direct_pose_loss_cfg = _cfg_from_schema(
         payload,
         [
-            ("direct_pose_loss_cycle_gte", _cfg_get_int, {"key": "direct_pose_loss_cycle_gte", "default": 0, "min_value": 0}),
-            (
-                "direct_pose_loss_sic_mode",
-                _cfg_get_enum,
-                {
-                    "key": "direct_pose_loss_sic_mode",
-                    "default": "mask",
-                    "alias_map": {"": "mask", "none": "mask", "off": "mask", "disable": "mask", "disabled": "mask"},
-                    "choices": ("mask", "boost"),
-                },
-            ),
-            ("direct_pose_loss_sic_boost", _cfg_get_float, {"key": "direct_pose_loss_sic_boost", "default": 1.0}),
             ("direct_pose_loss_group_norm_enable", _cfg_get_bool, {"key": "direct_pose_loss_group_norm_enable", "default": False}),
             ("direct_pose_loss_group_norm_w_leg", _cfg_get_float, {"key": "direct_pose_loss_group_norm_w_leg", "default": 1.0, "require_finite": False}),
             (
@@ -999,11 +1124,18 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
             ("direct_pose_nonleg_focus_weight", _cfg_get_float, {"key": "direct_pose_nonleg_focus_weight", "default": 1.0}),
             ("direct_pose_grad_monitor_enable", _cfg_get_bool, {"key": "direct_pose_grad_monitor_enable", "default": False}),
             ("direct_pose_grad_ratio_gate", _cfg_get_float, {"key": "direct_pose_grad_ratio_gate", "default": 0.35}),
+            (
+                "direct_pose_leg_align_grad_probe_enable",
+                _cfg_get_bool,
+                {"key": "direct_pose_leg_align_grad_probe_enable", "default": False},
+            ),
+            (
+                "direct_pose_leg_align_grad_probe_steps",
+                _cfg_get_int,
+                {"key": "direct_pose_leg_align_grad_probe_steps", "default": 0, "min_value": 0},
+            ),
         ],
     )
-    direct_pose_loss_sic_boost = float(direct_pose_loss_cfg["direct_pose_loss_sic_boost"])
-    if (not math.isfinite(direct_pose_loss_sic_boost)) or direct_pose_loss_sic_boost <= 0.0:
-        direct_pose_loss_sic_boost = 1.0
     direct_pose_loss_group_norm_w_leg = float(direct_pose_loss_cfg["direct_pose_loss_group_norm_w_leg"])
     direct_pose_loss_group_norm_w_nonleg = float(direct_pose_loss_cfg["direct_pose_loss_group_norm_w_nonleg"])
     direct_pose_loss_group_norm_ema_beta = float(direct_pose_loss_cfg["direct_pose_loss_group_norm_ema_beta"])
@@ -1030,10 +1162,16 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
     direct_pose_grad_ratio_gate = float(direct_pose_loss_cfg["direct_pose_grad_ratio_gate"])
     if (not math.isfinite(direct_pose_grad_ratio_gate)) or direct_pose_grad_ratio_gate <= 0.0:
         direct_pose_grad_ratio_gate = 0.35
+    direct_pose_leg_align_grad_probe_steps = int(direct_pose_loss_cfg["direct_pose_leg_align_grad_probe_steps"])
+    if direct_pose_leg_align_grad_probe_steps < 0:
+        direct_pose_leg_align_grad_probe_steps = 0
+    if bool(direct_pose_loss_cfg["direct_pose_leg_align_grad_probe_enable"]) and direct_pose_leg_align_grad_probe_steps <= 0:
+        direct_pose_leg_align_grad_probe_steps = 30
     cfg.update(
-        direct_pose_loss_cycle_gte=int(direct_pose_loss_cfg["direct_pose_loss_cycle_gte"]),
-        direct_pose_loss_sic_mode=str(direct_pose_loss_cfg["direct_pose_loss_sic_mode"]),
-        direct_pose_loss_sic_boost=float(direct_pose_loss_sic_boost),
+        direct_pose_loss_sics=None,
+        direct_pose_loss_cycle_gte=0,
+        direct_pose_loss_sic_mode="mask",
+        direct_pose_loss_sic_boost=1.0,
         direct_pose_loss_group_norm_enable=bool(direct_pose_loss_cfg["direct_pose_loss_group_norm_enable"]),
         direct_pose_loss_group_norm_w_leg=float(direct_pose_loss_group_norm_w_leg),
         direct_pose_loss_group_norm_w_nonleg=float(direct_pose_loss_group_norm_w_nonleg),
@@ -1044,6 +1182,8 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
         direct_pose_nonleg_focus_weight=float(direct_pose_nonleg_focus_weight),
         direct_pose_grad_monitor_enable=bool(direct_pose_loss_cfg["direct_pose_grad_monitor_enable"]),
         direct_pose_grad_ratio_gate=float(direct_pose_grad_ratio_gate),
+        direct_pose_leg_align_grad_probe_enable=bool(direct_pose_loss_cfg["direct_pose_leg_align_grad_probe_enable"]),
+        direct_pose_leg_align_grad_probe_steps=int(direct_pose_leg_align_grad_probe_steps),
     )
     return cfg
 
@@ -1061,7 +1201,7 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
             ("rollout_include_boundary_raw", _cfg_pick, {"key": "rollout_include_boundary"}),
             ("rollout_random_offset", _cfg_get_bool, {"key": "rollout_random_offset", "default": False}),
             ("time_index_mode", _cfg_get_str_or, {"key": "time_index_mode", "default": "global"}),
-            ("phase_reset_source", _cfg_get_str_or, {"key": "phase_reset_source", "default": "contacts_meas"}),
+            ("phase_reset_source", _cfg_get_str_or, {"key": "phase_reset_source", "default": "none"}),
             ("depth", _cfg_get_int_or, {"key": "depth", "default": 3}),
             ("num_heads", _cfg_get_int_or, {"key": "num_heads", "default": 4}),
             ("dropout", _cfg_get_float_or, {"key": "dropout", "default": 0.1}),
@@ -1105,10 +1245,6 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
             ("lambda_l2sp_weight", _cfg_get_float_or, {"key": "lambda_l2sp_weight", "default": 0.0}),
             ("lambda_boundary_weight", _cfg_get_float_or, {"key": "lambda_boundary_weight", "default": 0.0}),
             ("contact_meas_weight", _cfg_get_float_or, {"key": "contact_meas_weight", "default": 0.0}),
-            ("contact_td_hazard_hidden", _cfg_get_int_or, {"key": "contact_td_hazard_hidden", "default": 64}),
-            ("contact_td_hazard_dropout", _cfg_get_float_or, {"key": "contact_td_hazard_dropout", "default": 0.0}),
-            ("direct_pose_meas_force_zero", _cfg_get_bool, {"key": "direct_pose_meas_force_zero", "default": False}),
-            ("direct_pose_meas_detach", _cfg_get_bool, {"key": "direct_pose_meas_detach", "default": False}),
             ("contact_meas_gate_by_hit", _cfg_get_str_or, {"key": "contact_meas_gate_by_hit", "default": "auto"}),
             ("contact_meas_vxy_mode", _cfg_get_str_or, {"key": "contact_meas_vxy_mode", "default": "abs"}),
             ("contact_meas_ground_z_mode", _cfg_get_str_or, {"key": "contact_meas_ground_z_mode", "default": "window"}),
@@ -1117,6 +1253,16 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
             ("contact_meas_ground_z_quantile", _cfg_get_float_or, {"key": "contact_meas_ground_z_quantile", "default": 0.2}),
             ("contact_meas_ground_z_slew_up_cm", _cfg_get_float_or, {"key": "contact_meas_ground_z_slew_up_cm", "default": 0.0}),
             ("contact_meas_ground_z_slew_down_cm", _cfg_get_float_or, {"key": "contact_meas_ground_z_slew_down_cm", "default": 0.0}),
+            (
+                "posttrain_contacts_source",
+                _cfg_get_str_or,
+                {
+                    "key": "posttrain_contacts_source",
+                    "default": "pretrain_contact",
+                },
+            ),
+            ("posttrain_contacts_pretrain_clamp", _cfg_get_float, {"key": "posttrain_contacts_pretrain_clamp", "default": 1.0, "min_value": 0.0}),
+            ("posttrain_contacts_pretrain_affine_stats", _cfg_pick, {"key": "posttrain_contacts_pretrain_affine_stats"}),
             ("seed", _cfg_get_int_or, {"key": "seed", "default": 0}),
         ],
     )
@@ -1129,6 +1275,26 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
     core_cfg["lambda_reliability_warmup_joint_scales"] = _as_float_list(
         core_cfg.pop("lambda_reliability_warmup_joint_scales_raw")
     )
+    src = str(core_cfg.get("posttrain_contacts_source", "pretrain_contact") or "pretrain_contact").strip().lower()
+    if src != "pretrain_contact":
+        raise SystemExit(
+            f"[FATAL] unsupported posttrain_contacts_source={src!r}; only 'pretrain_contact' is allowed."
+        )
+    core_cfg["posttrain_contacts_source"] = "pretrain_contact"
+    clamp_v = core_cfg.get("posttrain_contacts_pretrain_clamp", 1.0)
+    try:
+        clamp_f = float(clamp_v)
+    except Exception:
+        clamp_f = 1.0
+    if not math.isfinite(clamp_f):
+        clamp_f = 1.0
+    core_cfg["posttrain_contacts_pretrain_clamp"] = max(0.0, float(clamp_f))
+    affine_spec = core_cfg.get("posttrain_contacts_pretrain_affine_stats", None)
+    if affine_spec is None:
+        core_cfg["posttrain_contacts_pretrain_affine_stats"] = None
+    else:
+        s = str(affine_spec).strip()
+        core_cfg["posttrain_contacts_pretrain_affine_stats"] = s if s else None
     return core_cfg
 
 
@@ -1136,6 +1302,8 @@ def _cfg_from_payload(payload: Dict[str, Any]) -> PostTrainConfig:
     if not isinstance(payload, dict):
         raise TypeError("posttrain config payload must be a dict")
     _cfg_reject_retired_targets(payload)
+    _cfg_reject_retired_shell_keys(payload)
+    _cfg_reject_retired_direct_pose_highorder(payload)
     cfg_kwargs: Dict[str, Any] = {}
     cfg_kwargs.update(_cfg_parse_path_basic(payload))
     cfg_kwargs.update(_cfg_parse_direct_pose(payload))
@@ -1334,10 +1502,7 @@ def _prepare_rollout_cond(
         except Exception:
             yaw_pred = None
         if yaw_gt is not None and yaw_pred is not None:
-            try:
-                cond_proj = trainer._reproject_cond_to_local_frame(cond_raw_step, yaw_gt, yaw_pred)
-            except Exception:
-                cond_proj = None
+            cond_proj = trainer._reproject_cond_to_local_frame(cond_raw_step, yaw_gt, yaw_pred)
             if cond_proj is not None:
                 cond_raw_for_model = cond_proj
 
@@ -1351,35 +1516,58 @@ def _prepare_rollout_cond(
     return cond_t, cond_raw_step
 
 
+def _predict_pretrain_contacts_from_frozen(
+    trainer: Trainer,
+    model: EventMotionModel,
+    *,
+    motion_step_t: Optional[torch.Tensor],
+    pose_hist_step_t: Optional[torch.Tensor],
+) -> Optional[torch.Tensor]:
+    _ = model
+    fn = getattr(trainer, '_predict_pretrain_contacts_from_frozen', None)
+    if not callable(fn):
+        return None
+    try:
+        return fn(motion_step_t=motion_step_t, pose_hist_step_t=pose_hist_step_t)
+    except Exception:
+        return None
+
+
 def _prepare_rollout_contacts_input(
     trainer: Trainer,
     model: EventMotionModel,
     *,
+    motion_t: torch.Tensor,
     motion_raw: torch.Tensor,
+    pose_hist_t: Optional[torch.Tensor],
     plan_z: Optional[torch.Tensor],
     t: int,
     prev_foot_pos_meas: Optional[torch.Tensor],
 ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-    plan_enable = bool(getattr(model, "contact_plan_enable", False))
-    use_learned_meas = bool(getattr(model, "contact_meas_enable", False))
-    init_mode = str(getattr(model, "contact_plan_init_mode", "learnable") or "learnable").strip().lower()
 
-    contacts_wb_t = None
-    if plan_enable and (
-        (not use_learned_meas)
-        or (init_mode in ("obs", "learnable+obs") and plan_z is None and int(t) == 0)
-    ):
-        try:
-            contacts_wb_t, prev_foot_pos_meas = trainer._contact_meas_whitebox(motion_raw, prev_foot_pos_meas)
-        except Exception:
-            contacts_wb_t = None
+    plan_enable = bool(getattr(model, "contact_plan_enable", False))
+    contacts_source = str(getattr(trainer, "posttrain_contacts_source", "pretrain_contact") or "pretrain_contact").strip().lower()
+    if contacts_source != "pretrain_contact":
+        raise RuntimeError(
+            f"[FATAL] unsupported posttrain_contacts_source={contacts_source!r}; only 'pretrain_contact' is allowed."
+        )
+    _ = motion_raw
+    _ = plan_z
+    _ = t
 
     contacts_in_t = None
     if plan_enable:
-        if not use_learned_meas:
-            contacts_in_t = contacts_wb_t
-        elif init_mode in ("obs", "learnable+obs") and plan_z is None and int(t) == 0:
-            contacts_in_t = contacts_wb_t
+        contacts_in_t = _predict_pretrain_contacts_from_frozen(
+            trainer,
+            model,
+            motion_step_t=motion_t,
+            pose_hist_step_t=pose_hist_t,
+        )
+        if contacts_in_t is None:
+            raise RuntimeError(
+                "[FATAL] posttrain_contacts_source=pretrain_contact requires valid frozen encoder+contact_head "
+                "and runtime-compatible encoder input dimensions."
+            )
     return contacts_in_t, prev_foot_pos_meas
 
 
@@ -1450,12 +1638,6 @@ def _update_rollout_recurrent_state(
                 state["phase_event_age"] = a_next.detach()
         except Exception:
             pass
-    try:
-        hz_acc_next = ret.get("td_hazard_acc_next", None)
-        if torch.is_tensor(hz_acc_next):
-            state["td_hazard_acc"] = hz_acc_next.detach()
-    except Exception:
-        pass
     try:
         mlog = ret.get("contacts_meas_logits", None)
         if torch.is_tensor(mlog):
@@ -1571,7 +1753,9 @@ def _rollout_step_common(
     contacts_in_t, prev_foot_pos_meas = _prepare_rollout_contacts_input(
         trainer,
         model,
+        motion_t=motion,
         motion_raw=motion_raw,
+        pose_hist_t=pose_hist_t,
         plan_z=state.get("plan_z", None),
         t=int(t),
         prev_foot_pos_meas=state.get("prev_foot_pos_meas", None),
@@ -1601,7 +1785,6 @@ def _rollout_step_common(
         plan_z=state.get("plan_z", None),
         phase_z=state.get("phase_z", None),
         phase_event_age=state.get("phase_event_age", None),
-        td_hazard_acc=state.get("td_hazard_acc", None),
         meas_logits_prev=state.get("meas_logits_prev", None),
         time_index=time_index_t,
         rollout_step=rollout_step_t,
@@ -1767,7 +1950,6 @@ def _lambda_rollout_prepare_context(
         "phase_z": None,
         "phase_event_age": None,
         "meas_logits_prev": None,
-        "td_hazard_acc": None,
         "prev_foot_pos_meas": None,
         "rot_slice": rot_slice,
         **pose_hist_state,
@@ -1827,95 +2009,6 @@ def _lambda_rollout_prepare_context(
         "step_weights": step_weights,
         "boundary_steps": int(boundary_steps),
         "boundary_weighted_sum": float(boundary_weighted_sum),
-    }
-
-
-def _lambda_rollout_apply_sic_focus(
-    *,
-    objective: str,
-    step_weights: torch.Tensor,
-    direct_pose_loss_sics: str,
-    direct_pose_loss_cycle_gte: int,
-    direct_pose_loss_sic_mode: str,
-    direct_pose_loss_sic_boost: float,
-    include_boundary: bool,
-    cycle_len: int,
-    total_steps: int,
-    offset: int,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> Dict[str, Any]:
-    # ---- Optional: focus objective="direct" on selected step_in_cycle indices (phase-locked hotspots) ----
-    direct_pose_sic_focus_steps = 0
-    direct_pose_sic_focus_weight_sum_before = 0.0
-    direct_pose_sic_focus_weight_sum_after = 0.0
-    direct_pose_sic_focus_mode = "mask"
-    direct_pose_sic_focus_boost = 1.0
-    try:
-        sic_spec = str(direct_pose_loss_sics or "").strip()
-    except (TypeError, ValueError):
-        sic_spec = ""
-    if objective == "direct" and sic_spec:
-        sics = _as_int_list(sic_spec) or []
-        # Only keep non-negative indices; step_in_cycle is defined as idx % cycle_len.
-        sics = [int(x) for x in sics if int(x) >= 0]
-        try:
-            cycle_gte = int(direct_pose_loss_cycle_gte or 0)
-        except (TypeError, ValueError):
-            cycle_gte = 0
-        cycle_gte = max(0, int(cycle_gte))
-        if sics:
-            try:
-                sic_mode = str(direct_pose_loss_sic_mode or "mask").strip().lower()
-                if sic_mode in ("", "none", "off", "disable", "disabled"):
-                    sic_mode = "mask"
-                if sic_mode not in ("mask", "boost"):
-                    sic_mode = "mask"
-                direct_pose_sic_focus_mode = sic_mode
-                try:
-                    boost = float(direct_pose_loss_sic_boost or 1.0)
-                except (TypeError, ValueError):
-                    boost = 1.0
-                if (not math.isfinite(boost)) or boost <= 0.0:
-                    boost = 1.0
-                direct_pose_sic_focus_boost = float(boost)
-
-                ar = torch.arange(int(total_steps), device=device)
-                if int(cycle_len) > 0:
-                    step_in_cycle = (ar + int(offset)) % int(cycle_len)
-                    cycle_idx = (ar + int(offset)) // int(cycle_len)
-                else:
-                    step_in_cycle = ar * 0
-                    cycle_idx = ar * 0
-                sic_mask = torch.zeros_like(step_in_cycle, dtype=torch.bool)
-                for sic in sics:
-                    sic_mask = sic_mask | (step_in_cycle == int(sic))
-                if cycle_gte > 0:
-                    sic_mask = sic_mask & (cycle_idx >= int(cycle_gte))
-                # Always drop wrap boundary step (matches common eval mask "drop_wrap").
-                if bool(include_boundary) and int(cycle_len) > 0:
-                    sic_mask = sic_mask & (step_in_cycle != (int(cycle_len) - 1))
-                if bool(sic_mask.any().detach().cpu().item()):
-                    direct_pose_sic_focus_steps = int(sic_mask.sum().detach().cpu().item())
-                    direct_pose_sic_focus_weight_sum_before = float(step_weights[sic_mask].sum().detach().cpu().item())
-                    if direct_pose_sic_focus_mode == "mask":
-                        step_weights = step_weights * sic_mask.to(dtype=dtype)
-                    elif abs(float(direct_pose_sic_focus_boost) - 1.0) > 1e-12:
-                        b = step_weights.new_tensor(float(direct_pose_sic_focus_boost))
-                        step_weights = torch.where(sic_mask, step_weights * b, step_weights)
-                    step_weights = step_weights / step_weights.sum().clamp_min(1e-6)
-                    direct_pose_sic_focus_weight_sum_after = float(step_weights[sic_mask].sum().detach().cpu().item())
-            except (RuntimeError, ValueError, TypeError, KeyError, IndexError, AttributeError):
-                pass
-
-    return {
-        "step_weights": step_weights,
-        "sic_spec": sic_spec,
-        "direct_pose_sic_focus_steps": int(direct_pose_sic_focus_steps),
-        "direct_pose_sic_focus_weight_sum_before": float(direct_pose_sic_focus_weight_sum_before),
-        "direct_pose_sic_focus_weight_sum_after": float(direct_pose_sic_focus_weight_sum_after),
-        "direct_pose_sic_focus_mode": str(direct_pose_sic_focus_mode),
-        "direct_pose_sic_focus_boost": float(direct_pose_sic_focus_boost),
     }
 
 
@@ -2073,15 +2166,128 @@ def _lambda_rollout_build_reg_params(
     }
 
 
+def _sanitize_metric_key_suffix(name: str, *, default: str) -> str:
+    key_suffix = "".join(ch if str(ch).isalnum() else "_" for ch in str(name).strip())
+    while "__" in key_suffix:
+        key_suffix = key_suffix.replace("__", "_")
+    key_suffix = key_suffix.strip("_")
+    return key_suffix or str(default)
+
+
+def _resolve_leg_align_joint_names(
+    *,
+    model: EventMotionModel,
+    expected_count: int,
+    keep_mask: Optional[torch.Tensor],
+) -> list[str]:
+    joint_names = list(getattr(model, "direct_pose_leg_joint_names", None) or [])
+    if int(expected_count) <= 0:
+        return []
+    if len(joint_names) != int(expected_count):
+        return [f"j{i}" for i in range(int(expected_count))]
+    if torch.is_tensor(keep_mask) and int(keep_mask.numel()) == int(len(joint_names)):
+        try:
+            keep_flags = [bool(v) for v in keep_mask.detach().cpu().tolist()]
+            joint_names = [name for name, keep in zip(joint_names, keep_flags) if bool(keep)]
+        except Exception:
+            pass
+    if len(joint_names) != int(expected_count):
+        return [f"j{i}" for i in range(int(expected_count))]
+    return [str(name) for name in joint_names]
+
+
+def _resolve_leg_align_selector_joints(
+    spec: Optional[str],
+    *,
+    joint_names: list[str],
+) -> list[str]:
+    joint_names_use = [str(name) for name in joint_names]
+    if not joint_names_use:
+        return []
+    if spec is None:
+        return list(joint_names_use)
+    raw = str(spec).replace("|", ",").replace("+", ",")
+    tokens = [tok.strip().lower() for tok in raw.split(",") if tok.strip()]
+    if not tokens:
+        return list(joint_names_use)
+    selected: set[str] = set()
+    for token in tokens:
+        group = _LEG_ALIGN_SELECTOR_GROUPS.get(token, None)
+        if group is not None:
+            selected.update(str(name).lower() for name in group)
+        else:
+            selected.add(str(token).lower())
+    return [name for name in joint_names_use if str(name).lower() in selected]
+
+
+def _compute_leg_align_subset_term(
+    *,
+    per: torch.Tensor,
+    w: torch.Tensor,
+    joint_names: list[str],
+    target_joints: Iterable[str],
+    dtype: torch.dtype,
+) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    if per.dim() != 2 or w.dim() != 2:
+        return None, None
+    if int(per.shape[1]) <= 0 or int(w.shape[1]) != int(per.shape[1]) or len(joint_names) != int(per.shape[1]):
+        return None, None
+    target_names = [str(name).lower() for name in target_joints]
+    if not target_names:
+        return None, None
+    target_set = set(target_names)
+    mask_vals = [str(name).lower() in target_set for name in joint_names]
+    if not any(mask_vals):
+        return None, None
+    mask = torch.tensor(mask_vals, device=per.device, dtype=torch.bool)
+    mask_f = mask.to(dtype=per.dtype).view(1, -1)
+    w_group = w * mask_f
+    denom = w_group.sum().clamp_min(1.0)
+    loss = (per * w_group).sum() / denom
+    frac = (w[:, mask] > 0.0).to(dtype=dtype).mean()
+    return loss, frac
+
+
+def _append_leg_align_group_term(
+    *,
+    per: torch.Tensor,
+    w: torch.Tensor,
+    joint_names: list[str],
+    target_joints: Iterable[str],
+    step_weight: torch.Tensor,
+    dtype: torch.dtype,
+    loss_terms: list[torch.Tensor],
+    frac_terms: list[torch.Tensor],
+) -> None:
+    loss, frac = _compute_leg_align_subset_term(
+        per=per,
+        w=w,
+        joint_names=joint_names,
+        target_joints=target_joints,
+        dtype=dtype,
+    )
+    if torch.is_tensor(loss):
+        loss_terms.append(loss * step_weight)
+    if torch.is_tensor(frac):
+        frac_terms.append(frac * step_weight)
+
+
 def _lambda_rollout_apply_direct_leg_adjustments(
     *, trainer: Trainer, model: EventMotionModel, ret: Dict[str, Any], direct_raw_base: torch.Tensor, R_gt: torch.Tensor,
     B: int, J: int, device: torch.device, dtype: torch.dtype, columns: Tuple[str, str], rot_slice: slice, rot_len: int,
     direct_pose_leg_align_weight: float, direct_pose_leg_align_oracle_min_deg: float, direct_pose_leg_align_oracle_weight_deg: float,
     direct_pose_leg_align_mode: str, direct_pose_leg_align_mag_weight: float, direct_pose_leg_align_res_weight: float,
-    direct_pose_leg_align_sign_weight: float, direct_pose_leg_align_cos_thresh: float, direct_pose_leg_gate_sup_weight: float,
-    direct_pose_leg_side_sign_gate_reg_weight: float, step_weight: torch.Tensor, leg_align_terms: list[torch.Tensor],
-    leg_align_frac_terms: list[torch.Tensor], leg_gate_sup_terms: list[torch.Tensor], leg_gate_sup_tgt_frac_terms: list[torch.Tensor],
-    leg_gate_sup_pred_mean_terms: list[torch.Tensor], leg_side_gate_reg_terms: list[torch.Tensor],
+    direct_pose_leg_align_sign_weight: float, direct_pose_leg_align_cos_thresh: float,
+    direct_pose_leg_align_target_joints: Optional[str], direct_pose_leg_align_anchor_joints: Optional[str],
+    direct_pose_leg_align_anchor_weight: float, direct_pose_leg_gate_sup_weight: float,
+    step_weight: torch.Tensor, leg_align_terms: list[torch.Tensor],
+    leg_align_frac_terms: list[torch.Tensor], leg_align_joint_num_terms: list[torch.Tensor],
+    leg_align_joint_den_terms: list[torch.Tensor], leg_align_joint_frac_terms: list[torch.Tensor],
+    leg_align_distal_terms: list[torch.Tensor], leg_align_distal_frac_terms: list[torch.Tensor],
+    leg_align_proximal_terms: list[torch.Tensor], leg_align_proximal_frac_terms: list[torch.Tensor],
+    leg_align_anchor_terms: list[torch.Tensor], leg_align_anchor_frac_terms: list[torch.Tensor],
+    leg_gate_sup_terms: list[torch.Tensor], leg_gate_sup_tgt_frac_terms: list[torch.Tensor],
+    leg_gate_sup_pred_mean_terms: list[torch.Tensor],
 ) -> torch.Tensor:
     try:
         omega_leg = ret.get("direct_leg_omega", None)
@@ -2191,6 +2397,76 @@ def _lambda_rollout_apply_direct_leg_adjustments(
                                     leg_align = (per * w).sum() / denom
                                     leg_align_terms.append(leg_align * step_weight)
                                     leg_align_frac_terms.append((w > 0.0).to(dtype=dtype).mean() * step_weight)
+                                    joint_names_use = _resolve_leg_align_joint_names(
+                                        model=model,
+                                        expected_count=int(per.shape[1]),
+                                        keep_mask=keep_mask,
+                                    )
+                                    main_target_joints = _resolve_leg_align_selector_joints(
+                                        direct_pose_leg_align_target_joints,
+                                        joint_names=joint_names_use,
+                                    )
+                                    main_loss, main_frac = _compute_leg_align_subset_term(
+                                        per=per,
+                                        w=w,
+                                        joint_names=joint_names_use,
+                                        target_joints=main_target_joints,
+                                        dtype=dtype,
+                                    )
+                                    if torch.is_tensor(main_loss):
+                                        leg_align_terms.append(main_loss * step_weight)
+                                    else:
+                                        _record_posttrain_soft_fail(trainer, "leg_align_target_spec_empty")
+                                    if torch.is_tensor(main_frac):
+                                        leg_align_frac_terms.append(main_frac * step_weight)
+                                    _append_leg_align_group_term(
+                                        per=per,
+                                        w=w,
+                                        joint_names=joint_names_use,
+                                        target_joints=_LEG_ALIGN_DISTAL_JOINTS,
+                                        step_weight=step_weight,
+                                        dtype=dtype,
+                                        loss_terms=leg_align_distal_terms,
+                                        frac_terms=leg_align_distal_frac_terms,
+                                    )
+                                    _append_leg_align_group_term(
+                                        per=per,
+                                        w=w,
+                                        joint_names=joint_names_use,
+                                        target_joints=_LEG_ALIGN_PROXIMAL_JOINTS,
+                                        step_weight=step_weight,
+                                        dtype=dtype,
+                                        loss_terms=leg_align_proximal_terms,
+                                        frac_terms=leg_align_proximal_frac_terms,
+                                    )
+                                    try:
+                                        anchor_weight = float(direct_pose_leg_align_anchor_weight or 0.0)
+                                    except (TypeError, ValueError):
+                                        anchor_weight = 0.0
+                                    if anchor_weight > 0.0 and direct_pose_leg_align_anchor_joints is not None:
+                                        anchor_target_joints = _resolve_leg_align_selector_joints(
+                                            direct_pose_leg_align_anchor_joints,
+                                            joint_names=joint_names_use,
+                                        )
+                                        anchor_loss, anchor_frac = _compute_leg_align_subset_term(
+                                            per=per,
+                                            w=w,
+                                            joint_names=joint_names_use,
+                                            target_joints=anchor_target_joints,
+                                            dtype=dtype,
+                                        )
+                                        if torch.is_tensor(anchor_loss):
+                                            leg_align_terms.append((anchor_weight * anchor_loss) * step_weight)
+                                            leg_align_anchor_terms.append(anchor_loss * step_weight)
+                                        else:
+                                            _record_posttrain_soft_fail(trainer, "leg_align_anchor_spec_empty")
+                                        if torch.is_tensor(anchor_frac):
+                                            leg_align_anchor_frac_terms.append(anchor_frac * step_weight)
+                                    elif anchor_weight > 0.0:
+                                        _record_posttrain_soft_fail(trainer, "leg_align_anchor_missing_joints")
+                                    leg_align_joint_num_terms.append(((per * w).sum(dim=0)).detach() * step_weight.detach())
+                                    leg_align_joint_den_terms.append((w.sum(dim=0)).detach() * step_weight.detach())
+                                    leg_align_joint_frac_terms.append(((w > 0.0).to(dtype=dtype).mean(dim=0)).detach() * step_weight.detach())
                                 except _ROLLOUT_SOFT_FAIL_ERRORS: _record_posttrain_soft_fail(trainer, "leg_align_supervision")
 
                             # Optional: supervise learned leg omega gate (apply vs no-op) using oracle magnitude.
@@ -2234,22 +2510,6 @@ def _lambda_rollout_apply_direct_leg_adjustments(
                             direct_raw_base = direct_raw_base.clone()
                             direct_raw_base[..., rot_slice] = rot6_final
     except _ROLLOUT_SOFT_FAIL_ERRORS: _record_posttrain_soft_fail(trainer, "leg_adjustment_main")
-
-    # Optional: regularize per-side sign gate (encourage |g|->1 so it acts like a sign, not a shrink-to-zero knob).
-    gate_reg_w = float(direct_pose_leg_side_sign_gate_reg_weight or 0.0)
-    if gate_reg_w > 0.0:
-        try:
-            g = ret.get("direct_leg_side_sign_gate", None)
-            if torch.is_tensor(g):
-                # Expect shape (B,2) for single-step; tolerate (B,1,2).
-                if g.dim() == 3 and g.size(1) == 1:
-                    g = g[:, 0]
-                if g.dim() == 2 and g.shape[0] == B and int(g.shape[-1]) == 2:
-                    g = g.to(device=device, dtype=dtype).clamp(-1.0, 1.0)
-                    # (1 - |g|)^2 encourages saturation at ±1 without preferring a sign.
-                    reg = (1.0 - g.abs()).pow(2).mean()
-                    leg_side_gate_reg_terms.append(reg * step_weight)
-        except _ROLLOUT_SOFT_FAIL_ERRORS: _record_posttrain_soft_fail(trainer, "leg_side_gate_regularizer")
 
     return direct_raw_base
 
@@ -2379,15 +2639,25 @@ def _lambda_rollout_unroll_single_step(*, t: int, ctx: Dict[str, Any]) -> None:
         direct_pose_leg_align_res_weight=float(weights["direct_pose_leg_align_res_weight"]),
         direct_pose_leg_align_sign_weight=float(weights["direct_pose_leg_align_sign_weight"]),
         direct_pose_leg_align_cos_thresh=float(weights["direct_pose_leg_align_cos_thresh"]),
+        direct_pose_leg_align_target_joints=weights["direct_pose_leg_align_target_joints"],
+        direct_pose_leg_align_anchor_joints=weights["direct_pose_leg_align_anchor_joints"],
+        direct_pose_leg_align_anchor_weight=float(weights["direct_pose_leg_align_anchor_weight"]),
         direct_pose_leg_gate_sup_weight=float(weights["direct_pose_leg_gate_sup_weight"]),
-        direct_pose_leg_side_sign_gate_reg_weight=float(weights["direct_pose_leg_side_sign_gate_reg_weight"]),
         step_weight=step_weights[t],
         leg_align_terms=accum["leg_align_terms"],
         leg_align_frac_terms=accum["leg_align_frac_terms"],
+        leg_align_joint_num_terms=accum["leg_align_joint_num_terms"],
+        leg_align_joint_den_terms=accum["leg_align_joint_den_terms"],
+        leg_align_joint_frac_terms=accum["leg_align_joint_frac_terms"],
+        leg_align_distal_terms=accum["leg_align_distal_terms"],
+        leg_align_distal_frac_terms=accum["leg_align_distal_frac_terms"],
+        leg_align_proximal_terms=accum["leg_align_proximal_terms"],
+        leg_align_proximal_frac_terms=accum["leg_align_proximal_frac_terms"],
+        leg_align_anchor_terms=accum["leg_align_anchor_terms"],
+        leg_align_anchor_frac_terms=accum["leg_align_anchor_frac_terms"],
         leg_gate_sup_terms=accum["leg_gate_sup_terms"],
         leg_gate_sup_tgt_frac_terms=accum["leg_gate_sup_tgt_frac_terms"],
         leg_gate_sup_pred_mean_terms=accum["leg_gate_sup_pred_mean_terms"],
-        leg_side_gate_reg_terms=accum["leg_side_gate_reg_terms"],
     )
     dir6 = reproject_rot6d(direct_raw_base[..., rot_slice]).view(B, J, 6)
     R_dir = rot6d_to_matrix(dir6, columns=runtime["columns"])
@@ -2673,8 +2943,11 @@ def _lambda_fusion_run_unroll(
 def _lambda_fusion_init_accum_ctx() -> Dict[str, Any]:
     keys = (
         "loss_terms", "inc_terms", "dir_terms", "dir_base_terms", "dir_leg_base_terms", "dir_nonleg_base_terms",
-        "dir_nonleg_plain_terms", "leg_side_gate_reg_terms", "leg_gate_sup_terms", "leg_gate_sup_tgt_frac_terms",
-        "leg_gate_sup_pred_mean_terms", "leg_align_terms", "leg_align_frac_terms", "ent_terms", "smooth_terms",
+        "dir_nonleg_plain_terms", "leg_gate_sup_terms", "leg_gate_sup_tgt_frac_terms",
+        "leg_gate_sup_pred_mean_terms", "leg_align_terms", "leg_align_frac_terms", "leg_align_joint_num_terms",
+        "leg_align_joint_den_terms", "leg_align_joint_frac_terms", "leg_align_distal_terms",
+        "leg_align_distal_frac_terms", "leg_align_proximal_terms", "leg_align_proximal_frac_terms",
+        "leg_align_anchor_terms", "leg_align_anchor_frac_terms", "ent_terms", "smooth_terms",
         "early_terms", "mono_terms", "plan_ent_terms", "plan_dyn_terms", "plan_ent_stat_terms", "plan_dyn_stat_terms",
         "meas_terms", "lam_vals", "lam_eff_vals", "lam_rel_vals", "boundary_blend_terms", "boundary_inc_terms", "boundary_dir_terms",
         "boundary_lam_terms", "boundary_lam_eff_terms", "boundary_r_terms", "gate_sup_terms", "gate_sup_frac_terms",
@@ -2688,6 +2961,7 @@ def _lambda_fusion_finalize(
 ) -> Tuple[torch.Tensor, Dict[str, float], Optional[Dict[str, Any]]]:
     f = finalize_ctx
     trainer = f["trainer"]
+    model = f["model"]
     objective = str(f["objective"])
     direct_group_norm_enable = bool(f["direct_group_norm_enable"])
     include_boundary = bool(f["include_boundary"])
@@ -2697,32 +2971,29 @@ def _lambda_fusion_finalize(
     boundary_steps = int(f["boundary_steps"])
     direct_nonleg_focus_requested = int(f["direct_nonleg_focus_requested"])
     direct_nonleg_focus_resolved = int(f["direct_nonleg_focus_resolved"])
-    direct_pose_sic_focus_steps = int(f["direct_pose_sic_focus_steps"])
-    direct_pose_loss_cycle_gte = int(f["direct_pose_loss_cycle_gte"])
-    sic_spec = str(f["sic_spec"])
-    direct_pose_sic_focus_mode = str(f["direct_pose_sic_focus_mode"])
     (
         direct_group_w_leg, direct_group_w_nonleg, direct_group_beta, direct_group_ratio_min, direct_group_ratio_max,
-        direct_group_eps, gate_sup_weight, direct_pose_leg_side_sign_gate_reg_weight, direct_pose_leg_gate_sup_weight,
+        direct_group_eps, gate_sup_weight, direct_pose_leg_gate_sup_weight,
         direct_pose_leg_align_weight, lambda_entropy_weight, lambda_smooth_weight, lambda_early_weight,
         lambda_monotonic_weight, lambda_plan_entropy_weight, lambda_plan_dyn_weight, contact_meas_weight,
         boundary_weight, boundary_weighted_sum, direct_nonleg_focus_weight_use, direct_nonleg_focus_applied,
-        direct_pose_sic_focus_weight_sum_before, direct_pose_sic_focus_weight_sum_after, direct_pose_sic_focus_boost,
     ) = (
         float(f[k]) for k in (
             "direct_group_w_leg", "direct_group_w_nonleg", "direct_group_beta", "direct_group_ratio_min",
-            "direct_group_ratio_max", "direct_group_eps", "gate_sup_weight", "direct_pose_leg_side_sign_gate_reg_weight",
+            "direct_group_ratio_max", "direct_group_eps", "gate_sup_weight",
             "direct_pose_leg_gate_sup_weight", "direct_pose_leg_align_weight", "lambda_entropy_weight",
             "lambda_smooth_weight", "lambda_early_weight", "lambda_monotonic_weight", "lambda_plan_entropy_weight",
             "lambda_plan_dyn_weight", "contact_meas_weight", "boundary_weight", "boundary_weighted_sum",
-            "direct_nonleg_focus_weight_use", "direct_nonleg_focus_applied", "direct_pose_sic_focus_weight_sum_before",
-            "direct_pose_sic_focus_weight_sum_after", "direct_pose_sic_focus_boost",
+            "direct_nonleg_focus_weight_use", "direct_nonleg_focus_applied",
         )
     )
     (
         loss_terms, inc_terms, dir_terms, dir_base_terms, dir_leg_base_terms, dir_nonleg_base_terms, dir_nonleg_plain_terms,
-        leg_side_gate_reg_terms, leg_gate_sup_terms, leg_gate_sup_tgt_frac_terms, leg_gate_sup_pred_mean_terms,
-        leg_align_terms, leg_align_frac_terms, ent_terms, smooth_terms, early_terms, mono_terms, plan_ent_terms,
+        leg_gate_sup_terms, leg_gate_sup_tgt_frac_terms, leg_gate_sup_pred_mean_terms,
+        leg_align_terms, leg_align_frac_terms, leg_align_joint_num_terms, leg_align_joint_den_terms,
+        leg_align_joint_frac_terms, leg_align_distal_terms, leg_align_distal_frac_terms,
+        leg_align_proximal_terms, leg_align_proximal_frac_terms, leg_align_anchor_terms, leg_align_anchor_frac_terms,
+        ent_terms, smooth_terms, early_terms, mono_terms, plan_ent_terms,
         plan_dyn_terms, plan_ent_stat_terms, plan_dyn_stat_terms, meas_terms, lam_vals, lam_eff_vals, lam_rel_vals,
         boundary_blend_terms, boundary_inc_terms, boundary_dir_terms, boundary_lam_terms, boundary_lam_eff_terms,
         boundary_r_terms, gate_sup_terms, gate_sup_frac_terms, gate_sup_acc_num_terms, gate_sup_acc_den_terms,
@@ -2730,8 +3001,11 @@ def _lambda_fusion_finalize(
         accum_ctx[k]
         for k in (
             "loss_terms", "inc_terms", "dir_terms", "dir_base_terms", "dir_leg_base_terms", "dir_nonleg_base_terms",
-            "dir_nonleg_plain_terms", "leg_side_gate_reg_terms", "leg_gate_sup_terms", "leg_gate_sup_tgt_frac_terms",
-            "leg_gate_sup_pred_mean_terms", "leg_align_terms", "leg_align_frac_terms", "ent_terms", "smooth_terms",
+            "dir_nonleg_plain_terms", "leg_gate_sup_terms", "leg_gate_sup_tgt_frac_terms",
+            "leg_gate_sup_pred_mean_terms", "leg_align_terms", "leg_align_frac_terms", "leg_align_joint_num_terms",
+            "leg_align_joint_den_terms", "leg_align_joint_frac_terms", "leg_align_distal_terms",
+            "leg_align_distal_frac_terms", "leg_align_proximal_terms", "leg_align_proximal_frac_terms",
+            "leg_align_anchor_terms", "leg_align_anchor_frac_terms", "ent_terms", "smooth_terms",
             "early_terms", "mono_terms", "plan_ent_terms", "plan_dyn_terms", "plan_ent_stat_terms", "plan_dyn_stat_terms",
             "meas_terms", "lam_vals", "lam_eff_vals", "lam_rel_vals", "boundary_blend_terms", "boundary_inc_terms",
             "boundary_dir_terms", "boundary_lam_terms", "boundary_lam_eff_terms", "boundary_r_terms", "gate_sup_terms",
@@ -2750,6 +3024,16 @@ def _lambda_fusion_finalize(
     dir_group_norm_nonleg = blend_loss_total.new_tensor(float("nan"))
     dir_group_norm_leg_ema = blend_loss_total.new_tensor(float("nan"))
     dir_group_norm_nonleg_ema = blend_loss_total.new_tensor(float("nan"))
+    dir_group_norm_leg_raw = blend_loss_total.new_tensor(float("nan"))
+    dir_group_norm_nonleg_raw = blend_loss_total.new_tensor(float("nan"))
+    dir_group_norm_leg_clamped = blend_loss_total.new_tensor(float("nan"))
+    dir_group_norm_nonleg_clamped = blend_loss_total.new_tensor(float("nan"))
+    dir_group_norm_leg_hit_min = blend_loss_total.new_tensor(0.0)
+    dir_group_norm_leg_hit_max = blend_loss_total.new_tensor(0.0)
+    dir_group_norm_nonleg_hit_min = blend_loss_total.new_tensor(0.0)
+    dir_group_norm_nonleg_hit_max = blend_loss_total.new_tensor(0.0)
+    dir_group_norm_leg_hit_any = blend_loss_total.new_tensor(0.0)
+    dir_group_norm_nonleg_hit_any = blend_loss_total.new_tensor(0.0)
     dir_group_norm_used = 0.0
     ema_update_payload: Optional[Dict[str, Any]] = None
     if (
@@ -2787,12 +3071,24 @@ def _lambda_fusion_finalize(
             else:
                 ema_non_prev = ema_non_prev.to(device=dir_nonleg_base.device, dtype=dir_nonleg_base.dtype)
 
-            leg_ratio = (dir_leg_base / ema_leg_prev.clamp_min(float(direct_group_eps))).clamp(
+            leg_ratio_raw = dir_leg_base / ema_leg_prev.clamp_min(float(direct_group_eps))
+            non_ratio_raw = dir_nonleg_base / ema_non_prev.clamp_min(float(direct_group_eps))
+            leg_ratio = leg_ratio_raw.clamp(
                 float(direct_group_ratio_min), float(direct_group_ratio_max)
             )
-            non_ratio = (dir_nonleg_base / ema_non_prev.clamp_min(float(direct_group_eps))).clamp(
+            non_ratio = non_ratio_raw.clamp(
                 float(direct_group_ratio_min), float(direct_group_ratio_max)
             )
+            dir_group_norm_leg_raw = leg_ratio_raw
+            dir_group_norm_nonleg_raw = non_ratio_raw
+            dir_group_norm_leg_clamped = leg_ratio
+            dir_group_norm_nonleg_clamped = non_ratio
+            dir_group_norm_leg_hit_min = (leg_ratio_raw <= float(direct_group_ratio_min)).to(dtype=dir_leg_base.dtype)
+            dir_group_norm_leg_hit_max = (leg_ratio_raw >= float(direct_group_ratio_max)).to(dtype=dir_leg_base.dtype)
+            dir_group_norm_nonleg_hit_min = (non_ratio_raw <= float(direct_group_ratio_min)).to(dtype=dir_nonleg_base.dtype)
+            dir_group_norm_nonleg_hit_max = (non_ratio_raw >= float(direct_group_ratio_max)).to(dtype=dir_nonleg_base.dtype)
+            dir_group_norm_leg_hit_any = torch.maximum(dir_group_norm_leg_hit_min, dir_group_norm_leg_hit_max)
+            dir_group_norm_nonleg_hit_any = torch.maximum(dir_group_norm_nonleg_hit_min, dir_group_norm_nonleg_hit_max)
             dir_group_norm_leg = leg_ratio
             dir_group_norm_nonleg = non_ratio
             dir_group_norm_leg_ema = ema_leg_prev
@@ -2830,11 +3126,6 @@ def _lambda_fusion_finalize(
             _record_posttrain_soft_fail(trainer, "finalize_gate_sup_acc")
             gate_sup_acc = None
 
-    leg_side_gate_reg_loss = blend_loss_total.new_tensor(0.0)
-    if leg_side_gate_reg_terms:
-        leg_side_gate_reg_loss = torch.stack(leg_side_gate_reg_terms).sum()
-        total = total + float(direct_pose_leg_side_sign_gate_reg_weight or 0.0) * leg_side_gate_reg_loss
-
     leg_gate_sup_loss = blend_loss_total.new_tensor(0.0)
     leg_gate_sup_tgt_frac = blend_loss_total.new_tensor(0.0)
     leg_gate_sup_pred_mean = blend_loss_total.new_tensor(0.0)
@@ -2848,11 +3139,51 @@ def _lambda_fusion_finalize(
 
     leg_align_loss = blend_loss_total.new_tensor(0.0)
     leg_align_frac = blend_loss_total.new_tensor(0.0)
+    leg_align_distal_loss = blend_loss_total.new_tensor(0.0)
+    leg_align_distal_frac = blend_loss_total.new_tensor(0.0)
+    leg_align_proximal_loss = blend_loss_total.new_tensor(0.0)
+    leg_align_proximal_frac = blend_loss_total.new_tensor(0.0)
+    leg_align_anchor_loss = blend_loss_total.new_tensor(0.0)
+    leg_align_anchor_frac = blend_loss_total.new_tensor(0.0)
     if leg_align_terms:
         leg_align_loss = torch.stack(leg_align_terms).sum()
         total = total + float(direct_pose_leg_align_weight or 0.0) * leg_align_loss
     if leg_align_frac_terms:
         leg_align_frac = torch.stack(leg_align_frac_terms).sum()
+    if leg_align_distal_terms:
+        leg_align_distal_loss = torch.stack(leg_align_distal_terms).sum()
+    if leg_align_distal_frac_terms:
+        leg_align_distal_frac = torch.stack(leg_align_distal_frac_terms).sum()
+    if leg_align_proximal_terms:
+        leg_align_proximal_loss = torch.stack(leg_align_proximal_terms).sum()
+    if leg_align_proximal_frac_terms:
+        leg_align_proximal_frac = torch.stack(leg_align_proximal_frac_terms).sum()
+    if leg_align_anchor_terms:
+        leg_align_anchor_loss = torch.stack(leg_align_anchor_terms).sum()
+    if leg_align_anchor_frac_terms:
+        leg_align_anchor_frac = torch.stack(leg_align_anchor_frac_terms).sum()
+
+    leg_align_joint_stats: Dict[str, float] = {}
+    if leg_align_joint_num_terms and leg_align_joint_den_terms:
+        try:
+            joint_num = torch.stack(leg_align_joint_num_terms).sum(dim=0)
+            joint_den = torch.stack(leg_align_joint_den_terms).sum(dim=0)
+            joint_frac = torch.stack(leg_align_joint_frac_terms).sum(dim=0) if leg_align_joint_frac_terms else None
+            joint_names = list(getattr(model, "direct_pose_leg_joint_names", None) or [])
+            if len(joint_names) != int(joint_num.shape[0]):
+                joint_names = [f"j{i}" for i in range(int(joint_num.shape[0]))]
+            for joint_idx, joint_name in enumerate(joint_names):
+                key_suffix = _sanitize_metric_key_suffix(str(joint_name), default=f"j{joint_idx}")
+                den_value = float(joint_den[joint_idx].detach().cpu())
+                if den_value > 0.0:
+                    joint_loss = float((joint_num[joint_idx] / joint_den[joint_idx].clamp_min(1e-6)).detach().cpu())
+                else:
+                    joint_loss = float("nan")
+                leg_align_joint_stats[f"leg_align_joint_loss_{key_suffix}"] = joint_loss
+                if joint_frac is not None:
+                    leg_align_joint_stats[f"leg_align_joint_frac_{key_suffix}"] = float(joint_frac[joint_idx].detach().cpu())
+        except (RuntimeError, ValueError, TypeError, IndexError):
+            _record_posttrain_soft_fail(trainer, "finalize_leg_align_joint_stats")
 
     entropy_loss = blend_loss_total.new_tensor(0.0)
     if ent_terms:
@@ -2919,16 +3250,27 @@ def _lambda_fusion_finalize(
         "gate_sup_loss": float(gate_sup_loss.detach().cpu()),
         "gate_sup_frac": float(gate_sup_frac.detach().cpu()),
         "gate_sup_acc@0.5": float(gate_sup_acc.detach().cpu()) if torch.is_tensor(gate_sup_acc) else float("nan"),
-        "leg_side_sign_gate_reg_loss": float(leg_side_gate_reg_loss.detach().cpu()),
-        "leg_side_sign_gate_reg_weighted": float(
-            (float(direct_pose_leg_side_sign_gate_reg_weight or 0.0) * leg_side_gate_reg_loss).detach().cpu()
-        ),
         "leg_gate_sup_loss": float(leg_gate_sup_loss.detach().cpu()),
         "leg_gate_sup_tgt_frac": float(leg_gate_sup_tgt_frac.detach().cpu()),
         "leg_gate_sup_pred_mean": float(leg_gate_sup_pred_mean.detach().cpu()),
         "leg_gate_sup_weighted": float((float(direct_pose_leg_gate_sup_weight or 0.0) * leg_gate_sup_loss).detach().cpu()),
         "leg_align_loss": float(leg_align_loss.detach().cpu()),
         "leg_align_frac": float(leg_align_frac.detach().cpu()),
+        "leg_align_distal_loss": float(leg_align_distal_loss.detach().cpu()),
+        "leg_align_distal_frac": float(leg_align_distal_frac.detach().cpu()),
+        "leg_align_proximal_loss": float(leg_align_proximal_loss.detach().cpu()),
+        "leg_align_proximal_frac": float(leg_align_proximal_frac.detach().cpu()),
+        "leg_align_anchor_loss": float(leg_align_anchor_loss.detach().cpu()),
+        "leg_align_anchor_frac": float(leg_align_anchor_frac.detach().cpu()),
+        "leg_align_anchor_weight": float(f.get("direct_pose_leg_align_anchor_weight", 0.0) or 0.0),
+        "leg_align_anchor_weighted": float(
+            (
+                float(direct_pose_leg_align_weight or 0.0)
+                * float(f.get("direct_pose_leg_align_anchor_weight", 0.0) or 0.0)
+                * leg_align_anchor_loss
+            ).detach().cpu()
+        ),
+        "leg_align_weight": float(direct_pose_leg_align_weight or 0.0),
         "leg_align_weighted": float((float(direct_pose_leg_align_weight or 0.0) * leg_align_loss).detach().cpu()),
         "lambda_mean": float(lam_mean) if lam_mean is not None else float("nan"),
         "lambda_std": float(lam_std) if lam_std is not None else float("nan"),
@@ -2946,6 +3288,10 @@ def _lambda_fusion_finalize(
         "dir_nonleg_focus_weight": float(direct_nonleg_focus_weight_use),
         "dir_nonleg_focus_applied": float(direct_nonleg_focus_applied),
         "dir_group_norm_used": float(dir_group_norm_used),
+        "dir_group_norm_leg_raw": float(dir_group_norm_leg_raw.detach().cpu()) if torch.is_tensor(dir_group_norm_leg_raw) else float("nan"),
+        "dir_group_norm_nonleg_raw": float(dir_group_norm_nonleg_raw.detach().cpu()) if torch.is_tensor(dir_group_norm_nonleg_raw) else float("nan"),
+        "dir_group_norm_leg_clamped": float(dir_group_norm_leg_clamped.detach().cpu()) if torch.is_tensor(dir_group_norm_leg_clamped) else float("nan"),
+        "dir_group_norm_nonleg_clamped": float(dir_group_norm_nonleg_clamped.detach().cpu()) if torch.is_tensor(dir_group_norm_nonleg_clamped) else float("nan"),
         "dir_group_norm_leg": float(dir_group_norm_leg.detach().cpu()) if torch.is_tensor(dir_group_norm_leg) else float("nan"),
         "dir_group_norm_nonleg": float(dir_group_norm_nonleg.detach().cpu()) if torch.is_tensor(dir_group_norm_nonleg) else float("nan"),
         "dir_group_norm_leg_ema": float(dir_group_norm_leg_ema.detach().cpu())
@@ -2954,6 +3300,12 @@ def _lambda_fusion_finalize(
         "dir_group_norm_nonleg_ema": float(dir_group_norm_nonleg_ema.detach().cpu())
         if torch.is_tensor(dir_group_norm_nonleg_ema)
         else float("nan"),
+        "dir_group_norm_leg_hit_min": float(dir_group_norm_leg_hit_min.detach().cpu()) if torch.is_tensor(dir_group_norm_leg_hit_min) else 0.0,
+        "dir_group_norm_leg_hit_max": float(dir_group_norm_leg_hit_max.detach().cpu()) if torch.is_tensor(dir_group_norm_leg_hit_max) else 0.0,
+        "dir_group_norm_nonleg_hit_min": float(dir_group_norm_nonleg_hit_min.detach().cpu()) if torch.is_tensor(dir_group_norm_nonleg_hit_min) else 0.0,
+        "dir_group_norm_nonleg_hit_max": float(dir_group_norm_nonleg_hit_max.detach().cpu()) if torch.is_tensor(dir_group_norm_nonleg_hit_max) else 0.0,
+        "dir_group_norm_leg_hit_any": float(dir_group_norm_leg_hit_any.detach().cpu()) if torch.is_tensor(dir_group_norm_leg_hit_any) else 0.0,
+        "dir_group_norm_nonleg_hit_any": float(dir_group_norm_nonleg_hit_any.detach().cpu()) if torch.is_tensor(dir_group_norm_nonleg_hit_any) else 0.0,
         "dir_group_norm_w_leg": float(direct_group_w_leg),
         "dir_group_norm_w_nonleg": float(direct_group_w_nonleg),
         "entropy_loss": float(entropy_loss.detach().cpu()),
@@ -2964,13 +3316,7 @@ def _lambda_fusion_finalize(
         "plan_dyn_loss": float(plan_dyn_loss.detach().cpu()),
         "total": float(total.detach().cpu()),
     }
-    if objective == "direct" and sic_spec:
-        stats["direct_pose_sic_focus_steps"] = float(direct_pose_sic_focus_steps)
-        stats["direct_pose_sic_focus_weight_sum_before"] = float(direct_pose_sic_focus_weight_sum_before)
-        stats["direct_pose_sic_focus_weight_sum_after"] = float(direct_pose_sic_focus_weight_sum_after)
-        stats["direct_pose_sic_focus_cycle_gte"] = float(direct_pose_loss_cycle_gte or 0)
-        stats["direct_pose_sic_focus_mode"] = str(direct_pose_sic_focus_mode)
-        stats["direct_pose_sic_focus_boost"] = float(direct_pose_sic_focus_boost)
+    stats.update(leg_align_joint_stats)
     if include_boundary:
         stats["rollout_include_boundary"] = 1.0
         stats["rollout_random_offset"] = 1.0 if bool(random_offset) else 0.0
@@ -3002,7 +3348,14 @@ def _lambda_fusion_finalize(
         else:
             stats["contact_meas_mse"] = float(contact_meas_loss.detach().cpu())
         stats["contact_meas_weighted"] = float((float(contact_meas_weight or 0.0) * contact_meas_loss).detach().cpu())
-    return total, stats, ema_update_payload
+    aux_payload: Dict[str, Any] = {"ema_update_payload": ema_update_payload}
+    if objective == "direct":
+        aux_payload["leg_align_grad_probe"] = {
+            "total": leg_align_loss,
+            "distal": leg_align_distal_loss,
+            "proximal": leg_align_proximal_loss,
+        }
+    return total, stats, aux_payload
 def _lambda_fusion_loss_rollout(
     trainer: Trainer,
     model: EventMotionModel,
@@ -3031,7 +3384,6 @@ def _lambda_fusion_loss_rollout(
     lambda_gate_sup_start_step: int = -1,
     contact_meas_weight: float = 0.0,
     objective: str = "blend",  # blend|direct|inc
-    direct_pose_leg_side_sign_gate_reg_weight: float = 0.0,
     direct_pose_leg_gate_sup_weight: float = 0.0,
     direct_pose_leg_align_weight: float = 0.0,
     direct_pose_leg_align_oracle_min_deg: float = 0.0,
@@ -3041,11 +3393,10 @@ def _lambda_fusion_loss_rollout(
     direct_pose_leg_align_res_weight: float = 1.0,
     direct_pose_leg_align_sign_weight: float = 0.0,
     direct_pose_leg_align_cos_thresh: float = 0.0,
+    direct_pose_leg_align_target_joints: Optional[str] = None,
+    direct_pose_leg_align_anchor_joints: Optional[str] = None,
+    direct_pose_leg_align_anchor_weight: float = 0.0,
     direct_pose_loss_leg_split: bool = False,
-    direct_pose_loss_sics: str = "",
-    direct_pose_loss_cycle_gte: int = 0,
-    direct_pose_loss_sic_mode: str = "mask",
-    direct_pose_loss_sic_boost: float = 1.0,
     direct_pose_loss_group_norm_enable: bool = False,
     direct_pose_loss_group_norm_w_leg: float = 1.0,
     direct_pose_loss_group_norm_w_nonleg: float = 1.0,
@@ -3092,28 +3443,6 @@ def _lambda_fusion_loss_rollout(
     step_weights = prep_ctx["step_weights"]
     boundary_steps = int(prep_ctx["boundary_steps"])
     boundary_weighted_sum = float(prep_ctx["boundary_weighted_sum"])
-
-    sic_focus_ctx = _lambda_rollout_apply_sic_focus(
-        objective=objective,
-        step_weights=step_weights,
-        direct_pose_loss_sics=direct_pose_loss_sics,
-        direct_pose_loss_cycle_gte=direct_pose_loss_cycle_gte,
-        direct_pose_loss_sic_mode=direct_pose_loss_sic_mode,
-        direct_pose_loss_sic_boost=direct_pose_loss_sic_boost,
-        include_boundary=include_boundary,
-        cycle_len=cycle_len,
-        total_steps=total_steps,
-        offset=offset,
-        device=device,
-        dtype=dtype,
-    )
-    step_weights = sic_focus_ctx["step_weights"]
-    sic_spec = str(sic_focus_ctx["sic_spec"])
-    direct_pose_sic_focus_steps = int(sic_focus_ctx["direct_pose_sic_focus_steps"])
-    direct_pose_sic_focus_weight_sum_before = float(sic_focus_ctx["direct_pose_sic_focus_weight_sum_before"])
-    direct_pose_sic_focus_weight_sum_after = float(sic_focus_ctx["direct_pose_sic_focus_weight_sum_after"])
-    direct_pose_sic_focus_mode = str(sic_focus_ctx["direct_pose_sic_focus_mode"])
-    direct_pose_sic_focus_boost = float(sic_focus_ctx["direct_pose_sic_focus_boost"])
     nonleg_focus_ctx = _lambda_rollout_resolve_nonleg_focus(
         trainer,
         objective=objective,
@@ -3150,8 +3479,11 @@ def _lambda_fusion_loss_rollout(
         "direct_pose_leg_align_oracle_weight_deg": direct_pose_leg_align_oracle_weight_deg,
         "direct_pose_leg_align_mode": direct_pose_leg_align_mode, "direct_pose_leg_align_mag_weight": direct_pose_leg_align_mag_weight,
         "direct_pose_leg_align_res_weight": direct_pose_leg_align_res_weight, "direct_pose_leg_align_sign_weight": direct_pose_leg_align_sign_weight,
-        "direct_pose_leg_align_cos_thresh": direct_pose_leg_align_cos_thresh, "direct_pose_leg_gate_sup_weight": direct_pose_leg_gate_sup_weight,
-        "direct_pose_leg_side_sign_gate_reg_weight": direct_pose_leg_side_sign_gate_reg_weight,
+        "direct_pose_leg_align_cos_thresh": direct_pose_leg_align_cos_thresh,
+        "direct_pose_leg_align_target_joints": direct_pose_leg_align_target_joints,
+        "direct_pose_leg_align_anchor_joints": direct_pose_leg_align_anchor_joints,
+        "direct_pose_leg_align_anchor_weight": direct_pose_leg_align_anchor_weight,
+        "direct_pose_leg_gate_sup_weight": direct_pose_leg_gate_sup_weight,
         "direct_pose_loss_leg_split": direct_pose_loss_leg_split, "direct_nonleg_focus_mask_j": direct_nonleg_focus_mask_j,
         "direct_nonleg_focus_resolved": direct_nonleg_focus_resolved, "direct_nonleg_focus_weight_use": direct_nonleg_focus_weight_use,
         "gate_sup_weight": float(reg_ctx["gate_sup_weight"]), "gate_sup_start": int(reg_ctx["gate_sup_start"]),
@@ -3168,18 +3500,16 @@ def _lambda_fusion_loss_rollout(
     }
     meas_used_logits, direct_nonleg_focus_applied = _lambda_fusion_run_unroll(runtime_ctx=runtime_ctx, weights_ctx=weights_ctx, accum_ctx=accum_ctx, state_vars=state_vars)
     finalize_ctx = {
-        "trainer": trainer, "objective": objective, "direct_pose_leg_side_sign_gate_reg_weight": direct_pose_leg_side_sign_gate_reg_weight,
+        "trainer": trainer, "model": model, "objective": objective,
         "direct_pose_leg_gate_sup_weight": direct_pose_leg_gate_sup_weight, "direct_pose_leg_align_weight": direct_pose_leg_align_weight,
+        "direct_pose_leg_align_anchor_weight": direct_pose_leg_align_anchor_weight,
         "lambda_entropy_weight": lambda_entropy_weight, "lambda_smooth_weight": lambda_smooth_weight, "lambda_early_weight": lambda_early_weight,
         "lambda_monotonic_weight": lambda_monotonic_weight, "lambda_plan_entropy_weight": lambda_plan_entropy_weight,
         "lambda_plan_dyn_weight": lambda_plan_dyn_weight, "contact_meas_weight": contact_meas_weight, "include_boundary": include_boundary,
         "random_offset": random_offset, "offset": offset, "boundary_weight": boundary_weight, "boundary_steps": boundary_steps,
         "boundary_weighted_sum": boundary_weighted_sum, "direct_nonleg_focus_requested": direct_nonleg_focus_requested,
         "direct_nonleg_focus_resolved": direct_nonleg_focus_resolved, "direct_nonleg_focus_weight_use": direct_nonleg_focus_weight_use,
-        "direct_nonleg_focus_applied": direct_nonleg_focus_applied, "sic_spec": sic_spec, "direct_pose_sic_focus_steps": direct_pose_sic_focus_steps,
-        "direct_pose_sic_focus_weight_sum_before": direct_pose_sic_focus_weight_sum_before,
-        "direct_pose_sic_focus_weight_sum_after": direct_pose_sic_focus_weight_sum_after, "direct_pose_sic_focus_mode": direct_pose_sic_focus_mode,
-        "direct_pose_sic_focus_boost": direct_pose_sic_focus_boost, "direct_pose_loss_cycle_gte": direct_pose_loss_cycle_gte,
+        "direct_nonleg_focus_applied": direct_nonleg_focus_applied,
         "meas_used_logits": meas_used_logits, **reg_ctx,
     }
     return _lambda_fusion_finalize(finalize_ctx=finalize_ctx, accum_ctx=accum_ctx)
@@ -3223,6 +3553,156 @@ def _module_grad_norm(module: Optional[torch.nn.Module]) -> float:
     if not has_grad:
         return float("nan")
     return float(math.sqrt(max(0.0, total_sq)))
+
+
+def _grad_list_norm(grads: Iterable[Optional[torch.Tensor]]) -> float:
+    total_sq = 0.0
+    has_grad = False
+    for g in grads:
+        if g is None:
+            continue
+        try:
+            gg = g.detach()
+            if not torch.isfinite(gg).all():
+                gg = torch.nan_to_num(gg, nan=0.0, posinf=0.0, neginf=0.0)
+            total_sq += float(gg.float().pow(2).sum().item())
+            has_grad = True
+        except Exception:
+            continue
+    if not has_grad:
+        return float("nan")
+    return float(math.sqrt(max(0.0, total_sq)))
+
+
+def _grad_list_cosine(grads_a: Iterable[Optional[torch.Tensor]], grads_b: Iterable[Optional[torch.Tensor]]) -> float:
+    dot = 0.0
+    na2 = 0.0
+    nb2 = 0.0
+    has_a = False
+    has_b = False
+    for ga, gb in zip(grads_a, grads_b):
+        gg_a = None
+        gg_b = None
+        if ga is not None:
+            try:
+                gg_a = ga.detach()
+                if not torch.isfinite(gg_a).all():
+                    gg_a = torch.nan_to_num(gg_a, nan=0.0, posinf=0.0, neginf=0.0)
+                na2 += float(gg_a.float().pow(2).sum().item())
+                has_a = True
+            except Exception:
+                gg_a = None
+        if gb is not None:
+            try:
+                gg_b = gb.detach()
+                if not torch.isfinite(gg_b).all():
+                    gg_b = torch.nan_to_num(gg_b, nan=0.0, posinf=0.0, neginf=0.0)
+                nb2 += float(gg_b.float().pow(2).sum().item())
+                has_b = True
+            except Exception:
+                gg_b = None
+        if gg_a is not None and gg_b is not None:
+            try:
+                dot += float((gg_a.float() * gg_b.float()).sum().item())
+            except Exception:
+                continue
+    if (not has_a) or (not has_b):
+        return float("nan")
+    na = math.sqrt(max(0.0, na2))
+    nb = math.sqrt(max(0.0, nb2))
+    if na <= 1e-12 or nb <= 1e-12:
+        return float("nan")
+    return float(dot / (na * nb))
+
+
+def _resolve_leg_align_grad_probe_named_params(
+    model: EventMotionModel,
+) -> tuple[str, list[tuple[str, torch.nn.Parameter]]]:
+    prefixes: list[str] = []
+    if getattr(model, "direct_pose_leg_head_shared", None) is not None:
+        prefixes.append("direct_pose_leg_head_shared")
+    if getattr(model, "direct_pose_leg_head", None) is not None:
+        prefixes.append("direct_pose_leg_head")
+    for prefix in prefixes:
+        named: list[tuple[str, torch.nn.Parameter]] = []
+        for name, param in model.named_parameters():
+            if not getattr(param, "requires_grad", False):
+                continue
+            if str(name) == prefix or str(name).startswith(f"{prefix}."):
+                named.append((str(name), param))
+        if named:
+            return prefix, named
+    return "", []
+
+
+def _run_leg_align_grad_probe(
+    *,
+    cfg: PostTrainConfig,
+    model: EventMotionModel,
+    stats: Dict[str, float],
+    aux_payload: Optional[Dict[str, Any]],
+) -> None:
+    probe_steps = max(0, int(getattr(cfg, "direct_pose_leg_align_grad_probe_steps", 0) or 0))
+    if (not bool(getattr(cfg, "direct_pose_leg_align_grad_probe_enable", False))) or probe_steps <= 0:
+        return
+    stats["leg_align_gradprobe_enabled"] = 1.0
+    stats["leg_align_gradprobe_steps"] = float(probe_steps)
+    if not isinstance(aux_payload, dict):
+        stats["leg_align_gradprobe_ready"] = 0.0
+        return
+    probe_loss_payload = aux_payload.get("leg_align_grad_probe", None)
+    if not isinstance(probe_loss_payload, dict):
+        stats["leg_align_gradprobe_ready"] = 0.0
+        return
+    prefix, named_params = _resolve_leg_align_grad_probe_named_params(model)
+    stats["leg_align_gradprobe_ready"] = 1.0 if named_params else 0.0
+    stats["leg_align_gradprobe_target_shared"] = 1.0 if prefix == "direct_pose_leg_head_shared" else 0.0
+    stats["leg_align_gradprobe_target_plain"] = 1.0 if prefix == "direct_pose_leg_head" else 0.0
+    stats["leg_align_gradprobe_param_count"] = float(len(named_params))
+    if not named_params:
+        return
+
+    params = [param for _, param in named_params]
+
+    def _grad_for(key: str) -> Optional[tuple[Optional[torch.Tensor], ...]]:
+        loss_t = probe_loss_payload.get(key, None)
+        if not torch.is_tensor(loss_t) or (not bool(getattr(loss_t, "requires_grad", False))):
+            return None
+        try:
+            grads_t = torch.autograd.grad(
+                loss_t,
+                params,
+                allow_unused=True,
+                retain_graph=True,
+                create_graph=False,
+            )
+        except Exception:
+            return None
+        return tuple(grads_t)
+
+    grads_distal = _grad_for("distal")
+    grads_proximal = _grad_for("proximal")
+    grads_total = _grad_for("total")
+
+    stats["leg_align_gradprobe_loss_distal"] = float(
+        probe_loss_payload["distal"].detach().cpu()
+    ) if torch.is_tensor(probe_loss_payload.get("distal", None)) else float("nan")
+    stats["leg_align_gradprobe_loss_proximal"] = float(
+        probe_loss_payload["proximal"].detach().cpu()
+    ) if torch.is_tensor(probe_loss_payload.get("proximal", None)) else float("nan")
+    stats["leg_align_gradprobe_loss_total"] = float(
+        probe_loss_payload["total"].detach().cpu()
+    ) if torch.is_tensor(probe_loss_payload.get("total", None)) else float("nan")
+    stats["leg_align_gradprobe_norm_distal"] = _grad_list_norm(grads_distal or ())
+    stats["leg_align_gradprobe_norm_proximal"] = _grad_list_norm(grads_proximal or ())
+    stats["leg_align_gradprobe_norm_total"] = _grad_list_norm(grads_total or ())
+    cos_dp = _grad_list_cosine(grads_distal or (), grads_proximal or ())
+    cos_dt = _grad_list_cosine(grads_distal or (), grads_total or ())
+    cos_pt = _grad_list_cosine(grads_proximal or (), grads_total or ())
+    stats["leg_align_gradprobe_cos_distal_proximal"] = float(cos_dp)
+    stats["leg_align_gradprobe_cos_distal_total"] = float(cos_dt)
+    stats["leg_align_gradprobe_cos_proximal_total"] = float(cos_pt)
+    stats["leg_align_gradprobe_neg"] = 1.0 if math.isfinite(cos_dp) and cos_dp < 0.0 else 0.0
 
 
 def _merge_grad_norm(*vals: float) -> float:
@@ -3273,11 +3753,7 @@ def _expected_trainable_prefixes(train_mode: str) -> list[str]:
             "direct_pose_arm_proj",
             "direct_pose_else_proj",
             "direct_pose_leg_head",
-            "direct_pose_leg_head_shared",
             "direct_pose_leg_gate_head",
-            "direct_pose_leg_gate_head_shared",
-            "direct_pose_leg_side_sign_gate_head",
-            "direct_pose_leg_side_embed",
         ),
     }
     try:
@@ -3297,9 +3773,6 @@ def _build_rollout_mode_kwargs(cfg: PostTrainConfig, train_mode: str) -> Dict[st
             "lambda_plan_entropy_weight": 0.0,
             "lambda_plan_dyn_weight": 0.0,
             "objective": "direct",
-            "direct_pose_leg_side_sign_gate_reg_weight": float(
-                getattr(cfg, "direct_pose_leg_side_sign_gate_reg_weight", 0.0) or 0.0
-            ),
             "direct_pose_leg_gate_sup_weight": float(getattr(cfg, "direct_pose_leg_gate_sup_weight", 0.0) or 0.0),
             "direct_pose_leg_align_weight": float(getattr(cfg, "direct_pose_leg_align_weight", 0.0) or 0.0),
             "direct_pose_leg_align_oracle_min_deg": float(
@@ -3313,11 +3786,10 @@ def _build_rollout_mode_kwargs(cfg: PostTrainConfig, train_mode: str) -> Dict[st
             "direct_pose_leg_align_res_weight": float(getattr(cfg, "direct_pose_leg_align_res_weight", 1.0) or 1.0),
             "direct_pose_leg_align_sign_weight": float(getattr(cfg, "direct_pose_leg_align_sign_weight", 0.0) or 0.0),
             "direct_pose_leg_align_cos_thresh": float(getattr(cfg, "direct_pose_leg_align_cos_thresh", 0.0) or 0.0),
+            "direct_pose_leg_align_target_joints": getattr(cfg, "direct_pose_leg_align_target_joints", None),
+            "direct_pose_leg_align_anchor_joints": getattr(cfg, "direct_pose_leg_align_anchor_joints", None),
+            "direct_pose_leg_align_anchor_weight": float(getattr(cfg, "direct_pose_leg_align_anchor_weight", 0.0) or 0.0),
             "direct_pose_loss_leg_split": bool(getattr(cfg, "direct_pose_loss_leg_split", False)),
-            "direct_pose_loss_sics": str(getattr(cfg, "direct_pose_loss_sics", "") or ""),
-            "direct_pose_loss_cycle_gte": int(getattr(cfg, "direct_pose_loss_cycle_gte", 0) or 0),
-            "direct_pose_loss_sic_mode": str(getattr(cfg, "direct_pose_loss_sic_mode", "mask") or "mask"),
-            "direct_pose_loss_sic_boost": float(getattr(cfg, "direct_pose_loss_sic_boost", 1.0) or 1.0),
             "direct_pose_loss_group_norm_enable": bool(getattr(cfg, "direct_pose_loss_group_norm_enable", False)),
             "direct_pose_loss_group_norm_w_leg": float(getattr(cfg, "direct_pose_loss_group_norm_w_leg", 1.0) or 1.0),
             "direct_pose_loss_group_norm_w_nonleg": float(
@@ -3354,6 +3826,31 @@ def _build_rollout_mode_kwargs(cfg: PostTrainConfig, train_mode: str) -> Dict[st
     raise ValueError(f"Unknown train_mode={train_mode!r}")
 
 
+def _resolve_direct_pose_leg_align_weight(cfg: PostTrainConfig, global_step: int) -> float:
+    target_weight = float(getattr(cfg, "direct_pose_leg_align_weight", 0.0) or 0.0)
+    if target_weight <= 0.0:
+        return 0.0
+
+    schedule = str(getattr(cfg, "direct_pose_leg_align_schedule", "none") or "none").strip().lower()
+    if schedule in ("", "none", "off", "false", "0"):
+        return target_weight
+
+    start_weight = float(getattr(cfg, "direct_pose_leg_align_start_weight", 0.0) or 0.0)
+    warmup_steps = max(0, int(getattr(cfg, "direct_pose_leg_align_warmup_steps", 0) or 0))
+    ramp_steps = max(0, int(getattr(cfg, "direct_pose_leg_align_ramp_steps", 0) or 0))
+    step_idx = max(0, int(global_step))
+
+    if schedule == "linear":
+        if step_idx < warmup_steps:
+            return start_weight
+        if ramp_steps <= 0:
+            return target_weight
+        progress = min(1.0, max(0.0, float(step_idx - warmup_steps) / float(ramp_steps)))
+        return float(start_weight + (target_weight - start_weight) * progress)
+
+    return target_weight
+
+
 def _format_posttrain_step_msg(
     *,
     train_mode: str,
@@ -3365,6 +3862,9 @@ def _format_posttrain_step_msg(
     l2sp_weight: float,
 ) -> str:
     if train_mode == "direct":
+        leg_align_weight = float(
+            stats.get("leg_align_weight", getattr(cfg, "direct_pose_leg_align_weight", 0.0)) or 0.0
+        )
         msg = (
             f"[posttrain][e{epoch} i{it}/{steps_per_epoch}] "
             f"total={stats['total']:.6f} dir={stats['dir_geo']:.6f} "
@@ -3377,17 +3877,28 @@ def _format_posttrain_step_msg(
                 f" tgt={stats.get('leg_gate_sup_tgt_frac', float('nan')):.3f}"
                 f" pred={stats.get('leg_gate_sup_pred_mean', float('nan')):.3f}"
             )
-        if float(getattr(cfg, "direct_pose_leg_align_weight", 0.0) or 0.0) > 0.0:
+        if leg_align_weight > 0.0:
             msg += (
                 f" leg_align={stats.get('leg_align_loss', float('nan')):.3e}"
+                f" w={leg_align_weight:.3f}"
                 f" frac={stats.get('leg_align_frac', float('nan')):.3f}"
             )
+            leg_align_anchor_weight = float(stats.get("leg_align_anchor_weight", getattr(cfg, "direct_pose_leg_align_anchor_weight", 0.0)) or 0.0)
+            if leg_align_anchor_weight > 0.0:
+                msg += (
+                    f" anchor={stats.get('leg_align_anchor_loss', float('nan')):.3e}"
+                    f" aw={leg_align_anchor_weight:.3f}"
+                )
         if float(stats.get("dir_group_norm_used", 0.0) or 0.0) > 0.0:
             msg += (
                 f" gnorm(L/N)={stats.get('dir_group_norm_leg', float('nan')):.3f}/"
                 f"{stats.get('dir_group_norm_nonleg', float('nan')):.3f}"
+                f" raw={stats.get('dir_group_norm_leg_raw', float('nan')):.3f}/"
+                f"{stats.get('dir_group_norm_nonleg_raw', float('nan')):.3f}"
                 f" ema={stats.get('dir_group_norm_leg_ema', float('nan')):.3f}/"
                 f"{stats.get('dir_group_norm_nonleg_ema', float('nan')):.3f}"
+                f" hit={stats.get('dir_group_norm_leg_hit_any', 0.0):.0f}/"
+                f"{stats.get('dir_group_norm_nonleg_hit_any', 0.0):.0f}"
             )
         if str(cfg.lambda_reliability_mode or "none").strip().lower() not in ("none", "off", "false", "0", ""):
             msg += (
@@ -3407,6 +3918,17 @@ def _format_posttrain_step_msg(
                 msg += " !grad_ratio_low"
             if float(stats.get("direct_grad_ratio_alert_leg_branch", 0.0) or 0.0) > 0.0:
                 msg += " !grad_ratio_low_omega"
+        if float(stats.get("leg_align_gradprobe_enabled", 0.0) or 0.0) > 0.0:
+            msg += (
+                f" gp(dp/dt/pt)={stats.get('leg_align_gradprobe_cos_distal_proximal', float('nan')):.3f}/"
+                f"{stats.get('leg_align_gradprobe_cos_distal_total', float('nan')):.3f}/"
+                f"{stats.get('leg_align_gradprobe_cos_proximal_total', float('nan')):.3f}"
+                f" gn(d/p/t)={stats.get('leg_align_gradprobe_norm_distal', float('nan')):.3e}/"
+                f"{stats.get('leg_align_gradprobe_norm_proximal', float('nan')):.3e}/"
+                f"{stats.get('leg_align_gradprobe_norm_total', float('nan')):.3e}"
+            )
+            if float(stats.get("leg_align_gradprobe_neg", 0.0) or 0.0) > 0.0:
+                msg += " !leg_conflict"
         return msg
     if train_mode == "lambda":
         msg = (
@@ -3470,26 +3992,10 @@ def _unfreeze_direct_pose(
     nonleg_only: bool = False,
 ) -> None:
     if bool(leg_gate_only):
-        # Train only the leg gate/scale head (keep base direct + leg omega frozen).
-        if bool(getattr(model, "direct_pose_leg_side_routing", False)) and getattr(model, "direct_pose_leg_gate_head_shared", None) is not None:
-            _enable_modules(model, ("direct_pose_leg_gate_head_shared",))
-        else:
-            _enable_modules(model, ("direct_pose_leg_gate_head",))
+        _enable_modules(model, ("direct_pose_leg_gate_head",))
         return
     if bool(leg_only):
-        # Prefer the routed shared head when enabled (compat head is unused in forward in that mode).
-        if bool(getattr(model, "direct_pose_leg_side_routing", False)) and getattr(model, "direct_pose_leg_head_shared", None) is not None:
-            _enable_modules(
-                model,
-                (
-                    "direct_pose_leg_head_shared",
-                    "direct_pose_leg_gate_head_shared",
-                    "direct_pose_leg_side_sign_gate_head",
-                    "direct_pose_leg_side_embed",
-                ),
-            )
-        else:
-            _enable_modules(model, ("direct_pose_leg_head", "direct_pose_leg_gate_head"))
+        _enable_modules(model, ("direct_pose_leg_head", "direct_pose_leg_gate_head"))
         return
     if bool(nonleg_only):
         _enable_modules(
@@ -3516,11 +4022,7 @@ def _unfreeze_direct_pose(
             "direct_pose_arm_proj",
             "direct_pose_else_proj",
             "direct_pose_leg_head",
-            "direct_pose_leg_head_shared",
             "direct_pose_leg_gate_head",
-            "direct_pose_leg_gate_head_shared",
-            "direct_pose_leg_side_sign_gate_head",
-            "direct_pose_leg_side_embed",
         ),
     )
 
@@ -3567,6 +4069,17 @@ def _apply_cli_overrides(payload: Dict[str, Any], args: argparse.Namespace) -> N
 def _run_training_loop(*, cfg: PostTrainConfig, train_mode: str, model: EventMotionModel, params: list[torch.nn.Parameter], opt: torch.optim.Optimizer, batch_iter: Any, rollout_common_kwargs: Dict[str, Any], rollout_mode_kwargs: Dict[str, Any], l2sp_pairs: list[tuple[torch.nn.Parameter, torch.Tensor]], l2sp_weight: float) -> list[dict[str, Any]]:
     log_rows: list[dict[str, Any]] = []
     global_step = 0
+    save_step_set = _parse_int_set_spec(getattr(cfg, "save_step_ckpts", None))
+
+    def _save_step_snapshot(step_idx: int) -> None:
+        if int(step_idx) < 0:
+            return
+        ckpt_step_out = cfg.out_dir / f"ckpt_step_{int(step_idx):06d}_{cfg.run_name}.pth"
+        torch.save({"model": model.state_dict(), "posttrain_cfg": _cfg_to_jsonable(cfg)}, ckpt_step_out)
+
+    if 0 in save_step_set:
+        _save_step_snapshot(0)
+
     for epoch in range(1, int(cfg.epochs) + 1):
         epoch_loss = 0.0
         ok_steps = 0
@@ -3574,7 +4087,18 @@ def _run_training_loop(*, cfg: PostTrainConfig, train_mode: str, model: EventMot
         for it in range(int(cfg.steps_per_epoch)):
             batch = next(batch_iter)
             opt.zero_grad(set_to_none=True)
-            loss, stats, ema_update_payload = _lambda_fusion_loss_rollout(batch=batch, **rollout_common_kwargs, **rollout_mode_kwargs)
+            rollout_mode_kwargs_step = rollout_mode_kwargs
+            if train_mode == "direct":
+                rollout_mode_kwargs_step = dict(rollout_mode_kwargs)
+                rollout_mode_kwargs_step["direct_pose_leg_align_weight"] = _resolve_direct_pose_leg_align_weight(
+                    cfg, global_step
+                )
+            loss, stats, aux_payload = _lambda_fusion_loss_rollout(
+                batch=batch,
+                **rollout_common_kwargs,
+                **rollout_mode_kwargs_step,
+            )
+            ema_update_payload = aux_payload.get("ema_update_payload", None) if isinstance(aux_payload, dict) else None
             if train_mode == "direct" and isinstance(ema_update_payload, dict):
                 try: setattr(rollout_common_kwargs["trainer"], "_direct_pose_group_norm_ema", dict(ema_update_payload, leg=ema_update_payload["leg"].detach(), nonleg=ema_update_payload["nonleg"].detach())) if (torch.is_tensor(ema_update_payload.get("leg", None)) and torch.is_tensor(ema_update_payload.get("nonleg", None)) and bool(torch.isfinite(ema_update_payload["leg"]).all().detach().cpu().item()) and bool(torch.isfinite(ema_update_payload["nonleg"]).all().detach().cpu().item())) else _record_posttrain_soft_fail(rollout_common_kwargs["trainer"], "apply_ema_update_invalid_payload")
                 except _ROLLOUT_SOFT_FAIL_ERRORS: _record_posttrain_soft_fail(rollout_common_kwargs["trainer"], "apply_ema_update_setattr")
@@ -3594,6 +4118,15 @@ def _run_training_loop(*, cfg: PostTrainConfig, train_mode: str, model: EventMot
                 global_step += 1
                 print(f"[posttrain][WARN] non-finite loss at step={global_step} (skipped). stats={stats}")
                 continue
+            if (
+                train_mode == "direct"
+                and bool(getattr(cfg, "direct_pose_leg_align_grad_probe_enable", False))
+                and int(global_step) < int(getattr(cfg, "direct_pose_leg_align_grad_probe_steps", 0) or 0)
+            ):
+                try:
+                    _run_leg_align_grad_probe(cfg=cfg, model=model, stats=stats, aux_payload=aux_payload)
+                except _ROLLOUT_SOFT_FAIL_ERRORS:
+                    _record_posttrain_soft_fail(rollout_common_kwargs["trainer"], "leg_align_grad_probe")
             loss.backward()
             if train_mode == "direct" and bool(getattr(cfg, "direct_pose_grad_monitor_enable", False)):
                 g_trunk = _module_grad_norm(getattr(model, "direct_pose_head", None))
@@ -3634,6 +4167,8 @@ def _run_training_loop(*, cfg: PostTrainConfig, train_mode: str, model: EventMot
             ok_steps += 1
             epoch_loss += float(stats["total"])
             global_step += 1
+            if global_step in save_step_set:
+                _save_step_snapshot(global_step)
             if (it % 20) == 0:
                 msg = _format_posttrain_step_msg(
                     train_mode=train_mode,
@@ -3657,8 +4192,13 @@ def _run_training_loop(*, cfg: PostTrainConfig, train_mode: str, model: EventMot
     return log_rows
 
 
-def _save_posttrain_outputs(*, cfg: PostTrainConfig, model: EventMotionModel, log_rows: list[dict[str, Any]], direct_pose_feat_source: str, direct_pose_time_pe_dim: int, direct_pose_time_pe_base: float, direct_pose_use_phase_z: bool, direct_pose_phase_z_mode: str, direct_pose_split_enable: bool, direct_pose_nonleg_proj_dim: int, direct_pose_leg_gate_mode_model: str, direct_pose_leg_gate_power_model: float) -> Path:
+def _cfg_to_jsonable(cfg: PostTrainConfig) -> dict[str, Any]:
     cfg_jsonable: dict[str, Any] = {k: (str(v) if isinstance(v, Path) else [str(p) for p in v] if isinstance(v, tuple) and v and all(isinstance(p, Path) for p in v) else v) for k, v in cfg.__dict__.items()}
+    return cfg_jsonable
+
+
+def _save_posttrain_outputs(*, cfg: PostTrainConfig, model: EventMotionModel, log_rows: list[dict[str, Any]], direct_pose_feat_source: str, direct_pose_time_pe_dim: int, direct_pose_time_pe_base: float, direct_pose_use_phase_z: bool, direct_pose_phase_z_mode: str, direct_pose_split_enable: bool, direct_pose_nonleg_proj_dim: int, direct_pose_leg_gate_mode_model: str, direct_pose_leg_gate_power_model: float) -> Path:
+    cfg_jsonable = _cfg_to_jsonable(cfg)
     cfg_jsonable["direct_pose_feat_source"] = str(direct_pose_feat_source)
     cfg_jsonable["direct_pose_time_pe_dim"] = int(direct_pose_time_pe_dim)
     cfg_jsonable["direct_pose_time_pe_base"] = float(direct_pose_time_pe_base)
@@ -3768,6 +4308,23 @@ def _build_model_and_trainer(*, cfg: PostTrainConfig, ds: MotionEventDataset, mo
         up_cm, down_cm = 0.0, 0.0
     trainer.contact_meas_ground_z_max_up_m = max(0.0, up_cm) / 100.0
     trainer.contact_meas_ground_z_max_down_m = max(0.0, down_cm) / 100.0
+    trainer.posttrain_contacts_source = str(getattr(cfg, "posttrain_contacts_source", "pretrain_contact") or "pretrain_contact").strip().lower()
+    if trainer.posttrain_contacts_source != "pretrain_contact":
+        raise SystemExit(
+            f"[FATAL] unsupported posttrain_contacts_source={trainer.posttrain_contacts_source!r}; "
+            "only 'pretrain_contact' is allowed."
+        )
+    try:
+        clamp_k = float(getattr(cfg, "posttrain_contacts_pretrain_clamp", 1.0) or 0.0)
+    except Exception:
+        clamp_k = 1.0
+    if (not math.isfinite(float(clamp_k))) or float(clamp_k) < 0.0:
+        clamp_k = 1.0
+    trainer.posttrain_contacts_pretrain_clamp = float(clamp_k)
+    trainer.posttrain_contacts_pretrain_affine_stats_spec = getattr(cfg, "posttrain_contacts_pretrain_affine_stats", None)
+    trainer.posttrain_contacts_pretrain_affine = _parse_pretrain_contact_affine_spec(
+        trainer.posttrain_contacts_pretrain_affine_stats_spec
+    )
     trainer.lambda_reliability_mode = str(cfg.lambda_reliability_mode or "none")
     trainer.lambda_reliability_warmup_steps = int(cfg.lambda_reliability_warmup_steps or 0)
     trainer.lambda_reliability_contact_err_max = float(cfg.lambda_reliability_contact_err_max or 1.0)
@@ -3823,7 +4380,6 @@ def _build_posttrain_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Phase reset / clock-anchor source. "
             "'contacts_meas'=internal threshold-crossing reset; "
-            "'td_hazard'=integrate-to-1 reset from contact_td_hazard_head; "
             "'ttc_gt'=external reset from GT touchdown events (ttc_td_events; rollout-only); "
             "'none'=disable internal resets."
         ),
@@ -3835,6 +4391,7 @@ def _build_posttrain_arg_parser() -> argparse.ArgumentParser:
 
     ap.add_argument("--epochs", type=int, default=None)
     ap.add_argument("--steps_per_epoch", type=int, default=None)
+    ap.add_argument("--save_step_ckpts", type=str, default=None, help="Optional step checkpoints to save, e.g. '0,1,5,20,60'.")
     ap.add_argument("--lr", type=float, default=None)
     ap.add_argument("--weight_decay", type=float, default=None)
 
@@ -3856,20 +4413,6 @@ def _build_posttrain_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--event_clock_gate_hidden_dim", type=int, default=None, help="Override Event-Clock gate hidden dim (λ_corr MLP).")
     ap.add_argument("--train_lambda_head", type=str, default=None, help="true|false; whether to train lambda_fusion_head (Stage2)")
     ap.add_argument("--contact_meas_weight", type=float, default=None, help="Weight for contact_meas MSE vs GT soft contacts.")
-    ap.add_argument("--contact_td_hazard_hidden", type=int, default=None, help=argparse.SUPPRESS)
-    ap.add_argument("--contact_td_hazard_dropout", type=float, default=None, help=argparse.SUPPRESS)
-    ap.add_argument(
-        "--direct_pose_meas_force_zero",
-        type=str,
-        default=None,
-        help="true|false; ablation: force direct head to ignore contacts_meas (concat->zeros, mode_select->uniform).",
-    )
-    ap.add_argument(
-        "--direct_pose_meas_detach",
-        type=str,
-        default=None,
-        help="true|false; ablation: stop-grad from direct head into contacts_meas (prevents co-adaptation).",
-    )
     ap.add_argument(
         "--direct_pose_split_enable",
         type=str,
@@ -3977,7 +4520,32 @@ def _build_posttrain_arg_parser() -> argparse.ArgumentParser:
         "--direct_pose_leg_align_weight",
         type=float,
         default=None,
-        help="Optional direction alignment loss weight for leg omega: relu(-cos_pred_oracle). 0 disables.",
+        help="Optional direction alignment loss target weight for leg omega. When schedule=none it is constant; otherwise it is the ramp target.",
+    )
+    ap.add_argument(
+        "--direct_pose_leg_align_schedule",
+        type=str,
+        default=None,
+        choices=("none", "linear"),
+        help="Leg align weight schedule: none | linear (hold start_weight for warmup_steps, then ramp to target weight).",
+    )
+    ap.add_argument(
+        "--direct_pose_leg_align_start_weight",
+        type=float,
+        default=None,
+        help="Leg align schedule start weight used before/at ramp start. Default 0.",
+    )
+    ap.add_argument(
+        "--direct_pose_leg_align_warmup_steps",
+        type=int,
+        default=None,
+        help="Leg align schedule warmup steps that keep start_weight before the ramp begins.",
+    )
+    ap.add_argument(
+        "--direct_pose_leg_align_ramp_steps",
+        type=int,
+        default=None,
+        help="Leg align schedule ramp length in optimizer steps. 0 means jump directly to target after warmup.",
     )
     ap.add_argument(
         "--direct_pose_leg_align_oracle_min_deg",
@@ -4023,10 +4591,28 @@ def _build_posttrain_arg_parser() -> argparse.ArgumentParser:
         help="Optional hard-example mining: apply leg omega alignment only when cos(pred, oracle) < thresh. 0 disables.",
     )
     ap.add_argument(
+        "--direct_pose_leg_align_target_joints",
+        type=str,
+        default=None,
+        help="Optional joint subset for the main leg_align objective. Supports presets like 'distal', 'proximal', 'calf', 'thigh', 'foot', 'ball'.",
+    )
+    ap.add_argument(
+        "--direct_pose_leg_align_anchor_joints",
+        type=str,
+        default=None,
+        help="Optional auxiliary joint subset added on top of the main leg_align objective (e.g. 'calf').",
+    )
+    ap.add_argument(
+        "--direct_pose_leg_align_anchor_weight",
+        type=float,
+        default=None,
+        help="Relative weight for the auxiliary leg_align anchor subset. 0 disables the anchor.",
+    )
+    ap.add_argument(
         "--direct_pose_leg_side_routing",
         type=str,
         default=None,
-        help="true|false; use explicit per-side routing + shared omega head for leg residuals (SO(3) only).",
+        help="Retired in posttrain mainline; only inert default false is accepted.",
     )
     ap.add_argument(
         "--direct_pose_leg_contact_order",
@@ -4045,20 +4631,19 @@ def _build_posttrain_arg_parser() -> argparse.ArgumentParser:
         "--direct_pose_leg_side_sign_gate",
         type=str,
         default=None,
-        help="true|false; predict a per-side sign gate g∈[-1,1] (tanh) and apply omega*=g*omega_raw (couples sign across same-side joints).",
+        help="Retired in posttrain mainline; only inert default false is accepted.",
     )
     ap.add_argument(
         "--direct_pose_leg_side_sign_gate_reg_weight",
         type=float,
         default=None,
-        help="Optional regularizer weight to encourage |g|->1 (avoid collapsing to 0). 0 disables.",
+        help="Retired in posttrain mainline; only inert default 0 is accepted.",
     )
     ap.add_argument(
         "--direct_pose_leg_side_rank1",
         type=str,
         default=None,
-        help="true|false; enforce rank-1 same-side coupling: omega_j = softplus(s_j)*normalize(v_side). "
-        "Incompatible with direct_pose_leg_side_sign_gate.",
+        help="Retired in posttrain mainline; only inert default false is accepted.",
     )
     ap.add_argument(
         "--direct_pose_loss_leg_split",
@@ -4082,27 +4667,26 @@ def _build_posttrain_arg_parser() -> argparse.ArgumentParser:
         "--direct_pose_loss_sics",
         type=str,
         default=None,
-        help='Optional: focus objective="direct" losses on selected step_in_cycle (sic). Example: "8,12,14,15,53,54,55,74". '
-        'Supports ranges like "49-55" (inclusive).',
+        help="Retired in posttrain mainline; only inert default null/empty is accepted.",
     )
     ap.add_argument(
         "--direct_pose_loss_cycle_gte",
         type=int,
         default=None,
-        help='When --direct_pose_loss_sics is set, apply it only for rollout cycles >= N (0=all; 1 matches eval mask "cycle>=1").',
+        help="Retired in posttrain mainline; only inert default 0 is accepted.",
     )
     ap.add_argument(
         "--direct_pose_loss_sic_mode",
         type=str,
         default=None,
         choices=("mask", "boost"),
-        help='When --direct_pose_loss_sics is set: "mask" trains only those steps; "boost" upweights them but keeps all steps.',
+        help="Retired in posttrain mainline; only inert default mask is accepted.",
     )
     ap.add_argument(
         "--direct_pose_loss_sic_boost",
         type=float,
         default=None,
-        help='Only for --direct_pose_loss_sic_mode=boost: multiplicative weight for selected steps (e.g. 10.0).',
+        help="Retired in posttrain mainline; only inert default 1.0 is accepted.",
     )
     ap.add_argument(
         "--direct_pose_loss_group_norm_enable",
@@ -4184,6 +4768,25 @@ def _build_posttrain_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--contact_meas_ground_z_quantile", type=float, default=None, help="Low-quantile (0..1) when mode=window.")
     ap.add_argument("--contact_meas_ground_z_slew_up_cm", type=float, default=None, help="Max upward change (cm/step) after ground_z update (0 disables).")
     ap.add_argument("--contact_meas_ground_z_slew_down_cm", type=float, default=None, help="Max downward change (cm/step) after ground_z update (0 disables).")
+    ap.add_argument(
+        "--posttrain_contacts_source",
+        type=str,
+        default=None,
+        choices=("pretrain_contact",),
+        help="Contacts source used during posttrain rollout (fixed): pretrain_contact.",
+    )
+    ap.add_argument(
+        "--posttrain_contacts_pretrain_clamp",
+        type=float,
+        default=None,
+        help="When posttrain_contacts_source=pretrain_contact, clamp frozen encoder input to [-k,+k].",
+    )
+    ap.add_argument(
+        "--posttrain_contacts_pretrain_affine_stats",
+        type=str,
+        default=None,
+        help="Optional affine stats JSON path or JSON string (scale/bias/eps) for pretrain contact calibration.",
+    )
     ap.add_argument("--lambda_fusion_mode", type=str, default=None, help="global|per_joint")
     ap.add_argument("--lambda_fusion_hidden", type=int, default=None)
     ap.add_argument("--lambda_fusion_dropout", type=float, default=None)
@@ -4565,28 +5168,6 @@ def _build_posttrain_model_from_ckpt(
         if torch.is_tensor(w_init) and w_init.ndim == 2:
             contact_plan_init_hidden = int(w_init.shape[0])
 
-    meas_has_weights = any(k.startswith("contact_meas_head.") for k in state_dict.keys())
-    contact_meas_enable = bool(meas_has_weights)
-    contact_meas_hidden = 64
-    if meas_has_weights:
-        w0 = state_dict.get("contact_meas_head.mlp.0.weight", None)
-        if not (torch.is_tensor(w0) and w0.ndim == 2):
-            raise SystemExit(
-                "[FATAL] This repo now only supports contact_meas_head v1 (lowerbody_nohist_v1). "
-                "The provided checkpoint seems to contain an old-format contact_meas_head; please retrain."
-            )
-        contact_meas_hidden = int(w0.shape[0])
-
-    # ---- Infer contact TD hazard head (touchdown event intensity; integrate-to-1 clock) ----
-    td_hazard_has_weights = any(k.startswith("contact_td_hazard_head.") for k in state_dict.keys())
-    contact_td_hazard_enable = bool(td_hazard_has_weights)
-    contact_td_hazard_hidden = int(getattr(cfg, "contact_td_hazard_hidden", 64) or 64)
-    contact_td_hazard_dropout = float(getattr(cfg, "contact_td_hazard_dropout", 0.0) or 0.0)
-    if td_hazard_has_weights:
-        w0 = state_dict.get("contact_td_hazard_head.mlp.0.weight", None)
-        if torch.is_tensor(w0) and w0.ndim == 2:
-            contact_td_hazard_hidden = int(w0.shape[0])
-
     # ---- Infer Event-Clock v3 (contact_plan residual correction) ----
     event_clock_has_weights = any(
         str(k).startswith("event_clock_gate.") or str(k).startswith("event_clock_corrector.")
@@ -4719,21 +5300,15 @@ def _build_posttrain_model_from_ckpt(
     except Exception:
         phase_state_enable = False
 
-    phase_reset_source_model = str(cfg.phase_reset_source or "contacts_meas").strip().lower()
+    phase_reset_source_model = str(cfg.phase_reset_source or "none").strip().lower()
     # Consistent with run_freerun_cycles:
     # - contacts_meas: internal threshold-crossing resets inside the model (event_kind controls it)
     # - ttc_gt: resets are applied externally (posttrain rollout loops), so disable internal resets
-    # - td_hazard: phase resets are handled by integrate-to-1 inside the model; disable contacts_meas resets
     phase_event_kind_model = str(getattr(cfg, "contact_phase_state_event_kind", "touchdown") or "touchdown").strip().lower()
     phase_min_interval_model = int(getattr(cfg, "contact_phase_state_event_min_interval", 0) or 0)
-    if phase_reset_source_model in ("ttc_gt", "td_hazard"):
+    if phase_reset_source_model == "ttc_gt":
         phase_event_kind_model = "none"
         phase_min_interval_model = 0
-    if phase_reset_source_model == "td_hazard" and (not td_hazard_has_weights):
-        raise SystemExit(
-            "[FATAL] phase_reset_source=td_hazard requires checkpoint contact_td_hazard_head weights. "
-            "Retired train_contact_td_hazard target cannot be replayed in current posttrain."
-        )
 
     # ---- Resolve leg gate config from explicit runtime config (no ckpt auto-infer) ----
     direct_pose_leg_gate_mode_raw = str(getattr(cfg, "direct_pose_leg_gate_mode", "none") or "none").strip().lower()
@@ -4824,16 +5399,6 @@ def _build_posttrain_model_from_ckpt(
         direct_pose_leg_gate_power=float(direct_pose_leg_gate_power_model),
         direct_pose_leg_scale_log_clip=float(getattr(cfg, "direct_pose_leg_scale_log_clip", 4.0) or 4.0),
         direct_pose_leg_scale_clamp_k=float(getattr(cfg, "direct_pose_leg_scale_clamp_k", 0.0) or 0.0),
-        direct_pose_leg_side_routing=bool(getattr(cfg, "direct_pose_leg_side_routing", False)),
-        direct_pose_leg_contact_order=str(getattr(cfg, "direct_pose_leg_contact_order", "lr") or "lr"),
-        direct_pose_leg_side_embed_dim=int(getattr(cfg, "direct_pose_leg_side_embed_dim", 0) or 0),
-        direct_pose_leg_side_plan_other=bool(getattr(cfg, "direct_pose_leg_side_plan_other", False)),
-        direct_pose_leg_side_phase_other=bool(getattr(cfg, "direct_pose_leg_side_phase_other", False)),
-        direct_pose_leg_side_phase_rel=bool(getattr(cfg, "direct_pose_leg_side_phase_rel", False)),
-        direct_pose_leg_side_cue=str(getattr(cfg, "direct_pose_leg_side_cue", "none") or "none"),
-        direct_pose_leg_side_cue_tau=float(getattr(cfg, "direct_pose_leg_side_cue_tau", 30.0) or 30.0),
-        direct_pose_leg_side_sign_gate=bool(getattr(cfg, "direct_pose_leg_side_sign_gate", False)),
-        direct_pose_leg_side_rank1=bool(getattr(cfg, "direct_pose_leg_side_rank1", False)),
         lambda_fusion_enable=bool(lambda_fusion_enable),
         lambda_fusion_mode=str(lambda_fusion_mode),
         lambda_fusion_hidden=int(lambda_fusion_hidden),
@@ -4841,12 +5406,6 @@ def _build_posttrain_model_from_ckpt(
         lambda_fusion_detach_err=True,
         lambda_fusion_logit_init=float(lambda_fusion_logit_init),
         lambda_fusion_use_rollout_step=bool(lambda_fusion_use_rollout_step),
-        contact_meas_enable=contact_meas_enable,
-        contact_meas_hidden=int(contact_meas_hidden),
-        contact_meas_dropout=0.0,
-        contact_td_hazard_enable=bool(contact_td_hazard_enable),
-        contact_td_hazard_hidden=int(contact_td_hazard_hidden),
-        contact_td_hazard_dropout=float(contact_td_hazard_dropout),
     ).to(device)
     validate_and_fix_model_(model, int(ds.Dx), int(ds.Dc))
     # Attach frozen encoder BEFORE loading weights (period_dim/period_encoder may be created here).
@@ -4968,6 +5527,29 @@ def _build_posttrain_model_from_ckpt(
                         f"[FATAL] direct_pose_use_phase_z=true but direct_pose_head.0.weight shape mismatch "
                         f"(ckpt_in_dim={old_in}, model_in_dim={new_in}). Enable train_direct_pose to reinit/adapt."
                     )
+    except Exception:
+        pass
+    try:
+        retired_direct_pose_prefixes = (
+            "direct_pose_leg_head_shared.",
+            "direct_pose_leg_gate_head_shared.",
+            "direct_pose_leg_side_sign_gate_head.",
+            "direct_pose_leg_side_embed.",
+        )
+        removed_highorder = []
+        for k in list(state_dict.keys()):
+            if any(str(k).startswith(prefix) for prefix in retired_direct_pose_prefixes):
+                removed_highorder.append(str(k))
+                state_dict.pop(k, None)
+        for k in ("direct_pose_leg_side_pos_r_tensor", "direct_pose_leg_side_pos_l_tensor"):
+            if k in state_dict:
+                removed_highorder.append(str(k))
+                state_dict.pop(k, None)
+        if removed_highorder:
+            print(
+                f"[posttrain][INFO] dropped {len(removed_highorder)} retired direct_pose high-order ckpt tensor(s) "
+                "(side-routing/sign-gate/rank1 compat shell)."
+            )
     except Exception:
         pass
     # If leg bones/mode are overridden relative to the checkpoint, drop leg head tensors (and idx buffer)
@@ -5114,20 +5696,6 @@ def _build_posttrain_model_from_ckpt(
         if getattr(model, "lambda_fusion_head", None) is None:
             raise SystemExit("[FATAL] Stage2 needs lambda_fusion_head, but it is not instantiated.")
 
-    # Optional ablations: decouple direct head from (potentially biased) contacts_meas during training.
-    if bool(getattr(cfg, "direct_pose_meas_force_zero", False)):
-        try:
-            setattr(model, "direct_pose_meas_force_zero", True)
-            print("[posttrain] direct_pose_meas_force_zero=true (direct ignores contacts_meas)")
-        except Exception:
-            pass
-    if bool(getattr(cfg, "direct_pose_meas_detach", False)):
-        try:
-            setattr(model, "direct_pose_meas_detach", True)
-            print("[posttrain] direct_pose_meas_detach=true (stop-grad direct->contacts_meas)")
-        except Exception:
-            pass
-
     # Optional: reset gate logit after loading ckpt (helps avoid near-zero gates that throttle gradients).
     if cfg.so3_corr_gate_logit_reset is not None:
         logit = getattr(model, "so3_corr_gate_logit", None)
@@ -5174,6 +5742,21 @@ def main() -> None:
         ds=ds,
         device=device,
     )
+
+    contacts_source_cfg = str(getattr(cfg, "posttrain_contacts_source", "pretrain_contact") or "pretrain_contact").strip().lower()
+    if contacts_source_cfg != "pretrain_contact":
+        raise SystemExit(
+            f"[FATAL] unsupported posttrain_contacts_source={contacts_source_cfg!r}; only 'pretrain_contact' is allowed."
+        )
+    if bool(getattr(model, "contact_plan_enable", False)):
+        if cfg.encoder_bundle is None or (not cfg.encoder_bundle.expanduser().is_file()):
+            raise SystemExit(
+                "[FATAL] posttrain_contacts_source=pretrain_contact requires --encoder_bundle with frozen encoder/contact_head."
+            )
+        if getattr(model, "frozen_encoder", None) is None or getattr(model, "frozen_contact_head", None) is None:
+            raise SystemExit(
+                "[FATAL] posttrain_contacts_source=pretrain_contact requires bundle keys 'encoder' and 'contact_head'."
+            )
 
     trainer = _build_model_and_trainer(cfg=cfg, ds=ds, model=model, norm_spec=norm_spec)
 

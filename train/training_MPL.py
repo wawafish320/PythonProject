@@ -4,8 +4,16 @@ from __future__ import annotations
 # ===== Common Helpers (extracted) =====
 
 # ========== [Unified Geometry Utilities] ==========
+import argparse
+import ast
+import glob
+import json
 import math as _math
+import os
 import sys
+import time
+from dataclasses import dataclass, field
+from types import SimpleNamespace
 from collections import deque
 from pathlib import Path
 import numpy as np
@@ -13,20 +21,11 @@ import torch
 import torch.nn.functional as F
 from typing import Any, Optional, Dict, Mapping, Sequence, Callable, List, Tuple
 
-# Allow both:
-# - `python -m train.training_MPL ...` (package execution)
-# - `python train/training_MPL.py ...` or `cd train && python training_MPL.py ...` (script execution)
-if __package__ is None or __package__ == "":
-    sys.path.append(str(Path(__file__).resolve().parents[1]))
-    __package__ = "train"
-
 from .eval_utils import FreeRunSettings, evaluate_teacher, evaluate_freerun
 from .geometry import (
     rot6d_to_matrix,
     matrix_to_rot6d,
     compose_rot6d_delta,
-    infer_rot6d_delta_from_abs,
-    axis_angle_to_matrix,
     geodesic_R,
     so3_exp_map,
     so3_log_map,
@@ -63,41 +62,316 @@ from .io import (
     speed_from_X_layout as _speed_from_X_layout,
     npz_scalar_to_str as _npz_scalar_to_str,
 )
-try:
-    from .utils import (
-        build_mlp,
-        safe_set_slice,
-        expand_paths_from_specs,
-        get_flag_value_from_argv,
-        get_flag_values_from_argv,
-        validate_and_fix_model_,
-        sanity_check_model_dims,
-        set_global_args,
-        get_global_arg,
-    )
-except ImportError:  # pragma: no cover - fallback for script execution
-    from utils import (
-        build_mlp,
-        safe_set_slice,
-        expand_paths_from_specs,
-        get_flag_value_from_argv,
-        get_flag_values_from_argv,
-        validate_and_fix_model_,
-        sanity_check_model_dims,
-        set_global_args,
-        get_global_arg,
-    )
+from .utils import (
+    build_mlp,
+    safe_set_slice,
+    expand_paths_from_specs,
+    get_flag_value_from_argv,
+    get_flag_values_from_argv,
+    validate_and_fix_model_,
+    sanity_check_model_dims,
+    set_global_args,
+    get_global_arg,
+)
 from .normalizers import VectorTanhNormalizerTorch
 
 import torch.nn as nn
 
-try:
-    from .models import MotionEncoder, PeriodHead, EventMotionModel, MotionJointLoss
-except ImportError:  # pragma: no cover - fallback for script execution
-    from models import MotionEncoder, PeriodHead, EventMotionModel, MotionJointLoss
+from .models import (
+    MotionEncoder,
+    PeriodHead,
+    EventMotionModel,
+    MotionJointLoss,
+    DEFAULT_DIRECT_POSE_LEG_BONES,
+    STAGE6_3WAY_ARMCHAIN_BONES,
+    STAGE6_3WAY_ARMCHAIN_BONES_CSV,
+)
 
 
 _arg = get_global_arg
+_STATE_UPDATE_UNSET = object()
+
+
+@dataclass(frozen=True)
+class RolloutPredictionBuffers:
+    hidden_seq: Sequence[torch.Tensor]
+    period_pred: Sequence[torch.Tensor]
+    contacts_plan: Sequence[torch.Tensor]
+    contacts_plan_logits: Sequence[torch.Tensor]
+    out_direct: Sequence[torch.Tensor]
+    contacts_meas: Sequence[torch.Tensor]
+    contacts_err: Sequence[torch.Tensor]
+    event_clock_lambda_logit: Sequence[torch.Tensor]
+    event_clock_dynamic_prior: Sequence[torch.Tensor]
+    event_clock_delta_z: Sequence[torch.Tensor]
+
+
+@dataclass(frozen=True)
+class ContactMeasRuntime:
+    x_raw: torch.Tensor
+    contact_dim: int
+    rot_slice: slice
+    rot_flat: torch.Tensor
+    joint_count: int
+    parents: Any
+    offsets: torch.Tensor
+    root_pos: torch.Tensor
+    up_axis: int
+
+
+def _parse_pretrain_contact_affine_spec(spec: Any) -> Optional[Dict[str, Any]]:
+    if spec is None:
+        return None
+    raw = spec
+    if isinstance(raw, Path):
+        raw = str(raw)
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return None
+        try:
+            p = Path(s).expanduser()
+            if p.is_file():
+                with p.open('r', encoding='utf-8') as f:
+                    raw = json.load(f)
+            else:
+                raw = json.loads(s)
+        except Exception:
+            return None
+    if not isinstance(raw, dict):
+        return None
+    scale = raw.get('scale', None)
+    bias = raw.get('bias', None)
+    if not isinstance(scale, (list, tuple)) or not isinstance(bias, (list, tuple)):
+        return None
+    try:
+        scale_vals = [float(x) for x in scale]
+        bias_vals = [float(x) for x in bias]
+    except Exception:
+        return None
+    if len(scale_vals) <= 0 or len(scale_vals) != len(bias_vals):
+        return None
+    if not all(_math.isfinite(float(x)) for x in scale_vals):
+        return None
+    if not all(_math.isfinite(float(x)) for x in bias_vals):
+        return None
+    try:
+        eps = float(raw.get('eps', 1e-4) or 1e-4)
+    except Exception:
+        eps = 1e-4
+    if not _math.isfinite(float(eps)):
+        eps = 1e-4
+    eps = float(min(1e-2, max(1e-8, eps)))
+    return {'scale': scale_vals, 'bias': bias_vals, 'eps': eps}
+
+
+@dataclass
+class PoseHistState:
+    enabled: bool
+    length: int
+    dim: int
+    stride: int
+    scales: Optional[torch.Tensor] = None
+    mu: Optional[torch.Tensor] = None
+    std: Optional[torch.Tensor] = None
+    buffer_norm: Optional[torch.Tensor] = None
+    buffer_raw: Optional[torch.Tensor] = None
+
+
+@dataclass(frozen=True)
+class RolloutSequenceInputs:
+    state_seq: torch.Tensor
+    cond_seq: Optional[torch.Tensor] = None
+    cond_raw_seq: Optional[torch.Tensor] = None
+    contacts_seq: Optional[torch.Tensor] = None
+    angvel_seq: Optional[torch.Tensor] = None
+    pose_hist_seq: Optional[torch.Tensor] = None
+    gt_seq: Optional[torch.Tensor] = None
+
+
+def _new_rollout_prediction_buffers() -> RolloutPredictionBuffers:
+    return RolloutPredictionBuffers(
+        hidden_seq=[],
+        period_pred=[],
+        contacts_plan=[],
+        contacts_plan_logits=[],
+        out_direct=[],
+        contacts_meas=[],
+        contacts_err=[],
+        event_clock_lambda_logit=[],
+        event_clock_dynamic_prior=[],
+        event_clock_delta_z=[],
+    )
+
+
+@dataclass
+class RolloutExecutionState:
+    batch_size: int
+    total_steps: int
+    mode: str
+    allow_grad: bool
+    tf_ratio: float
+    ss_chunk_len: int
+    amp_enabled: bool
+    rot6d_slice: slice
+    rot6d_y_slice: slice
+    has_time_dim: Mapping[str, bool]
+    cond_norm_mu: Optional[torch.Tensor]
+    cond_norm_std: Optional[torch.Tensor]
+    enable_reprojection: bool
+    plan_enable: bool
+    time_base_local: Any
+    motion: torch.Tensor
+    motion_raw_local: Optional[torch.Tensor]
+    y_raw_local: Optional[torch.Tensor]
+    pose_hist_state: PoseHistState
+    ss_sel_hold: Optional[torch.Tensor] = None
+    plan_z: Optional[torch.Tensor] = None
+    phase_z: Optional[torch.Tensor] = None
+    phase_event_age: Optional[torch.Tensor] = None
+    meas_prev_prob: Optional[torch.Tensor] = None
+    prev_foot_pos_meas: Optional[torch.Tensor] = None
+    reprojection_applied_count: int = 0
+    last_attn: Optional[torch.Tensor] = None
+    latest_y_raw: Optional[torch.Tensor] = None
+    latest_cond_raw_for_env: Optional[torch.Tensor] = None
+    outs: List[torch.Tensor] = field(default_factory=list)
+    delta_preds: List[torch.Tensor] = field(default_factory=list)
+    buffers: RolloutPredictionBuffers = field(default_factory=_new_rollout_prediction_buffers)
+
+
+@dataclass(frozen=True)
+class TrainEpochResult:
+    avg_train: float
+    train_metrics: Dict[str, Any]
+
+
+@dataclass
+class FitEpochValidationResult:
+    metrics_for_json: Optional[Dict[str, Any]] = None
+    metrics_tag: Optional[str] = None
+    teacher_metrics_cached: Optional[Dict[str, Any]] = None
+    forced_valfree_metrics: Optional[Dict[str, Any]] = None
+    best_metrics_source: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class FitCheckpointState:
+    best_teacher_val: float = float('inf')
+    best_ckpt: Optional[str] = None
+    best_teacher_ckpt: Optional[str] = None
+    best_free_slope: float = float('inf')
+    best_free_ckpt: Optional[str] = None
+    best_teacher_payload: Optional[Dict[str, Any]] = None
+    best_free_payload: Optional[Dict[str, Any]] = None
+    last_payload: Optional[Dict[str, Any]] = None
+    last_ckpt: Optional[str] = None
+    latest_y_raw: Optional[torch.Tensor] = None
+    latest_cond_raw_for_env: Optional[torch.Tensor] = None
+    outs: List[torch.Tensor] = field(default_factory=list)
+    delta_preds: List[torch.Tensor] = field(default_factory=list)
+    buffers: RolloutPredictionBuffers = field(default_factory=_new_rollout_prediction_buffers)
+
+
+def _finalize_rollout_prediction_buffers(
+    preds: Dict[str, torch.Tensor],
+    buffers: RolloutPredictionBuffers,
+) -> None:
+    if buffers.hidden_seq:
+        preds["hidden_seq"] = torch.cat(list(buffers.hidden_seq), dim=1)
+    if buffers.period_pred:
+        preds["period_pred"] = torch.stack(
+            [p if p.dim() == 2 else p.squeeze(1) for p in buffers.period_pred],
+            dim=1,
+        )
+    for key, chunks in (
+        ("contacts_plan", buffers.contacts_plan),
+        ("contacts_plan_logits", buffers.contacts_plan_logits),
+        ("out_direct", buffers.out_direct),
+        ("contacts_meas", buffers.contacts_meas),
+        ("contacts_err", buffers.contacts_err),
+        ("event_clock_lambda_logit", buffers.event_clock_lambda_logit),
+        ("event_clock_dynamic_prior", buffers.event_clock_dynamic_prior),
+        ("event_clock_delta_z", buffers.event_clock_delta_z),
+    ):
+        if not chunks:
+            continue
+        try:
+            preds[key] = torch.cat(list(chunks), dim=1)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"[RolloutFinalize] failed to concat preds['{key}'] with {len(chunks)} chunks"
+            ) from exc
+
+
+def _record_optional_diag_curve(
+    result: Dict[str, Any],
+    *,
+    metric_name: str,
+    curve: Any,
+    curve_max: Optional[Any] = None,
+    curve_bones: Optional[Mapping[str, Sequence[float]]] = None,
+    scope_alias: Optional[str] = None,
+) -> None:
+    def _curve_payload(value: Any) -> Any:
+        if torch.is_tensor(value):
+            return value.detach().cpu().tolist()
+        if isinstance(value, tuple):
+            return list(value)
+        return value
+
+    curve_key = f"{metric_name}Curve"
+    result[curve_key] = _curve_payload(curve)
+    if curve_max is not None:
+        curve_max_key = f"{metric_name}CurveMax"
+        result[curve_max_key] = _curve_payload(curve_max)
+    else:
+        curve_max_key = None
+    if curve_bones is not None:
+        curve_bones_key = f"{metric_name}CurveBones"
+        result[curve_bones_key] = curve_bones
+    else:
+        curve_bones_key = None
+    if scope_alias:
+        result[f"{scope_alias}/{curve_key}"] = result[curve_key]
+        if curve_max_key is not None:
+            result[f"{scope_alias}/{curve_max_key}"] = result[curve_max_key]
+        if curve_bones_key is not None:
+            result[f"{scope_alias}/{curve_bones_key}"] = result[curve_bones_key]
+
+
+_PHASEC_WARN_ONCE_KEYS: set[str] = set()
+
+
+def _phasec_warn_once(
+    key: str,
+    message: str,
+    exc: Optional[BaseException] = None,
+) -> None:
+    key_token = str(key)
+    if key_token in _PHASEC_WARN_ONCE_KEYS:
+        return
+    _PHASEC_WARN_ONCE_KEYS.add(key_token)
+    if exc is None:
+        print(f"[PhaseC][WARN] {message}")
+    else:
+        print(f"[PhaseC][WARN] {message}: {exc}")
+
+
+def _phasec_safe_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if torch.is_tensor(value):
+        if value.numel() != 1:
+            return None
+        value = value.detach().cpu().item()
+    try:
+        return int(value)
+    except (TypeError, ValueError, RuntimeError):
+        return None
+
 
 LEGACY_LOSS_KEYS: tuple[str, ...] = (
     "ignore_motion_groups",
@@ -124,6 +398,22 @@ LEGACY_LOSS_CLI_FLAGS: dict[str, str] = {
     "--bone_prior_samples": "bone_prior_samples",
 }
 
+REMOVED_TRAINBASE_PHASE_RESET_KEYS: tuple[str, ...] = (
+    "contact_phase_state_event_kind",
+    "contact_phase_state_event_thr",
+    "contact_phase_state_event_hyst",
+    "contact_phase_state_event_min_interval",
+    "phase_reset_source",
+)
+
+REMOVED_TRAINBASE_PHASE_RESET_CLI_FLAGS: dict[str, str] = {
+    "--contact_phase_state_event_kind": "contact_phase_state_event_kind",
+    "--contact_phase_state_event_thr": "contact_phase_state_event_thr",
+    "--contact_phase_state_event_hyst": "contact_phase_state_event_hyst",
+    "--contact_phase_state_event_min_interval": "contact_phase_state_event_min_interval",
+    "--phase_reset_source": "phase_reset_source",
+}
+
 
 def _legacy_loss_keys_msg(keys: Sequence[str], *, context: str) -> str:
     keys_sorted = ", ".join(sorted({str(k) for k in keys}))
@@ -131,6 +421,16 @@ def _legacy_loss_keys_msg(keys: Sequence[str], *, context: str) -> str:
         f"[LegacyLossConfig] {context} contains removed keys: {keys_sorted}. "
         "Please remove them; MotionJointLoss now uses unified weights only "
         "(adaptive_bone_weights + unified_* knobs)."
+    )
+
+
+def _removed_trainbase_phase_reset_msg(keys: Sequence[str], *, context: str) -> str:
+    keys_sorted = ", ".join(sorted({str(k) for k in keys}))
+    return (
+        f"[trainbase] {context} contains removed phase-reset keys: {keys_sorted}. "
+        "train/training_MPL.py now hard-disables phase reset/event reset and always builds "
+        "contact_phase_state with phase_reset_source='none' and contact_phase_state_event_kind='none'. "
+        "Please remove these keys from trainbase configs/CLI. Posttrain/validate keep their own phase-reset controls."
     )
 
 
@@ -159,66 +459,49 @@ def _assert_no_legacy_loss_keys_in_schedule(schedule: Any, *, context: str) -> N
                         )
 
 
-def __apply_layout_center(ds_train, trainer):
-    bundle_path = _arg('bundle_json', None)
-    apply_layout_center(ds_train, trainer, bundle_path)
+REMOVED_TRAINBASE_STAGE_PARAM_KEYS: tuple[str, ...] = (
+    'freerun_horizon',
+    'freerun_weight',
+    'teacher_rot_noise_deg',
+    'teacher_rot_noise_prob',
+    'input_step_noise_prob',
+    'input_noise_profile',
+)
+
+REMOVED_TRAINBASE_STAGE_ROOT_KEYS: tuple[str, ...] = (
+    'teacher_rot_noise_deg_start',
+    'teacher_rot_noise_deg_end',
+    'teacher_rot_noise_prob_start',
+    'teacher_rot_noise_prob_end',
+)
 
 
-def _sanitize_noise_profile_spec(spec: Any) -> Optional[list[dict[str, float]]]:
-    """
-    Accepts JSON/list specifications like
-        [{"prob":0.8,"min":3,"max":8}, {"prob":0.2,"min":15,"max":30}]
-    and returns a normalized list with keys prob|min_deg|max_deg.
-    """
-    if spec is None:
-        return None
-    payload = spec
-    if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except Exception:
-            return None
-    if isinstance(payload, Mapping):
-        payload = [payload]
-    if not isinstance(payload, Sequence):
-        return None
-    sanitized: list[dict[str, float]] = []
-    total_prob = 0.0
-    for entry in payload:
-        if isinstance(entry, Mapping):
-            prob = float(entry.get('prob', entry.get('p', 0.0)) or 0.0)
-            min_val = entry.get('min', entry.get('min_deg', entry.get('lo', None)))
-            max_val = entry.get('max', entry.get('max_deg', entry.get('hi', None)))
-        elif isinstance(entry, Sequence) and len(entry) >= 3:
-            min_val, max_val, prob = entry[0], entry[1], entry[2]
-        else:
+def _assert_no_removed_trainbase_stage_keys(schedule: Any, *, context: str) -> None:
+    if not isinstance(schedule, Sequence):
+        return
+    removed_hits: list[str] = []
+    for idx, stage in enumerate(schedule):
+        if not isinstance(stage, Mapping):
             continue
-        try:
-            prob = float(prob)
-            min_deg = float(min_val if min_val is not None else 0.0)
-            max_deg = float(max_val if max_val is not None else min_deg)
-        except Exception:
-            continue
-        if prob <= 0.0:
-            continue
-        if max_deg < min_deg:
-            min_deg, max_deg = max_deg, min_deg
-        # Allow zero-magnitude buckets (min=max=0) so schedules can express
-        # "mostly no-noise" mixtures without relying solely on noise_prob.
-        if max_deg < 0.0:
-            continue
-        bucket = {
-            "prob": prob,
-            "min_deg": max(0.0, min_deg),
-            "max_deg": max(max_deg, max(0.0, min_deg)),
-        }
-        sanitized.append(bucket)
-        total_prob += prob
-    if not sanitized or total_prob <= 0.0:
-        return None
-    for bucket in sanitized:
-        bucket["prob"] = bucket["prob"] / total_prob
-    return sanitized
+        for key in REMOVED_TRAINBASE_STAGE_ROOT_KEYS:
+            if key in stage:
+                removed_hits.append(f'{context}[{idx}].{key}')
+        params = stage.get('params')
+        if isinstance(params, Mapping):
+            for key in REMOVED_TRAINBASE_STAGE_PARAM_KEYS:
+                if key in params:
+                    removed_hits.append(f'{context}[{idx}].params.{key}')
+        trainer_cfg = stage.get('trainer')
+        if isinstance(trainer_cfg, Mapping):
+            for key in ('freerun_horizon', 'freerun_weight'):
+                if key in trainer_cfg:
+                    removed_hits.append(f'{context}[{idx}].trainer.{key}')
+    if removed_hits:
+        joined = ', '.join(removed_hits)
+        raise ValueError(
+            '[trainbase] the following stage-schedule keys were removed together with freerun-loss/noise branches: '
+            f'{joined}. Keep `freerun_stage_schedule` only for TF/LR/history/direct-pose-trainability overrides.'
+        )
 
 
 
@@ -248,10 +531,141 @@ class Trainer:
         if callable(fn):
             try:
                 return fn(ref_tensor.device, ref_tensor.dtype, joint_count)
-            except Exception:
-                pass
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                _phasec_warn_once(
+                    "joint_weights/fallback",
+                    "loss_fn._joint_weight_vector failed; falling back to uniform weights",
+                    exc,
+                )
         import torch
         return torch.ones(joint_count, device=ref_tensor.device, dtype=ref_tensor.dtype)
+
+    def _resolve_contact_meas_runtime(self, x_raw) -> Optional[ContactMeasRuntime]:
+        import torch
+
+        if x_raw is None or (not torch.is_tensor(x_raw)):
+            return None
+        if x_raw.dim() == 3 and x_raw.size(1) == 1:
+            x_raw = x_raw[:, 0]
+        if x_raw.dim() != 2:
+            return None
+
+        model = getattr(self, "model", None)
+        contact_dim = int(getattr(model, "contact_dim", 0) or 0) if model is not None else 0
+        if contact_dim <= 0:
+            return None
+
+        x_layout = getattr(self, "_x_layout", None) or {}
+        rot_slice = self._sl_from_layout(x_layout, "BoneRotations6D")
+        if not isinstance(rot_slice, slice):
+            return None
+        rot_flat = x_raw[..., rot_slice]
+        if rot_flat.numel() == 0 or (rot_flat.shape[-1] % 6 != 0):
+            return None
+        joint_count = int(rot_flat.shape[-1] // 6)
+
+        parents = getattr(self.loss_fn, "parents", None)
+        offsets = getattr(self.loss_fn, "bone_offsets", None)
+        if not parents or offsets is None:
+            return None
+        if offsets.shape[0] < joint_count:
+            return None
+
+        root_slice = self._sl_from_layout(x_layout, "RootPosition")
+        if isinstance(root_slice, slice) and (root_slice.stop - root_slice.start) == 3:
+            root_pos = x_raw[..., root_slice]
+        else:
+            root_pos = x_raw.new_zeros((x_raw.shape[0], 3))
+
+        up_axis = int(getattr(self, "eval_up_axis", getattr(self, "_up_axis", 2)))
+        up_axis = 2 if up_axis not in (0, 1, 2) else up_axis
+        return ContactMeasRuntime(
+            x_raw=x_raw,
+            contact_dim=contact_dim,
+            rot_slice=rot_slice,
+            rot_flat=rot_flat,
+            joint_count=joint_count,
+            parents=parents,
+            offsets=offsets,
+            root_pos=root_pos,
+            up_axis=up_axis,
+        )
+
+    def _resolve_contact_meas_cfg(self) -> dict[str, Any]:
+        cfg = getattr(self, "_contact_meas_cfg", None)
+        if not isinstance(cfg, dict):
+            meta = getattr(self.loss_fn, "meta", None)
+            foot_evidence = (meta.get("foot_evidence") if isinstance(meta, dict) else {}) or {}
+            sweep = (foot_evidence.get("sweep") if isinstance(foot_evidence, dict) else {}) or {}
+            spec = (foot_evidence.get("soft_score_spec") if isinstance(foot_evidence, dict) else {}) or {}
+
+            def _finite_float(mapping: Mapping[str, Any], key: str, default: float) -> float:
+                if not isinstance(mapping, Mapping):
+                    return default
+                try:
+                    value = float(mapping.get(key, default))
+                except Exception:
+                    value = default
+                return default if not math.isfinite(value) else value
+
+            radius_cm = _finite_float(sweep, "sphere_radius_cm", 0.0)
+            up_offset_cm = _finite_float(sweep, "up_offset_cm", 0.0)
+            down_distance_cm = _finite_float(sweep, "down_distance_cm", 0.0)
+            cfg = {
+                "radius_m": max(0.0, radius_cm) / 100.0,
+                "up_offset_m": max(0.0, up_offset_cm) / 100.0,
+                "down_distance_m": max(0.0, down_distance_cm) / 100.0,
+                "dist0_cm": max(0.0, _finite_float(spec, "dist0_cm", 0.5)),
+                "alpha_dist": max(1e-6, _finite_float(spec, "alpha_dist", 2.0)),
+                "vz0_cmps": max(1e-6, _finite_float(spec, "vz0_cmps", 40.0)),
+                "alpha_vz": max(1e-6, _finite_float(spec, "alpha_vz", 0.5)),
+                "vxy0_cmps": max(1e-6, _finite_float(spec, "vxy0_cmps", 96.0)),
+                "alpha_vxy": max(1e-6, _finite_float(spec, "alpha_vxy", 0.2)),
+                "gate_by_hit": bool(spec.get("gate_by_hit", True)) if isinstance(spec, dict) else True,
+                "min_score": 1e-4,
+                "max_score": 0.9,
+                "scale": 0.92,
+            }
+            self._contact_meas_cfg = cfg
+
+        gate_override = getattr(self, "contact_meas_gate_by_hit_override", None)
+        if gate_override is not None:
+            cfg["gate_by_hit"] = bool(gate_override)
+        return cfg
+
+    def _resolve_contact_meas_foot_indices(
+        self,
+        *,
+        bone_names: Sequence[str],
+        joint_count: int,
+        contact_dim: int,
+    ) -> Optional[list[int]]:
+        foot_indices = getattr(self, "_contact_meas_foot_idxs", None)
+        if not isinstance(foot_indices, (list, tuple)) or len(foot_indices) != contact_dim:
+            foot_indices = None
+        if foot_indices is not None:
+            return [int(idx) for idx in foot_indices]
+
+        resolved: list[int] = []
+        name_to_idx = {name: idx for idx, name in enumerate(bone_names[:joint_count])} if bone_names else {}
+        meta = getattr(self.loss_fn, "meta", None)
+        if isinstance(meta, dict):
+            markers = meta.get("foot_evidence", {}).get("markers")
+            if isinstance(markers, str):
+                for name in [item.strip() for item in markers.split(",") if item.strip()]:
+                    idx = name_to_idx.get(name)
+                    if isinstance(idx, int):
+                        resolved.append(int(idx))
+        for name in ("ball_l", "ball_r", "foot_l", "foot_r"):
+            if len(resolved) >= contact_dim:
+                break
+            idx = name_to_idx.get(name)
+            if isinstance(idx, int) and 0 <= idx < joint_count and idx not in resolved:
+                resolved.append(int(idx))
+        if len(resolved) != contact_dim:
+            return None
+        self._contact_meas_foot_idxs = list(resolved)
+        return resolved
 
     def _contact_meas_whitebox(self, x_raw, prev_foot_pos=None):
         """
@@ -264,120 +678,42 @@ class Trainer:
         """
         import torch
         log_wb = bool(getattr(self, "log_contacts_whitebox", False))
-        if log_wb:
-            # Avoid stale debug payload when we early-return.
-            setattr(self, "_contact_meas_whitebox_debug", None)
-        if x_raw is None or (not torch.is_tensor(x_raw)):
+        debug_payload: Optional[Dict[str, Any]] = None
+        runtime = self._resolve_contact_meas_runtime(x_raw)
+        if runtime is None:
+            if log_wb:
+                self._contact_meas_whitebox_debug = None
             return None, prev_foot_pos
-        if x_raw.dim() == 3 and x_raw.size(1) == 1:
-            x_raw = x_raw[:, 0]
-        if x_raw.dim() != 2:
-            return None, prev_foot_pos
-        contact_dim = int(getattr(self.model, "contact_dim", 0) or 0) if getattr(self, "model", None) is not None else 0
-        if contact_dim <= 0:
-            return None, prev_foot_pos
-
-        x_layout = getattr(self, "_x_layout", None) or {}
-        rot_sl = self._sl_from_layout(x_layout, "BoneRotations6D")
-        if not isinstance(rot_sl, slice):
-            return None, prev_foot_pos
-        rot_flat = x_raw[..., rot_sl]
-        if rot_flat.numel() == 0 or (rot_flat.shape[-1] % 6 != 0):
-            return None, prev_foot_pos
-        J = int(rot_flat.shape[-1] // 6)
-
-        parents = getattr(self.loss_fn, "parents", None)
-        offsets = getattr(self.loss_fn, "bone_offsets", None)
-        if not parents or offsets is None:
-            return None, prev_foot_pos
-        if offsets.shape[0] < J:
-            return None, prev_foot_pos
-
         bone_names_src = getattr(self.loss_fn, "bone_names", None) or getattr(self, "_bone_names", None)
         if not bone_names_src:
             meta = getattr(self.loss_fn, "meta", None)
             if isinstance(meta, dict):
                 bone_names_src = meta.get("bone_names") or meta.get("skeleton", {}).get("bone_names")
-        bone_names = [str(b) for b in bone_names_src] if isinstance(bone_names_src, (list, tuple)) else []
-
-        foot_idxs = getattr(self, "_contact_meas_foot_idxs", None)
-        if not isinstance(foot_idxs, (list, tuple)) or len(foot_idxs) != contact_dim:
-            foot_idxs = None
+        bone_names = [str(name) for name in bone_names_src] if isinstance(bone_names_src, (list, tuple)) else []
+        if runtime.joint_count > 0:
+            bone_names = bone_names[:runtime.joint_count]
+        foot_idxs = self._resolve_contact_meas_foot_indices(
+            bone_names=bone_names,
+            joint_count=runtime.joint_count,
+            contact_dim=runtime.contact_dim,
+        )
         if foot_idxs is None:
-            foot_idxs = []
-            name_to_idx = {n: i for i, n in enumerate(bone_names[:J])} if bone_names else {}
-            meta = getattr(self.loss_fn, "meta", None)
-            if isinstance(meta, dict):
-                markers = meta.get("foot_evidence", {}).get("markers")
-                if isinstance(markers, str):
-                    for nm in [s.strip() for s in markers.split(",") if s.strip()]:
-                        if nm in name_to_idx:
-                            foot_idxs.append(int(name_to_idx[nm]))
-            for nm in ("ball_l", "ball_r", "foot_l", "foot_r"):
-                if len(foot_idxs) >= contact_dim:
-                    break
-                idx = name_to_idx.get(nm)
-                if isinstance(idx, int) and 0 <= idx < J and idx not in foot_idxs:
-                    foot_idxs.append(int(idx))
-            if len(foot_idxs) != contact_dim:
-                return None, prev_foot_pos
-            self._contact_meas_foot_idxs = list(foot_idxs)
+            if log_wb:
+                self._contact_meas_whitebox_debug = None
+            return None, prev_foot_pos
+        cfg = self._resolve_contact_meas_cfg()
 
-        root_sl = self._sl_from_layout(x_layout, "RootPosition")
-        if isinstance(root_sl, slice) and (root_sl.stop - root_sl.start) == 3:
-            root_pos = x_raw[..., root_sl]
-        else:
-            root_pos = x_raw.new_zeros((x_raw.shape[0], 3))
-
-        up_axis = int(getattr(self, "eval_up_axis", getattr(self, "_up_axis", 2)))
-        up_axis = 2 if up_axis not in (0, 1, 2) else up_axis
-
-        cfg = getattr(self, "_contact_meas_cfg", None)
-        if not isinstance(cfg, dict):
-            meta = getattr(self.loss_fn, "meta", None)
-            fe = (meta.get("foot_evidence") if isinstance(meta, dict) else {}) or {}
-            sweep = (fe.get("sweep") if isinstance(fe, dict) else {}) or {}
-            spec = (fe.get("soft_score_spec") if isinstance(fe, dict) else {}) or {}
-
-            def _f(d, k, default):
-                if not isinstance(d, dict):
-                    return default
-                try:
-                    v = float(d.get(k, default))
-                except Exception:
-                    v = default
-                return default if (not math.isfinite(v)) else v
-
-            radius_cm = _f(sweep, "sphere_radius_cm", 0.0)
-            up_offset_cm = _f(sweep, "up_offset_cm", 0.0)
-            down_distance_cm = _f(sweep, "down_distance_cm", 0.0)
-
-            cfg = {
-                "radius_m": max(0.0, radius_cm) / 100.0,
-                "up_offset_m": max(0.0, up_offset_cm) / 100.0,
-                "down_distance_m": max(0.0, down_distance_cm) / 100.0,
-                "dist0_cm": max(0.0, _f(spec, "dist0_cm", 0.5)),
-                "alpha_dist": max(1e-6, _f(spec, "alpha_dist", 2.0)),
-                "vz0_cmps": max(1e-6, _f(spec, "vz0_cmps", 40.0)),
-                "alpha_vz": max(1e-6, _f(spec, "alpha_vz", 0.5)),
-                "vxy0_cmps": max(1e-6, _f(spec, "vxy0_cmps", 96.0)),
-                "alpha_vxy": max(1e-6, _f(spec, "alpha_vxy", 0.2)),
-                "gate_by_hit": bool(spec.get("gate_by_hit", True)) if isinstance(spec, dict) else True,
-                # Empirically close to the JSON FootEvidence range (~[1e-4, 0.9]).
-                "min_score": 1e-4,
-                "max_score": 0.9,
-                "scale": 0.92,
-            }
-            self._contact_meas_cfg = cfg
-        gate_override = getattr(self, "contact_meas_gate_by_hit_override", None)
-        if isinstance(cfg, dict) and gate_override is not None:
-            cfg["gate_by_hit"] = bool(gate_override)
+        x_raw = runtime.x_raw
+        contact_dim = runtime.contact_dim
+        rot_flat = runtime.rot_flat
+        J = runtime.joint_count
+        parents = runtime.parents
+        offsets = runtime.offsets
+        root_pos = runtime.root_pos
+        up_axis = runtime.up_axis
 
         with torch.no_grad():
-            try:
-                from train.geometry import fk_positions_from_rot6d, reproject_rot6d
-            except ImportError:  # pragma: no cover
-                from geometry import fk_positions_from_rot6d, reproject_rot6d
+            from .geometry import fk_positions_from_rot6d, reproject_rot6d
 
             cols = getattr(self.loss_fn, "_rot6d_columns", ("X", "Z"))
             rot_proj = reproject_rot6d(rot_flat).view(x_raw.shape[0], J, 6)
@@ -640,17 +976,769 @@ class Trainer:
                         "VxyScoreMean": _mean_list(vxy_score),
                         "MeasMean": _mean_list(contacts_meas),
                     }
-                    setattr(self, "_contact_meas_whitebox_debug", wb_debug)
+                    debug_payload = wb_debug
                 except Exception:
-                    setattr(self, "_contact_meas_whitebox_debug", None)
+                    debug_payload = None
 
         # Cache root_pos for the next-step velocity estimate (kept in Trainer state).
-        try:
-            self._contact_meas_prev_root_pos = root_pos.detach()
-        except Exception:
-            pass
-
+        self._contact_meas_prev_root_pos = root_pos.detach() if torch.is_tensor(root_pos) else root_pos
+        if log_wb:
+            self._contact_meas_whitebox_debug = debug_payload
         return contacts_meas, foot_pos.detach()
+
+    def _predict_pretrain_contacts_from_frozen(
+        self,
+        *,
+        motion_step_t: Optional[torch.Tensor],
+        pose_hist_step_t: Optional[torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        import torch
+
+        if not torch.is_tensor(motion_step_t):
+            return None
+        model = getattr(self, 'model', None)
+        if model is None:
+            return None
+        enc = getattr(model, 'frozen_encoder', None)
+        head = getattr(model, 'frozen_contact_head', None)
+        if enc is None or head is None:
+            return None
+        try:
+            cdim = int(getattr(model, 'contact_dim', 0) or 0)
+            in_dim = int(getattr(model, 'encoder_input_dim', 0) or 0)
+            if cdim <= 0 or in_dim <= 0:
+                return None
+
+            batch_size = int(motion_step_t.shape[0])
+            device = motion_step_t.device
+            dtype = motion_step_t.dtype
+            contacts_seed = torch.zeros((batch_size, cdim), device=device, dtype=dtype)
+
+            angvel_slice = getattr(self, 'angvel_x_slice', None)
+            if not isinstance(angvel_slice, slice):
+                angvel_slice = getattr(model, '_contact_meas_state_angvel_slice', None)
+            if isinstance(angvel_slice, slice):
+                try:
+                    angvel_t = motion_step_t[..., angvel_slice]
+                except Exception:
+                    angvel_t = None
+            else:
+                angvel_t = None
+            if not torch.is_tensor(angvel_t):
+                angvel_t = torch.zeros((batch_size, 0), device=device, dtype=dtype)
+            elif angvel_t.ndim != 2:
+                angvel_t = angvel_t.reshape(batch_size, -1)
+
+            if torch.is_tensor(pose_hist_step_t):
+                pose_hist_t = pose_hist_step_t.to(device=device, dtype=dtype)
+                if pose_hist_t.ndim == 3 and int(pose_hist_t.size(1)) == 1:
+                    pose_hist_t = pose_hist_t[:, 0]
+                elif pose_hist_t.ndim != 2:
+                    pose_hist_t = pose_hist_t.reshape(batch_size, -1)
+            else:
+                pose_hist_t = torch.zeros((batch_size, 0), device=device, dtype=dtype)
+
+            encoder_input = torch.cat([contacts_seed, angvel_t, pose_hist_t], dim=-1)
+            if int(encoder_input.shape[-1]) != int(in_dim):
+                if int(encoder_input.shape[-1]) > int(in_dim):
+                    encoder_input = encoder_input[..., : int(in_dim)]
+                else:
+                    encoder_input = F.pad(encoder_input, (0, int(in_dim) - int(encoder_input.shape[-1])))
+
+            pre_clamp_raw = getattr(
+                self,
+                'trainbase_contacts_pretrain_clamp',
+                getattr(self, 'posttrain_contacts_pretrain_clamp', 1.0),
+            )
+            try:
+                pre_clamp = float(pre_clamp_raw or 0.0)
+            except Exception:
+                pre_clamp = 1.0
+            if _math.isfinite(float(pre_clamp)) and float(pre_clamp) > 0.0:
+                encoder_input = encoder_input.clamp(-float(pre_clamp), float(pre_clamp))
+
+            affine_cfg = getattr(
+                self,
+                'trainbase_contacts_pretrain_affine',
+                getattr(self, 'posttrain_contacts_pretrain_affine', None),
+            )
+
+            with torch.no_grad():
+                hidden = enc(encoder_input.unsqueeze(1), return_summary=False)
+                logits = head(hidden)
+                if torch.is_tensor(logits) and logits.ndim == 3 and int(logits.size(1)) == 1:
+                    logits = logits[:, 0]
+                if (not torch.is_tensor(logits)) or logits.ndim != 2:
+                    return None
+                if isinstance(affine_cfg, dict):
+                    scale = affine_cfg.get('scale', None)
+                    bias = affine_cfg.get('bias', None)
+                    try:
+                        eps = float(affine_cfg.get('eps', 1e-4) or 1e-4)
+                    except Exception:
+                        eps = 1e-4
+                    if not _math.isfinite(float(eps)):
+                        eps = 1e-4
+                    eps = float(min(1e-2, max(1e-8, eps)))
+                    channels = int(logits.shape[-1])
+                    if (
+                        isinstance(scale, (list, tuple))
+                        and isinstance(bias, (list, tuple))
+                        and int(len(scale)) == channels
+                        and int(len(bias)) == channels
+                    ):
+                        scale_t = torch.tensor([float(x) for x in scale], device=device, dtype=logits.dtype).view(1, channels)
+                        bias_t = torch.tensor([float(x) for x in bias], device=device, dtype=logits.dtype).view(1, channels)
+                        probs = torch.sigmoid(logits).clamp(eps, 1.0 - eps)
+                        logits = bias_t + scale_t * (torch.log(probs) - torch.log1p(-probs))
+                probs = torch.sigmoid(logits)
+                if int(probs.shape[-1]) != int(cdim):
+                    if int(probs.shape[-1]) > int(cdim):
+                        probs = probs[..., : int(cdim)]
+                    else:
+                        probs = F.pad(probs, (0, int(cdim) - int(probs.shape[-1])))
+                return probs
+        except Exception:
+            return None
+
+    def _prepare_pose_hist_state(
+        self,
+        state_seq: torch.Tensor,
+        pose_hist_seq: Optional[torch.Tensor],
+        y_raw_local: Optional[torch.Tensor],
+        rot6d_y_slice: slice,
+        tf_ratio: float,
+        has_time_dim: Mapping[str, bool],
+    ) -> PoseHistState:
+        import torch
+
+        pose_hist_len = int(getattr(self, 'pose_hist_len', 0) or 0)
+        pose_hist_dim = int(getattr(self, 'pose_hist_dim', 0) or 0)
+        pose_hist_stride = pose_hist_dim // pose_hist_len if pose_hist_len > 0 else 0
+        pose_hist_state = PoseHistState(
+            enabled=(pose_hist_len > 0 and pose_hist_dim > 0 and pose_hist_stride > 0),
+            length=pose_hist_len,
+            dim=pose_hist_dim,
+            stride=pose_hist_stride,
+        )
+        if bool(getattr(self, "force_pose_hist_seq", False)):
+            pose_hist_state.enabled = False
+            return pose_hist_state
+        if not pose_hist_state.enabled:
+            return pose_hist_state
+
+        scales, mu, std = self._pose_hist_params(state_seq)
+        if scales is None:
+            pose_hist_state.enabled = False
+            return pose_hist_state
+        pose_hist_state.scales = scales
+        pose_hist_state.mu = mu
+        pose_hist_state.std = std
+
+        if has_time_dim['pose_hist']:
+            initial_norm = pose_hist_seq[:, 0].to(device=state_seq.device, dtype=state_seq.dtype)
+        elif isinstance(pose_hist_seq, torch.Tensor) and pose_hist_seq.numel() > 0:
+            initial_norm = pose_hist_seq.to(device=state_seq.device, dtype=state_seq.dtype)
+        else:
+            initial_norm = None
+
+        with torch.no_grad():
+            if initial_norm is not None:
+                pose_hist_state.buffer_norm = initial_norm
+                pose_hist_state.buffer_raw = self._pose_hist_inverse_vec(initial_norm, scales, mu, std)
+            else:
+                base_rot = y_raw_local[..., rot6d_y_slice]
+                pose_hist_state.buffer_raw = (
+                    base_rot.unsqueeze(1)
+                    .repeat(1, pose_hist_len, 1)
+                    .reshape(state_seq.shape[0], pose_hist_dim)
+                )
+                pose_hist_state.buffer_norm = self._pose_hist_transform_vec(
+                    pose_hist_state.buffer_raw,
+                    scales,
+                    mu,
+                    std,
+                )
+
+        return pose_hist_state
+
+    def _resolve_rollout_step_inputs(self, context: Any) -> Any:
+        import torch
+
+        step_idx = int(context.step_idx)
+        cond_input = context.cond_seq[:, step_idx] if context.has_time_dim['cond'] else context.cond_seq
+        prev_foot_pos_meas = context.prev_foot_pos_meas
+
+        angvel_slice = getattr(self, "angvel_x_slice", None)
+        if bool(getattr(self, "use_freerun_state_sync", False)) and isinstance(angvel_slice, slice):
+            angvel_t = context.motion[..., angvel_slice].detach()
+        else:
+            angvel_t = context.angvel_seq[:, step_idx] if context.has_time_dim['angvel'] else context.angvel_seq
+
+        if context.pose_hist_state.enabled:
+            pose_history_t = context.pose_hist_state.buffer_norm
+        else:
+            pose_history_t = context.pose_hist_seq[:, step_idx] if context.has_time_dim['pose_hist'] else context.pose_hist_seq
+
+        contacts_in_t = None
+        if context.plan_enable:
+            contacts_source = str(getattr(self, 'trainbase_contacts_source', 'whitebox') or 'whitebox').strip().lower()
+            if contacts_source == 'pretrain_contact':
+                contacts_in_t = self._predict_pretrain_contacts_from_frozen(
+                    motion_step_t=context.motion,
+                    pose_hist_step_t=pose_history_t,
+                )
+                if contacts_in_t is None:
+                    raise RuntimeError(
+                        '[FATAL] trainbase_contacts_source=pretrain_contact requires valid frozen encoder+contact_head '
+                        'and runtime-compatible encoder input dimensions.'
+                    )
+            else:
+                try:
+                    contacts_in_t, prev_foot_pos_meas = self._contact_meas_whitebox(
+                        context.motion_raw_local,
+                        prev_foot_pos_meas,
+                    )
+                except Exception:
+                    contacts_in_t = None
+
+        cond_raw_t = None
+        if context.cond_raw_seq is not None:
+            if context.has_time_dim['cond_raw']:
+                cond_idx = min(context.cond_raw_seq.shape[1] - 1, max(0, step_idx + 1))
+                cond_raw_t = context.cond_raw_seq[:, cond_idx]
+            elif torch.is_tensor(context.cond_raw_seq):
+                cond_raw_t = context.cond_raw_seq
+            else:
+                cond_raw_t = context.cond_raw_seq
+
+        cond_raw_for_env = cond_raw_t
+        cond_raw_for_model = cond_raw_t
+        reprojection_applied = False
+        if context.enable_reprojection and step_idx > 0 and context.mode in ('free', 'train_free', 'mixed') and cond_raw_t is not None:
+            gt_yaw = None
+            if context.gt_seq is not None and context.has_time_dim.get('cond_raw'):
+                gt_idx = min(context.gt_seq.shape[1] - 1, step_idx)
+                gt_raw = self._denorm(context.gt_seq[:, gt_idx])
+                gt_yaw = self._infer_root_yaw_from_rot6d(gt_raw)
+            elif context.state_seq is not None:
+                state_raw = self.normalizer.denorm_x(context.state_seq[:, step_idx], prev_raw=context.motion_raw_local)
+                gt_yaw = self._infer_root_yaw_from_rot6d(state_raw)
+
+            pred_yaw = self._infer_root_yaw_from_rot6d(context.y_raw_local) if context.y_raw_local is not None else None
+            if gt_yaw is not None and pred_yaw is not None:
+                cond_raw_t_reprojected = self._reproject_cond_to_local_frame(cond_raw_t, gt_yaw, pred_yaw)
+                if cond_raw_t_reprojected is not None:
+                    cond_raw_for_model = cond_raw_t_reprojected
+                    reprojection_applied = True
+
+        if cond_raw_for_model is not None:
+            cond_override = self._normalize_cond_from_raw(
+                cond_raw_for_model,
+                context.cond_norm_mu,
+                context.cond_norm_std,
+            )
+            if cond_override is not None:
+                cond_input = cond_override
+        if cond_input is None and context.cond_seq is not None:
+            cond_input = context.cond_seq[:, step_idx] if context.has_time_dim['cond'] else context.cond_seq
+
+        time_index_t = None
+        if context.time_base_local is not None:
+            try:
+                time_index_t = context.time_base_local + step_idx
+            except Exception:
+                time_index_t = None
+
+        rollout_step_t = None
+        try:
+            if int(context.total_steps) > 1:
+                step_norm = float(step_idx) / float(int(context.total_steps) - 1)
+            else:
+                step_norm = 0.0
+            rollout_step_t = torch.full(
+                (context.motion.shape[0], 1, 1),
+                step_norm,
+                device=context.motion.device,
+                dtype=context.motion.dtype,
+            )
+        except Exception:
+            rollout_step_t = None
+
+        return SimpleNamespace(
+            cond_input=cond_input,
+            contacts_in_t=contacts_in_t,
+            angvel_t=angvel_t,
+            pose_history_t=pose_history_t,
+            cond_raw_for_env=cond_raw_for_env,
+            prev_foot_pos_meas=prev_foot_pos_meas,
+            time_index_t=time_index_t,
+            rollout_step_t=rollout_step_t,
+            reprojection_applied=reprojection_applied,
+        )
+
+    def _update_rollout_carry_state(self, request: Any) -> Any:
+        import torch
+
+        if request.motion_raw_local is None:
+            self._raise_norm_error("rollout 更新需要 DataNormalizer 提供 RAW 状态写回。")
+        free_raw = self._apply_free_carry(
+            request.motion_raw_local,
+            request.y_raw,
+            cond_next_raw=request.cond_raw_for_env,
+        )
+        if request.allow_grad:
+            free_raw = free_raw.clone()
+        else:
+            free_raw = free_raw.detach()
+        free_z = self._diag_norm_x(free_raw)
+        gt_next = request.state_seq[:, request.step_idx + 1]
+        ss_sel_hold = request.ss_sel_hold
+        if ss_sel_hold is None or request.ss_chunk_len <= 1 or (request.step_idx % request.ss_chunk_len == 0):
+            ss_sel_hold = (torch.rand(request.batch_size, device=self.device) < float(request.tf_ratio)).float().unsqueeze(-1)
+        sel = ss_sel_hold
+        if sel.dtype != gt_next.dtype:
+            sel = sel.to(gt_next.dtype)
+        motion = sel * gt_next + (1.0 - sel) * free_z
+
+        try:
+            gt_raw_next = self.normalizer.denorm_x(gt_next, prev_raw=request.motion_raw_local)
+            motion_raw_local = sel * gt_raw_next + (1.0 - sel) * free_raw
+        except Exception as exc:
+            self._raise_norm_error("normalizer.denorm_x 在 rollout 更新时失败", exc)
+
+        y_raw_local = request.y_raw_local
+        if request.gt_seq is not None and request.gt_seq.dim() == 3:
+            try:
+                y_next = self._denorm(request.gt_seq[:, request.step_idx + 1]).detach()
+                y_raw_local = sel * y_next + (1.0 - sel) * y_raw_local
+            except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+                _phasec_warn_once(
+                    "rollout/carry_gt_denorm",
+                    "failed to blend GT RAW carry in scheduled sampling; keeping model RAW carry",
+                    exc,
+                )
+
+        pose_hist_state = request.pose_hist_state
+        if pose_hist_state.enabled and pose_hist_state.stride > 0 and pose_hist_state.buffer_raw is not None:
+            with torch.no_grad():
+                pose_hist_buffer_raw = torch.roll(
+                    pose_hist_state.buffer_raw,
+                    shifts=-pose_hist_state.stride,
+                    dims=-1,
+                )
+                pose_hist_buffer_raw[..., -pose_hist_state.stride:] = y_raw_local[..., request.rot6d_y_slice]
+                pose_hist_buffer_norm = self._pose_hist_transform_vec(
+                    pose_hist_buffer_raw,
+                    pose_hist_state.scales,
+                    pose_hist_state.mu,
+                    pose_hist_state.std,
+                )
+            pose_hist_state = PoseHistState(
+                enabled=pose_hist_state.enabled,
+                length=pose_hist_state.length,
+                dim=pose_hist_state.dim,
+                stride=pose_hist_state.stride,
+                scales=pose_hist_state.scales,
+                mu=pose_hist_state.mu,
+                std=pose_hist_state.std,
+                buffer_norm=pose_hist_buffer_norm,
+                buffer_raw=pose_hist_buffer_raw,
+            )
+        return SimpleNamespace(
+            motion=motion,
+            motion_raw_local=motion_raw_local,
+            y_raw_local=y_raw_local,
+            ss_sel_hold=ss_sel_hold,
+            pose_hist_state=pose_hist_state,
+        )
+
+    def _init_rollout_state(
+        self,
+        rollout_inputs: RolloutSequenceInputs,
+        *,
+        cond_norm_mu: Optional[torch.Tensor] = None,
+        cond_norm_std: Optional[torch.Tensor] = None,
+        mode: str = 'mixed',
+        tf_ratio: float = 1.0,
+        time_base: Any = None,
+    ) -> RolloutExecutionState:
+        state_seq = rollout_inputs.state_seq
+        gt_seq = rollout_inputs.gt_seq
+        batch_size, total_steps, _ = state_seq.shape
+        allow_grad = mode == 'train_free'
+
+        try:
+            ss_chunk_len = int(getattr(self, 'ss_chunk_len', 1) or 1)
+        except Exception:
+            ss_chunk_len = 1
+        ss_chunk_len = max(1, ss_chunk_len)
+
+        motion = state_seq[:, 0]
+        try:
+            motion_raw_local = self.normalizer.denorm_x(motion)
+        except Exception as exc:
+            self._raise_norm_error('normalizer.denorm_x 在 roll-out 初始化时失败', exc)
+
+        y_raw_local = None
+        dy = None
+        if gt_seq is not None and gt_seq.dim() == 3:
+            y0 = gt_seq[:, 0]
+            dy = y0.shape[-1]
+            y_raw_local = self._denorm(y0)
+        if dy is None:
+            dy = int(getattr(self, 'Dy', 0) or (gt_seq.shape[-1] if gt_seq is not None else 0))
+
+        rot6d_slice = getattr(self.train_loader, 'rot6d_x_slice', None) if hasattr(self, 'train_loader') else None
+        if rot6d_slice is None:
+            rot6d_slice = getattr(self, 'rot6d_x_slice', None) or getattr(self, 'rot6d_slice', None)
+        if not isinstance(rot6d_slice, slice):
+            rot6d_slice = slice(0, motion.size(-1))
+
+        if y_raw_local is None and motion_raw_local is not None and dy:
+            slice_len = rot6d_slice.stop - rot6d_slice.start
+            if slice_len != dy:
+                self._raise_norm_error('rollout 初始化 rot6d_x_slice 与 Dy 不匹配。')
+            y_raw_local = motion_raw_local[..., rot6d_slice].clone()
+        if y_raw_local is None and dy:
+            joint_count = dy // 6
+            if joint_count > 0:
+                zeros = state_seq.new_zeros((batch_size, joint_count, 6))
+                y_raw_local = _rot6d_identity_like(zeros).view(batch_size, dy)
+
+        has_time_dim = {
+            'cond': callable(getattr(rollout_inputs.cond_seq, 'dim', None)) and rollout_inputs.cond_seq.dim() == 3,
+            'cond_raw': callable(getattr(rollout_inputs.cond_raw_seq, 'dim', None)) and getattr(rollout_inputs.cond_raw_seq, 'dim', lambda: 0)() == 3,
+            'contacts': callable(getattr(rollout_inputs.contacts_seq, 'dim', None)) and rollout_inputs.contacts_seq.dim() == 3,
+            'angvel': callable(getattr(rollout_inputs.angvel_seq, 'dim', None)) and rollout_inputs.angvel_seq.dim() == 3,
+            'pose_hist': callable(getattr(rollout_inputs.pose_hist_seq, 'dim', None)) and rollout_inputs.pose_hist_seq.dim() == 3,
+        }
+        amp_enabled = bool(getattr(self, 'use_amp', False))
+        rot6d_y_slice = getattr(self, 'rot6d_y_slice', None) or rot6d_slice
+        pose_hist_state = self._prepare_pose_hist_state(
+            state_seq,
+            rollout_inputs.pose_hist_seq,
+            y_raw_local,
+            rot6d_y_slice,
+            tf_ratio,
+            has_time_dim,
+        )
+
+        cond_norm_mu = self._prepare_cond_stat(cond_norm_mu, state_seq) if cond_norm_mu is not None else None
+        cond_norm_std = self._prepare_cond_stat(cond_norm_std, state_seq) if cond_norm_std is not None else None
+
+        enable_reprojection = bool(getattr(self, 'enable_cond_reprojection', True))
+        yaw_strategy = str(getattr(self, 'freerun_yaw_strategy', 'trajectory') or 'trajectory')
+        if yaw_strategy == 'trajectory':
+            enable_reprojection = False
+
+        time_base_local = time_base
+        if torch.is_tensor(time_base_local):
+            try:
+                time_base_local = time_base_local.to(device=state_seq.device)
+            except Exception:
+                time_base_local = time_base
+
+        return RolloutExecutionState(
+            batch_size=batch_size,
+            total_steps=total_steps,
+            mode=mode,
+            allow_grad=allow_grad,
+            tf_ratio=float(tf_ratio),
+            ss_chunk_len=ss_chunk_len,
+            amp_enabled=amp_enabled,
+            rot6d_slice=rot6d_slice,
+            rot6d_y_slice=rot6d_y_slice,
+            has_time_dim=has_time_dim,
+            cond_norm_mu=cond_norm_mu,
+            cond_norm_std=cond_norm_std,
+            enable_reprojection=enable_reprojection,
+            plan_enable=bool(getattr(self.model, 'contact_plan_enable', False)),
+            time_base_local=time_base_local,
+            motion=motion,
+            motion_raw_local=motion_raw_local,
+            y_raw_local=y_raw_local,
+            pose_hist_state=pose_hist_state,
+        )
+
+    def _get_rollout_step_tensor(
+        self,
+        ret: Mapping[str, Any],
+        key: str,
+    ) -> Optional[torch.Tensor]:
+        value = ret.get(key, None)
+        if not torch.is_tensor(value):
+            return None
+        if value.dim() == 2:
+            return value.unsqueeze(1)
+        if value.dim() >= 3 and value.size(1) != 1:
+            return value[:, -1:, ...]
+        return value
+
+    def _update_rollout_plan_state(
+        self,
+        rollout: RolloutExecutionState,
+        ret: Mapping[str, Any],
+    ) -> None:
+        if not rollout.plan_enable:
+            return
+
+        contacts_plan = self._get_rollout_step_tensor(ret, 'contacts_plan')
+        if contacts_plan is not None:
+            rollout.buffers.contacts_plan.append(contacts_plan)
+
+        contacts_plan_logits = self._get_rollout_step_tensor(ret, 'contacts_plan_logits')
+        if contacts_plan_logits is not None:
+            rollout.buffers.contacts_plan_logits.append(contacts_plan_logits)
+
+        direct_out = self._get_rollout_step_tensor(ret, 'out_direct')
+        if direct_out is not None:
+            rollout.buffers.out_direct.append(direct_out)
+
+        for source_key, target_attr in (
+            ('plan_z_next', 'plan_z'),
+            ('phase_z_next', 'phase_z'),
+            ('phase_event_age_next', 'phase_event_age'),
+        ):
+            value = ret.get(source_key, None)
+            if value is None:
+                continue
+            if torch.is_tensor(value) and not rollout.allow_grad:
+                value = value.detach()
+            setattr(rollout, target_attr, value)
+
+    def _record_rollout_step_outputs(
+        self,
+        rollout: RolloutExecutionState,
+        *,
+        y_norm: torch.Tensor,
+        delta_out: torch.Tensor,
+        period_pred: Optional[torch.Tensor],
+        ret: Mapping[str, Any],
+    ) -> None:
+        rollout.outs.append(y_norm)
+        rollout.delta_preds.append(delta_out)
+        if period_pred is not None:
+            rollout.buffers.period_pred.append(period_pred)
+
+        hidden_step = ret.get('h_final', None)
+        if torch.is_tensor(hidden_step):
+            if hidden_step.dim() == 1:
+                hidden_step = hidden_step.unsqueeze(0).unsqueeze(0)
+            elif hidden_step.dim() == 2:
+                hidden_step = hidden_step.unsqueeze(1)
+            elif hidden_step.dim() >= 3 and hidden_step.size(1) != 1:
+                hidden_step = hidden_step[:, -1:, ...]
+            rollout.buffers.hidden_seq.append(hidden_step)
+
+        for key, target in (
+            ('contacts_meas', rollout.buffers.contacts_meas),
+            ('contacts_err', rollout.buffers.contacts_err),
+            ('event_clock_lambda_logit', rollout.buffers.event_clock_lambda_logit),
+            ('event_clock_dynamic_prior', rollout.buffers.event_clock_dynamic_prior),
+            ('event_clock_delta_z', rollout.buffers.event_clock_delta_z),
+        ):
+            value = self._get_rollout_step_tensor(ret, key)
+            if value is not None:
+                target.append(value)
+
+    def _compute_rollout_step_debug_stats(
+        self,
+        *,
+        delta_out: torch.Tensor,
+        y_raw: torch.Tensor,
+        prev_raw_snapshot: Optional[torch.Tensor],
+        pred_raw_local: Optional[torch.Tensor],
+        gt_seq: Optional[torch.Tensor],
+        step_idx: int,
+    ) -> Dict[str, Optional[float]]:
+        debug_stats: Dict[str, Optional[float]] = {'rot6d_geo_deg': None}
+        try:
+            debug_stats['delta_norm_abs_mean'] = float(delta_out.abs().mean().item())
+        except Exception:
+            debug_stats['delta_norm_abs_mean'] = None
+        try:
+            if prev_raw_snapshot is not None:
+                delta_raw = y_raw - prev_raw_snapshot
+                debug_stats['delta_raw_abs_mean'] = float(delta_raw.abs().mean().item())
+            else:
+                debug_stats['delta_raw_abs_mean'] = None
+        except Exception:
+            debug_stats['delta_raw_abs_mean'] = None
+
+        if torch.is_tensor(gt_seq) and gt_seq.dim() == 3 and pred_raw_local is not None:
+            try:
+                gt_frame = self._denorm(gt_seq[:, min(step_idx + 1, gt_seq.shape[1] - 1)])
+                rot_slice = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
+                if isinstance(rot_slice, slice):
+                    pred_block = pred_raw_local[:, rot_slice].reshape(pred_raw_local.shape[0], -1, 6)
+                    gt_block = gt_frame[:, rot_slice].reshape(gt_frame.shape[0], -1, 6)
+                    pred_m = rot6d_to_matrix(reproject_rot6d(pred_block))
+                    gt_m = rot6d_to_matrix(reproject_rot6d(gt_block))
+                    geo_diff = geodesic_R(pred_m, gt_m) * (180.0 / _math.pi)
+                    debug_stats['rot6d_geo_deg'] = float(geo_diff.mean().item())
+            except Exception:
+                debug_stats['rot6d_geo_deg'] = None
+        return debug_stats
+
+    def _rollout_forward_step(
+        self,
+        rollout: RolloutExecutionState,
+        rollout_inputs: RolloutSequenceInputs,
+        *,
+        step_idx: int,
+    ) -> Dict[str, Optional[float]]:
+        step_inputs = self._resolve_rollout_step_inputs(
+            SimpleNamespace(
+                step_idx=step_idx,
+                total_steps=rollout.total_steps,
+                motion=rollout.motion,
+                motion_raw_local=rollout.motion_raw_local,
+                y_raw_local=rollout.y_raw_local,
+                state_seq=rollout_inputs.state_seq,
+                gt_seq=rollout_inputs.gt_seq,
+                cond_seq=rollout_inputs.cond_seq,
+                cond_raw_seq=rollout_inputs.cond_raw_seq,
+                contacts_seq=rollout_inputs.contacts_seq,
+                angvel_seq=rollout_inputs.angvel_seq,
+                pose_hist_seq=rollout_inputs.pose_hist_seq,
+                cond_norm_mu=rollout.cond_norm_mu,
+                cond_norm_std=rollout.cond_norm_std,
+                has_time_dim=rollout.has_time_dim,
+                pose_hist_state=rollout.pose_hist_state,
+                plan_enable=rollout.plan_enable,
+                mode=rollout.mode,
+                enable_reprojection=rollout.enable_reprojection,
+                time_base_local=rollout.time_base_local,
+                prev_foot_pos_meas=rollout.prev_foot_pos_meas,
+            )
+        )
+        rollout.prev_foot_pos_meas = step_inputs.prev_foot_pos_meas
+        if step_inputs.reprojection_applied:
+            rollout.reprojection_applied_count += 1
+
+        with self._amp_context(rollout.amp_enabled):
+            ret = self.model(
+                rollout.motion,
+                step_inputs.cond_input,
+                contacts=step_inputs.contacts_in_t,
+                angvel=step_inputs.angvel_t,
+                pose_history=step_inputs.pose_history_t,
+                plan_z=rollout.plan_z,
+                phase_z=rollout.phase_z,
+                phase_event_age=rollout.phase_event_age,
+                meas_logits_prev=rollout.meas_prev_prob,
+                time_index=step_inputs.time_index_t,
+                rollout_step=step_inputs.rollout_step_t,
+            )
+
+        if not isinstance(ret, dict):
+            raise RuntimeError("Model forward must return a dict with at least 'out'.")
+
+        delta_out = ret.get('delta', ret.get('out', None))
+        if delta_out is None:
+            raise RuntimeError("Model forward must return 'delta' tensor.")
+
+        period_pred = ret.get('period_pred', None)
+        rollout.last_attn = ret.get('attn', rollout.last_attn)
+        self._update_rollout_plan_state(rollout, ret)
+
+        meas_prob_step = ret.get('contacts_meas', None)
+        if torch.is_tensor(meas_prob_step):
+            rollout.meas_prev_prob = meas_prob_step.detach()
+
+        prev_raw_snapshot = rollout.y_raw_local.clone() if rollout.y_raw_local is not None else None
+        y_raw = self._compose_delta_to_raw(rollout.y_raw_local, delta_out)
+        if y_raw is None:
+            self._raise_norm_error('compose_delta_to_raw 返回 None，缺少上一帧 RAW 数据。')
+
+        apply_lambda = bool(getattr(self, 'lambda_fusion_apply', False))
+        if apply_lambda and rollout.mode == 'mixed':
+            try:
+                apply_lambda = float(rollout.tf_ratio) < 0.999
+            except Exception:
+                apply_lambda = False
+        if apply_lambda and rollout.mode in ('free', 'train_free', 'mixed'):
+            try:
+                lam_eff = ret.get('lambda_fusion', None)
+                if lam_eff is not None:
+                    try:
+                        lam_eff, _ = self._lambda_fusion_apply_reliability(
+                            lam_eff,
+                            step_idx=int(step_idx),
+                            total_steps=int(rollout.total_steps),
+                            rollout_step=step_inputs.rollout_step_t,
+                            ret=ret,
+                        )
+                    except Exception:
+                        lam_eff = ret.get('lambda_fusion', None)
+                y_raw = self._apply_lambda_fusion_to_raw(
+                    y_raw,
+                    direct_norm=ret.get('out_direct', None),
+                    lambda_fusion=lam_eff,
+                )
+            except (RuntimeError, TypeError, ValueError, AttributeError, KeyError) as exc:
+                _phasec_warn_once(
+                    "rollout/lambda_fusion",
+                    "lambda-fusion postprocess failed; keeping incremental compose output",
+                    exc,
+                )
+
+        rollout.y_raw_local = y_raw.clone() if rollout.allow_grad else y_raw.detach()
+        y_norm = self._norm_y(y_raw)
+        self._record_rollout_step_outputs(
+            rollout,
+            y_norm=y_norm,
+            delta_out=delta_out,
+            period_pred=period_pred,
+            ret=ret,
+        )
+        step_debug_stats = self._compute_rollout_step_debug_stats(
+            delta_out=delta_out,
+            y_raw=y_raw,
+            prev_raw_snapshot=prev_raw_snapshot,
+            pred_raw_local=rollout.y_raw_local,
+            gt_seq=rollout_inputs.gt_seq,
+            step_idx=step_idx,
+        )
+        rollout.latest_y_raw = y_raw
+        rollout.latest_cond_raw_for_env = step_inputs.cond_raw_for_env
+        return step_debug_stats
+
+    def _apply_scheduled_sampling_update(
+        self,
+        rollout: RolloutExecutionState,
+        rollout_inputs: RolloutSequenceInputs,
+        *,
+        step_idx: int,
+    ) -> None:
+        if step_idx >= rollout.total_steps - 1:
+            return
+
+        carry_state = self._update_rollout_carry_state(
+            SimpleNamespace(
+                step_idx=step_idx,
+                total_steps=rollout.total_steps,
+                batch_size=rollout.batch_size,
+                tf_ratio=float(rollout.tf_ratio),
+                state_seq=rollout_inputs.state_seq,
+                gt_seq=rollout_inputs.gt_seq,
+                motion_raw_local=rollout.motion_raw_local,
+                y_raw=rollout.latest_y_raw,
+                y_raw_local=rollout.y_raw_local,
+                allow_grad=rollout.allow_grad,
+                cond_raw_for_env=rollout.latest_cond_raw_for_env,
+                ss_chunk_len=rollout.ss_chunk_len,
+                ss_sel_hold=rollout.ss_sel_hold,
+                pose_hist_state=rollout.pose_hist_state,
+                rot6d_y_slice=rollout.rot6d_y_slice,
+            )
+        )
+        rollout.motion = carry_state.motion
+        rollout.motion_raw_local = carry_state.motion_raw_local
+        rollout.y_raw_local = carry_state.y_raw_local
+        rollout.ss_sel_hold = carry_state.ss_sel_hold
+        rollout.pose_hist_state = carry_state.pose_hist_state
 
     def _rollout_sequence(
         self,
@@ -669,859 +1757,59 @@ class Trainer:
         time_base=None,
     ):
         self._require_normalizer("Trainer._rollout_sequence")
-        import torch
         assert state_seq.dim() == 3, "state_seq expects [B,T,Dx]"
-        B, T, _ = state_seq.shape
         mode = str(mode or 'mixed')
         valid_modes = {'mixed', 'train_free'}
         if mode not in valid_modes:
             raise ValueError(f"_rollout_sequence mode must be one of {valid_modes}, got {mode}")
-        self._diag_roll_mode = mode
-        allow_grad = mode == 'train_free'
-
-        # Scheduled sampling: reuse the same sel within each chunk to avoid high-frequency switching.
-        try:
-            ss_chunk_len = int(getattr(self, "ss_chunk_len", 1) or 1)
-        except Exception:
-            ss_chunk_len = 1
-        ss_chunk_len = max(1, ss_chunk_len)
-        ss_sel_hold = None
-
-        motion = state_seq[:, 0]  # X in Z-domain at t=0
-        try:
-            motion_raw_local = self.normalizer.denorm_x(motion)
-        except Exception as exc:
-            self._raise_norm_error("normalizer.denorm_x 在 roll-out 初始化时失败", exc)
-
-        outs = []
-        delta_preds = []
-        period_preds = []
-        hidden_preds = []
-        contacts_plan_preds = []
-        contacts_plan_logits_preds = []
-        direct_pose_preds = []
-        contacts_meas_preds = []
-        contacts_meas_logits_preds = []
-        contacts_td_hazard_logits_preds = []
-        contacts_err_preds = []
-        event_clock_lambda_logit_preds = []
-        event_clock_dynamic_prior_preds = []
-        event_clock_delta_z_preds = []
-        last_attn = None
-        y_raw_local = None
-        Dy = None
-        if gt_seq is not None and gt_seq.dim() == 3:
-            y0 = gt_seq[:, 0]
-            Dy = y0.shape[-1]
-            y_raw_local = self._denorm(y0)
-        if Dy is None:
-            Dy = int(getattr(self, 'Dy', 0) or (gt_seq.shape[-1] if gt_seq is not None else 0))
-
-        rot6d_slice = getattr(self.train_loader, "rot6d_x_slice", None) if hasattr(self, "train_loader") else None
-        if rot6d_slice is None:
-            rot6d_slice = getattr(self, 'rot6d_x_slice', None) or getattr(self, 'rot6d_slice', None)
-        if not isinstance(rot6d_slice, slice):
-            rot6d_slice = slice(0, motion.size(-1))
-
-        if y_raw_local is None and motion_raw_local is not None and Dy:
-            slice_len = rot6d_slice.stop - rot6d_slice.start
-            if slice_len != Dy:
-                self._raise_norm_error("rollout 初始化 rot6d_x_slice 与 Dy 不匹配。")
-            y_raw_local = motion_raw_local[..., rot6d_slice].clone()
-        if y_raw_local is None and Dy:
-            J = Dy // 6
-            if J > 0:
-                zeros = state_seq.new_zeros((B, J, 6))
-                ident = _rot6d_identity_like(zeros).view(B, Dy)
-                y_raw_local = ident
-
-        has_time_dim = {
-            'cond': callable(getattr(cond_seq, 'dim', None)) and cond_seq.dim() == 3,
-            'cond_raw': callable(getattr(cond_raw_seq, 'dim', None)) and getattr(cond_raw_seq, 'dim', lambda: 0)() == 3,
-            'contacts': callable(getattr(contacts_seq, 'dim', None)) and contacts_seq.dim() == 3,
-            'angvel': callable(getattr(angvel_seq, 'dim', None)) and angvel_seq.dim() == 3,
-            'pose_hist': callable(getattr(pose_hist_seq, 'dim', None)) and pose_hist_seq.dim() == 3,
-        }
-
-        amp_enabled = bool(getattr(self, 'use_amp', False))
-        rot6d_y_slice = getattr(self, 'rot6d_y_slice', None) or rot6d_slice
-        pose_hist_len = int(getattr(self, 'pose_hist_len', 0) or 0)
-        pose_hist_dim = int(getattr(self, 'pose_hist_dim', 0) or 0)
-        pose_hist_stride = pose_hist_dim // pose_hist_len if pose_hist_len > 0 else 0
-        pose_hist_enabled = (
-            pose_hist_len > 0
-            and pose_hist_dim > 0
-            and pose_hist_stride > 0
+        self._commit_rollout_diag_update(mode=mode)
+        rollout_inputs = RolloutSequenceInputs(
+            state_seq=state_seq,
+            cond_seq=cond_seq,
+            cond_raw_seq=cond_raw_seq,
+            contacts_seq=contacts_seq,
+            angvel_seq=angvel_seq,
+            pose_hist_seq=pose_hist_seq,
+            gt_seq=gt_seq,
         )
-        # Debug override: force using provided pose_hist_seq instead of the internal rolling buffer.
-        # This is useful for ablations that manipulate history blocks without changing model code.
-        if bool(getattr(self, "force_pose_hist_seq", False)):
-            pose_hist_enabled = False
-        scales = mu = std = None
-        pose_hist_buffer_norm = None
-        pose_hist_buffer_raw = None
-        if pose_hist_enabled:
-            scales, mu, std = self._pose_hist_params(state_seq)
-            if scales is None:
-                pose_hist_enabled = False
-            else:
-                if has_time_dim['pose_hist']:
-                    initial_norm = pose_hist_seq[:, 0].to(device=state_seq.device, dtype=state_seq.dtype)
-                elif isinstance(pose_hist_seq, torch.Tensor) and pose_hist_seq.numel() > 0:
-                    initial_norm = pose_hist_seq.to(device=state_seq.device, dtype=state_seq.dtype)
-                else:
-                    initial_norm = None
-                with torch.no_grad():
-                    if initial_norm is not None:
-                        pose_hist_buffer_norm = initial_norm
-                        pose_hist_buffer_raw = self._pose_hist_inverse_vec(initial_norm, scales, mu, std)
-                    else:
-                        base_rot = y_raw_local[..., rot6d_y_slice]
-                        pose_hist_buffer_raw = (
-                            base_rot.unsqueeze(1)
-                            .repeat(1, pose_hist_len, 1)
-                            .reshape(B, pose_hist_dim)
-                        )
-                        pose_hist_buffer_norm = self._pose_hist_transform_vec(pose_hist_buffer_raw, scales, mu, std)
+        rollout = self._init_rollout_state(
+            rollout_inputs,
+            cond_norm_mu=cond_norm_mu,
+            cond_norm_std=cond_norm_std,
+            mode=mode,
+            tf_ratio=tf_ratio,
+            time_base=time_base,
+        )
+        try:
+            for step_idx in range(rollout.total_steps):
+                self._commit_rollout_diag_update(step=int(step_idx))
+                step_diag_update = self._rollout_forward_step(rollout, rollout_inputs, step_idx=step_idx)
+                self._commit_rollout_diag_update(last_step_debug_stats=step_diag_update)
+                self._apply_scheduled_sampling_update(rollout, rollout_inputs, step_idx=step_idx)
 
-                if getattr(self.model, 'training', False):
-                    noise_deg = float(getattr(self, 'teacher_rot_noise_deg', 0.0) or 0.0)
-                    noise_prob = float(getattr(self, 'teacher_rot_noise_prob', 0.0) or 0.0)
-                    noise_deg = noise_deg * float(getattr(self, 'teacher_noise_boost', 1.0) or 1.0)
-                    try:
-                        is_teacher_like = float(tf_ratio) >= 0.999
-                    except Exception:
-                        is_teacher_like = True
-                    if is_teacher_like:
-                        pose_hist_buffer_norm, pose_hist_buffer_raw = self._inject_pose_hist_noise(
-                            pose_hist_buffer_norm,
-                            pose_hist_buffer_raw,
-                            scales,
-                            mu,
-                            std,
-                            noise_deg=noise_deg,
-                            noise_prob=noise_prob,
-                        )
-
-        cond_norm_mu = self._prepare_cond_stat(cond_norm_mu, state_seq) if cond_norm_mu is not None else None
-        cond_norm_std = self._prepare_cond_stat(cond_norm_std, state_seq) if cond_norm_std is not None else None
-
-        # 相对化重投影配置
-        enable_reprojection = bool(getattr(self, 'enable_cond_reprojection', True))
-        # 当 freerun_yaw_strategy='trajectory' 时，坐标系直接由 cond_dir 定义，
-        # 不再依赖骨骼 yaw，因此禁用基于 root yaw 的 cond 重投影。
-        yaw_strategy = str(getattr(self, 'freerun_yaw_strategy', 'trajectory') or 'trajectory')
-        if yaw_strategy == 'trajectory':
-            enable_reprojection = False
-        reprojection_applied_count = 0
-
-        plan_enable = bool(getattr(self.model, 'contact_plan_enable', False))
-        plan_z = None
-        # NOTE: let the model decide the initial plan_z when plan_z is None.
-        # This allows using a learnable contact_plan_init_z (or falling back to zeros).
-        phase_z = None
-        phase_event_age = None
-        td_hazard_acc = None
-        meas_prev_logits = None
-        meas_prev_prob = None
-        prev_pose_hist_meas = None
-        prev_foot_pos_meas = None
-
-        time_base_local = time_base
-        if torch.is_tensor(time_base_local):
-            try:
-                time_base_local = time_base_local.to(device=state_seq.device)
-            except Exception:
-                time_base_local = time_base
-
-        # ---- Rollout-time input ablations (debug knobs; no effect unless explicitly set) ----
-        rollout_angvel_ablation = str(getattr(self, "rollout_angvel_ablation", "none") or "none").lower().strip()
-        rollout_pose_hist_ablation = str(getattr(self, "rollout_pose_hist_ablation", "none") or "none").lower().strip()
-        rollout_pose_hist_keep_last = int(getattr(self, "rollout_pose_hist_keep_last", 1) or 1)
-
-        def _ablate_pose_hist_tensor(pose_hist_in: torch.Tensor) -> torch.Tensor:
-            mode = rollout_pose_hist_ablation
-            if mode in ("", "none"):
-                return pose_hist_in
-            if not torch.is_tensor(pose_hist_in) or pose_hist_in.numel() == 0:
-                return pose_hist_in
-            if mode == "zero":
-                return torch.zeros_like(pose_hist_in)
-
-            L = int(pose_hist_len)
-            if L <= 0:
-                return pose_hist_in
-            D = int(pose_hist_in.shape[-1])
-            if D % L != 0:
-                return pose_hist_in
-            pose_dim = D // L
-            B_local = int(pose_hist_in.shape[0])
-            hist = pose_hist_in.reshape(B_local, L, pose_dim)
-
-            if mode == "keep_last":
-                k = max(1, min(L, int(rollout_pose_hist_keep_last)))
-                if k >= L:
-                    return pose_hist_in
-                out = hist.clone()
-                out[:, : L - k, :] = 0.0
-                return out.reshape(B_local, D)
-
-            if mode == "replicate_last":
-                src = hist[:, -1:, :].clone()
-                out = src.expand(-1, L, -1).contiguous()
-                return out.reshape(B_local, D)
-
-            if mode == "replicate_oldest":
-                src = hist[:, :1, :].clone()
-                out = src.expand(-1, L, -1).contiguous()
-                return out.reshape(B_local, D)
-
-            return pose_hist_in
-
-        for t in range(T):
-            self._diag_roll_step = int(t)
-            cond_input = cond_seq[:, t] if has_time_dim['cond'] else cond_seq
-            contacts_in_t = None
-            use_learned_meas = bool(getattr(self.model, "contact_meas_enable", False))
-            if plan_enable and not use_learned_meas:
-                try:
-                    contacts_in_t, prev_foot_pos_meas = self._contact_meas_whitebox(motion_raw_local, prev_foot_pos_meas)
-                except Exception:
-                    contacts_in_t = None
-            if getattr(self, "use_freerun_state_sync", False) and isinstance(getattr(self, "angvel_x_slice", None), slice):
-                angvel_t = motion[..., self.angvel_x_slice].detach()
-            else:
-                angvel_t = angvel_seq[:, t] if has_time_dim['angvel'] else angvel_seq
-            if rollout_angvel_ablation == "zero" and torch.is_tensor(angvel_t):
-                angvel_t = torch.zeros_like(angvel_t)
-            if pose_hist_enabled:
-                pose_hist_t = pose_hist_buffer_norm
-            else:
-                pose_hist_t = pose_hist_seq[:, t] if has_time_dim['pose_hist'] else pose_hist_seq
-            # Train-time meas-input corruption: simulate pose-history contamination/delay so that
-            # e_t = contacts_plan - contacts_meas stays informative under drift.
-            pose_hist_meas_t = pose_hist_t
-            if plan_enable and getattr(self.model, "training", False) and mode in ("mixed", "train_free") and torch.is_tensor(pose_hist_meas_t):
-                try:
-                    tf_cur = float(tf_ratio)
-                except Exception:
-                    tf_cur = 1.0
-                if tf_cur < 0.999:
-                    drop_p = float(getattr(self, "meas_pose_hist_drop_prob", 0.0) or 0.0)
-                    if drop_p > 0.0 and torch.rand(1, device=pose_hist_meas_t.device).item() < drop_p:
-                        pose_hist_meas_t = torch.zeros_like(pose_hist_meas_t)
-                    delay_p = float(getattr(self, "meas_pose_hist_delay_prob", 0.0) or 0.0)
-                    if prev_pose_hist_meas is not None and delay_p > 0.0 and torch.rand(1, device=pose_hist_meas_t.device).item() < delay_p:
-                        pose_hist_meas_t = prev_pose_hist_meas
-                    noise_std = float(getattr(self, "meas_pose_hist_noise_std", 0.0) or 0.0)
-                    if noise_std > 0.0:
-                        pose_hist_meas_t = pose_hist_meas_t + torch.randn_like(pose_hist_meas_t) * noise_std
-                    prev_pose_hist_meas = pose_hist_meas_t.detach()
-            if rollout_pose_hist_ablation not in ("", "none") and torch.is_tensor(pose_hist_meas_t):
-                pose_hist_meas_t = _ablate_pose_hist_tensor(pose_hist_meas_t)
-            cond_raw_t = None
-            if cond_raw_seq is not None:
-                if has_time_dim['cond_raw']:
-                    idx = min(cond_raw_seq.shape[1] - 1, max(0, t + 1))
-                    cond_raw_t = cond_raw_seq[:, idx]
-                elif torch.is_tensor(cond_raw_seq):
-                    cond_raw_t = cond_raw_seq
-                else:
-                    cond_raw_t = cond_raw_seq
-
-            cond_raw_for_env = cond_raw_t
-            cond_raw_for_model = cond_raw_t
-
-            # === 相对化重投影：当使用模型预测时，将目标方向转换到模型的局部坐标系 ===
-            if enable_reprojection and t > 0 and mode in ('free', 'train_free', 'mixed') and cond_raw_t is not None:
-                try:
-                    # 获取 GT 的根骨朝向
-                    gt_yaw = None
-                    if gt_seq is not None and has_time_dim.get('cond_raw'):
-                        gt_idx = min(gt_seq.shape[1] - 1, t)
-                        gt_raw = self._denorm(gt_seq[:, gt_idx])
-                        gt_yaw = self._infer_root_yaw_from_rot6d(gt_raw)
-                    elif state_seq is not None:
-                        # 从当前输入状态推断
-                        state_raw = self.normalizer.denorm_x(state_seq[:, t], prev_raw=motion_raw_local)
-                        gt_yaw = self._infer_root_yaw_from_rot6d(state_raw)
-
-                    # 获取模型预测的根骨朝向
-                    pred_yaw = None
-                    if y_raw_local is not None:
-                        pred_yaw = self._infer_root_yaw_from_rot6d(y_raw_local)
-
-                    # 执行重投影
-                    if gt_yaw is not None and pred_yaw is not None:
-                        cond_raw_t_reprojected = self._reproject_cond_to_local_frame(
-                            cond_raw_t, gt_yaw, pred_yaw
-                        )
-                        if cond_raw_t_reprojected is not None:
-                            cond_raw_for_model = cond_raw_t_reprojected
-                            reprojection_applied_count += 1
-                except Exception as e:
-                    # 重投影失败时，回退到原始 cond（静默失败，不中断训练）
-                    if getattr(self, '_reprojection_warn_once', True):
-                        print(f"[Warning] Cond reprojection failed at step {t}: {e}")
-                        self._reprojection_warn_once = False
-
-            if cond_raw_for_model is not None:
-                cond_override = self._normalize_cond_from_raw(cond_raw_for_model, cond_norm_mu, cond_norm_std)
-                if cond_override is not None:
-                    cond_input = cond_override
-
-            if cond_input is None and cond_seq is not None:
-                cond_input = cond_seq[:, t] if has_time_dim['cond'] else cond_seq
-
-            # --- Autoregressive input noise (self-correction training) ---
-            # 只在 mixed/train_free 且存在自由运行成分时，对当前 RAW 姿态注入噪声，
-            # 模拟累计误差输入，让模型学会纠错。
-            if getattr(self.model, "training", False) and mode in ("mixed", "train_free"):
-                try:
-                    tf_cur = float(tf_ratio)
-                except Exception:
-                    tf_cur = 1.0
-                # 纯 teacher 阶段（tf≈1.0）保持输入干净
-                if tf_cur < 0.999:
-                    import torch as _t
-                    step_prob = float(getattr(self, "input_step_noise_prob", 0.3) or 0.0)
-                    noise_deg = float(getattr(self, "teacher_rot_noise_deg", 0.0) or 0.0)
-                    noise_prob = float(getattr(self, "teacher_rot_noise_prob", 0.0) or 0.0)
-                    if step_prob > 0.0 and noise_deg > 1e-6 and noise_prob > 0.0:
-                        if _t.rand(1, device=motion.device).item() < step_prob:
-                            try:
-                                motion_raw_local = self._apply_rot_noise(
-                                    motion_raw_local,
-                                    rot6d_slice,
-                                    noise_prob=noise_prob,
-                                    noise_deg=noise_deg,
-                                    min_time_steps=1,
-                                    noise_profile=getattr(self, "input_noise_profile", None),
-                                )
-                                motion = self._diag_norm_x(motion_raw_local)
-                            except Exception:
-                                # 保守处理：噪声注入失败时回退到原始 motion
-                                pass
-
-            time_index_t = None
-            if time_base_local is not None:
-                try:
-                    time_index_t = time_base_local + int(t)
-                except Exception:
-                    time_index_t = None
-
-            rollout_step_t = None
-            try:
-                if int(T) > 1:
-                    step_norm = float(t) / float(int(T) - 1)
-                else:
-                    step_norm = 0.0
-                rollout_step_t = torch.full((motion.shape[0], 1, 1), step_norm, device=motion.device, dtype=motion.dtype)
-            except Exception:
-                rollout_step_t = None
-
-            meas_prev_in = meas_prev_logits if (contacts_in_t is None and use_learned_meas) else meas_prev_prob
-
-            with self._amp_context(amp_enabled):
-                ret = self.model(
-                    motion,
-                    cond_input,
-                    contacts=contacts_in_t,
-                    angvel=angvel_t,
-                    pose_history=pose_hist_meas_t,
-                    plan_z=plan_z,
-                    phase_z=phase_z,
-                    phase_event_age=phase_event_age,
-                    td_hazard_acc=td_hazard_acc,
-                    meas_logits_prev=meas_prev_in,
-                    time_index=time_index_t,
-                    rollout_step=rollout_step_t,
-                )
-
-            if not isinstance(ret, dict):
-                raise RuntimeError("Model forward must return a dict with at least 'out'.")
-            delta_out = ret.get('delta', ret.get('out', None))
-            period_pred = ret.get('period_pred', None)
-            last_attn = ret.get('attn', last_attn)
-            if plan_enable:
-                try:
-                    cp = ret.get('contacts_plan', None)
-                    if cp is not None:
-                        if cp.dim() == 2:
-                            cp = cp.unsqueeze(1)
-                        elif cp.dim() >= 3 and cp.size(1) != 1:
-                            cp = cp[:, -1:, ...]
-                        contacts_plan_preds.append(cp)
-                except Exception:
-                    pass
-                try:
-                    cpl = ret.get("contacts_plan_logits", None)
-                    if cpl is not None:
-                        if cpl.dim() == 2:
-                            cpl = cpl.unsqueeze(1)
-                        elif cpl.dim() >= 3 and cpl.size(1) != 1:
-                            cpl = cpl[:, -1:, ...]
-                        contacts_plan_logits_preds.append(cpl)
-                except Exception:
-                    pass
-                try:
-                    direct_out = ret.get('out_direct', None)
-                    if direct_out is not None:
-                        if direct_out.dim() == 2:
-                            direct_out = direct_out.unsqueeze(1)
-                        elif direct_out.dim() >= 3 and direct_out.size(1) != 1:
-                            direct_out = direct_out[:, -1:, ...]
-                        direct_pose_preds.append(direct_out)
-                except Exception:
-                    pass
-                try:
-                    z_next = ret.get('plan_z_next', None)
-                    if z_next is not None:
-                        plan_z = z_next if allow_grad else z_next.detach()
-                    p_next = ret.get('phase_z_next', None)
-                    if p_next is not None:
-                        phase_z = p_next if allow_grad else p_next.detach()
-                    a_next = ret.get('phase_event_age_next', None)
-                    if a_next is not None:
-                        phase_event_age = a_next if allow_grad else a_next.detach()
-                    hz_acc_next = ret.get("td_hazard_acc_next", None)
-                    if hz_acc_next is not None:
-                        # Keep hazard accumulator stateful across steps (stop-gradient; inference-aligned).
-                        td_hazard_acc = hz_acc_next.detach()
-                except Exception:
-                    pass
-
-            # Event-Clock driver state: keep prev meas for Δmeas when forward runs with T=1.
-            try:
-                meas_logits_step = ret.get("contacts_meas_logits", None)
-                if meas_logits_step is not None:
-                    meas_prev_logits = meas_logits_step.detach()
-                meas_prob_step = ret.get("contacts_meas", None)
-                if meas_prob_step is not None:
-                    meas_prev_prob = meas_prob_step.detach()
-            except Exception:
-                pass
-
-            if delta_out is None:
-                raise RuntimeError("Model forward must return 'delta' tensor.")
-
-            delta_preds.append(delta_out)
-            hidden_step = ret.get('h_final')
-            if hidden_step is not None:
-                if hidden_step.dim() == 1:
-                    hidden_step = hidden_step.unsqueeze(0).unsqueeze(0)
-                elif hidden_step.dim() == 2:
-                    hidden_step = hidden_step.unsqueeze(1)
-                elif hidden_step.dim() >= 3 and hidden_step.size(1) != 1:
-                    hidden_step = hidden_step[:, -1:, ...]
-                hidden_preds.append(hidden_step)
-
-            prev_raw_snapshot = y_raw_local.clone() if y_raw_local is not None else None
-            y_raw = self._compose_delta_to_raw(
-                y_raw_local,
-                delta_out,
+            y = torch.stack(rollout.outs, dim=1)
+            preds = {'out': y, 'delta': torch.stack(rollout.delta_preds, dim=1)}
+            _finalize_rollout_prediction_buffers(
+                preds,
+                rollout.buffers,
             )
-            if y_raw is None:
-                self._raise_norm_error("compose_delta_to_raw 返回 None，缺少上一帧 RAW 数据。")
 
-            # Stage2: optional on-manifold λ fusion (incremental vs direct) used for rollout update.
-            apply_lambda = bool(getattr(self, "lambda_fusion_apply", False))
-            if apply_lambda and mode == "mixed":
-                try:
-                    apply_lambda = float(tf_ratio) < 0.999
-                except Exception:
-                    apply_lambda = False
-            if apply_lambda and mode in ("free", "train_free", "mixed"):
-                try:
-                    lam_eff = ret.get("lambda_fusion", None)
-                    if lam_eff is not None:
-                        try:
-                            lam_eff, _ = self._lambda_fusion_apply_reliability(
-                                lam_eff,
-                                step_idx=int(t),
-                                total_steps=int(T),
-                                rollout_step=rollout_step_t,
-                                ret=ret,
-                            )
-                        except Exception:
-                            lam_eff = ret.get("lambda_fusion", None)
-                    y_raw = self._apply_lambda_fusion_to_raw(
-                        y_raw,
-                        direct_norm=ret.get("out_direct", None),
-                        lambda_fusion=lam_eff,
+            # 诊断：报告重投影应用情况
+            if rollout.enable_reprojection and rollout.reprojection_applied_count > 0:
+                diag_limit = int(getattr(self, '_reprojection_diag_limit', 3))
+                if not hasattr(self, '_reprojection_diag_count'):
+                    self._reprojection_diag_count = 0
+                if self._reprojection_diag_count < diag_limit:
+                    epoch = getattr(self, 'cur_epoch', -1)
+                    print(
+                        f"[CondReprojection] Epoch {epoch}, Mode '{rollout.mode}': "
+                        f"Applied reprojection to {rollout.reprojection_applied_count}/{rollout.total_steps} steps"
                     )
-                except Exception:
-                    pass
+                    self._reprojection_diag_count += 1
 
-            if allow_grad:
-                y_raw_local = y_raw.clone()
-            else:
-                y_raw_local = y_raw.detach()
-            y_norm = self._norm_y(y_raw)
-
-            debug_stats = {}
-            try:
-                debug_stats['delta_norm_abs_mean'] = float(delta_out.abs().mean().item())
-            except Exception:
-                debug_stats['delta_norm_abs_mean'] = None
-            try:
-                if prev_raw_snapshot is not None:
-                    delta_raw = y_raw - prev_raw_snapshot
-                    debug_stats['delta_raw_abs_mean'] = float(delta_raw.abs().mean().item())
-                else:
-                    debug_stats['delta_raw_abs_mean'] = None
-            except Exception:
-                debug_stats['delta_raw_abs_mean'] = None
-            debug_stats['rot6d_geo_deg'] = None
-
-            outs.append(y_norm)
-            if period_pred is not None:
-                period_preds.append(period_pred)
-            try:
-                cm = ret.get("contacts_meas", None)
-                if cm is not None:
-                    if cm.dim() == 2:
-                        cm = cm.unsqueeze(1)
-                    elif cm.dim() >= 3 and cm.size(1) != 1:
-                        cm = cm[:, -1:, ...]
-                    contacts_meas_preds.append(cm)
-            except Exception:
-                pass
-            try:
-                cml = ret.get("contacts_meas_logits", None)
-                if cml is not None:
-                    if cml.dim() == 2:
-                        cml = cml.unsqueeze(1)
-                    elif cml.dim() >= 3 and cml.size(1) != 1:
-                        cml = cml[:, -1:, ...]
-                    contacts_meas_logits_preds.append(cml)
-            except Exception:
-                pass
-            try:
-                # Needed for MotionJointLoss TD-hazard supervision (w_contact_td_hazard_*).
-                hz = ret.get("contacts_td_hazard_logit", None)
-                if hz is not None:
-                    if hz.dim() == 2:
-                        hz = hz.unsqueeze(1)
-                    elif hz.dim() >= 3 and hz.size(1) != 1:
-                        hz = hz[:, -1:, ...]
-                    contacts_td_hazard_logits_preds.append(hz)
-            except Exception:
-                pass
-            try:
-                ce = ret.get("contacts_err", None)
-                if ce is not None:
-                    if ce.dim() == 2:
-                        ce = ce.unsqueeze(1)
-                    elif ce.dim() >= 3 and ce.size(1) != 1:
-                        ce = ce[:, -1:, ...]
-                    contacts_err_preds.append(ce)
-            except Exception:
-                pass
-            try:
-                lam_logit = ret.get("event_clock_lambda_logit", None)
-                if lam_logit is not None:
-                    if lam_logit.dim() == 2:
-                        lam_logit = lam_logit.unsqueeze(1)
-                    elif lam_logit.dim() >= 3 and lam_logit.size(1) != 1:
-                        lam_logit = lam_logit[:, -1:, ...]
-                    event_clock_lambda_logit_preds.append(lam_logit)
-            except Exception:
-                pass
-            try:
-                dyn_prior = ret.get("event_clock_dynamic_prior", None)
-                if dyn_prior is not None:
-                    if dyn_prior.dim() == 2:
-                        dyn_prior = dyn_prior.unsqueeze(1)
-                    elif dyn_prior.dim() >= 3 and dyn_prior.size(1) != 1:
-                        dyn_prior = dyn_prior[:, -1:, ...]
-                    event_clock_dynamic_prior_preds.append(dyn_prior)
-            except Exception:
-                pass
-            try:
-                dz = ret.get("event_clock_delta_z", None)
-                if dz is not None:
-                    if dz.dim() == 2:
-                        dz = dz.unsqueeze(1)
-                    elif dz.dim() >= 3 and dz.size(1) != 1:
-                        dz = dz[:, -1:, ...]
-                    event_clock_delta_z_preds.append(dz)
-            except Exception:
-                pass
-            debug_stats['rot6d_geo_deg'] = None
-            if gt_seq is not None and gt_seq.dim() == 3:
-                try:
-                    gt_frame = self._denorm(gt_seq[:, min(t + 1, gt_seq.shape[1] - 1)])
-                    rot_slice = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
-                    if isinstance(rot_slice, slice):
-                        pred_block = y_raw_local[:, rot_slice].reshape(y_raw_local.shape[0], -1, 6)
-                        gt_block = gt_frame[:, rot_slice].reshape(gt_frame.shape[0], -1, 6)
-                        pred_m = rot6d_to_matrix(reproject_rot6d(pred_block))
-                        gt_m = rot6d_to_matrix(reproject_rot6d(gt_block))
-                        geo_diff = geodesic_R(pred_m, gt_m) * (180.0 / math.pi)
-                        debug_stats['rot6d_geo_deg'] = float(geo_diff.mean().item())
-                except Exception:
-                    debug_stats['rot6d_geo_deg'] = None
-            self._last_step_debug_stats = debug_stats
-
-            if t < T - 1:
-                # One scheduled-sampling update rule:
-                #   - p=tf_ratio controls whether next-step X comes from GT (sel=1) or from model carry (sel=0).
-                #   - train_free keeps gradients through the carry; mixed detaches the carry.
-                if motion_raw_local is None:
-                    self._raise_norm_error("rollout 更新需要 DataNormalizer 提供 RAW 状态写回。")
-                free_raw = self._apply_free_carry(motion_raw_local, y_raw, cond_next_raw=cond_raw_for_env)
-                if allow_grad:
-                    free_raw = free_raw.clone()
-                else:
-                    free_raw = free_raw.detach()
-                free_z = self._diag_norm_x(free_raw)
-                gt_next = state_seq[:, t + 1]
-                if ss_sel_hold is None or ss_chunk_len <= 1 or (t % ss_chunk_len == 0):
-                    ss_sel_hold = (torch.rand(B, device=self.device) < float(tf_ratio)).float().unsqueeze(-1)
-                sel = ss_sel_hold
-                if sel.dtype != gt_next.dtype:
-                    sel = sel.to(gt_next.dtype)
-                motion = sel * gt_next + (1.0 - sel) * free_z
-
-                # Sync RAW state for the next step.
-                try:
-                    gt_raw_next = self.normalizer.denorm_x(gt_next, prev_raw=motion_raw_local)
-                    motion_raw_local = sel * gt_raw_next + (1.0 - sel) * free_raw
-                except Exception as exc:
-                    self._raise_norm_error("normalizer.denorm_x 在 rollout 更新时失败", exc)
-
-                # When we use GT as next input, also reset the raw-y carrier to GT to match teacher forcing.
-                if gt_seq is not None and gt_seq.dim() == 3:
-                    try:
-                        y_next = self._denorm(gt_seq[:, t + 1]).detach()
-                        y_raw_local = sel * y_next + (1.0 - sel) * y_raw_local
-                    except Exception:
-                        pass
-                if pose_hist_enabled and pose_hist_stride > 0:
-                    with torch.no_grad():
-                        pose_hist_buffer_raw = torch.roll(pose_hist_buffer_raw, shifts=-pose_hist_stride, dims=-1)
-                        pose_hist_buffer_raw[..., -pose_hist_stride:] = y_raw_local[..., rot6d_y_slice]
-                        pose_hist_buffer_norm = self._pose_hist_transform_vec(pose_hist_buffer_raw, scales, mu, std)
-
-        y = torch.stack(outs, dim=1)
-        preds = {'out': y, 'delta': torch.stack(delta_preds, dim=1)}
-        if hidden_preds:
-            hidden_seq = torch.cat(hidden_preds, dim=1)
-            preds['hidden_seq'] = hidden_seq
-        if period_preds:
-            preds['period_pred'] = torch.stack(
-                [p if p.dim() == 2 else p.squeeze(1) for p in period_preds], dim=1
-            )
-        if contacts_plan_preds:
-            try:
-                preds['contacts_plan'] = torch.cat(contacts_plan_preds, dim=1)
-            except Exception:
-                pass
-        if contacts_plan_logits_preds:
-            try:
-                preds["contacts_plan_logits"] = torch.cat(contacts_plan_logits_preds, dim=1)
-            except Exception:
-                pass
-        if direct_pose_preds:
-            try:
-                preds['out_direct'] = torch.cat(direct_pose_preds, dim=1)
-            except Exception:
-                pass
-        if contacts_meas_preds:
-            try:
-                preds['contacts_meas'] = torch.cat(contacts_meas_preds, dim=1)
-            except Exception:
-                pass
-        if contacts_meas_logits_preds:
-            try:
-                preds["contacts_meas_logits"] = torch.cat(contacts_meas_logits_preds, dim=1)
-            except Exception:
-                pass
-        if contacts_td_hazard_logits_preds:
-            try:
-                preds["contacts_td_hazard_logit"] = torch.cat(contacts_td_hazard_logits_preds, dim=1)
-            except Exception:
-                pass
-        if contacts_err_preds:
-            try:
-                preds['contacts_err'] = torch.cat(contacts_err_preds, dim=1)
-            except Exception:
-                pass
-        if event_clock_lambda_logit_preds:
-            try:
-                preds["event_clock_lambda_logit"] = torch.cat(event_clock_lambda_logit_preds, dim=1)
-            except Exception:
-                pass
-        if event_clock_dynamic_prior_preds:
-            try:
-                preds["event_clock_dynamic_prior"] = torch.cat(event_clock_dynamic_prior_preds, dim=1)
-            except Exception:
-                pass
-        if event_clock_delta_z_preds:
-            try:
-                preds["event_clock_delta_z"] = torch.cat(event_clock_delta_z_preds, dim=1)
-            except Exception:
-                pass
-
-        # 诊断：报告重投影应用情况
-        if enable_reprojection and reprojection_applied_count > 0:
-            diag_limit = int(getattr(self, '_reprojection_diag_limit', 3))
-            if not hasattr(self, '_reprojection_diag_count'):
-                self._reprojection_diag_count = 0
-            if self._reprojection_diag_count < diag_limit:
-                epoch = getattr(self, 'cur_epoch', -1)
-                print(f"[CondReprojection] Epoch {epoch}, Mode '{mode}': Applied reprojection to {reprojection_applied_count}/{T} steps")
-                self._reprojection_diag_count += 1
-
-        self._diag_roll_mode = None
-        self._diag_roll_step = -1
-        return preds, last_attn
-
-    def _maybe_apply_teacher_noise(self, state_seq: torch.Tensor) -> torch.Tensor:
-        """
-        Optionally inject noise into teacher inputs.
-
-        当前策略下我们只在自回归路径（mixed/train_free 模式）上做输入扰动，
-        teacher 阶段保持输入干净，避免影响单步诊断和基础收敛。
-        因此这里直接返回原始 state_seq。
-        """
-        return state_seq
-
-    def _inject_pose_hist_noise(
-        self,
-        pose_hist_norm: Optional[torch.Tensor],
-        pose_hist_raw: Optional[torch.Tensor],
-        scales: Optional[torch.Tensor],
-        mu: Optional[torch.Tensor],
-        std: Optional[torch.Tensor],
-        *,
-        noise_deg: float,
-        noise_prob: float,
-    ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-        """
-        Inject rotation noise into pose-history buffer to simulate accumulated errors in teacher mode.
-        """
-        import torch
-        noise_deg = float(noise_deg or 0.0)
-        noise_prob = float(noise_prob or 0.0)
-        if (
-            pose_hist_norm is None
-            or pose_hist_raw is None
-            or noise_deg <= 1e-6
-            or noise_prob <= 0.0
-        ):
-            return pose_hist_norm, pose_hist_raw
-
-        pose_hist_len = int(getattr(self, "pose_hist_len", 0) or 0)
-        pose_hist_dim = int(getattr(self, "pose_hist_dim", pose_hist_raw.shape[-1]) or pose_hist_raw.shape[-1])
-        stride = pose_hist_dim // max(1, pose_hist_len) if pose_hist_len > 0 else 0
-        if (
-            pose_hist_len <= 0
-            or pose_hist_dim <= 0
-            or stride <= 0
-            or stride * pose_hist_len != pose_hist_dim
-            or stride % 6 != 0
-        ):
-            return pose_hist_norm, pose_hist_raw
-
-        with torch.no_grad():
-            pose_hist_raw = self._apply_rot_noise(
-                pose_hist_raw,
-                slice(0, pose_hist_dim),
-                noise_prob=noise_prob,
-                noise_deg=noise_deg,
-                min_time_steps=pose_hist_len,
-                noise_profile=getattr(self, 'input_noise_profile', None),
-            )
-            pose_hist_norm = self._pose_hist_transform_vec(pose_hist_raw, scales, mu, std)
-        return pose_hist_norm, pose_hist_raw
-
-    def _apply_rot_noise(
-        self,
-        tensor: torch.Tensor,
-        rot_slice: Optional[slice],
-        *,
-        noise_prob: float,
-        noise_deg: float,
-        min_time_steps: int = 1,
-        noise_profile: Optional[Sequence[Mapping[str, Any]]] = None,
-    ) -> torch.Tensor:
-        """Shared rot6d noise injector for teacher inputs & pose history."""
-        import torch
-        noise_deg = float(noise_deg or 0.0)
-        noise_prob = float(noise_prob or 0.0)
-        if noise_deg <= 1e-6 or noise_prob <= 0.0:
-            return tensor
-        if not isinstance(rot_slice, slice):
-            return tensor
-        rot_chunk = tensor[..., rot_slice]
-        if rot_chunk.dim() < 2 or rot_chunk.shape[-2] < min_time_steps:
-            return tensor
-        # ensure time dimension: [..., T, D]
-        if rot_chunk.dim() == 2:
-            rot_chunk = rot_chunk.unsqueeze(1)
-        *prefix, T, D = rot_chunk.shape
-        if D % 6 != 0:
-            return tensor
-        J = D // 6
-        flat = rot_chunk.view(-1, T, J, 6)
-        R = rot6d_to_matrix(flat)
-        mask = torch.rand(R.shape[:-2], device=rot_chunk.device) < noise_prob
-        if not mask.any():
-            return tensor
-        angles = self._draw_noise_angles(
-            mask.shape,
-            noise_deg=noise_deg,
-            noise_profile=noise_profile,
-            device=rot_chunk.device,
-            dtype=rot_chunk.dtype,
-        )
-        axes = torch.randn(*mask.shape, 3, device=rot_chunk.device, dtype=rot_chunk.dtype)
-        delta_R = axis_angle_to_matrix(axes, angles)
-        R_noisy = torch.matmul(delta_R, R)
-        R = torch.where(mask.unsqueeze(-1).unsqueeze(-1), R_noisy, R)
-        rot_noisy = matrix_to_rot6d(R).view(*prefix, T, J * 6)
-        if tensor.dim() == 2:
-            rot_noisy = rot_noisy.squeeze(1)
-        out = tensor.clone()
-        out[..., rot_slice] = rot_noisy
-        return out
-
-    def _draw_noise_angles(
-        self,
-        shape: Sequence[int],
-        *,
-        noise_deg: float,
-        noise_profile: Optional[Sequence[Mapping[str, Any]]],
-        device,
-        dtype,
-    ) -> torch.Tensor:
-        import torch
-        deg = max(float(noise_deg or 0.0), 0.0)
-        if not noise_profile:
-            if deg <= 0.0:
-                return torch.zeros(shape, device=device, dtype=dtype)
-            mags = torch.rand(shape, device=device, dtype=dtype) * deg
-        else:
-            probs = torch.tensor([max(0.0, float(bucket.get("prob", 0.0))) for bucket in noise_profile], device=device, dtype=dtype)
-            if probs.sum() <= 0:
-                if deg <= 0.0:
-                    return torch.zeros(shape, device=device, dtype=dtype)
-                mags = torch.rand(shape, device=device, dtype=dtype) * deg
-            else:
-                cdf = torch.cumsum(probs, dim=0)
-                total = cdf[-1]
-                samples = torch.rand(shape, device=device, dtype=dtype) * total
-                bucket_idx = torch.bucketize(samples, cdf, right=False)
-                bucket_idx = torch.clamp(bucket_idx, max=len(noise_profile) - 1)
-                mins = torch.as_tensor([float(bucket["min_deg"]) for bucket in noise_profile], device=device, dtype=dtype)
-                maxs = torch.as_tensor([float(bucket["max_deg"]) for bucket in noise_profile], device=device, dtype=dtype)
-                min_sel = mins[bucket_idx]
-                max_sel = maxs[bucket_idx]
-                mags = min_sel + (max_sel - min_sel) * torch.rand(shape, device=device, dtype=dtype)
-        signs = torch.where(torch.rand(shape, device=device, dtype=dtype) < 0.5, -1.0, 1.0)
-        return signs * mags * (_math.pi / 180.0)
+            return preds, rollout.last_attn
+        finally:
+            self._commit_rollout_diag_update(mode=None, step=-1)
 
     def _rot_geo_from_raw_seq(
         self,
@@ -1559,244 +1847,57 @@ class Trainer:
         except Exception:
             return None
 
-    def _freerun_loss_window(self, state_seq, gt_seq, cond_seq, cond_raw_seq, contacts_seq,
-                             angvel_seq, pose_hist_seq, batch, *, start: int, length: int,
-                             train_mode: bool = False, return_preds: bool = False,
-                             cond_norm_mu: Optional[torch.Tensor] = None,
-                             cond_norm_std: Optional[torch.Tensor] = None):
-        """
-        在给定时间窗口上运行一次 free-run（或 train_free）rollout，并计算对应的 loss。
+    @staticmethod
+    def _module_grad_norm(module: Optional[torch.nn.Module]) -> float:
+        if module is None:
+            return float('nan')
+        total = None
+        for param in module.parameters(recurse=True):
+            if param.grad is None:
+                continue
+            g2 = param.grad.detach().float().pow(2).sum()
+            total = g2 if total is None else total + g2
+        if total is None:
+            return float('nan')
+        return float(total.sqrt().detach().cpu())
 
-        注意:
-            - 这里的 base loss 完全复用 MotionJointLoss（局部/骨骼空间）。
-            - freerun 模式下可选叠加“全局轨迹锚点”约束（root 位置）。
-        """
-        if state_seq is None or gt_seq is None:
-            return None
-        T = state_seq.shape[1]
-        start = max(0, int(start))
-        stop = min(T, start + int(length))
-        if stop - start < 2:
-            return None
+    @staticmethod
+    def _merge_grad_norm(*vals: float) -> float:
+        finite = [float(v) for v in vals if isinstance(v, (int, float)) and _math.isfinite(float(v))]
+        if not finite:
+            return float('nan')
+        return float(_math.sqrt(sum(v * v for v in finite)))
 
-        def _slice_tensor(tensor):
-            if tensor is None:
-                return None
-            if hasattr(tensor, 'dim') and tensor.dim() == 3 and tensor.size(1) >= stop:
-                return tensor[:, start:stop]
-            return tensor
-
-        state_sub = state_seq[:, start:stop]
-        gt_sub = gt_seq[:, start:stop]
-        cond_sub = _slice_tensor(cond_seq)
-        cond_raw_sub = _slice_tensor(cond_raw_seq)
-        contacts_sub = _slice_tensor(contacts_seq)
-        angvel_sub = _slice_tensor(angvel_seq)
-        pose_hist_sub = _slice_tensor(pose_hist_seq)
-
-        mode = 'train_free' if train_mode else 'mixed'
-        time_base = None
-        try:
-            if isinstance(batch, dict):
-                base = batch.get("start", None)
-                if base is not None:
-                    if torch.is_tensor(base):
-                        base = base.to(device=state_seq.device)
-                    time_base = base + int(start)
-        except Exception:
-            time_base = None
-        preds_free, attn_free = self._rollout_sequence(
-            state_sub,
-            cond_sub,
-            cond_raw_sub,
-            contacts_seq=contacts_sub,
-            angvel_seq=angvel_sub,
-            pose_hist_seq=pose_hist_sub,
-            gt_seq=gt_sub,
-            mode=mode,
-            tf_ratio=0.0,
-            cond_norm_mu=cond_norm_mu,
-            cond_norm_std=cond_norm_std,
-            time_base=time_base,
-        )
-        preds_free = self._ensure_rot6d_delta(preds_free)
-        with self._amp_context(self.use_amp):
-            out = self.loss_fn(preds_free, gt_sub, attn_weights=attn_free, batch=batch)
-        if isinstance(out, tuple):
-            free_loss, stats = out
-        else:
-            free_loss, stats = out, {}
-
-        # ---- Trajectory anchor & temporal weighting (free-run 专用约束) ----
-        # 仅在配置开启时启用，避免影响已有训练配置。
-        traj_weight = float(getattr(self, "freerun_traj_weight", 0.0) or 0.0)
-        if traj_weight > 0.0:
-            traj_payload = self._freerun_traj_loss(state_sub, gt_sub, preds_free)
-            if traj_payload is not None:
-                traj_loss, traj_stats = traj_payload
-                if traj_loss is not None:
-                    free_loss = free_loss + traj_weight * traj_loss
-                    # 将轨迹相关统计并入现有 stats，便于监控
-                    try:
-                        stats = stats or {}
-                        stats.update(traj_stats)
-                    except Exception:
-                        pass
-
-        if return_preds:
-            return free_loss, stats or {}, preds_free, gt_sub
-        return free_loss, stats or {}, None, None
-
-    def _short_freerun_loss(self, state_seq, gt_seq, cond_seq, cond_raw_seq, contacts_seq,
-                             angvel_seq, pose_hist_seq, batch, cond_norm_mu=None, cond_norm_std=None):
-        horizon = int(getattr(self, 'freerun_horizon', 0) or 0)
-        weight = float(getattr(self, 'freerun_weight', 0.0))
-        if horizon <= 0 or weight <= 0.0:
-            return None
-        T = state_seq.shape[1]
-        window = min(int(horizon) + 1, T)
-        if window < 2:
-            return None
-        max_start = T - window
-        if max_start > 0:
-            start = int(torch.randint(0, max_start + 1, (1,), device=state_seq.device).item())
-        else:
-            start = 0
-        payload = self._freerun_loss_window(
-            state_seq, gt_seq, cond_seq, cond_raw_seq, contacts_seq, angvel_seq, pose_hist_seq,
-            batch, start=start, length=window, train_mode=True,
-            cond_norm_mu=cond_norm_mu, cond_norm_std=cond_norm_std,
-        )
-        if payload is None:
-            return None
-        free_loss, stats, _, _ = payload
-        return free_loss, stats
-
-    def _ensure_rot6d_delta(self, preds_dict):
-        import torch
-        if not isinstance(preds_dict, dict):
-            return preds_dict
-        if torch.is_tensor(preds_dict.get('delta')):
-            return preds_dict
-        rot_sl = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
-        pred_out = preds_dict.get('out')
-        if pred_out is None or not isinstance(rot_sl, slice):
-            return preds_dict
-        try:
-            pred_out_raw = self._denorm(pred_out)
-        except Exception as exc:
-            self._raise_norm_error("_ensure_rot6d_delta 反归一化预测失败", exc)
-            return preds_dict
-        rot_delta_abs = infer_rot6d_delta_from_abs(pred_out_raw[..., rot_sl])
-        if rot_delta_abs is None:
-            return preds_dict
-        rot_width = rot_sl.stop - rot_sl.start
-        if rot_width <= 0 or rot_width % 6 != 0:
-            return preds_dict
-        J = rot_width // 6
-        identity = _rot6d_identity_like(rot_delta_abs.view(*rot_delta_abs.shape[:-1], J, 6)).view_as(rot_delta_abs)
-        rot_delta_residual = rot_delta_abs - identity
-        std = getattr(self, 'std_y', None)
-        if std is None:
-            std = getattr(self, 'StdY', None)
-        if std is not None:
-            std_t = self._cached_norm_param('std_y', std, pred_out)
-            if std_t is not None:
-                std_slice = std_t[..., rot_sl]
-                while std_slice.dim() < rot_delta_residual.dim():
-                    std_slice = std_slice.unsqueeze(0)
-                rot_delta_residual = rot_delta_residual / std_slice.clamp_min(1e-6)
-        delta_full = torch.zeros_like(pred_out)
-        delta_full[..., rot_sl] = rot_delta_residual
-        preds_out = dict(preds_dict)
-        preds_out['delta'] = delta_full
-        preds_out['_delta_fallback'] = True
-        return preds_out
-
-    def _current_freerun_weight(self) -> float:
-        base = float(getattr(self, 'freerun_weight', 0.0) or 0.0)
-        if base <= 0.0:
-            return 0.0
-        mode = str(getattr(self, 'freerun_weight_mode', 'epoch_linear') or 'epoch_linear').lower()
-        init = float(getattr(self, 'freerun_weight_init', 0.0) or 0.0)
-        init = max(0.0, min(init, base))
-        if mode == 'epoch_linear':
-            ramp = max(1, int(getattr(self, 'freerun_weight_ramp_epochs', 1) or 1))
-            epoch = max(1, int(getattr(self, 'cur_epoch', 1) or 1))
-            factor = min(1.0, max(0.0, epoch / ramp))
-            return init + (base - init) * factor
-        return base
-
-    def _current_freerun_horizon(self) -> int:
-        max_h = int(getattr(self, 'freerun_horizon', 0) or 0)
-        if max_h <= 0:
-            return 0
-        min_h = int(getattr(self, 'freerun_horizon_min', 6) or 6)
-        min_h = max(1, min(min_h, max_h))
-        init_h = getattr(self, 'freerun_init_horizon', None)
-        if init_h is None or init_h <= 0:
-            init_h = min(max_h, max(min_h, 8))
-        init_h = max(min_h, min(int(init_h), max_h))
-        ramp_epochs = max(1, int(getattr(self, 'freerun_horizon_ramp_epochs', 4) or 4))
-        epoch = max(1, int(getattr(self, 'cur_epoch', 1) or 1))
-        progress = min(1.0, max(0.0, (epoch - 1) / ramp_epochs))
-        upper = init_h + int(round((max_h - init_h) * progress))
-        return max(min_h, min(upper, max_h))
-
-    def _should_log_freerun_gradients(self, batch_idx: int) -> bool:
-        if not bool(getattr(self, 'freerun_grad_log', False)):
-            return False
-        interval = max(1, int(getattr(self, 'freerun_grad_log_interval', 50) or 50))
-        return (batch_idx % interval) == 0
-
-    def _collect_freerun_gradients(self, free_loss, preds_dict, effective_h: int):
-        import torch
-        if preds_dict is None:
-            return None
-        predY = preds_dict.get('out') if isinstance(preds_dict, dict) else None
-        if predY is None or not predY.requires_grad:
-            return None
-        grad = torch.autograd.grad(
-            free_loss,
-            predY,
-            retain_graph=True,
-            allow_unused=True,
-        )[0]
-        if grad is None:
-            return None
-        grad = grad.view(grad.shape[0], grad.shape[1], -1)
-        per_step = grad.norm(dim=-1).mean(dim=0)
-        if per_step.numel() == 0:
-            return None
-        horizon_idx = max(0, min(int(effective_h), per_step.shape[0] - 1))
-        step0 = per_step[0].detach()
-        steph = per_step[horizon_idx].detach()
-        ratio = float((steph / (step0 + 1e-8)).item())
-        return {
-            'per_step': per_step.detach().cpu(),
-            'step0': float(step0.cpu()),
-            'steph': float(steph.cpu()),
-            'ratio': ratio,
-            'horizon': int(effective_h),
+    def _collect_direct_pose_grad_stats(self) -> Dict[str, float]:
+        model = getattr(self, 'model', None)
+        if model is None:
+            return {}
+        g_trunk = self._module_grad_norm(getattr(model, 'direct_pose_head', None))
+        g_leg = self._module_grad_norm(getattr(model, 'direct_pose_out_leg', None))
+        g_nonleg_head = self._module_grad_norm(getattr(model, 'direct_pose_out_nonleg', None))
+        g_arm = self._module_grad_norm(getattr(model, 'direct_pose_out_arm', None))
+        g_else = self._module_grad_norm(getattr(model, 'direct_pose_out_else', None))
+        g_nonleg = self._merge_grad_norm(g_nonleg_head, g_arm, g_else)
+        ratio_nonleg_leg = float('nan')
+        if _math.isfinite(g_leg) and _math.isfinite(g_nonleg):
+            ratio_nonleg_leg = float(g_nonleg / max(1e-12, g_leg))
+        ratio_arm_else = float('nan')
+        if _math.isfinite(g_arm) and _math.isfinite(g_else):
+            ratio_arm_else = float(g_arm / max(1e-12, g_else))
+        stats = {
+            'direct_grad_norm_trunk': float(g_trunk),
+            'direct_grad_norm_out_leg': float(g_leg),
+            'direct_grad_norm_out_nonleg': float(g_nonleg),
+            'direct_grad_norm_out_arm': float(g_arm),
+            'direct_grad_norm_out_else': float(g_else),
+            'direct_grad_ratio_nonleg_over_leg': float(ratio_nonleg_leg),
+            'direct_grad_ratio_arm_over_else': float(ratio_arm_else),
         }
-
-    def _maybe_print_grad_monitor(self, grad_info, epoch: int, batch_idx: int) -> None:
-        if not isinstance(grad_info, dict):
-            return
-        ratio = float(grad_info.get('ratio', float('nan')))
-        step0 = float(grad_info.get('step0', float('nan')))
-        steph = float(grad_info.get('steph', float('nan')))
-        horizon = int(grad_info.get('horizon', -1))
-        print(
-            f"[FreeGrad][ep {int(epoch):03d}][bi {int(batch_idx):04d}] "
-            f"step0={step0:.3e} step{horizon}={steph:.3e} ratio={ratio:.3e}"
-        )
-        threshold = float(getattr(self, 'freerun_grad_ratio_alert', 1e-2) or 1e-2)
-        if ratio < threshold:
-            print(
-                f"[FreeGrad][warn] ratio<{threshold:.2e}; "
-                "考虑缩短 horizon 或引入 skip-connection/latent consistency。"
-            )
+        gate_thr = float(getattr(self, 'direct_pose_grad_ratio_gate', 0.35) or 0.35)
+        if _math.isfinite(ratio_nonleg_leg) and _math.isfinite(gate_thr) and gate_thr > 0.0:
+            stats['direct_grad_ratio_gate'] = float(gate_thr)
+            stats['direct_grad_ratio_alert'] = 1.0 if ratio_nonleg_leg < gate_thr else 0.0
+        return stats
 
     def _history_drift_debug(
         self,
@@ -2025,6 +2126,24 @@ class Trainer:
             'distal': group_vals.get('distal', float('nan')),
         }
 
+    def _set_direct_pose_trunk_trainable(self, enabled: bool) -> None:
+        self.direct_pose_trunk_trainable = bool(enabled)
+        model = getattr(self, 'model', None)
+        head = getattr(model, 'direct_pose_head', None) if model is not None else None
+        if head is None:
+            print('[StageSched][WARN] direct_pose_head missing; cannot toggle trunk trainability.')
+            return
+        for param in head.parameters():
+            param.requires_grad_(bool(enabled))
+
+    def _apply_runtime_trainability_modes(self) -> None:
+        if bool(getattr(self, 'direct_pose_trunk_trainable', True)):
+            return
+        model = getattr(self, 'model', None)
+        head = getattr(model, 'direct_pose_head', None) if model is not None else None
+        if head is not None:
+            head.train(False)
+
     def _apply_stage_schedule(self, epoch: int):
         schedule = getattr(self, 'freerun_stage_schedule', None)
         overrides: Dict[str, Any] = {}
@@ -2093,14 +2212,12 @@ class Trainer:
                     lo = float(getattr(self, 'history_dropout_prob_min', 0.05))
                     hi = float(getattr(self, 'history_dropout_prob_max', 0.30))
                     coerced = max(lo, min(hi, float(coerced)))
-                except Exception:
-                    pass
-            # normalize noise bucket specs (accepts min/max or min_deg/max_deg).
-            if attr_name == 'input_noise_profile':
-                try:
-                    coerced = _sanitize_noise_profile_spec(value)
-                except Exception:
-                    pass
+                except (TypeError, ValueError, RuntimeError) as exc:
+                    _phasec_warn_once(
+                        "stage_schedule/history_dropout_prob",
+                        "failed to clamp history_dropout_prob from stage schedule; keeping previous value",
+                        exc,
+                    )
             setattr(target, attr_name, coerced)
             key_name = key if prefix else attr_name
             overrides[key_name] = coerced
@@ -2117,28 +2234,6 @@ class Trainer:
                 return overrides
 
         params = dict(selected.get('params') or {})
-
-        # --- rampable teacher noise inside a stage ---
-        try:
-            st = int(selected.get('start', epoch))
-            ed = int(selected.get('end', st))
-            span = max(1, ed - st)
-            prog = min(1.0, max(0.0, (epoch - st) / span))
-            boost = float(getattr(self, 'teacher_noise_boost', 1.0) or 1.0)
-            def _ramp(stage, key_start, key_end, target):
-                v0 = stage.get(key_start, stage.get(target))
-                v1 = stage.get(key_end, v0)
-                if v0 is None or v1 is None:
-                    return
-                val = float(v0 + (v1 - v0) * prog)
-                val *= boost
-                if 'prob' in target:
-                    val = max(0.0, min(1.0, val))
-                params[target] = val
-            _ramp(selected, 'teacher_rot_noise_deg_start', 'teacher_rot_noise_deg_end', 'teacher_rot_noise_deg')
-            _ramp(selected, 'teacher_rot_noise_prob_start', 'teacher_rot_noise_prob_end', 'teacher_rot_noise_prob')
-        except Exception:
-            pass
         for key, value in params.items():
             # Special-case stage-wise optimizer LR scheduling.
             if key in ("opt_lr", "optimizer_lr"):
@@ -2151,8 +2246,21 @@ class Trainer:
                         for pg in self.optimizer.param_groups:
                             pg["lr"] = lr_val
                         overrides[key] = lr_val
-                    except Exception:
-                        pass
+                    except (TypeError, ValueError, RuntimeError, AttributeError) as exc:
+                        _phasec_warn_once(
+                            "stage_schedule/optimizer_lr",
+                            "failed to set optimizer LR from stage schedule",
+                            exc,
+                        )
+                continue
+            if key in (
+                "direct_pose_trunk_trainable",
+                "trainer.direct_pose_trunk_trainable",
+                "model.direct_pose_trunk_trainable",
+            ):
+                enabled = bool(value)
+                self._set_direct_pose_trunk_trainable(enabled)
+                overrides[key] = enabled
                 continue
             _assign(key, value)
 
@@ -2194,10 +2302,6 @@ class Trainer:
             if legacy_in_loss:
                 raise ValueError(_legacy_loss_keys_msg(legacy_in_loss, context="freerun_stage_schedule.loss"))
 
-        if "freerun_weight" in trainer_cfg:
-            self.freerun_weight = float(trainer_cfg["freerun_weight"])
-        if "freerun_horizon" in trainer_cfg:
-            self.freerun_horizon = int(trainer_cfg["freerun_horizon"])
         if "eval_horizon" in trainer_cfg:
             if hasattr(self, 'eval_settings'):
                 self.eval_settings.horizon = int(trainer_cfg["eval_horizon"])
@@ -2228,21 +2332,8 @@ class Trainer:
                         elif hasattr(self.loss_fn, weight_name):
                             setattr(self.loss_fn, weight_name, float(weight_value))
 
-        # 同步在线调度器的边界/当前值，避免后续被旧参数拉回去
         if hasattr(self, 'hyperparam_scheduler') and self.hyperparam_scheduler is not None:
             sched_params = self.hyperparam_scheduler.params
-            if "freerun_horizon" in trainer_cfg:
-                sched_params["freerun_horizon"] = int(trainer_cfg["freerun_horizon"])
-            if hasattr(self, 'freerun_horizon_min'):
-                sched_params["freerun_min"] = int(getattr(self, 'freerun_horizon_min'))
-            if "freerun_horizon" in trainer_cfg:
-                sched_params["freerun_max"] = int(
-                    max(
-                        trainer_cfg.get("freerun_horizon", 0),
-                        sched_params.get("freerun_max", 0),
-                        getattr(self, 'freerun_horizon_min', 0),
-                    )
-                )
             if hasattr(self, 'teacher_forcing_ratio'):
                 sched_params["teacher_forcing_ratio"] = float(getattr(self, 'teacher_forcing_ratio'))
 
@@ -2362,98 +2453,6 @@ class Trainer:
         if lo is not None and value < float(lo):
             return False
         return True
-    def _log_freerun_vs_teacher_stats(self, epoch: int, batch_idx: int, free_stats: Optional[dict]) -> None:
-        if not bool(getattr(self, 'freerun_grad_log', False)):
-            return
-        teacher_stats = getattr(self, '_last_teacher_stats', None)
-        if not isinstance(teacher_stats, dict):
-            return
-        if not isinstance(free_stats, dict):
-            return
-        keys = ('rot_geo', 'angvel_dir')
-        parts = []
-        for key in keys:
-            t = teacher_stats.get(key)
-            f = free_stats.get(key)
-            if t is None or f is None:
-                continue
-            denom = abs(t) + 1e-6
-            ratio = f / denom
-            parts.append(f"{key}=T{t:.3f}/F{f:.3f}(x{ratio:.2f})")
-        if parts:
-            joined = " ".join(parts)
-            print(f"[FreeLossCmp][ep {epoch:03d}][bi {batch_idx:04d}] {joined}")
-
-    def compute_freerun_loss(
-        self,
-        state_seq,
-        gt_seq,
-        cond_seq,
-        cond_raw_seq,
-        contacts_seq,
-        angvel_seq,
-        pose_hist_seq,
-        batch,
-        cond_norm_mu=None,
-        cond_norm_std=None,
-        *,
-        batch_idx: int,
-        log_grad: bool = False,
-    ):
-        import torch
-        weight = self._current_freerun_weight()
-        need_training = (weight > 0.0) or log_grad
-        if not need_training:
-            return None
-        if state_seq is None or gt_seq is None:
-            return None
-        T = state_seq.shape[1]
-        if T < 2:
-            return None
-        horizon_cap = min(self._current_freerun_horizon(), T - 1)
-        if horizon_cap < 1:
-            return None
-        min_h = int(getattr(self, 'freerun_horizon_min', 6) or 6)
-        min_h = max(1, min(min_h, horizon_cap))
-        lower = min(min_h, horizon_cap)
-        upper = max(lower, horizon_cap)
-        if upper > lower:
-            effective_h = int(torch.randint(lower, upper + 1, (1,), device=state_seq.device).item())
-        else:
-            effective_h = lower
-        window = effective_h + 1
-        if window < 2:
-            return None
-        max_start = max(0, T - window)
-        if max_start > 0:
-            start = int(torch.randint(0, max_start + 1, (1,), device=state_seq.device).item())
-        else:
-            start = 0
-        payload = self._freerun_loss_window(
-            state_seq,
-            gt_seq,
-            cond_seq,
-            cond_raw_seq,
-            contacts_seq,
-            angvel_seq,
-            pose_hist_seq,
-            batch,
-            start=start,
-            length=window,
-            train_mode=True,
-            return_preds=log_grad,
-            cond_norm_mu=cond_norm_mu,
-            cond_norm_std=cond_norm_std,
-        )
-        if payload is None:
-            return None
-        free_loss, stats, preds_free, _ = payload
-        grad_monitor = None
-        if log_grad:
-            grad_monitor = self._collect_freerun_gradients(free_loss, preds_free, effective_h)
-        self._freerun_active_horizon = effective_h
-        return free_loss, stats or {}, grad_monitor, effective_h
-
     def test_gradient_connection(self, loader):
         if getattr(self, '_grad_connection_checked', False):
             return
@@ -2586,10 +2585,10 @@ class Trainer:
             stats = {} if stats is None else dict(stats)
         stats = dict(stats)
         stats['adaptive_loss/total_weight'] = float(total_weight)
-        try:
+        if hasattr(core_loss, 'detach'):
             stats['adaptive_loss/base'] = float(core_loss.detach().cpu())
-        except Exception:
-            pass
+        else:
+            stats['adaptive_loss/base'] = float(core_loss)
         for name, rel in rel_weights.items():
             stats[f'adaptive_loss/weight/{name}'] = float(rel * total_weight)
         return adapted, stats
@@ -2604,8 +2603,6 @@ class Trainer:
             loss_val = float('nan')
         scheduler.step(loss_val, float(grad_norm_value))
         params = scheduler.get_params()
-        if 'freerun_horizon' in params:
-            self.freerun_horizon = int(params['freerun_horizon'])
         if 'teacher_forcing_ratio' in params:
             self.teacher_forcing_ratio = float(params['teacher_forcing_ratio'])
     def __init__(self, model, loss_fn, lr=0.0001, grad_clip=0.0, weight_decay=0.01, tf_warmup_steps=0, tf_total_steps=0, augmentor=None, use_amp=None, accum_steps=1, *, pin_memory=False, args=None):
@@ -2627,6 +2624,7 @@ class Trainer:
         self._stage_epoch_entered: Optional[int] = None
         self._stage_goal_history: Dict[str, deque] = {}
         self._stage_pending_advance: bool = False
+        self.direct_pose_trunk_trainable: bool = True
         self.args = args
 
         self.grad_clip = float(grad_clip)
@@ -2676,9 +2674,6 @@ class Trainer:
         self.pose_hist_scales: Optional[torch.Tensor] = None
         self.pose_hist_mu: Optional[torch.Tensor] = None
         self.pose_hist_std: Optional[torch.Tensor] = None
-        self.input_step_noise_prob: float = 0.3
-        self.input_noise_profile: Optional[list[dict[str, float]]] = None
-        self.teacher_noise_boost: float = 1.0
         self.nan_grad_reports: int = 0
         self.nan_grad_report_limit: int = 5
         self.diag_input_stats: bool = False
@@ -2689,23 +2684,10 @@ class Trainer:
         self._diag_roll_mode: Optional[str] = None
         self._diag_roll_step: int = -1
         self._diag_roll_epoch: int = 0
-        self.freerun_weight_mode: str = 'epoch_linear'
-        self.freerun_weight_ramp_epochs: int = 1
-        self.freerun_horizon_min: int = 6
-        self.freerun_init_horizon: int = 8
-        self.freerun_horizon_ramp_epochs: int = 4
-        self.freerun_weight_init: float = 0.0
-        self.freerun_weight_init: float = 0.0
-        self.freerun_grad_log: bool = False
-        self.freerun_grad_log_interval: int = 50
-        self.freerun_grad_ratio_alert: float = 1e-2
-        self._freerun_active_horizon: int = 0
-        self._last_teacher_stats: Optional[dict[str, float]] = None
         self.enable_grad_connection_test: bool = True
         self._grad_connection_checked: bool = False
         self.grad_conn_window: int = 8
         self.grad_conn_detect_anomaly: bool = True
-        self._carry_debug_buffer: list[dict[str, float]] = []
         self.adaptive_loss_module = None
         self.hyperparam_scheduler: Optional[Any] = None
         self.teacher_forcing_ratio: float = 1.0
@@ -2758,213 +2740,211 @@ class Trainer:
         msg = self._format_template_hint(f"[FATAL] {context}")
         raise RuntimeError(msg) from exc
 
+    def _commit_rollout_diag_update(
+        self,
+        *,
+        mode: Any = _STATE_UPDATE_UNSET,
+        step: Any = _STATE_UPDATE_UNSET,
+        last_step_debug_stats: Any = _STATE_UPDATE_UNSET,
+    ) -> None:
+        if mode is not _STATE_UPDATE_UNSET:
+            self._diag_roll_mode = mode
+        if step is not _STATE_UPDATE_UNSET:
+            self._diag_roll_step = int(step)
+        if isinstance(last_step_debug_stats, dict):
+            self._last_step_debug_stats = last_step_debug_stats
+
     @torch.no_grad()
     def eval_epoch(self, loader, mode='mixed', max_batches=None):
         self.model.eval()
         return evaluate_teacher(self, loader, mode='mixed', max_batches=max_batches)
 
-    def fit(self, train_loader, epochs=10, log_every=50, out_dir=None, patience=10, run_name='run'):
-        import torch, os
-        self.model.train()
-        self.train_loader = train_loader
-        device_type = getattr(self.device, 'type', 'cpu')
-        scaler = torch.amp.GradScaler('cuda' if device_type=='cuda' else 'cpu', enabled=(getattr(self, 'use_amp', False) and device_type in ('cuda', 'mps')))
-        accum_steps = int(getattr(self, 'accum_steps', 1) or 1)
-        # Track two best checkpoints:
-        # - best_teacher: min teacher GeoLocalDeg (root-aligned single-frame accuracy)
-        # - best_free: min freerun drift slope (error growth rate)
-        best_teacher_val, best_ckpt = float('inf'), None
-        best_teacher_ckpt = None
-        best_free_slope = float('inf')
-        best_free_ckpt = None
-        history = {'train':[], 'val':[]}
-        tf_mode = getattr(self, 'tf_mode', 'epoch_linear')
-        tf_start = int(getattr(self, 'tf_start_epoch', 0))
-        tf_end   = int(getattr(self, 'tf_end_epoch', 0))
-        tf_max_base   = float(getattr(self, 'tf_max', 1.0))
-        tf_min_base   = float(getattr(self, 'tf_min', 0.0))
+    def _compute_fit_drift_slope(self, free_metrics: Mapping[str, Any]) -> float:
+        curve = free_metrics.get('GeoDegCurve')
+        if not isinstance(curve, list) or not curve:
+            start = float(free_metrics.get('GeoDegStart', free_metrics.get('GeoDeg', float('inf'))))
+            end = float(free_metrics.get('GeoDegEnd', start))
+            horizon = int(free_metrics.get('eval_horizon', 0) or 0)
+            return (end - start) / max(1, horizon - 1)
 
-        def _compute_drift_slope(free_metrics: dict) -> float:
-            """Compute freerun drift slope from GeoDegCurve (deg/step).
+        if isinstance(curve[0], (list, tuple)) and curve[0]:
+            horizon = len(curve[0])
+            mean_curve = []
+            for step_idx in range(horizon):
+                vals = []
+                for batch_curve in curve:
+                    if isinstance(batch_curve, (list, tuple)) and step_idx < len(batch_curve):
+                        value = batch_curve[step_idx]
+                        if isinstance(value, (int, float)) and value == value:
+                            vals.append(float(value))
+                mean_curve.append(sum(vals) / max(1, len(vals)))
+        else:
+            mean_curve = [float(v) for v in curve if isinstance(v, (int, float)) and v == v]
 
-            Uses mean curve across monitored batches if needed.
-            """
-            curve = free_metrics.get("GeoDegCurve")
-            if not isinstance(curve, list) or not curve:
-                start = float(free_metrics.get("GeoDegStart", free_metrics.get("GeoDeg", float("inf"))))
-                end = float(free_metrics.get("GeoDegEnd", start))
-                h = int(free_metrics.get("eval_horizon", 0) or 0)
-                denom = max(1, h - 1)
-                return (end - start) / denom
+        if len(mean_curve) < 2:
+            return float('inf')
+        return (mean_curve[-1] - mean_curve[0]) / max(1, len(mean_curve) - 1)
 
-            # curve can be [H] or [B][H]
-            if isinstance(curve[0], (list, tuple)) and curve[0]:
-                H = len(curve[0])
-                mean_curve = []
-                for t in range(H):
-                    vals = []
-                    for b in curve:
-                        if isinstance(b, (list, tuple)) and t < len(b):
-                            v = b[t]
-                            if isinstance(v, (int, float)) and v == v:
-                                vals.append(float(v))
-                    mean_curve.append(sum(vals) / max(1, len(vals)))
+    def _fit_checkpoint_payload(self) -> Dict[str, Any]:
+        model_state: Dict[str, Any] = {}
+        for key, value in self.model.state_dict().items():
+            if torch.is_tensor(value):
+                model_state[str(key)] = value.detach().cpu().clone()
             else:
-                mean_curve = [float(v) for v in curve if isinstance(v, (int, float)) and v == v]
+                model_state[str(key)] = value
+        payload: Dict[str, Any] = {'model': model_state}
+        full_config = getattr(self, 'full_config', None)
+        if isinstance(full_config, Mapping):
+            payload['config'] = dict(full_config)
+        return payload
 
-            if len(mean_curve) < 2:
-                return float("inf")
-            start, end = mean_curve[0], mean_curve[-1]
-            return (end - start) / max(1, len(mean_curve) - 1)
+    def _save_fit_checkpoint_payload(
+        self,
+        *,
+        out_dir: Optional[str],
+        run_name: str,
+        checkpoint_tag: str,
+        payload: Optional[Mapping[str, Any]],
+    ) -> Optional[str]:
+        if not out_dir or payload is None:
+            return None
+        filename_map = {
+            'best_teacher': 'ckpt_best_teacher_{run_name}.pth',
+            'best_free': 'ckpt_best_free_{run_name}.pth',
+            'last': 'ckpt_last_{run_name}.pth',
+        }
+        template = filename_map.get(str(checkpoint_tag))
+        if template is None:
+            raise ValueError(f'Unknown checkpoint tag: {checkpoint_tag}')
+        out_dir_str = str(out_dir)
+        os.makedirs(out_dir_str, exist_ok=True)
+        ckpt_path = os.path.join(out_dir_str, template.format(run_name=str(run_name)))
+        torch.save(dict(payload), ckpt_path)
+        return ckpt_path
 
-        try:
-            self.test_gradient_connection(train_loader)
-        except Exception as _grad_exc:
-            print(f"[GradConn] failed during warm-up: {_grad_exc}")
-            raise
+    def _prepare_fit_epoch(
+        self,
+        epoch: int,
+        total_epochs: int,
+        *,
+        tf_mode: str,
+        tf_start: int,
+        tf_end: int,
+        tf_max_base: float,
+        tf_min_base: float,
+    ) -> float:
+        self.cur_epoch = int(epoch)
+        self.current_epoch = int(epoch)
+        self.total_epochs = int(total_epochs)
+        self._diag_roll_epoch = int(epoch)
+        self._yaw_diag_hits = 0
+        self._diag_roll_step = -1
+        self._diag_roll_mode = None
+        if epoch == 1:
+            print(f"[LR-DBG:fit-epoch{epoch:03d}-start] pg0={self.optimizer.param_groups[0]['lr']:.2e}")
 
-        for ep in range(1, int(epochs)+1):
-
-            # record epoch for schedulers
-            try:
-                self.cur_epoch = int(ep)
-                self.current_epoch = int(ep)
-                self.total_epochs = int(epochs)
-            except Exception:
-                pass
-            # 复位 yaw 诊断状态，保证每个 epoch 打印次数受限
-            self._diag_roll_epoch = int(ep)
-            self._yaw_diag_hits = 0
-            self._diag_roll_step = -1
-            self._diag_roll_mode = None
-            epoch_sums = {}
-            epoch_cnt = 0
-            if ep == 1:
-                print(f"[LR-DBG:fit-epoch{ep:03d}-start] pg0={self.optimizer.param_groups[0]['lr']:.2e}")
-
-            stage_overrides = self._apply_stage_schedule(ep)
-            tf_max_epoch = float(stage_overrides.get('tf_max', tf_max_base))
-            tf_min_epoch = float(stage_overrides.get('tf_min', tf_min_base))
-
-            if tf_mode == 'epoch_linear' and tf_end > tf_start:
-                if ep <= tf_start:
-                    tf_ratio = tf_max_epoch
-                elif ep >= tf_end:
-                    tf_ratio = tf_min_epoch
-                else:
-                    r = (ep - tf_start) / max(1, (tf_end - tf_start))
-                    tf_ratio = tf_max_epoch + (tf_min_epoch - tf_max_epoch) * r
-            else:
+        stage_overrides = self._apply_stage_schedule(epoch)
+        tf_max_epoch = float(stage_overrides.get('tf_max', tf_max_base))
+        tf_min_epoch = float(stage_overrides.get('tf_min', tf_min_base))
+        if tf_mode == 'epoch_linear' and tf_end > tf_start:
+            if epoch <= tf_start:
                 tf_ratio = tf_max_epoch
-            self.teacher_forcing_ratio = float(tf_ratio)
-            self._last_tf_ratio = float(tf_ratio)
-            sched = getattr(self, 'hyperparam_scheduler', None)
-            if sched is not None:
-                sched.params['teacher_forcing_ratio'] = float(tf_ratio)
-                if 'freerun_horizon' in sched.params:
-                    sched.params['freerun_horizon'] = int(getattr(self, 'freerun_horizon', sched.params['freerun_horizon']))
-                if 'freerun_min' in sched.params and hasattr(self, 'freerun_horizon_min'):
-                    sched.params['freerun_min'] = int(getattr(self, 'freerun_horizon_min'))
-                if 'freerun_max' in sched.params:
-                    sched.params['freerun_max'] = int(max(
-                        sched.params.get('freerun_max', 0),
-                        getattr(self, 'freerun_horizon', 0),
-                        getattr(self, 'freerun_horizon_min', 0),
-                    ))
-            running, cnt = 0.0, 0
-            self.model.train()
-            self.optimizer.zero_grad(set_to_none=True)
+            elif epoch >= tf_end:
+                tf_ratio = tf_min_epoch
+            else:
+                ratio = (epoch - tf_start) / max(1, (tf_end - tf_start))
+                tf_ratio = tf_max_epoch + (tf_min_epoch - tf_max_epoch) * ratio
+        else:
+            tf_ratio = tf_max_epoch
 
+        self.teacher_forcing_ratio = float(tf_ratio)
+        self._last_tf_ratio = float(tf_ratio)
+        sched = getattr(self, 'hyperparam_scheduler', None)
+        if sched is not None:
+            sched.params['teacher_forcing_ratio'] = float(tf_ratio)
 
-            for bi, batch in enumerate(train_loader, start=1):
-                # 缓存首个 batch 供快速 teacher 评估，避免额外遍历
-                if getattr(self, "_cached_train_batch", None) is None:
-                    def _cache_obj(obj):
-                        import torch
-                        if torch.is_tensor(obj):
-                            return obj.detach().cpu()
-                        if isinstance(obj, (list, tuple)):
-                            return type(obj)(_cache_obj(x) for x in obj)
-                        if isinstance(obj, dict):
-                            return {k: _cache_obj(v) for k, v in obj.items()}
-                        return obj
-                    try:
-                        self._cached_train_batch = _cache_obj(batch)
-                    except Exception:
-                        self._cached_train_batch = None
-                x_cand = self._pick_first(batch, ('motion','X','x_in_features'))
-                y_cand = self._pick_first(batch, ('gt_motion','Y','y_out_features','y_out_seq'))
-                if x_cand is None or y_cand is None:
-                    continue
-                # 位置：Trainer.train(...) 里
-                def _to_device(maybe_tensor):
-                    if maybe_tensor is None:
-                        return None
-                    try:
-                        tensor = maybe_tensor.to(self.device, non_blocking=self._non_blocking)
-                        return tensor if tensor.dtype == torch.float32 else tensor.float()
-                    except Exception:
-                        return None
+        self.model.train()
+        self._apply_runtime_trainability_modes()
+        self.optimizer.zero_grad(set_to_none=True)
+        return float(tf_ratio)
 
-                state_seq = _to_device(x_cand)
-                gt_seq = _to_device(y_cand)
-                if state_seq is None or gt_seq is None:
-                    continue
-                state_seq = self._maybe_apply_teacher_noise(state_seq)
+    def _run_one_train_batch(self, batch, *, epoch: int, batch_idx: int, tf_ratio: float):
+        if getattr(self, '_cached_train_batch', None) is None:
+            def _cache_obj(obj):
+                if torch.is_tensor(obj):
+                    return obj.detach().cpu()
+                if isinstance(obj, (list, tuple)):
+                    return type(obj)(_cache_obj(x) for x in obj)
+                if isinstance(obj, dict):
+                    return {k: _cache_obj(v) for k, v in obj.items()}
+                return obj
 
-                cond_seq = _to_device(batch.get('cond_in')) if isinstance(batch, dict) else None
-                cond_raw_seq = _to_device(batch.get('cond_tgt_raw')) if isinstance(batch, dict) else None
-                contacts_seq = _to_device(batch.get('contacts')) if isinstance(batch, dict) else None
-                angvel_seq = _to_device(batch.get('angvel')) if isinstance(batch, dict) else None
-                angvel_raw_seq = _to_device(batch.get('angvel_raw')) if isinstance(batch, dict) else None
-                pose_hist_seq = _to_device(batch.get('pose_hist')) if isinstance(batch, dict) else None
-                cond_norm_mu = _to_device(batch.get('cond_norm_mu')) if isinstance(batch, dict) else None
-                cond_norm_std = _to_device(batch.get('cond_norm_std')) if isinstance(batch, dict) else None
-                time_base = _to_device(batch.get('start')) if isinstance(batch, dict) else None
+            try:
+                self._cached_train_batch = _cache_obj(batch)
+            except Exception:
+                self._cached_train_batch = None
 
-                # === 插入开始：一次性打印训练端 X(z) 的 RMS，验证不是 0 ===
-                current_tf_ratio = float(getattr(self, 'teacher_forcing_ratio', tf_ratio))
-                tf_ratio = current_tf_ratio
-                preds_dict, last_attn = self._rollout_sequence(
-                    state_seq,
-                    cond_seq,
-                    cond_raw_seq,
-                    contacts_seq=contacts_seq,
-                    angvel_seq=angvel_seq,
-                    pose_hist_seq=pose_hist_seq,
-                    gt_seq=gt_seq,
-                    cond_norm_mu=cond_norm_mu,
-                    cond_norm_std=cond_norm_std,
-                    mode='mixed',
-                    tf_ratio=current_tf_ratio,
-                    time_base=time_base,
-                )
+        x_cand = self._pick_first(batch, ('motion', 'X', 'x_in_features'))
+        y_cand = self._pick_first(batch, ('gt_motion', 'Y', 'y_out_features', 'y_out_seq'))
+        if x_cand is None or y_cand is None:
+            return None
 
-                stats = {}
-                with self._amp_context(self.use_amp):
-                    out = self.loss_fn(preds_dict, gt_seq, attn_weights=last_attn, batch=batch)
-                if isinstance(out, tuple):
-                    loss, stats = out
-                else:
-                    loss, stats = out, {}
-                if not isinstance(stats, dict):
-                    stats = {} if stats is None else dict(stats)
+        def _to_device(maybe_tensor):
+            if maybe_tensor is None:
+                return None
+            try:
+                tensor = maybe_tensor.to(self.device, non_blocking=self._non_blocking)
+                return tensor if tensor.dtype == torch.float32 else tensor.float()
+            except Exception:
+                return None
 
-                loss, stats = self._maybe_apply_adaptive_loss(loss, stats)
-                # Smoke-friendly diagnostic: confirm BCE-on-logits contact losses are actually being computed.
-                # (Without propagating contacts_*_logits through rollout, these keys will be missing and training
-                # silently falls back to MSE-on-probabilities.)
-                if ep == 1 and bi == 1:
-                    try:
-                        cp_bce = stats.get("contact_plan_bce", None)
-                        cm_bce = stats.get("contact_meas_bce", None)
-                        if cp_bce is not None or cm_bce is not None:
-                            print(f"[Smoke] contact_plan_bce={cp_bce} contact_meas_bce={cm_bce}")
-                    except Exception:
-                        pass
+        state_seq = _to_device(x_cand)
+        gt_seq = _to_device(y_cand)
+        if state_seq is None or gt_seq is None:
+            return None
+        # Teacher inputs stay clean; rollout noise injection is only applied in mixed/train_free paths.
+        cond_seq = _to_device(batch.get('cond_in')) if isinstance(batch, dict) else None
+        cond_raw_seq = _to_device(batch.get('cond_tgt_raw')) if isinstance(batch, dict) else None
+        contacts_seq = _to_device(batch.get('contacts')) if isinstance(batch, dict) else None
+        angvel_seq = _to_device(batch.get('angvel')) if isinstance(batch, dict) else None
+        pose_hist_seq = _to_device(batch.get('pose_hist')) if isinstance(batch, dict) else None
+        cond_norm_mu = _to_device(batch.get('cond_norm_mu')) if isinstance(batch, dict) else None
+        cond_norm_std = _to_device(batch.get('cond_norm_std')) if isinstance(batch, dict) else None
+        time_base = _to_device(batch.get('start')) if isinstance(batch, dict) else None
+        current_tf_ratio = float(getattr(self, 'teacher_forcing_ratio', tf_ratio))
+        preds_dict, last_attn = self._rollout_sequence(
+            state_seq,
+            cond_seq,
+            cond_raw_seq,
+            contacts_seq=contacts_seq,
+            angvel_seq=angvel_seq,
+            pose_hist_seq=pose_hist_seq,
+            gt_seq=gt_seq,
+            cond_norm_mu=cond_norm_mu,
+            cond_norm_std=cond_norm_std,
+            mode='mixed',
+            tf_ratio=current_tf_ratio,
+            time_base=time_base,
+        )
+        stats = {}
+        with self._amp_context(self.use_amp):
+            out = self.loss_fn(preds_dict, gt_seq, attn_weights=last_attn, batch=batch)
+        if isinstance(out, tuple):
+            loss, stats = out
+        else:
+            loss, stats = out, {}
+        if not isinstance(stats, dict):
+            stats = {} if stats is None else dict(stats)
+        loss, stats = self._maybe_apply_adaptive_loss(loss, stats)
+        if epoch == 1 and batch_idx == 1:
+            if isinstance(stats, Mapping):
+                cp_bce = stats.get('contact_plan_bce', None)
+                if cp_bce is not None:
+                    print(f'[Smoke] contact_plan_bce={cp_bce}')
 
-                log_grad = self._should_log_freerun_gradients(bi)
-                freerun_payload = self.compute_freerun_loss(
+        if getattr(self, 'history_debug_steps', 0) > 1 and batch_idx == 1:
+            try:
+                self._history_drift_debug(
                     state_seq,
                     gt_seq,
                     cond_seq,
@@ -2972,376 +2952,451 @@ class Trainer:
                     contacts_seq,
                     angvel_seq,
                     pose_hist_seq,
-                    batch,
+                    epoch=epoch,
+                    batch_idx=batch_idx,
                     cond_norm_mu=cond_norm_mu,
                     cond_norm_std=cond_norm_std,
-                    batch_idx=bi,
-                    log_grad=log_grad,
                 )
-                if freerun_payload is not None:
-                    free_loss, free_stats, grad_monitor, eff_h = freerun_payload
-                    weight = self._current_freerun_weight()
-                    if weight > 0.0:
-                        loss = loss + weight * free_loss
-                    stats['freerun_loss'] = float(free_loss.detach().cpu())
-                    stats['freerun/weight'] = float(weight)
-                    stats['freerun/horizon'] = float(eff_h)
-                    if isinstance(free_stats, dict):
-                        for fk, fv in free_stats.items():
-                            try:
-                                stats[f'freerun/{fk}'] = fv
-                            except Exception:
-                                pass
-                    if grad_monitor is not None:
-                        stats['freerun/grad_ratio'] = float(grad_monitor.get('ratio', float('nan')))
-                        self._maybe_print_grad_monitor(grad_monitor, ep, bi)
-                    self._log_freerun_vs_teacher_stats(ep, bi, free_stats)
+            except Exception as exc:
+                print(f'[HistDrift][warn] debug failed: {exc}')
 
-                if getattr(self, 'history_debug_steps', 0) > 1 and bi == 1:
+        return loss, stats, preds_dict, state_seq, gt_seq, current_tf_ratio
+
+    def _run_one_train_epoch(
+        self,
+        train_loader,
+        *,
+        epoch: int,
+        log_every: int,
+        scaler: torch.amp.GradScaler,
+        accum_steps: int,
+        tf_ratio: float,
+    ) -> TrainEpochResult:
+        running = 0.0
+        count = 0
+        epoch_sums: Dict[str, float] = {}
+        epoch_counts: Dict[str, int] = {}
+        tf_ratio_local = float(tf_ratio)
+
+        for batch_idx, batch in enumerate(train_loader, start=1):
+            train_batch = self._run_one_train_batch(batch, epoch=epoch, batch_idx=batch_idx, tf_ratio=tf_ratio_local)
+            if train_batch is None:
+                continue
+            loss, stats, preds_dict, state_seq, gt_seq, tf_ratio_local = train_batch
+            scaler.scale(loss / accum_steps).backward()
+
+            if (batch_idx + 1) % accum_steps == 0:
+                scaler.unscale_(self.optimizer)
+
+                if bool(getattr(self, 'direct_pose_grad_monitor_enable', False)) and isinstance(stats, dict):
                     try:
-                        self._history_drift_debug(
-                            state_seq,
-                            gt_seq,
-                            cond_seq,
-                            cond_raw_seq,
-                            contacts_seq,
-                            angvel_seq,
-                            pose_hist_seq,
-                            epoch=ep,
-                            batch_idx=bi,
-                            cond_norm_mu=cond_norm_mu,
-                            cond_norm_std=cond_norm_std,
-                        )
+                        stats.update(self._collect_direct_pose_grad_stats())
                     except Exception as exc:
-                        print(f"[HistDrift][warn] debug failed: {exc}")
+                        print(f'[DirectGrad][WARN] failed to collect grad stats: {exc}')
 
-                try:
-                    if isinstance(stats, dict):
-                        for _k, _v in stats.items():
-                            try:
-                                if hasattr(_v, 'detach'):
-                                    val = float(_v.detach().cpu())
-                                else:
-                                    val = float(_v)
-                                epoch_sums[_k] = epoch_sums.get(_k, 0.0) + val
-                            except Exception:
-                                pass
-                    epoch_cnt += 1
-                except Exception:
-                    pass
-                self._last_teacher_stats = stats if isinstance(stats, dict) else None
-
-                scaler.scale(loss / accum_steps).backward()
-
-                if (bi + 1) % accum_steps == 0:
-                    scaler.unscale_(self.optimizer)
-
-                    _any_bad_grad = False
-                    _bad_names = []
-                    for _name, _p in self.model.named_parameters():
-                        if _p.grad is None:
-                            continue
-                        if not torch.isfinite(_p.grad).all():
-                            _any_bad_grad = True
-                            if len(_bad_names) < 3:
-                                _bad_names.append(_name)
-                            _p.grad = torch.nan_to_num(_p.grad, nan=0.0, posinf=0.0, neginf=0.0)
-
-                    if _any_bad_grad:
-                        try:
-                            loss_val = float(loss.detach().cpu())
-                        except Exception:
-                            loss_val = float('nan')
-                        self._dump_nan_grad_report(ep, bi, batch, state_seq, gt_seq, preds_dict, loss_val, stats)
-                        if log_every:
-                            print(f"[Guard][Grad] non-finite grads on {', '.join(_bad_names)} ... skip optimizer.step()")
-                        scaler.update()
-                        self.optimizer.zero_grad(set_to_none=True)
+                any_bad_grad = False
+                bad_names = []
+                for name, param in self.model.named_parameters():
+                    if param.grad is None:
                         continue
+                    if not torch.isfinite(param.grad).all():
+                        any_bad_grad = True
+                        if len(bad_names) < 3:
+                            bad_names.append(name)
+                        param.grad = torch.nan_to_num(param.grad, nan=0.0, posinf=0.0, neginf=0.0)
 
-                    gn = torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        max_norm=float(getattr(self, 'grad_clip', 1.0))
-                    )
-                    self._step_hyperparam_scheduler(loss, float(gn))
-                    tf_ratio = float(getattr(self, 'teacher_forcing_ratio', tf_ratio))
-                    self._last_tf_ratio = float(tf_ratio)
-                    if log_every and (bi % int(log_every or 50) == 0):
-                        lr0 = float(self.optimizer.param_groups[0].get('lr', 0.0))
-                        print(f"[Grad] ep={ep:03d} bi={bi:04d} gn={float(gn):.3e} lr={lr0:.2e}")
-
-                    scaler.step(self.optimizer)
-                    if log_every and ep == 1 and bi == 1:
-                        print(f"[LR-DBG:after-opt-step] pg0={self.optimizer.param_groups[0]['lr']:.2e}")
+                if any_bad_grad:
+                    try:
+                        loss_val = float(loss.detach().cpu())
+                    except Exception:
+                        loss_val = float('nan')
+                    self._dump_nan_grad_report(epoch, batch_idx, batch, state_seq, gt_seq, preds_dict, loss_val, stats)
+                    if log_every:
+                        print(f"[Guard][Grad] non-finite grads on {', '.join(bad_names)} ... skip optimizer.step()")
                     scaler.update()
                     self.optimizer.zero_grad(set_to_none=True)
+                    continue
 
-                    _param_finite = True
-                    with torch.no_grad():
-                        for _n, _p in self.model.named_parameters():
-                            if not torch.isfinite(_p).all():
-                                _param_finite = False
-                                break
-                    if not _param_finite:
-                        if log_every:
-                            print("[Guard][Param] non-finite parameters after step; try sanitize via validate_and_fix_model_")
-                        try:
-                            validate_and_fix_model_(self.model, reinit_on_nonfinite=True)
-                        except Exception as _san_e:
-                            print("[Guard][Param] sanitize failed:", _san_e)
-                            raise
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    max_norm=float(getattr(self, 'grad_clip', 1.0)),
+                )
+                self._step_hyperparam_scheduler(loss, float(grad_norm))
+                tf_ratio_local = float(getattr(self, 'teacher_forcing_ratio', tf_ratio_local))
+                self._last_tf_ratio = float(tf_ratio_local)
+                if log_every and (batch_idx % int(log_every or 50) == 0):
+                    lr0 = float(self.optimizer.param_groups[0].get('lr', 0.0))
+                    print(f'[Grad] ep={epoch:03d} bi={batch_idx:04d} gn={float(grad_norm):.3e} lr={lr0:.2e}')
 
-                    _sched = getattr(self, 'lr_scheduler', None)
-                    if _sched is not None:
-                        try:
-                            _sched.step()
-                        except Exception:
-                            pass
+                scaler.step(self.optimizer)
+                if log_every and epoch == 1 and batch_idx == 1:
+                    print(f"[LR-DBG:after-opt-step] pg0={self.optimizer.param_groups[0]['lr']:.2e}")
+                scaler.update()
+                self.optimizer.zero_grad(set_to_none=True)
 
-                running += float(loss.detach().cpu()); cnt += 1
-                if log_every and (bi % int(log_every) == 0):
-                    print("[Train][ep %03d][%04d/%d] loss=%.4f tf=%.3f" % (ep, bi, len(train_loader), running/max(1,cnt), float(tf_ratio)))
-            avg_train = running / max(1, cnt)
-            history['train'].append(avg_train)
-            print("[Train][ep %03d] loss=%.4f" % (ep, avg_train))
-
-            # --- 阶段化评估与日志输出 ---
-            is_teacher_phase = float(getattr(self, '_last_tf_ratio', 1.0)) >= 0.999
-            _metrics = None
-            metrics_for_json = None
-            metrics_tag = None
-            teacher_metrics_cached = None
-            try:
-                import math as _math
-
-                def _run_valfree_eval(log_prefix: str = "ValFree"):
-                    if getattr(self, 'val_mode', 'none') != 'online' or bool(getattr(self, 'no_monitor', False)):
-                        return None
-                    vloader = self.train_loader
-                    _mon_batches = getattr(self, 'monitor_batches', None)
-                    if _mon_batches is None:
-                        _mon_batches = 8
+                params_finite = True
+                with torch.no_grad():
+                    for _, param in self.model.named_parameters():
+                        if not torch.isfinite(param).all():
+                            params_finite = False
+                            break
+                if not params_finite:
+                    if log_every:
+                        print('[Guard][Param] non-finite parameters after step; try sanitize via validate_and_fix_model_')
                     try:
-                        _mon_batches = int(_mon_batches)
-                    except Exception:
-                        _mon_batches = 8
-                    if _mon_batches <= 0:
-                        return None
-                    free_metrics = dict(self.validate_autoreg_online(vloader, max_batches=_mon_batches))
-                    free_metrics.setdefault('phase', 'freerun')
-                    free_metrics['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
-                    _extra = ""
-                    _kgeo = free_metrics.get('KeyBone/GeoDegMean', float('nan'))
-                    _klocal = free_metrics.get('KeyBone/GeoLocalDegMean', float('nan'))
-                    free_ang_dir = free_metrics.get('AngVelDirDeg', float('nan'))
-                    if _math.isfinite(_kgeo):
-                        _extra += f" | LimbGeoDeg={_kgeo:.3f}°"
-                    if _math.isfinite(_klocal):
-                        _extra += f" | LimbGeoLocalDeg={_klocal:.3f}°"
-                    if _math.isfinite(free_ang_dir):
-                        _extra += f" | AngVelDirDeg={free_ang_dir:.2f}"
-                    print(
-                        f"[{log_prefix}@ep {ep:03d}] "
-                        f"GeoDeg={free_metrics.get('GeoDeg', float('nan')):.3f}° | "
-                        f"RootVelMAE={free_metrics.get('RootVelMAE', float('nan')):.5f} | "
-                        f"AngVelMAE={free_metrics.get('AngVelMAE', float('nan')):.5f} rad/s | "
-                        f"AngMagRel={free_metrics.get('AngVelMagRel', float('nan')):.3f}" + _extra
-                    )
-                    return free_metrics
+                        validate_and_fix_model_(self.model, reinit_on_nonfinite=True)
+                    except Exception as sanitize_exc:
+                        print('[Guard][Param] sanitize failed:', sanitize_exc)
+                        raise
 
-                if is_teacher_phase:
-                    max_t_batches = getattr(self, 'teacher_eval_max_batches', None)
-                    if max_t_batches is not None and int(max_t_batches) <= 0:
-                        cached_batch = getattr(self, "_cached_train_batch", None)
-                        if cached_batch is not None:
-                            teacher_metrics = dict(self.eval_epoch([cached_batch], mode='teacher', max_batches=1) or {})
-                            teacher_metrics.setdefault('phase', 'teacher')
-                            teacher_metrics['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
-                            print(f"[ValTeacher@ep {ep:03d}] cached-batch eval (no extra loader pass)")
-                        else:
-                            teacher_metrics = None
-                            print(f"[ValTeacher@ep {ep:03d}] skipped: no cached batch available (teacher_eval_max_batches<=0)")
-                    else:
-                        teacher_metrics = dict(self.eval_epoch(self.train_loader, mode='teacher', max_batches=max_t_batches) or {})
-                        teacher_metrics.setdefault('phase', 'teacher')
-                        teacher_metrics['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
-                    # 动态放大 teacher 噪声：旧版本基于 GeoDeg + MSEnormY 等复合指标调整。
-                    # 为避免这些复合指标干扰训练，这里固定为 1.0。
-                    self.teacher_noise_boost = 1.0
-                    teacher_metrics.setdefault('phase', 'teacher')
-                    # 基于 teacher 单帧指标执行 plateau LR 调度（只在 teacher 阶段）
-                    # Prefer GeoLocalDeg (root-aligned) to avoid root drift interference.
+                lr_scheduler = getattr(self, 'lr_scheduler', None)
+                if lr_scheduler is not None:
                     try:
-                        _plateau = getattr(self, "lr_plateau_scheduler", None)
-                        if _plateau is not None:
-                            keybone_mean = teacher_metrics.get("KeyBone/GeoLocalDegMean")
-                            if keybone_mean is None:
-                                keybone_mean = teacher_metrics.get("KeyBone/GeoDegMean")
-                            if keybone_mean is None:
-                                keybone_mean = teacher_metrics.get("GeoLocalDeg")
-                            if keybone_mean is None:
-                                keybone_mean = teacher_metrics.get("GeoDeg")
-                            if keybone_mean is not None:
-                                _plateau.step(float(keybone_mean))
-                    except Exception as _pl_e:
-                        print(f"[LR-Plateau][WARN] scheduler step failed: {_pl_e}")
-
-                    # 在 stage1 仅保存 teacher 诊断快照（无 freerun）
-                    base_debug_path = getattr(self, "freerun_debug_path", None)
-                    if base_debug_path:
-                        from pathlib import Path
-                        ep_tag = f"ep{ep:03d}"
-                        candidate = Path(base_debug_path)
-                        if candidate.is_dir() or str(base_debug_path).endswith("/"):
-                            candidate = candidate / f"teacher_diag_{ep_tag}.json"
-                        else:
-                            candidate = candidate.with_name(candidate.stem + f"_teacher_{ep_tag}.json")
-                        try:
-                            payload = {
-                                "epoch": ep,
-                                "phase": "teacher",
-                                "tf_ratio": float(getattr(self, "_last_tf_ratio", 1.0)),
-                                "freerun_weight": float(getattr(self, "freerun_weight", 0.0) or 0.0),
-                                "metrics": teacher_metrics,
-                            }
-                            candidate.parent.mkdir(parents=True, exist_ok=True)
-                            import json
-                            with open(candidate, "w") as fw:
-                                json.dump(payload, fw, indent=2)
-                            print(f"[TeacherDiag] saved to {candidate}")
-                        except Exception as _td_exc:
-                            print(f"[TeacherDiag][WARN] failed to save: {_td_exc}")
-                    metrics_for_json = teacher_metrics
-                    metrics_tag = 'teacher'
-                    loss_val = teacher_metrics.get('loss', float('nan'))
-                    geo_deg = teacher_metrics.get('GeoDeg', float('nan'))
-                    geo_local_deg = teacher_metrics.get('GeoLocalDeg', float('nan'))
-                    ang_mae = teacher_metrics.get('AngVelMAE', float('nan'))
-                    ang_rel = teacher_metrics.get('AngVelMagRel', float('nan'))
-                    print(
-                        f"[ValTeacher@ep {ep:03d}] "
-                        f"loss={loss_val:.6f} | "
-                        f"GeoDeg={geo_deg:.3f}° | "
-                        f"GeoLocalDeg={geo_local_deg:.3f}° | "
-                        f"AngVelMAE={ang_mae:.5f} rad/s | "
-                        f"AngMagRel={ang_rel:.3f}"
-                    )
-                else:
-                    free_metrics = _run_valfree_eval()
-                    if free_metrics is not None:
-                        metrics_for_json = free_metrics
-                        metrics_tag = 'valfree'
-                        _metrics = free_metrics
-                    teacher_metrics_cached = dict(self.eval_epoch(self.train_loader, mode='teacher') or {})
-                    teacher_metrics_cached.setdefault('phase', 'teacher')
-                    teacher_metrics_cached['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
-                    if metrics_for_json is not None:
-                        _gap_extra = ""
-                        _kgeo = metrics_for_json.get('KeyBone/GeoDegMean', float('nan'))
-                        _klocal = metrics_for_json.get('KeyBone/GeoLocalDegMean', float('nan'))
-                        free_ang_dir = metrics_for_json.get('AngVelDirDeg', float('nan'))
-                        if _math.isfinite(_kgeo):
-                            _gap_extra += f" | LimbGeoDeg={_kgeo:.3f}°"
-                        if _math.isfinite(_klocal):
-                            _gap_extra += f" | LimbGeoLocalDeg={_klocal:.3f}°"
-                        if _math.isfinite(free_ang_dir):
-                            _gap_extra += f" | AngVelDirDeg={free_ang_dir:.2f}"
-                        print(
-                            f"[Gap@ep {ep:03d}] "
-                            f"teach_loss={teacher_metrics_cached.get('loss', float('nan')):.6f} | "
-                            f"GeoDeg={metrics_for_json.get('GeoDeg', float('nan')):.3f}° | "
-                            f"AngVelMAE={metrics_for_json.get('AngVelMAE', float('nan')):.5f}" + _gap_extra
+                        lr_scheduler.step()
+                    except (TypeError, ValueError, RuntimeError, AttributeError) as exc:
+                        _phasec_warn_once(
+                            "fit/lr_scheduler_step",
+                            "lr_scheduler.step() failed; keeping optimizer state unchanged",
+                            exc,
                         )
 
-                forced_valfree_metrics = None
-                if getattr(self, 'force_valfree_eval', False):
-                    need_force = metrics_tag != 'valfree'
-                    if need_force:
-                        forced_valfree_metrics = _run_valfree_eval("ValFreeForced")
-                        if forced_valfree_metrics is not None:
-                            _metrics = forced_valfree_metrics
-            except Exception as _e:
-                phase_label = 'ValTeacher' if is_teacher_phase else 'ValFree'
-                import traceback
-                traceback.print_exc()
-                print(f"[{phase_label}@ep {ep:03d}] skipped due to error: {_e}")
+            if isinstance(stats, dict):
+                for key, value in stats.items():
+                    try:
+                        if hasattr(value, 'detach'):
+                            scalar = float(value.detach().cpu())
+                        else:
+                            scalar = float(value)
+                    except (TypeError, ValueError, RuntimeError):
+                        continue
+                    if not _math.isfinite(scalar):
+                        continue
+                    epoch_sums[key] = epoch_sums.get(key, 0.0) + scalar
+                    epoch_counts[key] = epoch_counts.get(key, 0) + 1
 
-            if metrics_for_json is not None and metrics_tag is not None:
-                self._record_epoch_metrics(metrics_for_json, tag=metrics_tag, epoch=ep)
-                if metrics_tag == 'valfree':
-                    self._save_val_metrics(ep, metrics_for_json)
+            running += float(loss.detach().cpu())
+            count += 1
+            if log_every and (batch_idx % int(log_every) == 0):
+                print('[Train][ep %03d][%04d/%d] loss=%.4f tf=%.3f' % (
+                    epoch,
+                    batch_idx,
+                    len(train_loader),
+                    running / max(1, count),
+                    float(tf_ratio_local),
+                ))
+
+        avg_train = running / max(1, count)
+        print('[Train][ep %03d] loss=%.4f' % (epoch, avg_train))
+        train_metrics: Dict[str, Any] = {
+            'loss': float(avg_train),
+            'phase': 'train',
+            'tf_ratio': float(getattr(self, '_last_tf_ratio', tf_ratio_local)),
+        }
+        for key, total in epoch_sums.items():
+            metric_count = int(epoch_counts.get(key, 0) or 0)
+            if metric_count > 0:
+                train_metrics[key] = float(total / metric_count)
+        return TrainEpochResult(avg_train=float(avg_train), train_metrics=train_metrics)
+
+    def _run_epoch_validation(self, *, epoch: int) -> FitEpochValidationResult:
+        result = FitEpochValidationResult()
+        is_teacher_phase = float(getattr(self, '_last_tf_ratio', 1.0)) >= 0.999
+
+        def _run_valfree_eval(log_prefix: str = 'ValFree') -> Optional[Dict[str, Any]]:
+            if getattr(self, 'val_mode', 'none') != 'online' or bool(getattr(self, 'no_monitor', False)):
+                return None
+            val_loader = self.train_loader
+            monitor_batches = getattr(self, 'monitor_batches', None)
+            if monitor_batches is None:
+                monitor_batches = 8
+            try:
+                monitor_batches = int(monitor_batches)
+            except Exception:
+                monitor_batches = 8
+            if monitor_batches <= 0:
+                return None
+            free_metrics = dict(self.validate_autoreg_online(val_loader, max_batches=monitor_batches))
+            free_metrics.setdefault('phase', 'freerun')
+            free_metrics['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
+            extra = ''
+            key_geo = free_metrics.get('KeyBone/GeoDegMean', float('nan'))
+            key_local = free_metrics.get('KeyBone/GeoLocalDegMean', float('nan'))
+            free_ang_dir = free_metrics.get('AngVelDirDeg', float('nan'))
+            if _math.isfinite(key_geo):
+                extra += f' | LimbGeoDeg={key_geo:.3f}°'
+            if _math.isfinite(key_local):
+                extra += f' | LimbGeoLocalDeg={key_local:.3f}°'
+            if _math.isfinite(free_ang_dir):
+                extra += f' | AngVelDirDeg={free_ang_dir:.2f}'
+            print(
+                f'[{log_prefix}@ep {epoch:03d}] '
+                f"GeoDeg={free_metrics.get('GeoDeg', float('nan')):.3f}° | "
+                f"RootVelMAE={free_metrics.get('RootVelMAE', float('nan')):.5f} | "
+                f"AngVelMAE={free_metrics.get('AngVelMAE', float('nan')):.5f} rad/s | "
+                f"AngMagRel={free_metrics.get('AngVelMagRel', float('nan')):.3f}" + extra
+            )
+            return free_metrics
+
+        try:
+            if is_teacher_phase:
+                max_teacher_batches = getattr(self, 'teacher_eval_max_batches', None)
+                if max_teacher_batches is not None and int(max_teacher_batches) <= 0:
+                    cached_batch = getattr(self, '_cached_train_batch', None)
+                    if cached_batch is not None:
+                        teacher_metrics = dict(self.eval_epoch([cached_batch], mode='teacher', max_batches=1) or {})
+                        teacher_metrics.setdefault('phase', 'teacher')
+                        teacher_metrics['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
+                        print(f'[ValTeacher@ep {epoch:03d}] cached-batch eval (no extra loader pass)')
+                    else:
+                        teacher_metrics = None
+                        print(f'[ValTeacher@ep {epoch:03d}] skipped: no cached batch available (teacher_eval_max_batches<=0)')
                 else:
-                    self._dump_metrics_json(metrics_for_json, tag=metrics_tag, epoch=ep)
-                self._maybe_finish_stage(ep, metrics_for_json, tag=str(metrics_tag))
-            if forced_valfree_metrics is not None:
-                self._record_epoch_metrics(forced_valfree_metrics, tag='valfree', epoch=ep)
-                self._save_val_metrics(ep, forced_valfree_metrics)
-                self._dump_metrics_json(forced_valfree_metrics, tag='valfree', epoch=ep)
-                self._maybe_finish_stage(ep, forced_valfree_metrics, tag='valfree')
-            if (not is_teacher_phase) and teacher_metrics_cached is not None:
-                self._record_epoch_metrics(teacher_metrics_cached, tag='teacher', epoch=ep)
-                self._maybe_finish_stage(ep, teacher_metrics_cached, tag='teacher')
-                self._dump_metrics_json(teacher_metrics_cached, tag='teacher', epoch=ep)
-
-            # --- 依据在线评估指标记录最佳模型 ---
-            # best_teacher: teacher 单帧 GeoLocalDeg 最小（root 对齐的起点精度）
-            # best_free: freerun drift slope 最小（误差增长率）
-            teacher_source = None
-            if isinstance(teacher_metrics_cached, dict) and teacher_metrics_cached:
-                teacher_source = teacher_metrics_cached
-            elif isinstance(_metrics, dict) and str(_metrics.get('phase', '')) == 'teacher':
-                teacher_source = _metrics
-
-            if teacher_source is not None:
-                current_teacher = teacher_source.get('KeyBone/GeoLocalDegMean')
-                if current_teacher is None:
-                    current_teacher = teacher_source.get('GeoLocalDeg')
-                if current_teacher is None:
-                    current_teacher = teacher_source.get('KeyBone/GeoDegMean')
-                if current_teacher is None:
-                    current_teacher = teacher_source.get('GeoDeg')
-                current_teacher = float(current_teacher if current_teacher is not None else float('inf'))
-                if current_teacher < best_teacher_val - 1e-9:
-                    best_teacher_val = current_teacher
-                    if out_dir:
-                        os.makedirs(out_dir, exist_ok=True)
-                        best_teacher_ckpt = os.path.join(out_dir, 'ckpt_best_teacher_' + str(run_name) + '.pth')
-                        torch.save({'model': self.model.state_dict()}, best_teacher_ckpt)
-                        # Keep old return semantics: best_ckpt points to teacher-best.
-                        best_ckpt = best_teacher_ckpt
-
-            if metrics_tag == 'valfree' and isinstance(metrics_for_json, dict) and metrics_for_json:
+                    teacher_metrics = dict(self.eval_epoch(self.train_loader, mode='teacher', max_batches=max_teacher_batches) or {})
+                    teacher_metrics.setdefault('phase', 'teacher')
+                    teacher_metrics['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
+                teacher_metrics.setdefault('phase', 'teacher')
                 try:
-                    drift_slope = float(_compute_drift_slope(metrics_for_json))
-                    metrics_for_json['GeoDriftSlope'] = drift_slope
-                except Exception:
-                    drift_slope = float('inf')
+                    plateau_scheduler = getattr(self, 'lr_plateau_scheduler', None)
+                    if plateau_scheduler is not None:
+                        keybone_mean = teacher_metrics.get('KeyBone/GeoLocalDegMean')
+                        if keybone_mean is None:
+                            keybone_mean = teacher_metrics.get('KeyBone/GeoDegMean')
+                        if keybone_mean is None:
+                            keybone_mean = teacher_metrics.get('GeoLocalDeg')
+                        if keybone_mean is None:
+                            keybone_mean = teacher_metrics.get('GeoDeg')
+                        if keybone_mean is not None:
+                            plateau_scheduler.step(float(keybone_mean))
+                except Exception as plateau_exc:
+                    print(f'[LR-Plateau][WARN] scheduler step failed: {plateau_exc}')
 
-                if drift_slope < best_free_slope - 1e-9:
-                    best_free_slope = drift_slope
-                    if out_dir:
-                        os.makedirs(out_dir, exist_ok=True)
-                        best_free_ckpt = os.path.join(out_dir, 'ckpt_best_free_' + str(run_name) + '.pth')
-                        torch.save({'model': self.model.state_dict()}, best_free_ckpt)
+                base_debug_path = getattr(self, 'freerun_debug_path', None)
+                if base_debug_path:
+                    ep_tag = f'ep{epoch:03d}'
+                    candidate = Path(base_debug_path)
+                    if candidate.is_dir() or str(base_debug_path).endswith('/'):
+                        candidate = candidate / f'teacher_diag_{ep_tag}.json'
+                    else:
+                        candidate = candidate.with_name(candidate.stem + f'_teacher_{ep_tag}.json')
+                    try:
+                        payload = {
+                            'epoch': epoch,
+                            'phase': 'teacher',
+                            'tf_ratio': float(getattr(self, '_last_tf_ratio', 1.0)),
+                            'metrics': teacher_metrics,
+                        }
+                        candidate.parent.mkdir(parents=True, exist_ok=True)
+                        with open(candidate, 'w') as fw:
+                            json.dump(payload, fw, indent=2)
+                        print(f'[TeacherDiag] saved to {candidate}')
+                    except Exception as teacher_diag_exc:
+                        print(f'[TeacherDiag][WARN] failed to save: {teacher_diag_exc}')
 
-        # Print final best checkpoint summary for convenience.
-        if best_teacher_ckpt is not None:
-            print(f"[BestTeacher] ckpt={best_teacher_ckpt} GeoLocalDeg={best_teacher_val:.6f}°")
-        if best_free_ckpt is not None and best_free_slope < float('inf'):
-            print(f"[BestFree] ckpt={best_free_ckpt} GeoDriftSlope={best_free_slope:.6f} deg/step")
+                result.metrics_for_json = teacher_metrics
+                result.metrics_tag = 'teacher'
+                loss_val = teacher_metrics.get('loss', float('nan'))
+                geo_deg = teacher_metrics.get('GeoDeg', float('nan'))
+                geo_local_deg = teacher_metrics.get('GeoLocalDeg', float('nan'))
+                ang_mae = teacher_metrics.get('AngVelMAE', float('nan'))
+                ang_rel = teacher_metrics.get('AngVelMagRel', float('nan'))
+                print(
+                    f'[ValTeacher@ep {epoch:03d}] '
+                    f'loss={loss_val:.6f} | '
+                    f'GeoDeg={geo_deg:.3f}° | '
+                    f'GeoLocalDeg={geo_local_deg:.3f}° | '
+                    f'AngVelMAE={ang_mae:.5f} rad/s | '
+                    f'AngMagRel={ang_rel:.3f}'
+                )
+            else:
+                free_metrics = _run_valfree_eval()
+                if free_metrics is not None:
+                    result.metrics_for_json = free_metrics
+                    result.metrics_tag = 'valfree'
+                    result.best_metrics_source = free_metrics
 
+                teacher_metrics_cached = dict(self.eval_epoch(self.train_loader, mode='teacher') or {})
+                teacher_metrics_cached.setdefault('phase', 'teacher')
+                teacher_metrics_cached['tf_ratio'] = float(getattr(self, '_last_tf_ratio', 1.0))
+                result.teacher_metrics_cached = teacher_metrics_cached
 
+                if result.metrics_for_json is not None:
+                    gap_extra = ''
+                    key_geo = result.metrics_for_json.get('KeyBone/GeoDegMean', float('nan'))
+                    key_local = result.metrics_for_json.get('KeyBone/GeoLocalDegMean', float('nan'))
+                    free_ang_dir = result.metrics_for_json.get('AngVelDirDeg', float('nan'))
+                    if _math.isfinite(key_geo):
+                        gap_extra += f' | LimbGeoDeg={key_geo:.3f}°'
+                    if _math.isfinite(key_local):
+                        gap_extra += f' | LimbGeoLocalDeg={key_local:.3f}°'
+                    if _math.isfinite(free_ang_dir):
+                        gap_extra += f' | AngVelDirDeg={free_ang_dir:.2f}'
+                    print(
+                        f'[Gap@ep {epoch:03d}] '
+                        f"teach_loss={teacher_metrics_cached.get('loss', float('nan')):.6f} | "
+                        f"GeoDeg={result.metrics_for_json.get('GeoDeg', float('nan')):.3f}° | "
+                        f"AngVelMAE={result.metrics_for_json.get('AngVelMAE', float('nan')):.5f}" + gap_extra
+                    )
+
+            if getattr(self, 'force_valfree_eval', False):
+                need_force = result.metrics_tag != 'valfree'
+                if need_force:
+                    forced_valfree_metrics = _run_valfree_eval('ValFreeForced')
+                    if forced_valfree_metrics is not None:
+                        result.forced_valfree_metrics = forced_valfree_metrics
+                        result.best_metrics_source = forced_valfree_metrics
+        except Exception as exc:
+            phase_label = 'ValTeacher' if is_teacher_phase else 'ValFree'
+            import traceback
+            traceback.print_exc()
+            print(f'[{phase_label}@ep {epoch:03d}] skipped due to error: {exc}')
+
+        return result
+
+    def _persist_epoch_validation_outputs(self, *, epoch: int, validation_result: FitEpochValidationResult) -> None:
+        if validation_result.metrics_for_json is not None and validation_result.metrics_tag is not None:
+            self._record_epoch_metrics(validation_result.metrics_for_json, tag=validation_result.metrics_tag, epoch=epoch)
+            if validation_result.metrics_tag == 'valfree':
+                self._save_val_metrics(epoch, validation_result.metrics_for_json)
+            else:
+                self._dump_metrics_json(validation_result.metrics_for_json, tag=validation_result.metrics_tag, epoch=epoch)
+            self._maybe_finish_stage(epoch, validation_result.metrics_for_json, tag=str(validation_result.metrics_tag))
+
+        if validation_result.forced_valfree_metrics is not None:
+            self._record_epoch_metrics(validation_result.forced_valfree_metrics, tag='valfree', epoch=epoch)
+            self._save_val_metrics(epoch, validation_result.forced_valfree_metrics)
+            self._dump_metrics_json(validation_result.forced_valfree_metrics, tag='valfree', epoch=epoch)
+            self._maybe_finish_stage(epoch, validation_result.forced_valfree_metrics, tag='valfree')
+
+        if validation_result.teacher_metrics_cached is not None:
+            self._record_epoch_metrics(validation_result.teacher_metrics_cached, tag='teacher', epoch=epoch)
+            self._maybe_finish_stage(epoch, validation_result.teacher_metrics_cached, tag='teacher')
+            self._dump_metrics_json(validation_result.teacher_metrics_cached, tag='teacher', epoch=epoch)
+
+        try:
+            self._write_basetrain_keybone_group_summary()
+        except Exception as exc:
+            print(f'[MetricsWrite][WARN] failed to update basetrain_keybone_group_summary.json: {exc}')
+
+    def _update_best_ckpts(
+        self,
+        validation_result: FitEpochValidationResult,
+        checkpoint_state: FitCheckpointState,
+    ) -> FitCheckpointState:
+        teacher_source = None
+        if isinstance(validation_result.teacher_metrics_cached, dict) and validation_result.teacher_metrics_cached:
+            teacher_source = validation_result.teacher_metrics_cached
+        elif isinstance(validation_result.best_metrics_source, dict) and str(validation_result.best_metrics_source.get('phase', '')) == 'teacher':
+            teacher_source = validation_result.best_metrics_source
+
+        if teacher_source is not None:
+            current_teacher = teacher_source.get('KeyBone/GeoLocalDegMean')
+            if current_teacher is None:
+                current_teacher = teacher_source.get('GeoLocalDeg')
+            if current_teacher is None:
+                current_teacher = teacher_source.get('KeyBone/GeoDegMean')
+            if current_teacher is None:
+                current_teacher = teacher_source.get('GeoDeg')
+            current_teacher = float(current_teacher if current_teacher is not None else float('inf'))
+            if current_teacher < checkpoint_state.best_teacher_val - 1e-9:
+                checkpoint_state.best_teacher_val = current_teacher
+                checkpoint_state.best_teacher_payload = self._fit_checkpoint_payload()
+
+        if validation_result.metrics_tag == 'valfree' and isinstance(validation_result.metrics_for_json, dict) and validation_result.metrics_for_json:
+            try:
+                drift_slope = float(self._compute_fit_drift_slope(validation_result.metrics_for_json))
+                validation_result.metrics_for_json['GeoDriftSlope'] = drift_slope
+            except Exception:
+                drift_slope = float('inf')
+            if drift_slope < checkpoint_state.best_free_slope - 1e-9:
+                checkpoint_state.best_free_slope = drift_slope
+                checkpoint_state.best_free_payload = self._fit_checkpoint_payload()
+
+        return checkpoint_state
+
+    def fit(self, train_loader, epochs=10, log_every=50, out_dir=None, patience=10, run_name='run'):
+        self.model.train()
+        self.train_loader = train_loader
+        device_type = getattr(self.device, 'type', 'cpu')
+        scaler = torch.amp.GradScaler('cuda' if device_type=='cuda' else 'cpu', enabled=(getattr(self, 'use_amp', False) and device_type in ('cuda', 'mps')))
+        accum_steps = int(getattr(self, 'accum_steps', 1) or 1)
+        checkpoint_state = FitCheckpointState()
+        history = {'train': [], 'val': []}
+        tf_mode = getattr(self, 'tf_mode', 'epoch_linear')
+        tf_start = int(getattr(self, 'tf_start_epoch', 0))
+        tf_end = int(getattr(self, 'tf_end_epoch', 0))
+        tf_max_base = float(getattr(self, 'tf_max', 1.0))
+        tf_min_base = float(getattr(self, 'tf_min', 0.0))
+        total_epochs = int(epochs)
+
+        try:
+            self.test_gradient_connection(train_loader)
+        except Exception as _grad_exc:
+            print(f"[GradConn] failed during warm-up: {_grad_exc}")
+            raise
+
+        for ep in range(1, total_epochs + 1):
+            tf_ratio = self._prepare_fit_epoch(
+                ep,
+                total_epochs,
+                tf_mode=tf_mode,
+                tf_start=tf_start,
+                tf_end=tf_end,
+                tf_max_base=tf_max_base,
+                tf_min_base=tf_min_base,
+            )
+            train_epoch_result = self._run_one_train_epoch(
+                train_loader,
+                epoch=ep,
+                log_every=log_every,
+                scaler=scaler,
+                accum_steps=accum_steps,
+                tf_ratio=tf_ratio,
+            )
+            history['train'].append(train_epoch_result.avg_train)
+            self._record_epoch_metrics(train_epoch_result.train_metrics, tag='train', epoch=ep)
+            self._dump_metrics_json(train_epoch_result.train_metrics, tag='train', epoch=ep)
+
+            validation_result = self._run_epoch_validation(epoch=ep)
+            self._persist_epoch_validation_outputs(epoch=ep, validation_result=validation_result)
+            self._update_best_ckpts(
+                validation_result,
+                checkpoint_state,
+            )
+
+        checkpoint_state.last_payload = self._fit_checkpoint_payload()
         if out_dir:
+            teacher_ckpt = self._save_fit_checkpoint_payload(
+                out_dir=out_dir,
+                run_name=run_name,
+                checkpoint_tag='best_teacher',
+                payload=checkpoint_state.best_teacher_payload,
+            )
+            if teacher_ckpt is not None:
+                checkpoint_state.best_teacher_ckpt = teacher_ckpt
+                checkpoint_state.best_ckpt = teacher_ckpt
 
-            import os, torch
+            free_ckpt = self._save_fit_checkpoint_payload(
+                out_dir=out_dir,
+                run_name=run_name,
+                checkpoint_tag='best_free',
+                payload=checkpoint_state.best_free_payload,
+            )
+            if free_ckpt is not None:
+                checkpoint_state.best_free_ckpt = free_ckpt
 
-            os.makedirs(out_dir, exist_ok=True)
+            checkpoint_state.last_ckpt = self._save_fit_checkpoint_payload(
+                out_dir=out_dir,
+                run_name=run_name,
+                checkpoint_tag='last',
+                payload=checkpoint_state.last_payload,
+            )
 
-            last_ckpt = os.path.join(out_dir, 'ckpt_last_' + str(run_name) + '.pth')
+        if checkpoint_state.best_teacher_ckpt is not None:
+            print(f'[BestTeacher] ckpt={checkpoint_state.best_teacher_ckpt} GeoLocalDeg={checkpoint_state.best_teacher_val:.6f}°')
+        if checkpoint_state.best_free_ckpt is not None and checkpoint_state.best_free_slope < float('inf'):
+            print(f'[BestFree] ckpt={checkpoint_state.best_free_ckpt} GeoDriftSlope={checkpoint_state.best_free_slope:.6f} deg/step')
 
-            torch.save({'model': self.model.state_dict()}, last_ckpt)
-
-        return best_ckpt, history
+        return checkpoint_state.best_ckpt, history
 
 
     def _sl_from_layout(self, layout, key):
@@ -3407,7 +3462,7 @@ class Trainer:
         so3_max_deg: Optional[float] = None,
         omega_detach: bool = True,
     ):
-        import torch, math
+        import torch
         if y_prev_raw is None:
             self._raise_norm_error("compose_delta_to_raw 需要上一帧 RAW，但收到 None。")
         if delta_norm is None:
@@ -3423,8 +3478,12 @@ class Trainer:
                     while std_t.dim() < delta_norm.dim():
                         std_t = std_t.unsqueeze(0)
                     delta_raw = delta_norm * std_t.clamp_min(1e-6)
-            except Exception:
-                pass
+            except (RuntimeError, TypeError, ValueError) as exc:
+                _phasec_warn_once(
+                    "compose_delta/std_scale",
+                    "failed to apply StdY scaling for delta compose; using unscaled delta_norm",
+                    exc,
+                )
         # 仅对 rot6d 部分做增量合成，尾部附加通道（如 RootVelocity）直接做残差相加
         rot_slice = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
         if not isinstance(rot_slice, slice):
@@ -3483,8 +3542,12 @@ class Trainer:
                         delta6_used = delta6_used_abs - ident6
                         delta_raw = delta_raw.clone()
                         delta_raw[..., rot_slice] = delta6_used.reshape(delta_raw.shape[0], J * 6)
-            except Exception:
-                pass
+            except (RuntimeError, TypeError, ValueError) as exc:
+                _phasec_warn_once(
+                    "compose_delta/so3_corr",
+                    "SO(3) correction failed during compose; falling back to raw residual compose",
+                    exc,
+                )
         try:
             rot_next = compose_rot6d_delta(
                 y_prev_raw[..., rot_slice],
@@ -3555,13 +3618,10 @@ class Trainer:
             if a is None:
                 return b
             # Align dims for broadcast-safe multiply.
-            try:
-                if a.dim() == 1 and b.dim() == 2:
-                    a = a.unsqueeze(-1)
-                elif a.dim() == 2 and b.dim() == 1:
-                    b = b.unsqueeze(-1)
-            except Exception:
-                pass
+            if a.dim() == 1 and b.dim() == 2:
+                a = a.unsqueeze(-1)
+            elif a.dim() == 2 and b.dim() == 1:
+                b = b.unsqueeze(-1)
             return a * b
 
         if "warmup" in tokens or "step_warmup" in tokens:
@@ -3580,10 +3640,7 @@ class Trainer:
                 # Optionally scale warmup per joint (useful when different bones drift at different rates).
                 r_w_t: torch.Tensor
                 joint_scales = getattr(self, "lambda_reliability_warmup_joint_scales", None)
-                try:
-                    J = int(lam.shape[-1]) if lam.dim() >= 2 else 0
-                except Exception:
-                    J = 0
+                J = int(lam.shape[-1]) if lam.dim() >= 2 else 0
                 if joint_scales is not None and J > 0:
                     try:
                         if not torch.is_tensor(joint_scales):
@@ -3594,7 +3651,12 @@ class Trainer:
                             r_w_t = (base * joint_scales_t.view(1, J)).clamp(0.0, 1.0)
                         else:
                             r_w_t = torch.full((B,), r_w, device=lam.device, dtype=lam.dtype)
-                    except Exception:
+                    except (RuntimeError, TypeError, ValueError) as exc:
+                        _phasec_warn_once(
+                            "lambda_reliability/warmup_joint_scales",
+                            "invalid warmup joint scales; fallback to scalar warmup reliability",
+                            exc,
+                        )
                         r_w_t = torch.full((B,), r_w, device=lam.device, dtype=lam.dtype)
                 else:
                     r_w_t = torch.full((B,), r_w, device=lam.device, dtype=lam.dtype)
@@ -3616,8 +3678,12 @@ class Trainer:
                         if err_max > 1e-8:
                             r_c = (1.0 - err_abs_mean / err_max).clamp(0.0, 1.0).to(dtype=lam.dtype)
                             r = _mul_r(r, r_c)
-                except Exception:
-                    pass
+                except (RuntimeError, TypeError, ValueError) as exc:
+                    _phasec_warn_once(
+                        "lambda_reliability/contacts_err",
+                        "contacts_err reliability term failed; using warmup-only reliability path",
+                        exc,
+                    )
 
         if r is None:
             return lam, None
@@ -3759,7 +3825,7 @@ class Trainer:
         # 解析 cond_raw: [...action_dims, dir_x, dir_y, speed]
         cond_dim = cond_raw.shape[-1]
         if cond_dim < 3:
-            return cond_raw  # 无法重投影，返回原值
+            self._raise_norm_error("_reproject_cond_to_local_frame cond_raw 最少需要 [dir_x, dir_y, speed]")
 
         action_dim = cond_dim - 3
         cond_reprojected = cond_raw.clone()
@@ -3922,9 +3988,6 @@ class Trainer:
         cond_dir = cond_raw[..., action_dim:action_dim + 2]
         cond_speed = cond_raw[..., action_dim + 2]
 
-        if cond_dir.shape[-1] < 2:
-            self._raise_norm_error("_apply_free_carry cond_next_raw 缺少二维方向")
-
         # cond_dir 已是世界系（转换脚本 convert_json_to_npz 已旋到 UE 世界坐标）
         cond_dir_world = cond_dir
         dir_norm = cond_dir_world.norm(dim=-1, keepdim=True).clamp_min(1e-6)
@@ -3950,8 +4013,6 @@ class Trainer:
         rootpos_sl = getattr(self, 'rootpos_x_slice', None)
         if not isinstance(rootvel_sl, slice):
             self._raise_norm_error("_apply_free_carry 缺少 RootVelocity 切片")
-        if cond_speed is None:
-            self._raise_norm_error("_apply_free_carry cond_next_raw 缺少速度分量")
         vel_world = dir_unit_world * cond_speed.unsqueeze(-1)
         vel_world = vel_world[..., : (rootvel_sl.stop - rootvel_sl.start)]
         x_next[..., rootvel_sl] = vel_world
@@ -3963,78 +4024,6 @@ class Trainer:
         step = vel_world[..., :min(2, vel_world.shape[-1])] * dt
         pos[..., :step.shape[-1]] = pos[..., :step.shape[-1]] + step
         x_next[..., rootpos_sl] = pos
-
-        debug_steps = int(getattr(self, 'freerun_debug_steps', 0) or 0)
-        if debug_steps > 0:
-            buffer = getattr(self, '_carry_debug_buffer', None)
-            if buffer is not None and len(buffer) < debug_steps:
-                try:
-                    sample = 0
-                    rad2deg = 180.0 / math.pi
-                    yaw_cmd_sample = float(yaw_cmd_vals.reshape(-1)[sample].detach().cpu() * rad2deg)
-                    if yaw_vals is not None:
-                        yaw_pred_sample = float(yaw_vals.reshape(-1)[sample].detach().cpu() * rad2deg)
-                    else:
-                        yaw_pred_sample = float('nan')
-                    if yaw_write is not None:
-                        yaw_after_carry_sample = float(yaw_write.reshape(-1)[sample].detach().cpu() * rad2deg)
-                    else:
-                        yaw_after_carry_sample = float('nan')
-                    if yaw_vals is not None:
-                        yaw_diff_deg = math.degrees(
-                            float(
-                                torch.atan2(
-                                    torch.sin(yaw_vals.reshape(-1)[sample] - yaw_cmd_vals.reshape(-1)[sample]),
-                                    torch.cos(yaw_vals.reshape(-1)[sample] - yaw_cmd_vals.reshape(-1)[sample]),
-                                ).item()
-                            )
-                        )
-                    else:
-                        yaw_diff_deg = float('nan')
-                    rootvel_slice = x_next[sample, rootvel_sl].detach().cpu().tolist()
-                    cond_speed_sample = float(cond_speed.reshape(-1)[sample].detach().cpu())
-                    ortho_err = float('nan')
-                    rot_width = rx.stop - rx.start
-                    if rot_width % 6 == 0 and rot_width > 0:
-                        J = rot_width // 6
-                        curr6 = x_next[sample : sample + 1, rx].reshape(1, J, 6)
-                        R = rot6d_to_matrix(curr6)
-                        eye = torch.eye(3, device=R.device, dtype=R.dtype)
-                        diff = torch.matmul(R.transpose(-1, -2), R) - eye
-                        ortho_err = float(diff.abs().mean().detach().cpu())
-                    delta_norm_debug = None
-                    delta_raw_debug = None
-                    rot6d_geo_debug = None
-                    stats = getattr(self, '_last_step_debug_stats', None)
-                    if isinstance(stats, dict):
-                        delta_norm_debug = stats.get('delta_norm_abs_mean')
-                        delta_raw_debug = stats.get('delta_raw_abs_mean')
-                        rot6d_geo_debug = stats.get('rot6d_geo_deg')
-                    buffer.append(
-                        {
-                            "yaw_cmd_deg": yaw_cmd_sample,
-                            "yaw_after_carry_deg": yaw_after_carry_sample,
-                            "yaw_rot6d_deg": yaw_pred_sample,
-                            # 移除世界系 cmd 差的噪声项，保留局部诊断信号
-                            "root_vel_pred": rootvel_slice,
-                            "cond_speed": cond_speed_sample,
-                            "rot6d_ortho_err": ortho_err,
-                            "delta_norm_abs_mean": delta_norm_debug,
-                            "delta_raw_abs_mean": delta_raw_debug,
-                            "rot6d_geo_deg": rot6d_geo_debug,
-                        }
-                    )
-                except Exception:
-                    buffer.append(
-                        {
-                            "yaw_cmd_deg": float('nan'),
-                            "yaw_after_carry_deg": float('nan'),
-                            "yaw_rot6d_deg": float('nan'),
-                            "root_vel_pred": [],
-                            "cond_speed": float('nan'),
-                            "rot6d_ortho_err": float('nan'),
-                        }
-                    )
 
         return x_next
 
@@ -4196,8 +4185,12 @@ class Trainer:
             if value.numel() == 1:
                 try:
                     return self._metrics_json_safe(value.item())
-                except Exception:
-                    pass
+                except (RuntimeError, TypeError, ValueError) as exc:
+                    _phasec_warn_once(
+                        "metrics_json/tensor_item",
+                        "failed to scalarize tensor metric via .item(); serializing as list instead",
+                        exc,
+                    )
             return [self._metrics_json_safe(v) for v in value.detach().cpu().tolist()]
         if np is not None and isinstance(value, np.ndarray):  # type: ignore[arg-type]
             return [self._metrics_json_safe(v) for v in value.tolist()]
@@ -4206,13 +4199,21 @@ class Trainer:
         try:
             if np is not None and isinstance(value, np.generic):  # type: ignore[arg-type]
                 return self._metrics_json_safe(float(value))
-        except Exception:
-            pass
+        except (RuntimeError, TypeError, ValueError) as exc:
+            _phasec_warn_once(
+                "metrics_json/numpy_generic",
+                "failed to convert numpy scalar metric; fallback to generic serialization",
+                exc,
+            )
         if hasattr(value, 'item') and not isinstance(value, (int, bool, str)):
             try:
                 return self._metrics_json_safe(value.item())
-            except Exception:
-                pass
+            except (RuntimeError, TypeError, ValueError) as exc:
+                _phasec_warn_once(
+                    "metrics_json/generic_item",
+                    "failed to scalarize metric via .item(); fallback to string serialization",
+                    exc,
+                )
         if isinstance(value, (int, str, bool)) or value is None:
             return value
         return str(value)
@@ -4294,14 +4295,131 @@ class Trainer:
         except Exception as exc:
             print(f"[MetricsWrite][WARN] failed to write {tag} metrics @ep{epoch}: {exc}")
 
+    @staticmethod
+    def _panel_metric_scalar(metrics: Mapping[str, Any], key: str, *, fallback: float = float('nan')) -> float:
+        val = metrics.get(key, fallback)
+        try:
+            return float(val)
+        except Exception:
+            return float(fallback)
+
+    def _write_basetrain_keybone_group_summary(self) -> None:
+        out_dir = getattr(self, 'out_dir', None)
+        if not out_dir:
+            return
+
+        def _panel_record(entry: Mapping[str, Any], *, phase: str) -> Dict[str, Any]:
+            metrics = entry.get('metrics', {}) if isinstance(entry.get('metrics', {}), Mapping) else {}
+            keybone_summary = metrics.get('KeyBoneSummary', {}) if isinstance(metrics.get('KeyBoneSummary', {}), Mapping) else {}
+            geo_local = self._panel_metric_scalar(metrics, 'GeoLocalDeg')
+            key_geo_local = self._panel_metric_scalar(
+                metrics,
+                'KeyBone/GeoLocalDegMean',
+                fallback=self._panel_metric_scalar(keybone_summary, 'GeoLocalDegMean'),
+            )
+            record: Dict[str, Any] = {
+                'epoch': int(entry.get('epoch', -1) or -1),
+                'GeoLocalDeg': geo_local,
+                'KeyBoneGeoLocalDegMean': key_geo_local,
+                'FreeRunGeoLocalDeg': geo_local if phase == 'freerun' else float('nan'),
+                'FreeRunKeyBoneGeoLocalDegMean': key_geo_local if phase == 'freerun' else float('nan'),
+                'group_mean': keybone_summary.get('group_mean', {}) if isinstance(keybone_summary.get('group_mean', {}), Mapping) else {},
+                'GeoDriftSlopeProxy': self._panel_metric_scalar(
+                    metrics,
+                    'GeoDriftSlopeProxy',
+                    fallback=self._panel_metric_scalar(metrics, 'GeoDriftSlope'),
+                ),
+            }
+            return record
+
+        def _train_direct_group_norm_record(entry: Mapping[str, Any]) -> Dict[str, Any]:
+            metrics = entry.get('metrics', {}) if isinstance(entry.get('metrics', {}), Mapping) else {}
+            return {
+                'epoch': int(entry.get('epoch', -1) or -1),
+                'dir_leg_base': self._panel_metric_scalar(metrics, 'dir_leg_base'),
+                'dir_nonleg_base': self._panel_metric_scalar(metrics, 'dir_nonleg_base'),
+                'dir_nonleg_effective_base': self._panel_metric_scalar(metrics, 'dir_nonleg_effective_base'),
+                'dir_arm_base': self._panel_metric_scalar(metrics, 'dir_arm_base'),
+                'dir_else_base': self._panel_metric_scalar(metrics, 'dir_else_base'),
+                'leg_over_nonleg': self._panel_metric_scalar(metrics, 'leg_over_nonleg'),
+                'leg_over_nonleg_effective': self._panel_metric_scalar(metrics, 'leg_over_nonleg_effective'),
+                'arm_over_else': self._panel_metric_scalar(metrics, 'arm_over_else'),
+                'direct_pose_arm_else_balance_active': self._panel_metric_scalar(metrics, 'direct_pose_arm_else_balance_active', fallback=0.0),
+                'direct_pose_loss_arm_weight': self._panel_metric_scalar(metrics, 'direct_pose_loss_arm_weight', fallback=1.0),
+                'direct_pose_loss_else_weight': self._panel_metric_scalar(metrics, 'direct_pose_loss_else_weight', fallback=1.0),
+                'dir_group_norm_used': self._panel_metric_scalar(metrics, 'dir_group_norm_used', fallback=0.0),
+                'dir_group_norm_leg_raw': self._panel_metric_scalar(metrics, 'dir_group_norm_leg_raw'),
+                'dir_group_norm_nonleg_raw': self._panel_metric_scalar(metrics, 'dir_group_norm_nonleg_raw'),
+                'dir_group_norm_leg_clamped': self._panel_metric_scalar(metrics, 'dir_group_norm_leg_clamped'),
+                'dir_group_norm_nonleg_clamped': self._panel_metric_scalar(metrics, 'dir_group_norm_nonleg_clamped'),
+                'dir_group_norm_leg_ema': self._panel_metric_scalar(metrics, 'dir_group_norm_leg_ema'),
+                'dir_group_norm_nonleg_ema': self._panel_metric_scalar(metrics, 'dir_group_norm_nonleg_ema'),
+                'dir_group_norm_leg_hit_min': self._panel_metric_scalar(metrics, 'dir_group_norm_leg_hit_min', fallback=0.0),
+                'dir_group_norm_leg_hit_max': self._panel_metric_scalar(metrics, 'dir_group_norm_leg_hit_max', fallback=0.0),
+                'dir_group_norm_nonleg_hit_min': self._panel_metric_scalar(metrics, 'dir_group_norm_nonleg_hit_min', fallback=0.0),
+                'dir_group_norm_nonleg_hit_max': self._panel_metric_scalar(metrics, 'dir_group_norm_nonleg_hit_max', fallback=0.0),
+                'GroupNormLegClampHitRate': self._panel_metric_scalar(metrics, 'dir_group_norm_leg_hit_any', fallback=0.0),
+                'GroupNormNonlegClampHitRate': self._panel_metric_scalar(metrics, 'dir_group_norm_nonleg_hit_any', fallback=0.0),
+                'direct_grad_norm_trunk': self._panel_metric_scalar(metrics, 'direct_grad_norm_trunk'),
+                'direct_grad_norm_out_leg': self._panel_metric_scalar(metrics, 'direct_grad_norm_out_leg'),
+                'direct_grad_norm_out_nonleg': self._panel_metric_scalar(metrics, 'direct_grad_norm_out_nonleg'),
+                'direct_grad_norm_out_arm': self._panel_metric_scalar(metrics, 'direct_grad_norm_out_arm'),
+                'direct_grad_norm_out_else': self._panel_metric_scalar(metrics, 'direct_grad_norm_out_else'),
+                'direct_grad_ratio_nonleg_over_leg': self._panel_metric_scalar(metrics, 'direct_grad_ratio_nonleg_over_leg'),
+                'direct_grad_ratio_arm_over_else': self._panel_metric_scalar(metrics, 'direct_grad_ratio_arm_over_else'),
+            }
+
+        teacher_rows = [_panel_record(rec, phase='teacher') for rec in self.metric_history if rec.get('tag') == 'teacher']
+        freerun_rows = [_panel_record(rec, phase='freerun') for rec in self.metric_history if rec.get('tag') == 'valfree']
+        train_direct_rows = [
+            _train_direct_group_norm_record(rec)
+            for rec in self.metric_history
+            if rec.get('tag') == 'train'
+        ]
+
+        def _best_row(rows: Sequence[Mapping[str, Any]], key: str) -> Optional[Dict[str, Any]]:
+            best = None
+            best_val = float('inf')
+            for row in rows:
+                try:
+                    val = float(row.get(key, float('nan')))
+                except Exception:
+                    continue
+                if not _math.isfinite(val):
+                    continue
+                if val < best_val:
+                    best_val = val
+                    best = dict(row)
+            return best
+
+        payload: Dict[str, Any] = {
+            'teacher': teacher_rows,
+            'freerun': freerun_rows,
+            'train_direct_group_norm': train_direct_rows,
+        }
+        best_teacher = _best_row(teacher_rows, 'GeoLocalDeg')
+        if best_teacher is not None:
+            payload['best_teacher_by_GeoLocalDeg'] = best_teacher
+        best_free = _best_row(freerun_rows, 'GeoDriftSlopeProxy')
+        if best_free is not None:
+            payload['best_free_by_GeoDriftSlopeProxy'] = best_free
+
+        summary_path = Path(out_dir) / 'basetrain_keybone_group_summary.json'
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
     def _save_val_metrics(self, epoch: int, metrics: Mapping[str, Any]) -> Optional[Path]:
         out_dir = getattr(self, 'out_dir', None)
         if not out_dir:
             return None
         try:
             self._dump_metrics_json(dict(metrics), tag='valfree', epoch=epoch)
-        except Exception:
-            pass
+        except (RuntimeError, TypeError, ValueError, OSError) as exc:
+            _phasec_warn_once(
+                "metrics/valfree_dump",
+                "failed to dump valfree metrics JSON snapshot",
+                exc,
+            )
         metrics_dir = Path(out_dir) / 'metrics'
         json_path = metrics_dir / f'valfree_ep{int(epoch):03d}.json'
         return json_path if json_path.exists() else None
@@ -4392,15 +4510,23 @@ class Trainer:
                 clip_id = batch.get('clip_id')
                 start = batch.get('start')
                 if clip_id is not None:
-                    try:
-                        payload['batch_meta']['clip_id'] = int(clip_id if isinstance(clip_id, int) else clip_id.item())
-                    except Exception:
-                        pass
+                    clip_id_int = _phasec_safe_int(clip_id)
+                    if clip_id_int is not None:
+                        payload['batch_meta']['clip_id'] = clip_id_int
+                    else:
+                        _phasec_warn_once(
+                            "grad_nan_dump/clip_id",
+                            f"failed to parse clip_id as int (type={type(clip_id).__name__}); omit from payload",
+                        )
                 if start is not None:
-                    try:
-                        payload['batch_meta']['start'] = int(start if isinstance(start, int) else start.item())
-                    except Exception:
-                        pass
+                    start_int = _phasec_safe_int(start)
+                    if start_int is not None:
+                        payload['batch_meta']['start'] = start_int
+                    else:
+                        _phasec_warn_once(
+                            "grad_nan_dump/start",
+                            f"failed to parse start as int (type={type(start).__name__}); omit from payload",
+                        )
             fname = os.path.join(out_dir, 'nan_grad', f'ep{int(epoch):03d}_b{int(batch_idx):05d}.json')
             with open(fname, 'w', encoding='utf-8') as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -4410,61 +4536,46 @@ class Trainer:
             print(f"[GradNan][WARN] failed to dump diagnostic: {exc}")
 
 
-def _diagnose_free_run_impl(
-    self,
-    batch,
-    predY,
-    gtY,
-    predsX,
-    period_seq_pred,
-    motion_seq,
-    y_seq,
-    contacts_seq,
-    angvel_seq,
-    pose_hist_seq,
-    angvel_raw_seq=None,
-):
-    import math
-    import torch
-    self._require_normalizer("_diagnose_free_run_impl")
+@dataclass(frozen=True)
+class FreeRunDiagSequences:
+    predX_tensor: Optional[torch.Tensor]
+    predX_raw: Optional[torch.Tensor]
+    gtX_raw: Optional[torch.Tensor]
+    gtX_raw_full: Optional[torch.Tensor]
+    cond_raw_seq: Optional[torch.Tensor]
+    model: Any
 
-    result: Dict[str, Any] = {}
-    diag_scope = getattr(self, '_diag_scope', 'free_run')
 
-    def _record_metric(name: str, value):
-        result[name] = value
-        if diag_scope == 'free_run':
-            result[f'FreeRun/{name}'] = value
-        elif diag_scope == 'single_step':
-            result[f'SingleStep/{name}'] = value
+@dataclass
+class FreeRunDiagKinematics:
+    geo: Optional[torch.Tensor] = None
+    geo_local: Optional[torch.Tensor] = None
+    w_pred: Optional[torch.Tensor] = None
+    w_gt: Optional[torch.Tensor] = None
 
-    rot6d_y = self._sl_from_layout(getattr(self, '_y_layout', {}), 'BoneRotations6D')
-    rv_x = self._sl_from_layout(getattr(self, '_x_layout', {}), 'RootVelocity')
-    rot6d_x = self._sl_from_layout(getattr(self, '_x_layout', {}), 'BoneRotations6D')
 
-    eval_align_root = bool(getattr(self, 'eval_align_root0', True))
-    root_idx = int(getattr(self, 'eval_root_idx', 0))
-    up_axis = int(getattr(self, 'eval_up_axis', getattr(self, '_up_axis', 2)))
-    fps_eval = float(getattr(self, 'bone_hz', 60.0))
-    contact_threshold = float(getattr(self, 'foot_contact_threshold', 1.5))
-    mag_rel_beta = float(getattr(self, 'eval_angvel_beta', 0.25) or 0.25)
-    mag_rel_threshold = float(getattr(self, 'eval_angvel_mag_threshold', 0.10) or 0.10)
-    geo = None
-    deg = 180.0 / math.pi
+def _record_diag_metric(
+    result: Dict[str, Any],
+    diag_scope: str,
+    name: str,
+    value: Any,
+    *,
+    extra_scope_aliases: Sequence[str] = (),
+) -> None:
+    result[name] = value
+    scope_aliases: list[str] = []
+    if diag_scope == 'free_run':
+        scope_aliases.append('FreeRun')
+    elif diag_scope == 'single_step':
+        scope_aliases.append('SingleStep')
+    for alias in extra_scope_aliases:
+        if alias not in scope_aliases:
+            scope_aliases.append(alias)
+    for alias in scope_aliases:
+        result[f'{alias}/{name}'] = value
 
-    bone_names_src = getattr(self, '_bone_names', None)
-    if not bone_names_src:
-        bundle_meta = getattr(self, '_bundle_meta', None)
-        if isinstance(bundle_meta, dict):
-            bone_names_src = bundle_meta.get('bone_names') or bundle_meta.get('skeleton', {}).get('bone_names')
-    bone_names = [str(b) for b in bone_names_src] if isinstance(bone_names_src, (list, tuple)) else []
 
-    def _mean_curve(tensor: torch.Tensor, reduce_dims) -> torch.Tensor:
-        cur = tensor
-        for dim in sorted(reduce_dims, reverse=True):
-            cur = cur.mean(dim=dim)
-        return cur
-
+def _collect_diag_sequences(self, *, predsX, motion_seq, batch) -> FreeRunDiagSequences:
     predX_tensor = torch.stack(predsX, dim=1) if predsX else None
     model = getattr(self, 'model', None)
     gtX_raw_full = None
@@ -4491,24 +4602,52 @@ def _diagnose_free_run_impl(
         predX_raw = None
         gtX_raw = None
 
-    # ----- diagnostics that need denormed X -----
-    if isinstance(rv_x, slice) and predX_raw is not None and gtX_raw is not None:
-        _record_metric('RootVelMAE', float((predX_raw[..., rv_x] - gtX_raw[..., rv_x]).abs().mean().item()))
-        if getattr(self, 'diag_input_stats', False):
-            diff = (predX_raw[..., rv_x] - gtX_raw[..., rv_x]).abs()
-            result['RootVelMAE_std'] = float(diff.std().item())
-        try:
-            # 末步根速度误差（观测累积轨迹漂移）
-            rv_end = (predX_raw[:, -1, rv_x] - gtX_raw[:, -1, rv_x]).abs().mean()
-            _record_metric('RootVelEndMAE', float(rv_end.item()))
-        except Exception:
-            pass
+    cond_raw_seq = None
+    if isinstance(batch, dict):
+        cond_raw_seq = batch.get("cond_tgt_raw")
+        if cond_raw_seq is None:
+            cond_raw_seq = batch.get("cond_in")
 
-    if isinstance(rot6d_x, slice) and predX_raw is not None and gtX_raw is not None:
+    return FreeRunDiagSequences(
+        predX_tensor=predX_tensor,
+        predX_raw=predX_raw,
+        gtX_raw=gtX_raw,
+        gtX_raw_full=gtX_raw_full,
+        cond_raw_seq=cond_raw_seq,
+        model=model,
+    )
+
+
+def _compute_input_drift_metrics(
+    self,
+    result: Dict[str, Any],
+    cfg: SimpleNamespace,
+    seqs: FreeRunDiagSequences,
+    *,
+    period_seq_pred,
+) -> None:
+    predX_raw = seqs.predX_raw
+    gtX_raw = seqs.gtX_raw
+
+    if isinstance(cfg.rv_x, slice) and predX_raw is not None and gtX_raw is not None:
+        _record_diag_metric(
+            result,
+            cfg.diag_scope,
+            'RootVelMAE',
+            float((predX_raw[..., cfg.rv_x] - gtX_raw[..., cfg.rv_x]).abs().mean().item()),
+        )
+        if cfg.diag_input_stats:
+            diff = (predX_raw[..., cfg.rv_x] - gtX_raw[..., cfg.rv_x]).abs()
+            result['RootVelMAE_std'] = float(diff.std().item())
+        if predX_raw.shape[1] > 0 and gtX_raw.shape[1] > 0:
+            rv_end = (predX_raw[:, -1, cfg.rv_x] - gtX_raw[:, -1, cfg.rv_x]).abs().mean()
+            _record_diag_metric(result, cfg.diag_scope, 'RootVelEndMAE', float(rv_end.item()))
+
+    if isinstance(cfg.rot6d_x, slice) and predX_raw is not None and gtX_raw is not None:
         try:
             Bx, Tx, Dx = predX_raw.shape
-            px = predX_raw[..., rot6d_x]
-            gx = gtX_raw[..., rot6d_x]
+            px = predX_raw[..., cfg.rot6d_x]
+            gx = gtX_raw[..., cfg.rot6d_x]
             if Dx > 0 and px.shape[-1] % 6 == 0:
                 Jx = px.shape[-1] // 6
                 px6 = reproject_rot6d(px.reshape(-1, px.shape[-1]))
@@ -4516,28 +4655,40 @@ def _diagnose_free_run_impl(
                 Rp = rot6d_to_matrix(px6.view(-1, Jx, 6)).view(Bx, Tx, Jx, 3, 3)
                 Rg = rot6d_to_matrix(gx6.view(-1, Jx, 6)).view(Bx, Tx, Jx, 3, 3)
                 geo_in = geodesic_R(Rp, Rg)
-                _record_metric('InputRotGeoDeg', float((geo_in.mean() * deg).item()))
-                result['FreeRun/InputRotGeoDeg'] = result['InputRotGeoDeg']
-                if getattr(self, 'diag_input_stats', False):
-                    result['InputRotGeoDeg_max'] = float((geo_in.max() * deg).item())
-                    result['InputRotGeoDeg_std'] = float((geo_in.std() * deg).item())
+                _record_diag_metric(
+                    result,
+                    cfg.diag_scope,
+                    'InputRotGeoDeg',
+                    float((geo_in.mean() * cfg.deg).item()),
+                    extra_scope_aliases=('FreeRun',),
+                )
+                if cfg.diag_input_stats:
+                    result['InputRotGeoDeg_max'] = float((geo_in.max() * cfg.deg).item())
+                    result['InputRotGeoDeg_std'] = float((geo_in.std() * cfg.deg).item())
                 try:
-                    geo_in_deg = geo_in * deg
-                    mean_curve = _mean_curve(geo_in_deg.mean(dim=-1), reduce_dims=(0,))
+                    geo_in_deg = geo_in * cfg.deg
+                    mean_curve = geo_in_deg.mean(dim=-1).mean(dim=0)
                     max_curve = geo_in_deg.max(dim=-1).values.max(dim=0).values
-                    result['InputRotGeoDegCurve'] = mean_curve.detach().cpu().tolist()
-                    result['InputRotGeoDegCurveMax'] = max_curve.detach().cpu().tolist()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                    _record_optional_diag_curve(
+                        result,
+                        metric_name='InputRotGeoDeg',
+                        curve=mean_curve,
+                        curve_max=max_curve,
+                    )
+                except (RuntimeError, TypeError, ValueError) as exc:
+                    _phasec_warn_once(
+                        "diag/input_rot_geo_curve",
+                        "failed to record InputRotGeoDeg curve payload",
+                        exc,
+                    )
+        except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+            _phasec_warn_once(
+                "diag/input_rot_geo",
+                "failed to compute InputRotGeoDeg diagnostics",
+                exc,
+            )
 
-    # Cond vs motion diagnostics
-    cond_raw_seq = None
-    if isinstance(batch, dict):
-        cond_raw_seq = batch.get("cond_tgt_raw")
-        if cond_raw_seq is None:
-            cond_raw_seq = batch.get("cond_in")
+    cond_raw_seq = seqs.cond_raw_seq
     if torch.is_tensor(cond_raw_seq):
         cond_raw_seq = cond_raw_seq.float()
         if cond_raw_seq.dim() == 2:
@@ -4567,20 +4718,30 @@ def _diagnose_free_run_impl(
                         dir_norm = dir_slice.norm(dim=-1).clamp_min(1e-6)
                         dir_unit = dir_slice / dir_norm.unsqueeze(-1)
                         yaw_cmd_world = torch.atan2(dir_unit[..., 1], dir_unit[..., 0])
-                        offset = float(getattr(self, 'yaw_forward_axis_offset', 0.0) or 0.0)
                         yaw_cmd = torch.atan2(
-                            torch.sin(yaw_cmd_world - offset),
-                            torch.cos(yaw_cmd_world - offset),
+                            torch.sin(yaw_cmd_world - cfg.yaw_forward_axis_offset),
+                            torch.cos(yaw_cmd_world - cfg.yaw_forward_axis_offset),
                         )
-                        if isinstance(rv_x, slice):
+                        _ = yaw_cmd
+                        if isinstance(cfg.rv_x, slice):
                             cond_vel = dir_unit * speed_slice.unsqueeze(-1)
-                            vel_pred = predX_raw[:, :L, rv_x]
-                            _record_metric('CondVelVsPredMAE', float((vel_pred - cond_vel).abs().mean().item()))
-                            result['FreeRun/CondVelVsPredMAE'] = result['CondVelVsPredMAE']
+                            vel_pred = predX_raw[:, :L, cfg.rv_x]
+                            _record_diag_metric(
+                                result,
+                                cfg.diag_scope,
+                                'CondVelVsPredMAE',
+                                float((vel_pred - cond_vel).abs().mean().item()),
+                                extra_scope_aliases=('FreeRun',),
+                            )
                             if gtX_raw is not None and gtX_raw.shape[1] >= start_idx + L:
-                                vel_gt = gtX_raw[:, start_idx:start_idx + L, rv_x]
-                                _record_metric('CondVelVsGTMAE', float((vel_gt - cond_vel).abs().mean().item()))
-                                result['FreeRun/CondVelVsGTMAE'] = result['CondVelVsGTMAE']
+                                vel_gt = gtX_raw[:, start_idx:start_idx + L, cfg.rv_x]
+                                _record_diag_metric(
+                                    result,
+                                    cfg.diag_scope,
+                                    'CondVelVsGTMAE',
+                                    float((vel_gt - cond_vel).abs().mean().item()),
+                                    extra_scope_aliases=('FreeRun',),
+                                )
 
     if period_seq_pred:
         try:
@@ -4596,17 +4757,33 @@ def _diagnose_free_run_impl(
                 period_tensor = torch.stack(norm_period, dim=1)
                 result['period_abs_mean'] = float(period_tensor.abs().mean().item())
                 result['period_abs_std'] = float(period_tensor.abs().std().item())
-        except Exception:
-            pass
+        except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+            _phasec_warn_once(
+                "diag/period_abs_stats",
+                "failed to compute period_abs_mean/std diagnostics",
+                exc,
+            )
 
 
-    w_pred = w_gt = None
-    angvel_slice = getattr(self, 'angvel_x_slice', None)
-    if isinstance(rot6d_y, slice):
+def _compute_contact_and_angvel_metrics(
+    self,
+    result: Dict[str, Any],
+    cfg: SimpleNamespace,
+    seqs: FreeRunDiagSequences,
+    *,
+    predY,
+    gtY,
+    period_seq_pred,
+    contacts_seq,
+    angvel_seq,
+    pose_hist_seq,
+) -> FreeRunDiagKinematics:
+    state = FreeRunDiagKinematics()
+    if isinstance(cfg.rot6d_y, slice):
         predY_raw = self._denorm(predY)
         gtY_raw = self._denorm(gtY)
-        py = predY_raw[..., rot6d_y]
-        gy = gtY_raw[..., rot6d_y]
+        py = predY_raw[..., cfg.rot6d_y]
+        gy = gtY_raw[..., cfg.rot6d_y]
         if py.shape[-1] % 6 == 0:
             J = py.shape[-1] // 6
             py6 = reproject_rot6d(py).view(py.shape[0], py.shape[1], J, 6)
@@ -4614,154 +4791,231 @@ def _diagnose_free_run_impl(
             Rp = rot6d_to_matrix(py6)
             Rg = rot6d_to_matrix(gy6)
             Rp_raw = Rp
-            if eval_align_root and Rp.shape[1] > 0 and 0 <= root_idx < J:
-                Rpr0 = Rp[:, 0, root_idx]
-                Rgr0 = Rg[:, 0, root_idx]
+            if cfg.eval_align_root and Rp.shape[1] > 0 and 0 <= cfg.root_idx < J:
+                Rpr0 = Rp[:, 0, cfg.root_idx]
+                Rgr0 = Rg[:, 0, cfg.root_idx]
                 R_align = Rgr0 @ Rpr0.transpose(-1, -2)
                 Rp = (R_align.view(Rp.shape[0], 1, 1, 3, 3).expand_as(Rp)) @ Rp
-                geo = geodesic_R(Rp, Rg)
-                _record_metric('GeoDeg', float((geo.mean() * deg).item()))
-                result['SingleStep/GeoDeg'] = result['GeoDeg']
+                state.geo = geodesic_R(Rp, Rg)
+                _record_diag_metric(
+                    result,
+                    cfg.diag_scope,
+                    'GeoDeg',
+                    float((state.geo.mean() * cfg.deg).item()),
+                    extra_scope_aliases=('SingleStep',),
+                )
                 try:
-                    geo_deg = geo * deg
-                    geo_curve = _mean_curve(geo_deg.mean(dim=-1), reduce_dims=(0,))
+                    geo_deg = state.geo * cfg.deg
+                    geo_curve = geo_deg.mean(dim=-1).mean(dim=0)
                     geo_curve_max = geo_deg.max(dim=-1).values.max(dim=0).values
-                    result['GeoDegCurve'] = geo_curve.detach().cpu().tolist()
-                    result['GeoDegCurveMax'] = geo_curve_max.detach().cpu().tolist()
-                    # 末步姿态误差（累积观察）
-                    _record_metric('GeoDegEnd', float(geo_curve[-1].item()))
-                    # 逐骨骼曲线（批均值），便于定位单骨骼误差
+                    _record_optional_diag_curve(
+                        result,
+                        metric_name='GeoDeg',
+                        curve=geo_curve,
+                        curve_max=geo_curve_max,
+                    )
+                    _record_diag_metric(result, cfg.diag_scope, 'GeoDegEnd', float(geo_curve[-1].item()))
                     try:
-                        if bone_names:
+                        if cfg.bone_names:
                             geo_per_bone = {}
-                            geo_mean_bone = geo_deg.mean(dim=0)  # [T,J]
-                            for j, name in enumerate(bone_names[:geo_mean_bone.shape[1]]):
+                            geo_mean_bone = geo_deg.mean(dim=0)
+                            for j, name in enumerate(cfg.bone_names[:geo_mean_bone.shape[1]]):
                                 geo_per_bone[name] = geo_mean_bone[:, j].detach().cpu().tolist()
-                            result['GeoDegCurveBones'] = geo_per_bone
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-                geo_local = None
+                            _record_optional_diag_curve(
+                                result,
+                                metric_name='GeoDeg',
+                                curve=result.get('GeoDegCurve', []),
+                                curve_max=result.get('GeoDegCurveMax'),
+                                curve_bones=geo_per_bone,
+                            )
+                    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+                        _phasec_warn_once(
+                            "diag/geo_curve_bones",
+                            "failed to build GeoDegCurveBones payload",
+                            exc,
+                        )
+                except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+                    _phasec_warn_once(
+                        "diag/geo_curve",
+                        "failed to compute GeoDeg curve diagnostics",
+                        exc,
+                    )
+                state.geo_local = None
                 try:
-                    # Keep root-relative matrices for downstream diagnostics (e.g., parent-relative angvel),
-                    # but compute GeoLocalDeg as a *pose-only* metric by excluding the root joint.
-                    Rp_root = _root_relative_matrices(Rp, root_idx)
-                    Rg_root = _root_relative_matrices(Rg, root_idx)
-
-                    # Use the *unaligned* pose rotations here: for local BoneRotations6D this avoids
-                    # introducing any root-dependent global alignment into the pose-only score.
-                    geo_local = geodesic_R(Rp_raw, Rg) * deg  # [B,T,J] in degrees (exclude root below)
+                    Rp_root = _root_relative_matrices(Rp, cfg.root_idx)
+                    Rg_root = _root_relative_matrices(Rg, cfg.root_idx)
+                    state.geo_local = geodesic_R(Rp_raw, Rg) * cfg.deg
                     joint_weights = self._joint_weights(Rp, J)
-                    if 0 <= root_idx < joint_weights.numel():
+                    if 0 <= cfg.root_idx < joint_weights.numel():
                         joint_weights = joint_weights.clone()
-                        joint_weights[root_idx] = 0.0
+                        joint_weights[cfg.root_idx] = 0.0
                     weights_sum = joint_weights.sum().clamp_min(1e-6)
                     w = joint_weights.view(1, 1, -1)
+                    geo_local_mean = (state.geo_local * w).sum() / (
+                        weights_sum * state.geo_local.shape[0] * state.geo_local.shape[1]
+                    )
+                    _record_diag_metric(
+                        result,
+                        cfg.diag_scope,
+                        'GeoLocalDeg',
+                        float(geo_local_mean.item()),
+                        extra_scope_aliases=('SingleStep',),
+                    )
+                    step_vals = ((state.geo_local * w).sum(dim=-1) / weights_sum).mean(dim=0)
+                    _record_optional_diag_curve(
+                        result,
+                        metric_name='GeoLocalDeg',
+                        curve=step_vals,
+                    )
+                    if int(step_vals.numel()) >= 2:
+                        drift_proxy = float(
+                            (step_vals[-1] - step_vals[0]).detach().cpu() / max(1, int(step_vals.numel()) - 1)
+                        )
+                    else:
+                        drift_proxy = float('nan')
+                    _record_diag_metric(result, cfg.diag_scope, 'GeoDriftSlopeProxy', drift_proxy)
 
-                    geo_local_mean = (geo_local * w).sum() / (weights_sum * geo_local.shape[0] * geo_local.shape[1])
-                    _record_metric('GeoLocalDeg', float(geo_local_mean.item()))
-                    result['SingleStep/GeoLocalDeg'] = result['GeoLocalDeg']
-
-                    step_vals = ((geo_local * w).sum(dim=-1) / weights_sum).mean(dim=0)
-                    result['GeoLocalDegCurve'] = step_vals.detach().cpu().tolist()
-
-                    geo_for_max = geo_local
-                    if 0 <= root_idx < geo_for_max.shape[-1]:
-                        geo_for_max = geo_local.clone()
-                        geo_for_max[..., root_idx] = -1e9
+                    geo_for_max = state.geo_local
+                    if 0 <= cfg.root_idx < geo_for_max.shape[-1]:
+                        geo_for_max = state.geo_local.clone()
+                        geo_for_max[..., cfg.root_idx] = -1e9
                     max_vals = geo_for_max.max(dim=-1).values.max(dim=0).values
-                    result['GeoLocalDegCurveMax'] = max_vals.detach().cpu().tolist()
-                    _record_metric('GeoLocalDegEnd', float(step_vals[-1].item()))
+                    _record_optional_diag_curve(
+                        result,
+                        metric_name='GeoLocalDeg',
+                        curve=result.get('GeoLocalDegCurve', []),
+                        curve_max=max_vals,
+                    )
+                    _record_diag_metric(result, cfg.diag_scope, 'GeoLocalDegEnd', float(step_vals[-1].item()))
 
                     try:
-                        if bone_names:
+                        if cfg.bone_names:
                             geo_local_per_bone = {}
-                            geo_local_mean_bone = geo_local.mean(dim=0)  # [T,J]
-                            if 0 <= root_idx < geo_local_mean_bone.shape[1]:
-                                geo_local_mean_bone[:, root_idx] = 0.0
-                            for j, name in enumerate(bone_names[:geo_local_mean_bone.shape[1]]):
+                            geo_local_mean_bone = state.geo_local.mean(dim=0)
+                            if 0 <= cfg.root_idx < geo_local_mean_bone.shape[1]:
+                                geo_local_mean_bone[:, cfg.root_idx] = 0.0
+                            for j, name in enumerate(cfg.bone_names[:geo_local_mean_bone.shape[1]]):
                                 geo_local_per_bone[name] = geo_local_mean_bone[:, j].detach().cpu().tolist()
-                            result['GeoLocalDegCurveBones'] = geo_local_per_bone
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
+                            _record_optional_diag_curve(
+                                result,
+                                metric_name='GeoLocalDeg',
+                                curve=result.get('GeoLocalDegCurve', []),
+                                curve_max=result.get('GeoLocalDegCurveMax'),
+                                curve_bones=geo_local_per_bone,
+                            )
+                    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+                        _phasec_warn_once(
+                            "diag/geo_local_curve_bones",
+                            "failed to build GeoLocalDegCurveBones payload",
+                            exc,
+                        )
+                except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+                    _phasec_warn_once(
+                        "diag/geo_local",
+                        "failed to compute GeoLocalDeg diagnostics",
+                        exc,
+                    )
             try:
                 Rp_parent = self._parent_relative_matrices(Rp_root)
                 Rg_parent = self._parent_relative_matrices(Rg_root)
-                w_pred = angvel_vec_from_R_seq(Rp_parent, fps_eval)
-                w_gt = angvel_vec_from_R_seq(Rg_parent, fps_eval)
-                _record_metric('AngVelMAE', float((w_pred - w_gt).abs().mean().item()))
-                mag_p = w_pred.norm(dim=-1)
-                mag_g = w_gt.norm(dim=-1)
+                state.w_pred = angvel_vec_from_R_seq(Rp_parent, cfg.fps_eval)
+                state.w_gt = angvel_vec_from_R_seq(Rg_parent, cfg.fps_eval)
+                _record_diag_metric(
+                    result,
+                    cfg.diag_scope,
+                    'AngVelMAE',
+                    float((state.w_pred - state.w_gt).abs().mean().item()),
+                )
+                mag_p = state.w_pred.norm(dim=-1)
+                mag_g = state.w_gt.norm(dim=-1)
                 mag_avg = 0.5 * (mag_p + mag_g)
-                maskA = (mag_avg > mag_rel_threshold)
-                mag_rel = (mag_p - mag_g).abs() / (mag_avg + mag_rel_beta)
+                maskA = (mag_avg > cfg.mag_rel_threshold)
+                mag_rel = (mag_p - mag_g).abs() / (mag_avg + cfg.mag_rel_beta)
                 ang_mag_rel = (mag_rel * maskA).sum(dim=(0, 1)) / maskA.sum(dim=(0, 1)).clamp_min(1)
-                _record_metric('AngVelMagRel', float(torch.nanmedian(ang_mag_rel).item()))
+                _record_diag_metric(result, cfg.diag_scope, 'AngVelMagRel', float(torch.nanmedian(ang_mag_rel).item()))
                 try:
-                    # 角速度幅值/分量误差曲线（便于逐帧诊断）
-                    ang_mae_full = (w_pred - w_gt).abs()  # [B, T, J, 3]
-                    ang_mae_curve = ang_mae_full.mean(dim=(0, 2))  # [T]
-                    result['AngVelMAECurve'] = ang_mae_curve.detach().cpu().tolist()
-                    if bone_names and ang_mae_full.shape[2] == len(bone_names):
-                        ang_mae_bones = ang_mae_full.mean(dim=0)  # [T, J, 3]
-                        bone_curve = {
+                    ang_mae_full = (state.w_pred - state.w_gt).abs()
+                    ang_mae_curve = ang_mae_full.mean(dim=(0, 2))
+                    ang_mae_bone_curve = None
+                    if cfg.bone_names and ang_mae_full.shape[2] == len(cfg.bone_names):
+                        ang_mae_bones = ang_mae_full.mean(dim=0)
+                        ang_mae_bone_curve = {
                             name: ang_mae_bones[:, j].norm(dim=-1).detach().cpu().tolist()
-                            for j, name in enumerate(bone_names)
+                            for j, name in enumerate(cfg.bone_names)
                         }
-                        result['AngVelMAECurveBones'] = bone_curve
+                    _record_optional_diag_curve(
+                        result,
+                        metric_name='AngVelMAE',
+                        curve=ang_mae_curve,
+                        curve_bones=ang_mae_bone_curve,
+                        scope_alias='SingleStep' if cfg.diag_scope == 'single_step' else None,
+                    )
 
-                    dot_full = (w_pred * w_gt).sum(dim=-1)
+                    dot_full = (state.w_pred * state.w_gt).sum(dim=-1)
                     ang_full = torch.zeros_like(dot_full)
-                    eps = float(getattr(self, 'angvel_eps', 1e-6) or 1e-6)
-                    dir_th = float(getattr(self, 'angvel_dir_threshold', 0.1) or 0.1)  # rad/s
-                    valid_full = (mag_p > dir_th) & (mag_g > dir_th)
+                    valid_full = (mag_p > cfg.angvel_dir_threshold) & (mag_g > cfg.angvel_dir_threshold)
                     if valid_full.any():
-                        norm_full = (mag_p * mag_g).clamp_min(eps)
+                        norm_full = (mag_p * mag_g).clamp_min(cfg.angvel_eps)
                         cos = torch.clamp(dot_full / norm_full, -1.0 + 1e-6, 1.0 - 1e-6)
                         ang_full[valid_full] = torch.acos(cos[valid_full])
-                    ang_full_deg = ang_full * deg
+                    ang_full_deg = ang_full * cfg.deg
                     if valid_full.any():
                         valid_f = valid_full.float()
                         ang_sum = (ang_full_deg * valid_f).sum(dim=(0, 2))
                         valid_cnt = valid_f.sum(dim=(0, 2)).clamp_min(1.0)
                         ang_curve = ang_sum / valid_cnt
                         ang_curve_max = ang_full_deg.max(dim=2).values.max(dim=0).values
-                        result['AngVelDirDegCurve'] = ang_curve.detach().cpu().tolist()
-                        result['AngVelDirDegCurveMax'] = ang_curve_max.detach().cpu().tolist()
+                        _record_optional_diag_curve(
+                            result,
+                            metric_name='AngVelDirDeg',
+                            curve=ang_curve,
+                            curve_max=ang_curve_max,
+                        )
                         result['AngVelDirDegValidRatio'] = float(valid_f.mean().item())
                     else:
-                        result['AngVelDirDegCurve'] = []
-                        result['AngVelDirDegCurveMax'] = []
+                        _record_optional_diag_curve(
+                            result,
+                            metric_name='AngVelDirDeg',
+                            curve=[],
+                            curve_max=[],
+                        )
                         result['AngVelDirDegSkipped'] = True
-                    if diag_scope == 'single_step':
-                        result['SingleStep/AngVelMAECurve'] = result.get('AngVelMAECurve')
-                        result['SingleStep/AngVelMAECurveBones'] = result.get('AngVelMAECurveBones')
-                    # 末步角速度方向误差
-                    _record_metric('AngVelDirDegEnd', float(ang_curve[-1].item()))
-                    if diag_scope == 'single_step':
+                    _record_diag_metric(result, cfg.diag_scope, 'AngVelDirDegEnd', float(ang_curve[-1].item()))
+                    if cfg.diag_scope == 'single_step':
                         result['SingleStep/AngVelDirDegCurve'] = result['AngVelDirDegCurve']
                         result['SingleStep/AngVelDirDegCurveMax'] = result['AngVelDirDegCurveMax']
                     try:
-                        summary = self._summarize_angvel_dir(w_pred, w_gt, bone_names=bone_names)
+                        summary = self._summarize_angvel_dir(state.w_pred, state.w_gt, bone_names=cfg.bone_names)
                     except Exception as _angvel_exc:
                         print(f"[Diag][WARN] _summarize_angvel_dir failed: {_angvel_exc}")
                         import traceback
                         traceback.print_exc()
                         summary = {}
                     if summary:
-                        _record_metric('AngVelDirDegRaw', summary.get('raw', float('nan')))
-                        _record_metric('AngVelDirDegWeighted', summary.get('weighted', float('nan')))
-                        _record_metric('AngVelDirDegSmooth', summary.get('smooth', float('nan')))
-                        _record_metric('AngVelDirDegTorso', summary.get('torso', float('nan')))
-                        _record_metric('AngVelDirDegProximal', summary.get('proximal', float('nan')))
-                        _record_metric('AngVelDirDegDistal', summary.get('distal', float('nan')))
+                        _record_diag_metric(result, cfg.diag_scope, 'AngVelDirDegRaw', summary.get('raw', float('nan')))
+                        _record_diag_metric(
+                            result,
+                            cfg.diag_scope,
+                            'AngVelDirDegWeighted',
+                            summary.get('weighted', float('nan')),
+                        )
+                        _record_diag_metric(result, cfg.diag_scope, 'AngVelDirDegSmooth', summary.get('smooth', float('nan')))
+                        _record_diag_metric(result, cfg.diag_scope, 'AngVelDirDegTorso', summary.get('torso', float('nan')))
+                        _record_diag_metric(
+                            result,
+                            cfg.diag_scope,
+                            'AngVelDirDegProximal',
+                            summary.get('proximal', float('nan')),
+                        )
+                        _record_diag_metric(
+                            result,
+                            cfg.diag_scope,
+                            'AngVelDirDegDistal',
+                            summary.get('distal', float('nan')),
+                        )
 
-                    # -------- Foot contact-phase ang-vel stats (GT mask, no heuristic thresholds) --------
                     foot_names = ('foot_l', 'foot_r')
-                    idx_map = {name: idx for idx, name in enumerate(bone_names)} if bone_names else {}
+                    idx_map = {name: idx for idx, name in enumerate(cfg.bone_names)} if cfg.bone_names else {}
 
                     def _masked_mean(val: torch.Tensor, mask: torch.Tensor):
                         mask_f = mask.to(val.dtype)
@@ -4772,15 +5026,15 @@ def _diagnose_free_run_impl(
 
                     contacts_mask = None
                     if torch.is_tensor(contacts_seq) and contacts_seq.dim() >= 3:
-                        contacts_mask = contacts_seq[:, : w_pred.shape[1]] > 0.5  # [B,T,2] bool
+                        contacts_mask = contacts_seq[:, : state.w_pred.shape[1]] > 0.5
 
                     for fname in foot_names:
                         j_idx = idx_map.get(fname, None)
-                        if j_idx is None or j_idx >= w_pred.shape[2]:
+                        if j_idx is None or j_idx >= state.w_pred.shape[2]:
                             continue
                         foot_idx = 0 if fname.endswith('_l') else 1
-                        w_p = w_pred[..., j_idx, :]  # [B,T,3]
-                        w_g = w_gt[..., j_idx, :]
+                        w_p = state.w_pred[..., j_idx, :]
+                        w_g = state.w_gt[..., j_idx, :]
                         mag_p = w_p.norm(dim=-1)
                         mag_g = w_g.norm(dim=-1)
 
@@ -4789,59 +5043,101 @@ def _diagnose_free_run_impl(
                             stance_mask = contacts_mask[..., foot_idx]
                             swing_mask = ~stance_mask
 
-                        # GT 接触期：直接按掩码平均
                         if stance_mask is not None and stance_mask.any():
                             mae_contact = _masked_mean((w_p - w_g).abs().norm(dim=-1), stance_mask)
                             mag_contact = _masked_mean(mag_p, stance_mask)
                             if mae_contact is not None:
-                                _record_metric(f'Foot/{fname}/ContactAngVelMAE', float(mae_contact.item()))
+                                _record_diag_metric(
+                                    result,
+                                    cfg.diag_scope,
+                                    f'Foot/{fname}/ContactAngVelMAE',
+                                    float(mae_contact.item()),
+                                )
                             if mag_contact is not None:
-                                _record_metric(f'Foot/{fname}/ContactAngVelMag', float(mag_contact.item()))
+                                _record_diag_metric(
+                                    result,
+                                    cfg.diag_scope,
+                                    f'Foot/{fname}/ContactAngVelMag',
+                                    float(mag_contact.item()),
+                                )
 
-                        # 方向误差（夹角）在 stance/swing 分别统计
                         dot = (w_p * w_g).sum(dim=-1)
                         norm_prod = mag_p * mag_g
                         ang = torch.zeros_like(dot)
                         valid = norm_prod > 1e-6
-                        ang[valid] = torch.acos(torch.clamp(dot[valid] / norm_prod[valid], -1.0, 1.0)) * deg
+                        ang[valid] = torch.acos(torch.clamp(dot[valid] / norm_prod[valid], -1.0, 1.0)) * cfg.deg
 
                         if stance_mask is not None and stance_mask.any():
                             ang_stance = _masked_mean(ang, stance_mask)
                             if ang_stance is not None:
-                                _record_metric(f'Foot/{fname}/AngVelDirDegStance', float(ang_stance.item()))
+                                _record_diag_metric(
+                                    result,
+                                    cfg.diag_scope,
+                                    f'Foot/{fname}/AngVelDirDegStance',
+                                    float(ang_stance.item()),
+                                )
                         if swing_mask is not None and swing_mask.any():
                             ang_swing = _masked_mean(ang, swing_mask)
                             if ang_swing is not None:
-                                _record_metric(f'Foot/{fname}/AngVelDirDegSwing', float(ang_swing.item()))
+                                _record_diag_metric(
+                                    result,
+                                    cfg.diag_scope,
+                                    f'Foot/{fname}/AngVelDirDegSwing',
+                                    float(ang_swing.item()),
+                                )
 
-                        # 幅值在 stance/swing 的误差
                         if stance_mask is not None and stance_mask.any():
                             mag_mae = _masked_mean((mag_p - mag_g).abs(), stance_mask)
                             if mag_mae is not None:
-                                _record_metric(f'Foot/{fname}/AngVelMagMAEStance', float(mag_mae.item()))
+                                _record_diag_metric(
+                                    result,
+                                    cfg.diag_scope,
+                                    f'Foot/{fname}/AngVelMagMAEStance',
+                                    float(mag_mae.item()),
+                                )
                         if swing_mask is not None and swing_mask.any():
                             mag_mae_sw = _masked_mean((mag_p - mag_g).abs(), swing_mask)
                             if mag_mae_sw is not None:
-                                _record_metric(f'Foot/{fname}/AngVelMagMAESwing', float(mag_mae_sw.item()))
+                                _record_diag_metric(
+                                    result,
+                                    cfg.diag_scope,
+                                    f'Foot/{fname}/AngVelMagMAESwing',
+                                    float(mag_mae_sw.item()),
+                                )
 
-                except Exception:
-                    # Be robust to any diagnostics failure; do not break training/eval.
-                    pass
+                except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+                    _phasec_warn_once(
+                        "diag/angvel",
+                        "failed to compute angvel diagnostics",
+                        exc,
+                    )
 
-                # -------- Soft-hint diagnostic: compare predicted vs frozen embedding --------
                 period_pred = None
                 if period_seq_pred:
                     try:
                         pp = period_seq_pred[0]
                         if isinstance(pp, torch.Tensor):
-                            period_pred = torch.stack([p if p.dim() == 3 else p.unsqueeze(1) for p in period_seq_pred], dim=1)
+                            period_pred = torch.stack(
+                                [p if p.dim() == 3 else p.unsqueeze(1) for p in period_seq_pred],
+                                dim=1,
+                            )
                             if period_pred.dim() == 4 and period_pred.size(2) == 1:
                                 period_pred = period_pred.squeeze(2)
-                    except Exception:
+                    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+                        _phasec_warn_once(
+                            "diag/period_pred_pack",
+                            "failed to stack period predictions for diagnostics",
+                            exc,
+                        )
                         period_pred = None
 
                 period_gt = None
-                if model is not None and getattr(model, 'frozen_encoder', None) is not None and getattr(model, 'frozen_period_head', None) is not None:
+                model = seqs.model
+                if (
+                    model is not None
+                    and getattr(model, 'frozen_encoder', None) is not None
+                    and getattr(model, 'frozen_period_head', None) is not None
+                ):
                     try:
                         enc_in_list = []
                         for tensor in (contacts_seq, angvel_seq, pose_hist_seq):
@@ -4853,25 +5149,34 @@ def _diagnose_free_run_impl(
                             if isinstance(enc_hidden, tuple):
                                 enc_hidden = enc_hidden[-1]
                             period_gt = torch.tanh(model.frozen_period_head(enc_hidden))
-                    except Exception:
+                    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+                        _phasec_warn_once(
+                            "diag/period_gt_probe",
+                            "failed to compute period_gt embedding probe",
+                            exc,
+                        )
                         period_gt = None
 
-                # --- Embedding-level comparison (works for periodic & non-periodic motion) ---
                 embed_l2 = embed_cos = None
                 if period_pred is not None and period_gt is not None and period_pred.shape == period_gt.shape:
                     try:
                         diff = period_pred - period_gt
                         embed_l2 = diff.norm(dim=-1).mean()
-                        _record_metric('Period/EmbedL2', float(embed_l2.item()))
-                        # cosine similarity (safe for small norms)
+                        _record_diag_metric(result, cfg.diag_scope, 'Period/EmbedL2', float(embed_l2.item()))
                         eps = 1e-6
-                        cos = ((period_pred * period_gt).sum(dim=-1)) / (period_pred.norm(dim=-1) * period_gt.norm(dim=-1) + eps)
+                        cos = ((period_pred * period_gt).sum(dim=-1)) / (
+                            period_pred.norm(dim=-1) * period_gt.norm(dim=-1) + eps
+                        )
                         embed_cos = cos.clamp(-1.0, 1.0).mean()
-                        _record_metric('Period/EmbedCos', float(embed_cos.item()))
-                    except Exception:
-                        pass
+                        _record_diag_metric(result, cfg.diag_scope, 'Period/EmbedCos', float(embed_cos.item()))
+                    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+                        _phasec_warn_once(
+                            "diag/period_embed",
+                            "failed to compute period embedding diagnostics",
+                            exc,
+                        )
+                _ = embed_cos
 
-                # --- Contact-hint diagnostics (tanh): first 2 dims should match (2*contacts-1). ---
                 try:
                     tgt = contacts_seq if torch.is_tensor(contacts_seq) else None
                     if tgt is not None and tgt.shape[-1] >= 2:
@@ -4881,188 +5186,461 @@ def _diagnose_free_run_impl(
                         tgt = tgt * 2.0 - 1.0
                         if period_pred is not None and period_pred.shape[:2] == tgt.shape[:2] and period_pred.shape[-1] >= 2:
                             pred_hint = period_pred[..., :2]
-                            _record_metric('Period/ContactHintMAE', float((pred_hint - tgt).abs().mean().item()))
+                            _record_diag_metric(
+                                result,
+                                cfg.diag_scope,
+                                'Period/ContactHintMAE',
+                                float((pred_hint - tgt).abs().mean().item()),
+                            )
                         if period_gt is not None and period_gt.shape[:2] == tgt.shape[:2] and period_gt.shape[-1] >= 2:
                             gt_hint = period_gt[..., :2]
-                            _record_metric('Period/ContactHintGTMAE', float((gt_hint - tgt).abs().mean().item()))
-                except Exception:
-                    pass
+                            _record_diag_metric(
+                                result,
+                                cfg.diag_scope,
+                                'Period/ContactHintGTMAE',
+                                float((gt_hint - tgt).abs().mean().item()),
+                            )
+                except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+                    _phasec_warn_once(
+                        "diag/period_contact_hint",
+                        "failed to compute period/contact hint diagnostics",
+                        exc,
+                    )
 
-                # Phase metrics are deprecated; keep flag for backward-compatible logs.
                 result['Period/PhaseSkipped'] = True
-            except Exception:
-                pass
+            except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+                _phasec_warn_once(
+                    "diag/phase_block",
+                    "period/contact diagnostic phase block failed",
+                    exc,
+                )
 
-    if bone_names:
-        if w_pred is not None and w_gt is not None:
-            for j_idx, name in enumerate(bone_names):
-                if j_idx >= w_pred.shape[2]:
-                    continue
-                w_pred_b = w_pred[..., j_idx, :]
-                w_gt_b = w_gt[..., j_idx, :]
-                mag_mae = float((w_pred_b.norm(dim=-1) - w_gt_b.norm(dim=-1)).abs().mean().item())
-                ang_mae = float((w_pred_b - w_gt_b).abs().mean().item())
-                result[f'Bone/{name}/AngVelMagMAE'] = mag_mae
-                result[f'Bone/{name}/AngVelMAE'] = ang_mae
-        key_bone_names = getattr(self, 'eval_key_bones', None)
-        if not key_bone_names:
-            key_bone_names = [
-                'pelvis',
-                'upperarm_l', 'lowerarm_l', 'hand_l',
-                'upperarm_r', 'lowerarm_r', 'hand_r',
-                'thigh_l', 'calf_l', 'foot_l',
-                'thigh_r', 'calf_r', 'foot_r',
-            ]
-        idx_map = {name: idx for idx, name in enumerate(bone_names)}
-        key_indices = [idx_map[name] for name in key_bone_names if name in idx_map]
-        key_geo_vals: list[float] = []
-        key_geo_local_vals: list[float] = []
-        key_ang_mae_vals: list[float] = []
-        key_ang_mag_mae_vals: list[float] = []
-        key_ang_mag_rel_vals: list[float] = []
-        key_ang_dir_vals: list[float] = []
-        keybone_details: Dict[str, Dict[str, float]] = {}
-        geo_local_tensor = geo_local if torch.is_tensor(geo_local) else None
-        if geo_local_tensor is None:
-            raise RuntimeError(
-                "GeoLocalDeg metrics unavailable; ensure FK + geodesic computation succeeded before KeyBone diagnostics."
-            )
-        for name in key_bone_names:
-            if name not in idx_map:
+    return state
+
+
+def _compute_keybone_metrics(
+    self,
+    result: Dict[str, Any],
+    cfg: SimpleNamespace,
+    state: FreeRunDiagKinematics,
+) -> None:
+    if not cfg.bone_names:
+        return
+
+    if state.w_pred is not None and state.w_gt is not None:
+        for j_idx, name in enumerate(cfg.bone_names):
+            if j_idx >= state.w_pred.shape[2]:
                 continue
-            j_idx = idx_map[name]
-            prefix = f'KeyBone/{name}'
-            if geo is not None and geo.shape[-1] > j_idx:
-                geo_val = float((geo[..., j_idx].mean() * (180.0 / math.pi)).item())
-            else:
-                geo_val = float('nan')
-            result[f'{prefix}/GeoDeg'] = geo_val
-            if math.isfinite(geo_val):
-                key_geo_vals.append(geo_val)
+            w_pred_b = state.w_pred[..., j_idx, :]
+            w_gt_b = state.w_gt[..., j_idx, :]
+            mag_mae = float((w_pred_b.norm(dim=-1) - w_gt_b.norm(dim=-1)).abs().mean().item())
+            ang_mae = float((w_pred_b - w_gt_b).abs().mean().item())
+            result[f'Bone/{name}/AngVelMagMAE'] = mag_mae
+            result[f'Bone/{name}/AngVelMAE'] = ang_mae
 
-            geo_local_val = float('nan')
-            if geo_local_tensor is not None and geo_local_tensor.shape[-1] > j_idx:
-                geo_local_val = float(geo_local_tensor[..., j_idx].mean().item())
-            result[f'{prefix}/GeoLocalDeg'] = geo_local_val
-            if math.isfinite(geo_local_val):
-                key_geo_local_vals.append(geo_local_val)
+    key_bone_names = getattr(self, 'eval_key_bones', None)
+    if not key_bone_names:
+        key_bone_names = [
+            'pelvis',
+            'upperarm_l', 'lowerarm_l', 'hand_l',
+            'upperarm_r', 'lowerarm_r', 'hand_r',
+            'thigh_l', 'calf_l', 'foot_l',
+            'thigh_r', 'calf_r', 'foot_r',
+        ]
 
-            if w_pred is not None and w_gt is not None and w_pred.shape[2] > j_idx:
-                w_pred_b = w_pred[..., j_idx, :]
-                w_gt_b = w_gt[..., j_idx, :]
-                ang_mae = float((w_pred_b - w_gt_b).abs().mean().item())
-                result[f'{prefix}/AngVelMAE'] = ang_mae
-                if math.isfinite(ang_mae):
-                    key_ang_mae_vals.append(ang_mae)
+    idx_map = {name: idx for idx, name in enumerate(cfg.bone_names)}
+    key_indices = [idx_map[name] for name in key_bone_names if name in idx_map]
+    key_geo_vals: list[float] = []
+    key_geo_local_vals: list[float] = []
+    key_ang_mae_vals: list[float] = []
+    key_ang_mag_mae_vals: list[float] = []
+    key_ang_mag_rel_vals: list[float] = []
+    key_ang_dir_vals: list[float] = []
+    keybone_details: Dict[str, Dict[str, float]] = {}
 
-                mag_p = w_pred_b.norm(dim=-1)
-                mag_g = w_gt_b.norm(dim=-1)
-                mag_avg = 0.5 * (mag_p + mag_g)
-                mag_rel = (mag_p - mag_g).abs() / (mag_avg + mag_rel_beta)
-                mag_mae = float((mag_p - mag_g).abs().mean().item())
-                result[f'{prefix}/AngVelMagMAE'] = mag_mae
-                if math.isfinite(mag_mae):
-                    key_ang_mag_mae_vals.append(mag_mae)
+    geo_local_tensor = state.geo_local if torch.is_tensor(state.geo_local) else None
+    if geo_local_tensor is None:
+        raise RuntimeError(
+            "GeoLocalDeg metrics unavailable; ensure FK + geodesic computation succeeded before KeyBone diagnostics."
+        )
 
-                valid_mag = mag_avg > mag_rel_threshold
-                mag_rel_val = float(torch.median(mag_rel[valid_mag]).item()) if valid_mag.any() else float('nan')
-                result[f'{prefix}/AngVelMagRel'] = mag_rel_val
-                if math.isfinite(mag_rel_val):
-                    key_ang_mag_rel_vals.append(mag_rel_val)
+    for name in key_bone_names:
+        if name not in idx_map:
+            continue
+        j_idx = idx_map[name]
+        prefix = f'KeyBone/{name}'
+        if state.geo is not None and state.geo.shape[-1] > j_idx:
+            geo_val = float((state.geo[..., j_idx].mean() * cfg.deg).item())
+        else:
+            geo_val = float('nan')
+        result[f'{prefix}/GeoDeg'] = geo_val
+        if _math.isfinite(geo_val):
+            key_geo_vals.append(geo_val)
 
-                dir_val = geo_local_val
-                if not math.isfinite(dir_val):
-                    raise RuntimeError(
-                        f"GeoLocalDeg for key bone '{name}' is NaN; ensure FK skeleton matches outputs."
-                    )
-                result[f'{prefix}/AngVelDirDeg'] = dir_val
-                key_ang_dir_vals.append(dir_val)
-                keybone_details[name] = {
-                    'GeoDeg': geo_val,
-                    'GeoLocalDeg': geo_local_val,
-                    'AngVelMAE': ang_mae,
-                    'AngVelMagMAE': mag_mae,
-                    'AngVelMagRel': mag_rel_val,
-                    'AngVelDirDeg': dir_val,
-                }
-            else:
-                result[f'{prefix}/AngVelMAE'] = float('nan')
-                result[f'{prefix}/AngVelMagMAE'] = float('nan')
-                result[f'{prefix}/AngVelMagRel'] = float('nan')
-                dir_val = geo_local_val
-                if not math.isfinite(dir_val):
-                    raise RuntimeError(
-                        f"GeoLocalDeg for key bone '{name}' is NaN; ensure FK skeleton matches outputs."
-                    )
-                result[f'{prefix}/AngVelDirDeg'] = dir_val
-                key_ang_dir_vals.append(dir_val)
-                keybone_details[name] = {
-                    'GeoDeg': geo_val,
-                    'GeoLocalDeg': geo_local_val,
-                    'AngVelMAE': float('nan'),
-                    'AngVelMagMAE': float('nan'),
-                    'AngVelMagRel': float('nan'),
-                    'AngVelDirDeg': dir_val,
-                }
+        geo_local_val = float('nan')
+        if geo_local_tensor.shape[-1] > j_idx:
+            geo_local_val = float(geo_local_tensor[..., j_idx].mean().item())
+        result[f'{prefix}/GeoLocalDeg'] = geo_local_val
+        if _math.isfinite(geo_local_val):
+            key_geo_local_vals.append(geo_local_val)
 
-        summary = {}
-        if key_geo_vals:
-            summary['GeoDegMean'] = float(sum(key_geo_vals) / len(key_geo_vals))
-            _record_metric('KeyBone/GeoDegMean', summary['GeoDegMean'])
-        if key_ang_mae_vals:
-            summary['AngVelMAE'] = float(sum(key_ang_mae_vals) / len(key_ang_mae_vals))
-            _record_metric('KeyBone/AngVelMAE', summary['AngVelMAE'])
-        if key_ang_mag_mae_vals:
-            summary['AngVelMagMAE'] = float(sum(key_ang_mag_mae_vals) / len(key_ang_mag_mae_vals))
-            _record_metric('KeyBone/AngVelMagMAE', summary['AngVelMagMAE'])
-        if key_ang_mag_rel_vals:
-            summary['AngVelMagRel'] = float(sum(key_ang_mag_rel_vals) / len(key_ang_mag_rel_vals))
-            _record_metric('KeyBone/AngVelMagRel', summary['AngVelMagRel'])
-        if not key_geo_local_vals:
-            raise RuntimeError("KeyBone GeoLocalDegMean is empty; diagnostics require valid limb geodesic values.")
-        summary['GeoLocalDegMean'] = float(sum(key_geo_local_vals) / len(key_geo_local_vals))
-        _record_metric('KeyBone/GeoLocalDegMean', summary['GeoLocalDegMean'])
-        if key_ang_dir_vals:
-            summary['AngVelDirDeg'] = float(sum(key_ang_dir_vals) / len(key_ang_dir_vals))
-            _record_metric('KeyBone/AngVelDirDeg', summary['AngVelDirDeg'])
-        if key_indices:
-            kb_curve = geo_local_tensor[:, :, key_indices].mean(dim=(0, 2))
-            result['KeyBone/AngVelDirDegCurve'] = kb_curve.detach().cpu().tolist()
-        if keybone_details:
-            _record_metric('KeyBoneDetails', keybone_details)
-        if summary:
-            _record_metric('KeyBoneSummary', summary)
+        if state.w_pred is not None and state.w_gt is not None and state.w_pred.shape[2] > j_idx:
+            w_pred_b = state.w_pred[..., j_idx, :]
+            w_gt_b = state.w_gt[..., j_idx, :]
+            ang_mae = float((w_pred_b - w_gt_b).abs().mean().item())
+            result[f'{prefix}/AngVelMAE'] = ang_mae
+            if _math.isfinite(ang_mae):
+                key_ang_mae_vals.append(ang_mae)
 
-    if w_gt is not None and gtX_raw_full is not None and isinstance(angvel_slice, slice):
+            mag_p = w_pred_b.norm(dim=-1)
+            mag_g = w_gt_b.norm(dim=-1)
+            mag_avg = 0.5 * (mag_p + mag_g)
+            mag_rel = (mag_p - mag_g).abs() / (mag_avg + cfg.mag_rel_beta)
+            mag_mae = float((mag_p - mag_g).abs().mean().item())
+            result[f'{prefix}/AngVelMagMAE'] = mag_mae
+            if _math.isfinite(mag_mae):
+                key_ang_mag_mae_vals.append(mag_mae)
+
+            valid_mag = mag_avg > cfg.mag_rel_threshold
+            mag_rel_val = float(torch.median(mag_rel[valid_mag]).item()) if valid_mag.any() else float('nan')
+            result[f'{prefix}/AngVelMagRel'] = mag_rel_val
+            if _math.isfinite(mag_rel_val):
+                key_ang_mag_rel_vals.append(mag_rel_val)
+
+            dir_val = geo_local_val
+            if not _math.isfinite(dir_val):
+                raise RuntimeError(
+                    f"GeoLocalDeg for key bone '{name}' is NaN; ensure FK skeleton matches outputs."
+                )
+            result[f'{prefix}/AngVelDirDeg'] = dir_val
+            key_ang_dir_vals.append(dir_val)
+            keybone_details[name] = {
+                'GeoDeg': geo_val,
+                'GeoLocalDeg': geo_local_val,
+                'AngVelMAE': ang_mae,
+                'AngVelMagMAE': mag_mae,
+                'AngVelMagRel': mag_rel_val,
+                'AngVelDirDeg': dir_val,
+            }
+        else:
+            result[f'{prefix}/AngVelMAE'] = float('nan')
+            result[f'{prefix}/AngVelMagMAE'] = float('nan')
+            result[f'{prefix}/AngVelMagRel'] = float('nan')
+            dir_val = geo_local_val
+            if not _math.isfinite(dir_val):
+                raise RuntimeError(
+                    f"GeoLocalDeg for key bone '{name}' is NaN; ensure FK skeleton matches outputs."
+                )
+            result[f'{prefix}/AngVelDirDeg'] = dir_val
+            key_ang_dir_vals.append(dir_val)
+            keybone_details[name] = {
+                'GeoDeg': geo_val,
+                'GeoLocalDeg': geo_local_val,
+                'AngVelMAE': float('nan'),
+                'AngVelMagMAE': float('nan'),
+                'AngVelMagRel': float('nan'),
+                'AngVelDirDeg': dir_val,
+            }
+
+    summary = {}
+    try:
+        geo_group_means = {}
+        name_to_idx_full = {name: idx for idx, name in enumerate(cfg.bone_names[:geo_local_tensor.shape[-1]])}
+
+        def _group_mean_from_names(names_group: Sequence[str]) -> Optional[float]:
+            idxs = [name_to_idx_full[name] for name in names_group if name in name_to_idx_full]
+            if not idxs:
+                return None
+            group_tensor = geo_local_tensor[..., idxs]
+            return float(group_tensor.mean().item())
+
+        leg_mean = _group_mean_from_names(DEFAULT_DIRECT_POSE_LEG_BONES)
+        arm_mean = _group_mean_from_names(STAGE6_3WAY_ARMCHAIN_BONES)
+        trunk_names = [
+            name
+            for name in cfg.bone_names[:geo_local_tensor.shape[-1]]
+            if name not in set(DEFAULT_DIRECT_POSE_LEG_BONES)
+            and name not in set(STAGE6_3WAY_ARMCHAIN_BONES)
+            and name_to_idx_full.get(name, -1) != cfg.root_idx
+        ]
+        trunk_mean = _group_mean_from_names(trunk_names)
+        if leg_mean is not None:
+            geo_group_means['leg'] = leg_mean
+        if arm_mean is not None:
+            geo_group_means['arm'] = arm_mean
+        if trunk_mean is not None:
+            geo_group_means['trunk'] = trunk_mean
+        if geo_group_means:
+            summary['group_mean'] = geo_group_means
+    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        _phasec_warn_once(
+            "diag/keybone_group_mean",
+            "failed to build KeyBone group_mean summary",
+            exc,
+        )
+
+    if key_geo_vals:
+        summary['GeoDegMean'] = float(sum(key_geo_vals) / len(key_geo_vals))
+        _record_diag_metric(result, cfg.diag_scope, 'KeyBone/GeoDegMean', summary['GeoDegMean'])
+    if key_ang_mae_vals:
+        summary['AngVelMAE'] = float(sum(key_ang_mae_vals) / len(key_ang_mae_vals))
+        _record_diag_metric(result, cfg.diag_scope, 'KeyBone/AngVelMAE', summary['AngVelMAE'])
+    if key_ang_mag_mae_vals:
+        summary['AngVelMagMAE'] = float(sum(key_ang_mag_mae_vals) / len(key_ang_mag_mae_vals))
+        _record_diag_metric(result, cfg.diag_scope, 'KeyBone/AngVelMagMAE', summary['AngVelMagMAE'])
+    if key_ang_mag_rel_vals:
+        summary['AngVelMagRel'] = float(sum(key_ang_mag_rel_vals) / len(key_ang_mag_rel_vals))
+        _record_diag_metric(result, cfg.diag_scope, 'KeyBone/AngVelMagRel', summary['AngVelMagRel'])
+    if not key_geo_local_vals:
+        raise RuntimeError("KeyBone GeoLocalDegMean is empty; diagnostics require valid limb geodesic values.")
+    summary['GeoLocalDegMean'] = float(sum(key_geo_local_vals) / len(key_geo_local_vals))
+    _record_diag_metric(result, cfg.diag_scope, 'KeyBone/GeoLocalDegMean', summary['GeoLocalDegMean'])
+    if key_ang_dir_vals:
+        summary['AngVelDirDeg'] = float(sum(key_ang_dir_vals) / len(key_ang_dir_vals))
+        _record_diag_metric(result, cfg.diag_scope, 'KeyBone/AngVelDirDeg', summary['AngVelDirDeg'])
+    if key_indices:
+        kb_curve = geo_local_tensor[:, :, key_indices].mean(dim=(0, 2))
+        result['KeyBone/AngVelDirDegCurve'] = kb_curve.detach().cpu().tolist()
+    if keybone_details:
+        _record_diag_metric(result, cfg.diag_scope, 'KeyBoneDetails', keybone_details)
+    if summary:
+        _record_diag_metric(result, cfg.diag_scope, 'KeyBoneSummary', summary)
+
+
+def _diagnose_free_run_impl(
+    self,
+    batch,
+    predY,
+    gtY,
+    predsX,
+    period_seq_pred,
+    motion_seq,
+    y_seq,
+    contacts_seq,
+    angvel_seq,
+    pose_hist_seq,
+    angvel_raw_seq=None,
+):
+    self._require_normalizer("_diagnose_free_run_impl")
+    _ = y_seq, angvel_raw_seq
+
+    bone_names_src = getattr(self, '_bone_names', None)
+    if not bone_names_src:
+        bundle_meta = getattr(self, '_bundle_meta', None)
+        if isinstance(bundle_meta, dict):
+            bone_names_src = bundle_meta.get('bone_names') or bundle_meta.get('skeleton', {}).get('bone_names')
+    bone_names = [str(b) for b in bone_names_src] if isinstance(bone_names_src, (list, tuple)) else []
+
+    result: Dict[str, Any] = {}
+    cfg = SimpleNamespace(
+        diag_scope=str(getattr(self, '_diag_scope', 'free_run')),
+        rot6d_y=self._sl_from_layout(getattr(self, '_y_layout', {}), 'BoneRotations6D'),
+        rv_x=self._sl_from_layout(getattr(self, '_x_layout', {}), 'RootVelocity'),
+        rot6d_x=self._sl_from_layout(getattr(self, '_x_layout', {}), 'BoneRotations6D'),
+        eval_align_root=bool(getattr(self, 'eval_align_root0', True)),
+        root_idx=int(getattr(self, 'eval_root_idx', 0)),
+        up_axis=int(getattr(self, 'eval_up_axis', getattr(self, '_up_axis', 2))),
+        fps_eval=float(getattr(self, 'bone_hz', 60.0)),
+        contact_threshold=float(getattr(self, 'foot_contact_threshold', 1.5)),
+        diag_input_stats=bool(getattr(self, 'diag_input_stats', False)),
+        yaw_forward_axis_offset=float(getattr(self, 'yaw_forward_axis_offset', 0.0) or 0.0),
+        mag_rel_beta=float(getattr(self, 'eval_angvel_beta', 0.25) or 0.25),
+        mag_rel_threshold=float(getattr(self, 'eval_angvel_mag_threshold', 0.10) or 0.10),
+        angvel_eps=float(getattr(self, 'angvel_eps', 1e-6) or 1e-6),
+        angvel_dir_threshold=float(getattr(self, 'angvel_dir_threshold', 0.1) or 0.1),
+        deg=180.0 / _math.pi,
+        bone_names=bone_names,
+        angvel_slice=getattr(self, 'angvel_x_slice', None),
+    )
+    seqs = _collect_diag_sequences(self, predsX=predsX, motion_seq=motion_seq, batch=batch)
+    _compute_input_drift_metrics(
+        self,
+        result,
+        cfg,
+        seqs,
+        period_seq_pred=period_seq_pred,
+    )
+    state = _compute_contact_and_angvel_metrics(
+        self,
+        result,
+        cfg,
+        seqs,
+        predY=predY,
+        gtY=gtY,
+        period_seq_pred=period_seq_pred,
+        contacts_seq=contacts_seq,
+        angvel_seq=angvel_seq,
+        pose_hist_seq=pose_hist_seq,
+    )
+    _compute_keybone_metrics(self, result, cfg, state)
+
+    if state.w_gt is not None and seqs.gtX_raw_full is not None and isinstance(cfg.angvel_slice, slice):
         try:
-            angvel_data = gtX_raw_full[:, :w_gt.shape[1]+1, angvel_slice]
-            J_ang = (angvel_slice.stop - angvel_slice.start) // 3
-            if J_ang == w_gt.shape[2]:
-                angvel_data = angvel_data[:, 1:w_gt.shape[1]+1].reshape(w_gt.shape[0], w_gt.shape[1], J_ang, 3)
-                diff_gt = (w_gt - angvel_data).abs()
+            angvel_data = seqs.gtX_raw_full[:, :state.w_gt.shape[1] + 1, cfg.angvel_slice]
+            J_ang = (cfg.angvel_slice.stop - cfg.angvel_slice.start) // 3
+            if J_ang == state.w_gt.shape[2]:
+                angvel_data = angvel_data[:, 1:state.w_gt.shape[1] + 1].reshape(
+                    state.w_gt.shape[0], state.w_gt.shape[1], J_ang, 3
+                )
+                diff_gt = (state.w_gt - angvel_data).abs()
                 result['AngVelGTReconMAE'] = float(diff_gt.mean().item())
-                dot_gt = (w_gt * angvel_data).sum(dim=-1)
-                norm_gt = w_gt.norm(dim=-1) * angvel_data.norm(dim=-1)
+                dot_gt = (state.w_gt * angvel_data).sum(dim=-1)
+                norm_gt = state.w_gt.norm(dim=-1) * angvel_data.norm(dim=-1)
                 mask_gt = norm_gt > 1e-6
                 if mask_gt.any():
-                    ang_dir = torch.acos(torch.clamp(dot_gt[mask_gt] / norm_gt[mask_gt], -1.0, 1.0)) * (180.0 / math.pi)
+                    ang_dir = torch.acos(torch.clamp(dot_gt[mask_gt] / norm_gt[mask_gt], -1.0, 1.0)) * cfg.deg
                     result['AngVelGTReconDirDeg'] = float(ang_dir.mean().item())
-        except Exception:
-            pass
+        except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+            _phasec_warn_once(
+                "diag/angvel_gt_recon",
+                "failed to compute AngVelGTRecon diagnostics",
+                exc,
+            )
 
-    if w_pred is not None:
-        contact_pred = (w_pred.norm(dim=-1) < contact_threshold).float()
+    if state.w_pred is not None:
+        contact_pred = (state.w_pred.norm(dim=-1) < cfg.contact_threshold).float()
         result['FootContact'] = float(contact_pred.mean().item())
-
     return result
 
-def train_entry():
-    global GLOBAL_ARGS
-    import argparse, warnings, os, glob, time, math, json, ast
-    from pathlib import Path
-    import torch
-    from torch.utils.data import DataLoader
-    # ---- Slice helpers (inserted) ----
+TRAIN_ENTRY_CONFIG_META_KEYS = {'dataset_profile', 'strategy_meta'}
+
+
+@dataclass(frozen=True)
+class TrainerRuntimeConfig:
+    norm_template_path: Optional[str]
+    bundle_json_path: Optional[str]
+    out_dir: str
+    direct_pose_grad_monitor_enable: bool
+    direct_pose_grad_ratio_gate: float
+    full_config: Dict[str, Any]
+    pose_hist_len: int
+    pose_hist_dim: int
+    pose_hist_scales: Optional[torch.Tensor]
+    pose_hist_mu: Optional[torch.Tensor]
+    pose_hist_std: Optional[torch.Tensor]
+    foot_contact_threshold: float
+    bone_hz: float
+    fps: float
+    trainbase_contacts_source: str
+    trainbase_contacts_pretrain_clamp: float
+    trainbase_contacts_pretrain_affine_stats: Optional[str]
+    trainbase_contacts_pretrain_affine: Optional[Dict[str, Any]]
+    contact_meas_gate_by_hit_override: Optional[bool]
+    contact_meas_ground_z_mode: str
+    contact_meas_ground_z_beta: float
+    contact_meas_ground_z_window: int
+    contact_meas_ground_z_quantile: float
+    contact_meas_ground_z_max_up_m: float
+    contact_meas_ground_z_max_down_m: float
+    diag_topk: int
+    diag_thr: float
+    yaw_forward_axis: int
+    yaw_forward_axis_offset: float
+    eval_angvel_dir_percentile: float
+    diag_input_stats: bool
+    val_mode: str
+    no_monitor: bool
+    monitor_batches: int
+    teacher_eval_max_batches: Optional[int]
+    force_valfree_eval: bool
+    eval_settings: FreeRunSettings
+    ss_chunk_len: int
+    tf_mode: str
+    tf_warmup_epochs: int
+    tf_start_epoch: int
+    tf_end_epoch: int
+    tf_max: float
+    tf_min: float
+    history_debug_steps: int
+    history_dropout_prob: float
+    history_dropout_prob_min: float
+    history_dropout_prob_max: float
+    freerun_stage_schedule: list[Any]
+    adaptive_loss_module: Any
+    hyperparam_scheduler: Any
+    freerun_debug_path: Optional[str]
+    enable_grad_connection_test: bool
+    current_run_name: str
+
+
+def _load_train_entry_config_defaults(config_path: Optional[str], parser: argparse.ArgumentParser) -> Dict[str, Any]:
+    if not config_path:
+        return {}
+    cfg_path = os.path.expanduser(config_path)
+    if not os.path.isfile(cfg_path):
+        parser.error(f"[config_json] 文件不存在: {cfg_path}")
+    with open(cfg_path, 'r', encoding='utf-8') as f:
+        payload = json.load(f)
+    if not isinstance(payload, Mapping):
+        parser.error(f"[config_json] 根对象必须是 JSON dict，当前类型 {type(payload).__name__}")
+    valid_dests = {action.dest for action in parser._actions if action.dest and action.dest != 'help'}
+    unknown_keys = sorted(k for k in payload.keys() if k not in valid_dests and k not in TRAIN_ENTRY_CONFIG_META_KEYS)
+    legacy_unknown = [k for k in unknown_keys if k in LEGACY_LOSS_TOPLEVEL_KEYS]
+    if legacy_unknown:
+        parser.error(_legacy_loss_keys_msg(legacy_unknown, context='config_json(top-level)'))
+    removed_phase_reset = [k for k in unknown_keys if k in REMOVED_TRAINBASE_PHASE_RESET_KEYS]
+    if removed_phase_reset:
+        parser.error(_removed_trainbase_phase_reset_msg(removed_phase_reset, context='config_json(top-level)'))
+    if unknown_keys:
+        parser.error(f"[config_json] 存在未识别字段: {', '.join(unknown_keys)}")
+    try:
+        _assert_no_legacy_loss_keys_in_schedule(
+            payload.get('freerun_stage_schedule'),
+            context='config_json.freerun_stage_schedule',
+        )
+        _assert_no_removed_trainbase_stage_keys(
+            payload.get('freerun_stage_schedule'),
+            context='config_json.freerun_stage_schedule',
+        )
+    except ValueError as err:
+        parser.error(str(err))
+    print(f"[config_json] Loaded defaults from {cfg_path} ({len(payload)} keys)")
+    return dict(payload)
+
+
+def _apply_train_entry_config_overrides(
+    namespace: argparse.Namespace,
+    overrides: Optional[Sequence[str]],
+    parser: argparse.ArgumentParser,
+) -> None:
+    if not overrides:
+        return
+
+    def _parse_literal(raw: str):
+        txt = raw.strip()
+        if not txt:
+            return txt
+        try:
+            return ast.literal_eval(txt)
+        except Exception:
+            lowered = txt.lower()
+            if lowered == 'none':
+                return None
+            return txt
+
+    applied: Dict[str, Any] = {}
+    for entry in overrides:
+        if not entry:
+            continue
+        if '=' not in entry:
+            parser.error(f"[config_override] 期望 KEY=VALUE，实际收到: {entry}")
+        key, value_expr = entry.split('=', 1)
+        key = key.strip()
+        if not key:
+            parser.error('[config_override] 键名不能为空')
+        if key in REMOVED_TRAINBASE_PHASE_RESET_KEYS:
+            parser.error(_removed_trainbase_phase_reset_msg([key], context='config_override'))
+        if not hasattr(namespace, key):
+            parser.error(f"[config_override] 未知键名: {key}")
+        new_value = _parse_literal(value_expr)
+        setattr(namespace, key, new_value)
+        applied[key] = new_value
+    if applied:
+        formatted = ', '.join(f"{k}={applied[k]}" for k in sorted(applied))
+        print(f"[config_override] Applied: {formatted}")
+
+
+def _build_train_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
     config_parser = argparse.ArgumentParser(add_help=False)
     config_parser.add_argument(
         '--config_json',
@@ -5071,71 +5649,6 @@ def train_entry():
         help='JSON 配置文件路径。键名需与 CLI 参数一致，并作为默认值参与解析。',
     )
 
-    config_args, remaining_argv = config_parser.parse_known_args()
-
-    META_KEYS = {'dataset_profile', 'strategy_meta'}
-
-    def _load_config_defaults(config_path: Optional[str], parser: argparse.ArgumentParser) -> Dict[str, Any]:
-        if not config_path:
-            return {}
-        cfg_path = os.path.expanduser(config_path)
-        if not os.path.isfile(cfg_path):
-            parser.error(f"[config_json] 文件不存在: {cfg_path}")
-        with open(cfg_path, 'r', encoding='utf-8') as f:
-            payload = json.load(f)
-        if not isinstance(payload, Mapping):
-            parser.error(f"[config_json] 根对象必须是 JSON dict，当前类型 {type(payload).__name__}")
-        valid_dests = {action.dest for action in parser._actions if action.dest and action.dest != 'help'}
-        unknown_keys = sorted(k for k in payload.keys() if k not in valid_dests and k not in META_KEYS)
-        legacy_unknown = [k for k in unknown_keys if k in LEGACY_LOSS_TOPLEVEL_KEYS]
-        if legacy_unknown:
-            parser.error(_legacy_loss_keys_msg(legacy_unknown, context="config_json(top-level)"))
-        if unknown_keys:
-            parser.error(f"[config_json] 存在未识别字段: {', '.join(unknown_keys)}")
-        try:
-            _assert_no_legacy_loss_keys_in_schedule(
-                payload.get("freerun_stage_schedule"),
-                context="config_json.freerun_stage_schedule",
-            )
-        except ValueError as err:
-            parser.error(str(err))
-        print(f"[config_json] Loaded defaults from {cfg_path} ({len(payload)} keys)")
-        return dict(payload)
-
-    def _apply_config_overrides(namespace: argparse.Namespace, overrides: Optional[Sequence[str]], parser: argparse.ArgumentParser) -> None:
-        if not overrides:
-            return
-
-        def _parse_literal(raw: str):
-            txt = raw.strip()
-            if not txt:
-                return txt
-            try:
-                return ast.literal_eval(txt)
-            except Exception:
-                lowered = txt.lower()
-                if lowered == 'none':
-                    return None
-                return txt
-
-        applied: Dict[str, Any] = {}
-        for entry in overrides:
-            if not entry:
-                continue
-            if '=' not in entry:
-                parser.error(f"[config_override] 期望 KEY=VALUE，实际收到: {entry}")
-            key, value_expr = entry.split('=', 1)
-            key = key.strip()
-            if not key:
-                parser.error('[config_override] 键名不能为空')
-            if not hasattr(namespace, key):
-                parser.error(f"[config_override] 未知键名: {key}")
-            new_value = _parse_literal(value_expr)
-            setattr(namespace, key, new_value)
-            applied[key] = new_value
-        if applied:
-            formatted = ', '.join(f"{k}={applied[k]}" for k in sorted(applied))
-            print(f"[config_override] Applied: {formatted}")
 
     p = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter, parents=[config_parser])
     p.add_argument('--val_mode', type=str, default='online', choices=['online','none'])
@@ -5179,34 +5692,8 @@ def train_entry():
     p.add_argument('--tf_end_epoch', type=int, default=10)
     p.add_argument('--tf_max', type=float, default=1.0)
     p.add_argument('--tf_min', type=float, default=0.1)
-    p.add_argument('--freerun_horizon', type=int, default=0,
-                   help='>0 时，在每个 batch 内追加该长度的自由滚动序列并复用原 loss。')
-    p.add_argument('--freerun_weight', type=float, default=0.1,
-                   help='短 horizon 自由滚动 loss 的权重。')
-    p.add_argument('--freerun_weight_init', type=float, default=None,
-                   help='自由滚动 loss 的初始权重（未指定则按最终权重的 20%% 推断，并在 ramp_epochs 内过渡）。')
-    p.add_argument('--freerun_horizon_min', type=int, default=6,
-                   help='自由滚动窗口的最小 horizon（默认 6，对应 100ms 左右）。')
-    p.add_argument('--freerun_init_horizon', type=int, default=None,
-                   help='训练早期的初始 horizon，上限不超过 --freerun_horizon。未指定时自动取约 70%% 的最终 horizon。')
-    p.add_argument('--freerun_horizon_ramp_epochs', type=int, default=5,
-                   help='多少个 epoch 内将 freerun horizon 从初始值平滑提升到 --freerun_horizon。')
-    p.add_argument('--freerun_weight_mode', type=str, default='epoch_linear', choices=['constant', 'epoch_linear'],
-                   help='自由滚动 loss 的权重调度方式：常量或按 epoch 线性增权。')
-    p.add_argument('--freerun_weight_ramp_epochs', type=int, default=5,
-                   help='当 weight_mode=epoch_linear 时，需要多少个 epoch 将权重升至 freerun_weight。')
-    p.add_argument('--freerun_grad_log', action='store_true',
-                   help='启用 freerun 梯度日志，定期打印 step0 vs stepH 的 grad norm。')
-    p.add_argument('--freerun_grad_log_interval', type=int, default=50,
-                   help='启用梯度日志时，每隔多少个 batch 采样一次。')
-    p.add_argument('--freerun_grad_ratio_alert', type=float, default=0.01,
-                   help='若 stepH/step0 的梯度范数比低于该阈值则打印告警。')
-    p.add_argument('--freerun_debug_steps', type=int, default=0,
-                   help='>0 时，在 freerun 评估中打印前 N 个自回归步的 yaw/速度诊断')
     p.add_argument('--history_debug_steps', type=int, default=0,
                    help='>1 时，在训练批次中额外运行 train_free rollout 诊断历史漂移步数')
-    p.add_argument('--  ', type=int, default=0,
-                   help='>0 时启用 adaptive history 模块，并指定推理期固定历史帧数')
     p.add_argument('--history_adaptive_max_frames', type=int, default=None,
                    help='训练期允许的最大历史帧数（默认使用 norm_template 中的 pose_hist_len）')
     p.add_argument('--history_adaptive_hidden', type=int, default=256,
@@ -5220,15 +5707,7 @@ def train_entry():
     p.add_argument('--history_use_trend_features', action='store_true',
                    help='在 adaptive history 中显式注入历史 drift/趋势特征。')
     p.add_argument('--freerun_stage_schedule', type=str, default=None,
-                   help='分阶段调度（freerun/tf/损失等）的 JSON/字符串配置。')
-    p.add_argument('--teacher_rot_noise_deg', type=float, default=0.0,
-                   help='Teacher 阶段对上一帧 rot6d 注入的最大扰动角度（度）。0 = 不扰动。')
-    p.add_argument('--teacher_rot_noise_prob', type=float, default=0.0,
-                   help='每帧被注入 rot6d 扰动的概率。')
-    p.add_argument('--input_step_noise_prob', type=float, default=0.3,
-                   help='mixed/train_free 模式下，每个时间步注入自回归噪声的概率。')
-    p.add_argument('--input_noise_deg_mix', type=str, default=None,
-                   help='重尾噪声配置（JSON/List），格式为 [{"prob":0.8,"min":3,"max":8}, ...]。')
+                   help='分阶段调度（TF/LR/history/direct-pose trainability 等）的 JSON/字符串配置。')
     p.add_argument('--ss_chunk_len', type=int, default=1,
                    help='scheduled sampling 的 chunk 长度（>1 启用 sticky 采样：每 chunk 采一次 use_gt）。')
     p.add_argument('--tf_warmup_steps', type=int, default=5000)
@@ -5249,6 +5728,25 @@ def train_entry():
     # ---- Contact plan anchor (independent) ----
     p.add_argument('--contact_plan_enable', action='store_true', default=False,
                    help='启用 cond-only GRU contacts_plan（作为独立锚点）')
+    p.add_argument(
+        '--trainbase_contacts_source',
+        type=str,
+        default='auto',
+        choices=('auto', 'whitebox', 'pretrain_contact'),
+        help='Basetrain rollout contacts source：auto 优先接 frozen pretrain_contact，缺失时回退 whitebox。',
+    )
+    p.add_argument(
+        '--trainbase_contacts_pretrain_clamp',
+        type=float,
+        default=1.0,
+        help='当 basetrain rollout 使用 pretrain_contact 时，对 frozen encoder 输入做 [-k,+k] clamp。',
+    )
+    p.add_argument(
+        '--trainbase_contacts_pretrain_affine_stats',
+        type=str,
+        default=None,
+        help='可选的 pretrain_contact affine stats JSON / JSON-string；格式与 posttrain affine_stats.json 一致。',
+    )
     p.add_argument('--contact_plan_hidden', type=int, default=64,
                    help='contacts_plan GRU hidden dim')
     p.add_argument('--contact_plan_dropout', type=float, default=0.0,
@@ -5294,26 +5792,6 @@ def train_entry():
                    help='每步相位推进 Δφ 的最大幅度（rad/step，tanh 缩放）')
     p.add_argument('--contact_phase_state_delta_init', type=float, default=(6.283185307179586 / 80.0),
                    help='Δφ 初始 bias（rad/step；默认约等于 80 帧一周期）')
-    p.add_argument(
-        '--contact_phase_state_event_kind',
-        type=str,
-        default='touchdown',
-        choices=['touchdown', 'liftoff', 'both', 'none'],
-        help='用 contacts_meas 的阈值过零事件对 phase 做 reset 的类型',
-    )
-    p.add_argument('--contact_phase_state_event_thr', type=float, default=0.5,
-                   help='phase event reset 的阈值（contacts_meas in [0,1]）')
-    p.add_argument('--contact_phase_state_event_hyst', type=float, default=0.0,
-                   help='phase event reset hysteresis（去抖动）：touchdown/liftoff 触发需要 prev_meas 远离阈值 (thr±hyst)，0=关闭')
-    p.add_argument('--contact_phase_state_event_min_interval', type=int, default=0,
-                   help='phase event reset 最小间隔（frames，左右脚独立计时），0=关闭')
-    p.add_argument(
-        '--phase_reset_source',
-        type=str,
-        default='contacts_meas',
-        choices=['contacts_meas', 'td_hazard', 'none'],
-        help='phase_z reset 信号源：contacts_meas(阈值过零；易受 OOD jitter/flip 影响) | td_hazard(integrate-to-1 clock-anchor) | none(不 reset)',
-    )
     # ---- Event-Clock v3 (contact_plan residual correction) ----
     p.add_argument('--use_event_clock', action='store_true', default=False,
                    help='启用 Event-Clock v3：在 contact_plan GRU loop 内做 gated residual correction')
@@ -5353,53 +5831,44 @@ def train_entry():
                    help='D2: 训练时对 direct 输入的 contacts_plan 执行整向量 drop(置0) 概率（防止 plan 成为 shortcut）')
     p.add_argument('--direct_pose_split_enable', action='store_true', default=False,
                    help='启用 direct_pose 输出分头（shared trunk + leg/non-leg split output heads）')
-    p.add_argument(
-        '--direct_pose_meas_force_zero',
-        action='store_true',
-        default=False,
-        help='Ablation: force direct head to ignore contacts_meas (concat->zeros, mode_select->uniform).',
-    )
-    p.add_argument(
-        '--direct_pose_meas_detach',
-        action='store_true',
-        default=False,
-        help='Ablation: stop-grad from direct head into contacts_meas (keeps meas values but blocks gradients).',
-    )
+    p.add_argument('--direct_pose_arm_split_enable', action='store_true', default=False,
+                   help='启用 direct_pose 非腿分支的 arm/else 再分头（3-way: leg/arm/else）')
+    p.add_argument('--direct_pose_arm_bones', type=str, default=None,
+                   help='arm 分支骨骼 CSV；未提供且启用 arm split 时默认使用 Stage6 3-way armchain 口径')
+    p.add_argument('--direct_pose_nonleg_proj_dim', type=int, default=0,
+                   help='non-leg/arm/else 分支投影维度；0=直接从 trunk readout')
     p.add_argument('--w_direct_pose', type=float, default=0.0,
                    help='direct pose 监督权重（geodesic vs GT pose；0=关闭）')
-    # ---- Meas head (pose-derived contacts; no physics) ----
-    p.add_argument('--contact_meas_enable', action='store_true', default=False,
-                   help='启用 contacts_meas head（v1: 从 state_t 的下肢 pose6d + 下肢 angvel 推导 soft contact；无 pose_hist）')
-    p.add_argument('--contact_meas_hidden', type=int, default=64,
-                   help='contacts_meas MLP hidden dim')
-    p.add_argument('--contact_meas_dropout', type=float, default=0.0,
-                   help='contacts_meas head dropout')
-    p.add_argument('--w_contact_meas', type=float, default=0.0,
-                   help='contacts_meas 监督权重（小权重对齐 GT soft_contacts；0=关闭）')
-    p.add_argument(
-        '--train_only_contact_meas_head',
-        action='store_true',
-        default=False,
-        help='Ablation: freeze all parameters except contact_meas_head (use with --w_contact_meas>0).',
-    )
-    # ---- TD hazard head (pose-derived touchdown hazard; clock anchor reset) ----
-    p.add_argument(
-        '--contact_td_hazard_enable',
-        action='store_true',
-        default=False,
-        help='启用 contacts_td_hazard head（预测 touchdown hazard mass；用于 integrate-to-1 phase reset anchor）',
-    )
-    p.add_argument('--contact_td_hazard_hidden', type=int, default=64, help='contacts_td_hazard MLP hidden dim')
-    p.add_argument('--contact_td_hazard_dropout', type=float, default=0.0, help='contacts_td_hazard head dropout')
-    p.add_argument('--w_contact_td_hazard_bce', type=float, default=0.0,
-                   help='contacts_td_hazard 监督权重（BCE vs ttc_td_events；0=关闭）')
-    p.add_argument('--w_contact_td_hazard_mass', type=float, default=0.0,
-                   help='contacts_td_hazard per-cycle mass matching 权重（(sum p - sum events)^2；0=关闭）')
-    p.add_argument('--w_contact_td_hazard_unimodal', type=float, default=0.0,
-                   help='contacts_td_hazard unimodal penalty 权重（抑制多峰；0=关闭）')
+    p.add_argument('--direct_pose_loss_leg_split', action='store_true', default=False,
+                   help='direct loss 按 leg/non-leg 拆分计算 base objective（Stage6 parity）')
+    p.add_argument('--direct_pose_loss_arm_else_balance_enable', action='store_true', default=False,
+                   help='启用 arm/else 组均衡 non-leg objective（按 group mean 重构 non-leg base）')
+    p.add_argument('--direct_pose_loss_arm_weight', type=float, default=1.0,
+                   help='arm/else rebalance 中 arm group 权重')
+    p.add_argument('--direct_pose_loss_else_weight', type=float, default=1.0,
+                   help='arm/else rebalance 中 else group 权重')
+    p.add_argument('--direct_pose_grad_monitor_enable', action='store_true', default=False,
+                   help='记录 direct trunk/leg/arm/else 输出头梯度范数与比值')
+    p.add_argument('--direct_pose_grad_ratio_gate', type=float, default=0.35,
+                   help='direct grad ratio 诊断阈值（nonleg/leg；仅日志告警）')
+    p.add_argument('--direct_pose_loss_group_norm_enable', action='store_true', default=False,
+                   help='启用 direct leg/non-leg group norm objective（Stage6 parity）')
+    p.add_argument('--direct_pose_loss_group_norm_w_leg', type=float, default=1.0,
+                   help='group norm objective 中 leg ratio 权重')
+    p.add_argument('--direct_pose_loss_group_norm_w_nonleg', type=float, default=1.0,
+                   help='group norm objective 中 non-leg ratio 权重')
+    p.add_argument('--direct_pose_loss_group_norm_ema_beta', type=float, default=0.9,
+                   help='group norm EMA beta')
+    p.add_argument('--direct_pose_loss_group_norm_ratio_min', type=float, default=0.2,
+                   help='group norm ratio clamp 最小值')
+    p.add_argument('--direct_pose_loss_group_norm_ratio_max', type=float, default=5.0,
+                   help='group norm ratio clamp 最大值')
+    p.add_argument('--direct_pose_loss_group_norm_eps', type=float, default=1e-6,
+                   help='group norm 数值稳定 epsilon')
     # ---- White-box contacts_meas knobs (P2 ground_z stability / ablations) ----
-    # NOTE: when contact_plan_enable=True, training/rollout will compute contacts_in_t via _contact_meas_whitebox,
-    # which uses these knobs (and feeds it to the model as meas override).
+    # NOTE: when contact_plan_enable=True, training/rollout will resolve contacts_in_t from
+    # trainbase_contacts_source=auto|whitebox|pretrain_contact; whitebox knobs below remain active
+    # for fallback / ablation when the resolved source is whitebox.
     p.add_argument(
         '--contact_meas_gate_by_hit',
         type=str,
@@ -5425,13 +5894,6 @@ def train_entry():
     p.add_argument('--contact_meas_ground_z_slew_down_cm', type=float, default=0.0,
                    help='Max downward change (cm/step) applied to ground_z after the chosen mode (0 disables).')
     # ---- (Reserved) post-train corrector knobs live in dedicated scripts ----
-    # ---- Optional mismatch enrichment (meas input corruption) ----
-    p.add_argument('--meas_pose_hist_drop_prob', type=float, default=0.0,
-                   help='mixed/train_free 下对 pose_hist 输入整向量 dropout 概率（增强 plan!=meas）')
-    p.add_argument('--meas_pose_hist_delay_prob', type=float, default=0.0,
-                   help='mixed/train_free 下 pose_hist 输入 1-step delay 概率（增强 plan!=meas）')
-    p.add_argument('--meas_pose_hist_noise_std', type=float, default=0.0,
-                   help='mixed/train_free 下给 pose_hist 输入加高斯噪声 std（增强 plan!=meas）')
     p.add_argument('--adaptive_bone_weights', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
                    help='是否根据骨骼运动幅度自适应权重（默认开启）。')
     # unified bone weight (new)
@@ -5475,28 +5937,43 @@ def train_entry():
     p.add_argument('--freerun_debug_path', type=str, default=None, help='若提供，则将首个 freerun batch 的诊断数据保存至该路径')
     p.add_argument('--no_grad_conn_test', action='store_true', help='跳过训练前的梯度连通性自检')
 
+    return config_parser, p
+
+def _parse_train_entry_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    config_parser, parser = _build_train_parser()
+    config_args, remaining_argv = config_parser.parse_known_args(argv)
+
     required_actions = []
-    for action in p._actions:
+    for action in parser._actions:
         if getattr(action, 'required', False):
             required_actions.append(action)
             action.required = False
 
-    config_defaults = _load_config_defaults(config_args.config_json, p)
+    config_defaults = _load_train_entry_config_defaults(config_args.config_json, parser)
     legacy_cli_hits: list[str] = []
     for token in remaining_argv:
         for flag, key in LEGACY_LOSS_CLI_FLAGS.items():
-            if token == flag or token.startswith(f"{flag}="):
+            if token == flag or token.startswith(f'{flag}='):
                 legacy_cli_hits.append(key)
     if legacy_cli_hits:
-        p.error(_legacy_loss_keys_msg(legacy_cli_hits, context="CLI args"))
+        parser.error(_legacy_loss_keys_msg(legacy_cli_hits, context='CLI args'))
+
+    removed_phase_reset_cli_hits: list[str] = []
+    for token in remaining_argv:
+        for flag, key in REMOVED_TRAINBASE_PHASE_RESET_CLI_FLAGS.items():
+            if token == flag or token.startswith(f'{flag}='):
+                removed_phase_reset_cli_hits.append(key)
+    if removed_phase_reset_cli_hits:
+        parser.error(_removed_trainbase_phase_reset_msg(removed_phase_reset_cli_hits, context='CLI args'))
+
     namespace = argparse.Namespace(**config_defaults)
     namespace.config_json = config_args.config_json
-    GLOBAL_ARGS = p.parse_args(remaining_argv, namespace=namespace)
-    set_global_args(GLOBAL_ARGS)
-    _apply_config_overrides(GLOBAL_ARGS, getattr(GLOBAL_ARGS, 'config_override', None), p)
-    GLOBAL_ARGS.config_override = None
+    parsed_args = parser.parse_args(remaining_argv, namespace=namespace)
+    set_global_args(parsed_args)
+    _apply_train_entry_config_overrides(parsed_args, getattr(parsed_args, 'config_override', None), parser)
+    parsed_args.config_override = None
 
-    missing_required = [act for act in required_actions if getattr(GLOBAL_ARGS, act.dest, None) is None]
+    missing_required = [act for act in required_actions if getattr(parsed_args, act.dest, None) is None]
     if missing_required:
         missing_opts = []
         for act in missing_required:
@@ -5504,20 +5981,251 @@ def train_entry():
                 missing_opts.append(act.option_strings[-1])
             else:
                 missing_opts.append(act.dest)
-        p.error(f"missing required arguments: {', '.join(missing_opts)}")
+        parser.error(f"missing required arguments: {', '.join(missing_opts)}")
+    return parsed_args
 
-    train_paths = expand_paths_from_specs(_arg('train_files', ''))
+
+def _resolve_trainer_runtime_config(
+    args: argparse.Namespace,
+    trainer: Trainer,
+    ds_train: Any,
+    norm_template_path: Optional[Path],
+    bundle_json_path: Optional[str],
+    out_dir: Path,
+    resolved_config: Dict[str, Any],
+    run_name: str,
+) -> TrainerRuntimeConfig:
+    pose_norm = getattr(ds_train, 'pose_hist_norm', None)
+    pose_hist_scales = None
+    pose_hist_mu = None
+    pose_hist_std = None
+    if pose_norm is not None:
+        pose_hist_scales = torch.as_tensor(pose_norm.scales, dtype=torch.float32)
+        pose_hist_mu = (
+            torch.as_tensor(pose_norm.mu, dtype=torch.float32)
+            if getattr(pose_norm, 'mu', None) is not None
+            else None
+        )
+        pose_hist_std = (
+            torch.as_tensor(pose_norm.std, dtype=torch.float32)
+            if getattr(pose_norm, 'std', None) is not None
+            else None
+        )
+
+    try:
+        up_cm = float(args.contact_meas_ground_z_slew_up_cm or 0.0)
+    except Exception:
+        up_cm = 0.0
+    try:
+        down_cm = float(args.contact_meas_ground_z_slew_down_cm or 0.0)
+    except Exception:
+        down_cm = 0.0
+
+    forward_axis_override = args.yaw_forward_axis
+    if forward_axis_override is not None:
+        yaw_forward_axis = int(forward_axis_override)
+    elif getattr(ds_train, 'forward_axis', None) is not None:
+        yaw_forward_axis = int(ds_train.forward_axis)
+    else:
+        yaw_forward_axis = int(getattr(trainer, 'yaw_forward_axis', 2))
+
+    offset_override = args.yaw_forward_offset
+    if offset_override is not None:
+        yaw_forward_axis_offset = float(_math.radians(float(offset_override)))
+    else:
+        yaw_forward_axis_offset = float(getattr(ds_train, 'forward_axis_offset', 0.0) or 0.0)
+
+    monitor_batches = int(args.monitor_batches or 8)
+    try:
+        freerun_stage_schedule = _parse_stage_schedule(args.freerun_stage_schedule)
+    except Exception as exc:
+        freerun_stage_schedule = []
+        print(
+            f"[StageSchedule][WARN] failed to parse freerun_stage_schedule ({exc}); fallback to empty schedule."
+        )
+    _assert_no_legacy_loss_keys_in_schedule(
+        freerun_stage_schedule,
+        context='freerun_stage_schedule',
+    )
+    _assert_no_removed_trainbase_stage_keys(
+        freerun_stage_schedule,
+        context='freerun_stage_schedule',
+    )
+
+    gate_raw = getattr(args, 'contact_meas_gate_by_hit', 'auto')
+    gate_value = str(gate_raw if gate_raw is not None else 'auto').strip().lower()
+    if gate_value in ('true', '1', 'yes', 'y'):
+        contact_meas_gate_by_hit_override: Optional[bool] = True
+    elif gate_value in ('false', '0', 'no', 'n'):
+        contact_meas_gate_by_hit_override = False
+    else:
+        contact_meas_gate_by_hit_override = None
+
+    trainbase_contacts_source = str(
+        getattr(args, '_trainbase_contacts_source_resolved', getattr(args, 'trainbase_contacts_source', 'auto')) or 'auto'
+    ).strip().lower()
+    if trainbase_contacts_source not in ('whitebox', 'pretrain_contact'):
+        trainbase_contacts_source = 'whitebox'
+    try:
+        trainbase_contacts_pretrain_clamp = float(getattr(args, 'trainbase_contacts_pretrain_clamp', 1.0) or 0.0)
+    except Exception:
+        trainbase_contacts_pretrain_clamp = 1.0
+    if (not _math.isfinite(float(trainbase_contacts_pretrain_clamp))) or float(trainbase_contacts_pretrain_clamp) < 0.0:
+        trainbase_contacts_pretrain_clamp = 1.0
+    trainbase_contacts_pretrain_affine_stats = getattr(args, 'trainbase_contacts_pretrain_affine_stats', None)
+    trainbase_contacts_pretrain_affine = _parse_pretrain_contact_affine_spec(trainbase_contacts_pretrain_affine_stats)
+    if trainbase_contacts_pretrain_affine_stats not in (None, '') and trainbase_contacts_pretrain_affine is None:
+        print('[MPL][WARN] failed to parse --trainbase_contacts_pretrain_affine_stats; continuing without affine calibration.')
+
+    return TrainerRuntimeConfig(
+        norm_template_path=str(norm_template_path) if norm_template_path else None,
+        bundle_json_path=bundle_json_path,
+        out_dir=str(out_dir),
+        direct_pose_grad_monitor_enable=bool(args.direct_pose_grad_monitor_enable),
+        direct_pose_grad_ratio_gate=float(args.direct_pose_grad_ratio_gate or 0.35),
+        full_config=resolved_config,
+        pose_hist_len=int(getattr(ds_train, 'pose_hist_len', 0) or 0),
+        pose_hist_dim=int(getattr(ds_train, 'pose_hist_dim', 0) or 0),
+        pose_hist_scales=pose_hist_scales,
+        pose_hist_mu=pose_hist_mu,
+        pose_hist_std=pose_hist_std,
+        foot_contact_threshold=float(args.foot_contact_threshold),
+        bone_hz=float(getattr(ds_train, 'fps', 60.0) or 60.0),
+        fps=float(getattr(ds_train, 'fps', 60.0) or 60.0),
+        trainbase_contacts_source=trainbase_contacts_source,
+        trainbase_contacts_pretrain_clamp=float(trainbase_contacts_pretrain_clamp),
+        trainbase_contacts_pretrain_affine_stats=(
+            str(trainbase_contacts_pretrain_affine_stats).strip()
+            if trainbase_contacts_pretrain_affine_stats not in (None, '')
+            else None
+        ),
+        trainbase_contacts_pretrain_affine=trainbase_contacts_pretrain_affine,
+        contact_meas_gate_by_hit_override=contact_meas_gate_by_hit_override,
+        contact_meas_ground_z_mode=str(getattr(args, 'contact_meas_ground_z_mode', 'window') or 'window').strip().lower(),
+        contact_meas_ground_z_beta=float(getattr(args, 'contact_meas_ground_z_beta', 0.05) or 0.05),
+        contact_meas_ground_z_window=int(getattr(args, 'contact_meas_ground_z_window', 5) or 5),
+        contact_meas_ground_z_quantile=float(getattr(args, 'contact_meas_ground_z_quantile', 0.2) or 0.2),
+        contact_meas_ground_z_max_up_m=max(0.0, up_cm) / 100.0,
+        contact_meas_ground_z_max_down_m=max(0.0, down_cm) / 100.0,
+        diag_topk=int(args.diag_topk or 8),
+        diag_thr=float(args.diag_thr or 8.0),
+        yaw_forward_axis=yaw_forward_axis,
+        yaw_forward_axis_offset=yaw_forward_axis_offset,
+        eval_angvel_dir_percentile=float(args.eval_angvel_dir_percentile),
+        diag_input_stats=bool(args.diag_input_stats),
+        val_mode=args.val_mode,
+        no_monitor=bool(args.no_monitor),
+        monitor_batches=monitor_batches,
+        teacher_eval_max_batches=args.teacher_eval_max_batches,
+        force_valfree_eval=bool(args.force_valfree_eval),
+        eval_settings=FreeRunSettings(
+            warmup_steps=int(args.eval_warmup or 0),
+            horizon=args.eval_horizon,
+            max_batches=monitor_batches,
+        ),
+        ss_chunk_len=int(getattr(args, 'ss_chunk_len', getattr(trainer, 'ss_chunk_len', 1)) or 1),
+        tf_mode=args.tf_mode,
+        tf_warmup_epochs=int(args.tf_warmup_epochs),
+        tf_start_epoch=int(args.tf_start_epoch),
+        tf_end_epoch=int(args.tf_end_epoch),
+        tf_max=float(args.tf_max),
+        tf_min=float(args.tf_min),
+        history_debug_steps=int(args.history_debug_steps or 0),
+        history_dropout_prob=float(args.history_dropout_prob or 0.0),
+        history_dropout_prob_min=0.05,
+        history_dropout_prob_max=0.30,
+        freerun_stage_schedule=freerun_stage_schedule,
+        adaptive_loss_module=None,
+        hyperparam_scheduler=None,
+        freerun_debug_path=args.freerun_debug_path,
+        enable_grad_connection_test=not bool(args.no_grad_conn_test),
+        current_run_name=run_name,
+    )
+
+
+def _apply_trainer_runtime_config(trainer: Trainer, runtime_cfg: TrainerRuntimeConfig) -> None:
+    trainer._norm_template_path = runtime_cfg.norm_template_path
+    trainer._bundle_json_path = runtime_cfg.bundle_json_path
+    trainer.out_dir = runtime_cfg.out_dir
+    trainer.direct_pose_grad_monitor_enable = runtime_cfg.direct_pose_grad_monitor_enable
+    trainer.direct_pose_grad_ratio_gate = runtime_cfg.direct_pose_grad_ratio_gate
+    trainer.full_config = runtime_cfg.full_config
+    trainer.pose_hist_len = runtime_cfg.pose_hist_len
+    trainer.pose_hist_dim = runtime_cfg.pose_hist_dim
+    trainer.pose_hist_scales = runtime_cfg.pose_hist_scales
+    trainer.pose_hist_mu = runtime_cfg.pose_hist_mu
+    trainer.pose_hist_std = runtime_cfg.pose_hist_std
+    trainer.foot_contact_threshold = runtime_cfg.foot_contact_threshold
+    trainer.bone_hz = runtime_cfg.bone_hz
+    trainer.fps = runtime_cfg.fps
+    trainer.trainbase_contacts_source = runtime_cfg.trainbase_contacts_source
+    trainer.trainbase_contacts_pretrain_clamp = runtime_cfg.trainbase_contacts_pretrain_clamp
+    trainer.trainbase_contacts_pretrain_affine_stats_spec = runtime_cfg.trainbase_contacts_pretrain_affine_stats
+    trainer.trainbase_contacts_pretrain_affine = runtime_cfg.trainbase_contacts_pretrain_affine
+    trainer.contact_meas_gate_by_hit_override = runtime_cfg.contact_meas_gate_by_hit_override
+    trainer.contact_meas_ground_z_mode = runtime_cfg.contact_meas_ground_z_mode
+    trainer.contact_meas_ground_z_beta = runtime_cfg.contact_meas_ground_z_beta
+    trainer.contact_meas_ground_z_window = runtime_cfg.contact_meas_ground_z_window
+    trainer.contact_meas_ground_z_quantile = runtime_cfg.contact_meas_ground_z_quantile
+    trainer.contact_meas_ground_z_max_up_m = runtime_cfg.contact_meas_ground_z_max_up_m
+    trainer.contact_meas_ground_z_max_down_m = runtime_cfg.contact_meas_ground_z_max_down_m
+    safe_set_slice(trainer, 'rootvel_x_slice', parse_layout_entry(trainer._x_layout.get('RootVelocity'), 'RootVelocity'))
+    safe_set_slice(trainer, 'angvel_x_slice', parse_layout_entry(trainer._x_layout.get('BoneAngularVelocities'), 'BoneAngularVelocities'))
+    trainer.diag_topk = runtime_cfg.diag_topk
+    trainer.diag_thr = runtime_cfg.diag_thr
+    trainer.yaw_forward_axis = runtime_cfg.yaw_forward_axis
+    trainer.yaw_forward_axis_offset = runtime_cfg.yaw_forward_axis_offset
+    trainer.eval_angvel_dir_percentile = runtime_cfg.eval_angvel_dir_percentile
+    trainer.diag_input_stats = runtime_cfg.diag_input_stats
+    trainer.val_mode = runtime_cfg.val_mode
+    trainer.no_monitor = runtime_cfg.no_monitor
+    trainer.monitor_batches = runtime_cfg.monitor_batches
+    trainer.teacher_eval_max_batches = runtime_cfg.teacher_eval_max_batches
+    trainer.force_valfree_eval = runtime_cfg.force_valfree_eval
+    trainer.eval_settings = runtime_cfg.eval_settings
+    trainer.ss_chunk_len = runtime_cfg.ss_chunk_len
+    trainer.tf_mode = runtime_cfg.tf_mode
+    trainer.tf_warmup_epochs = runtime_cfg.tf_warmup_epochs
+    trainer.tf_start_epoch = runtime_cfg.tf_start_epoch
+    trainer.tf_end_epoch = runtime_cfg.tf_end_epoch
+    trainer.tf_max = runtime_cfg.tf_max
+    trainer.tf_min = runtime_cfg.tf_min
+    trainer.history_debug_steps = runtime_cfg.history_debug_steps
+    trainer.history_dropout_prob = runtime_cfg.history_dropout_prob
+    trainer.history_dropout_prob_min = runtime_cfg.history_dropout_prob_min
+    trainer.history_dropout_prob_max = runtime_cfg.history_dropout_prob_max
+    trainer.freerun_stage_schedule = runtime_cfg.freerun_stage_schedule
+    trainer.adaptive_loss_module = runtime_cfg.adaptive_loss_module
+    trainer.hyperparam_scheduler = runtime_cfg.hyperparam_scheduler
+    trainer.freerun_debug_path = runtime_cfg.freerun_debug_path
+    trainer.enable_grad_connection_test = runtime_cfg.enable_grad_connection_test
+    trainer._current_run_name = runtime_cfg.current_run_name
+
+
+def _build_train_components() -> Any:
+    global GLOBAL_ARGS
+
+    GLOBAL_ARGS = _parse_train_entry_args()
+    args = GLOBAL_ARGS
+
+    train_paths = expand_paths_from_specs(args.train_files)
     if not train_paths:
-        if GLOBAL_ARGS.data and os.path.isdir(GLOBAL_ARGS.data):
-            train_paths = sorted(glob.glob(os.path.join(GLOBAL_ARGS.data, '*.npz')))
+        if args.data and os.path.isdir(args.data):
+            train_paths = sorted(glob.glob(os.path.join(args.data, '*.npz')))
         else:
             raise FileNotFoundError('No training files. Provide --train_files or --data with .npz')
-    run_name = _arg('run_name') or time.strftime('%Y%m%d-%H%M%S')
-    out_dir = Path(_arg('out', './runs')).expanduser() / run_name
+    run_name = args.run_name or time.strftime('%Y%m%d-%H%M%S')
+    out_dir = Path(args.out).expanduser() / run_name
     out_dir.mkdir(parents=True, exist_ok=True)
-    device = torch.device('mps') if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    device = (
+        torch.device('mps')
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+        else torch.device('cuda')
+        if torch.cuda.is_available()
+        else torch.device('cpu')
+    )
 
-    def _load_json(path_str: str, label: str):
+    def _load_json_spec(path_str: Optional[str], label: str) -> Any:
         if not path_str:
             return None
         path = Path(path_str).expanduser()
@@ -5533,15 +6241,23 @@ def train_entry():
             print(f"[Spec][WARN] failed to read {label} {path}: {err}")
             return None
 
-    norm_template_arg = _arg('norm_template')
+    norm_template_arg = args.norm_template
     norm_template_path = Path(norm_template_arg).expanduser() if norm_template_arg else None
-    norm_spec = _load_json(norm_template_arg, 'norm_template')
+    norm_spec = _load_json_spec(norm_template_arg, 'norm_template')
     if norm_spec is None:
         raise SystemExit(f"[FATAL] norm_template 缺失或无效，请确认路径：{norm_template_path}")
-    pretrain_template_arg = _arg('pretrain_template')
-    pretrain_spec = _load_json(pretrain_template_arg, 'pretrain_template')
+    pretrain_template_arg = args.pretrain_template
+    pretrain_spec = _load_json_spec(pretrain_template_arg, 'pretrain_template')
     if pretrain_spec is not None:
-        for key in ('MuAngVel', 'StdAngVel', 'tanh_scales_angvel', 'pose_hist_len', 'tanh_scales_pose_hist', 'MuPoseHist', 'StdPoseHist'):
+        for key in (
+            'MuAngVel',
+            'StdAngVel',
+            'tanh_scales_angvel',
+            'pose_hist_len',
+            'tanh_scales_pose_hist',
+            'MuPoseHist',
+            'StdPoseHist',
+        ):
             if key in pretrain_spec and pretrain_spec[key] is not None:
                 norm_spec[key] = pretrain_spec[key]
     pose_hist_len = 0
@@ -5551,32 +6267,67 @@ def train_entry():
         except Exception:
             pose_hist_len = 0
 
-    ds_train = MotionEventDataset(
-        GLOBAL_ARGS.data,
-        seq_len=GLOBAL_ARGS.seq_len,
-        paths=train_paths,
-        pose_hist_len=pose_hist_len,
+    return SimpleNamespace(
+        args=args,
+        train_paths=train_paths,
+        run_name=run_name,
+        out_dir=out_dir,
+        device=device,
+        norm_template_path=norm_template_path,
         norm_spec=norm_spec,
+        pose_hist_len=pose_hist_len,
     )
-    ds_train = _maybe_optimize_dataset_index(ds_train, GLOBAL_ARGS)
+
+
+def _build_train_loaders(train_ctx: Any) -> Any:
+    from torch.utils.data import DataLoader
+
+    args = train_ctx.args
+    ds_train = MotionEventDataset(
+        args.data,
+        seq_len=args.seq_len,
+        paths=train_ctx.train_paths,
+        pose_hist_len=train_ctx.pose_hist_len,
+        norm_spec=train_ctx.norm_spec,
+    )
+    ds_train = _maybe_optimize_dataset_index(ds_train, args)
     ds_train.is_train = True
-    ds_train.yaw_aug_deg = float(_arg('yaw_aug_deg', 0.0))
-    ds_train.normalize_c = bool(_arg('normalize_c', False))
+    ds_train.yaw_aug_deg = float(args.yaw_aug_deg)
+    ds_train.normalize_c = bool(args.normalize_c)
     if not hasattr(ds_train, 'state_layout'):
         ds_train.state_layout = getattr(ds_train, 'state_layout', {}) or {}
-    pin = device.type == 'cuda'
-    lkw = dict(num_workers=_arg('num_workers', 0), pin_memory=pin, persistent_workers=_arg('num_workers', 0) > 0, **{'prefetch_factor': 2} if _arg('num_workers', 0) > 0 else {})
-    lkw['collate_fn'] = make_fixedlen_collate(_arg('seq_len', 120))
-    train_loader = DataLoader(ds_train, batch_size=_arg('batch', 32), shuffle=True, drop_last=True, **lkw)
-    Dx, Dy, Dc = (int(ds_train.Dx), int(ds_train.Dy), int(ds_train.Dc))
-    L = int(_arg('depth', 2))
-    H = int(_arg('width', 512))
-    K = int(_arg('context_len', 16))
-    print(f'[Export][Dims] Dx={Dx}, Dy={Dy}, Dc={Dc} | L={L}, H={H}, K={K}')
+    pin = train_ctx.device.type == 'cuda'
+    loader_kwargs = dict(
+        num_workers=args.num_workers,
+        pin_memory=pin,
+        persistent_workers=args.num_workers > 0,
+        **({'prefetch_factor': 2} if args.num_workers > 0 else {}),
+    )
+    loader_kwargs['collate_fn'] = make_fixedlen_collate(args.seq_len)
+    train_loader = DataLoader(ds_train, batch_size=args.batch, shuffle=True, drop_last=True, **loader_kwargs)
+    dx, dy, dc = int(ds_train.Dx), int(ds_train.Dy), int(ds_train.Dc)
+    print(f'[Export][Dims] Dx={dx}, Dy={dy}, Dc={dc} | L={int(args.depth)}, H={int(args.width)}, K={int(args.context_len)}')
+    return SimpleNamespace(
+        ds_train=ds_train,
+        train_loader=train_loader,
+        pin_memory=pin,
+        dx=dx,
+        dy=dy,
+        dc=dc,
+    )
+
+
+def _build_train_model(
+    train_ctx: Any,
+    train_data: Any,
+) -> Any:
+    args = train_ctx.args
+    ds_train = train_data.ds_train
+    device = train_ctx.device
 
     pose_hist_dim_raw = int(getattr(ds_train, 'pose_hist_dim', 0) or 0)
     pose_hist_len_raw = int(getattr(ds_train, 'pose_hist_len', 0) or 0)
-    history_export_frames = int(_arg('history_adaptive_export_frames', 0) or 0)
+    history_export_frames = int(getattr(args, 'history_adaptive_export_frames', 0) or 0)
     history_frame_dim = (
         pose_hist_dim_raw // pose_hist_len_raw
         if pose_hist_len_raw > 0 and pose_hist_dim_raw % pose_hist_len_raw == 0
@@ -5586,102 +6337,131 @@ def train_entry():
     if history_export_frames > 0 and history_frame_dim > 0:
         pose_hist_dim_model = history_export_frames * history_frame_dim
 
+    direct_pose_split_enable = bool(args.direct_pose_split_enable)
+    direct_pose_arm_split_enable = bool(args.direct_pose_arm_split_enable)
+    arm_bones_raw = getattr(args, 'direct_pose_arm_bones', None)
+    if not direct_pose_arm_split_enable:
+        if arm_bones_raw is None:
+            direct_pose_arm_bones_resolved = None
+        else:
+            arm_bones_txt = str(arm_bones_raw).strip()
+            direct_pose_arm_bones_resolved = arm_bones_txt or None
+    else:
+        if arm_bones_raw is None:
+            direct_pose_arm_bones_resolved = str(STAGE6_3WAY_ARMCHAIN_BONES_CSV)
+        else:
+            arm_bones_txt = str(arm_bones_raw).strip()
+            direct_pose_arm_bones_resolved = arm_bones_txt or str(STAGE6_3WAY_ARMCHAIN_BONES_CSV)
+    direct_pose_nonleg_proj_dim = int(args.direct_pose_nonleg_proj_dim or 0)
+
     model = EventMotionModel(
         in_state_dim=ds_train.Dx,
         out_motion_dim=ds_train.Dy,
         cond_dim=ds_train.Dc,
         period_dim=getattr(ds_train, 'period_dim', 0),
-        hidden_dim=_arg('width', 512),
-        num_layers=_arg('depth', 2),
-        num_heads=_arg('num_heads', 4),
-        dropout=_arg('dropout', 0.1),
-        context_len=_arg('context_len', 16),
+        hidden_dim=args.width,
+        num_layers=args.depth,
+        num_heads=args.num_heads,
+        dropout=args.dropout,
+        context_len=args.context_len,
         contact_dim=getattr(ds_train, 'contact_dim', 0),
         angvel_dim=getattr(ds_train, 'angvel_dim', 0),
         pose_hist_dim=pose_hist_dim_model,
         state_layout=getattr(ds_train, 'state_layout', None),
         bone_names=getattr(ds_train, 'bone_names', None),
         output_layout=getattr(ds_train, 'output_layout', None),
-        contact_plan_enable=bool(_arg('contact_plan_enable', False)),
-        contact_plan_hidden=int(_arg('contact_plan_hidden', 64) or 64),
-        contact_plan_dropout=float(_arg('contact_plan_dropout', 0.0) or 0.0),
-        contact_plan_inject=str(_arg('contact_plan_inject', 'none') or 'none'),
-        contact_plan_inject_detach=bool(_arg('contact_plan_inject_detach', True)),
-        contact_plan_time_pe_dim=int(_arg('contact_plan_time_pe_dim', 0) or 0),
-        contact_plan_time_pe_base=float(_arg('contact_plan_time_pe_base', 10000.0) or 10000.0),
-        contact_plan_init_mode=str(_arg('contact_plan_init_mode', 'learnable') or 'learnable'),
-        contact_plan_init_hidden=int(_arg('contact_plan_init_hidden', 128) or 128),
-        contact_plan_init_dropout=float(_arg('contact_plan_init_dropout', 0.0) or 0.0),
-        contact_phase_state_enable=bool(_arg('contact_phase_state_enable', False)),
-        contact_phase_state_init_mode=str(_arg('contact_phase_state_init_mode', 'obs') or 'obs'),
-        contact_phase_state_hidden=int(_arg('contact_phase_state_hidden', 64) or 64),
-        contact_phase_state_delta_max=float(_arg('contact_phase_state_delta_max', 0.5) or 0.5),
-        contact_phase_state_delta_init=float(_arg('contact_phase_state_delta_init', (6.283185307179586 / 80.0)) or (6.283185307179586 / 80.0)),
-        contact_phase_state_event_kind=str(_arg('contact_phase_state_event_kind', 'touchdown') or 'touchdown'),
-        contact_phase_state_event_thr=float(_arg('contact_phase_state_event_thr', 0.5) or 0.5),
-        contact_phase_state_event_hyst=float(_arg('contact_phase_state_event_hyst', 0.0) or 0.0),
-        contact_phase_state_event_min_interval=int(_arg('contact_phase_state_event_min_interval', 0) or 0),
-        phase_reset_source=str(_arg('phase_reset_source', 'contacts_meas') or 'contacts_meas'),
-        use_event_clock=bool(_arg('use_event_clock', False)),
-        event_clock_max_delta=float(_arg('event_clock_max_delta', 0.5) or 0.5),
-        event_clock_hidden_dim=int(_arg('event_clock_hidden_dim', 64) or 64),
-        event_clock_gate_hidden_dim=int(_arg('event_clock_gate_hidden_dim', 32) or 32),
-        direct_pose_enable=bool(_arg('direct_pose_enable', False)),
-        direct_pose_hidden=int(_arg('direct_pose_hidden', 256) or 256),
-        direct_pose_dropout=float(_arg('direct_pose_dropout', 0.0) or 0.0),
-        direct_pose_detach_plan=bool(_arg('direct_pose_detach_plan', True)),
-        direct_pose_meas_mode=str(_arg('direct_pose_meas_mode', 'concat') or 'concat'),
-        direct_pose_meas_drop_prob=float(_arg('direct_pose_meas_drop_prob', 0.0) or 0.0),
-        direct_pose_meas_noise_std=float(_arg('direct_pose_meas_noise_std', 0.0) or 0.0),
-        direct_pose_plan_drop_prob=float(_arg('direct_pose_plan_drop_prob', 0.0) or 0.0),
-        direct_pose_feat_source=str(_arg('direct_pose_feat_source', 'cond') or 'cond'),
-        direct_pose_time_pe_dim=int(_arg('direct_pose_time_pe_dim', 0) or 0),
-        direct_pose_time_pe_base=float(_arg('direct_pose_time_pe_base', 10000.0) or 10000.0),
-        direct_pose_split_enable=bool(_arg('direct_pose_split_enable', False)),
-        contact_meas_enable=bool(_arg('contact_meas_enable', False)),
-        contact_meas_hidden=int(_arg('contact_meas_hidden', 64) or 64),
-        contact_meas_dropout=float(_arg('contact_meas_dropout', 0.0) or 0.0),
-        contact_td_hazard_enable=bool(_arg('contact_td_hazard_enable', False)),
-        contact_td_hazard_hidden=int(_arg('contact_td_hazard_hidden', 64) or 64),
-        contact_td_hazard_dropout=float(_arg('contact_td_hazard_dropout', 0.0) or 0.0),
+        contact_plan_enable=bool(args.contact_plan_enable),
+        contact_plan_hidden=int(args.contact_plan_hidden or 64),
+        contact_plan_dropout=float(args.contact_plan_dropout or 0.0),
+        contact_plan_inject=str(args.contact_plan_inject or 'none'),
+        contact_plan_inject_detach=bool(args.contact_plan_inject_detach),
+        contact_plan_time_pe_dim=int(args.contact_plan_time_pe_dim or 0),
+        contact_plan_time_pe_base=float(args.contact_plan_time_pe_base or 10000.0),
+        contact_plan_init_mode=str(getattr(args, 'contact_plan_init_mode', 'learnable') or 'learnable'),
+        contact_plan_init_hidden=int(args.contact_plan_init_hidden or 128),
+        contact_plan_init_dropout=float(args.contact_plan_init_dropout or 0.0),
+        contact_phase_state_enable=bool(getattr(args, 'contact_phase_state_enable', False)),
+        contact_phase_state_init_mode=str(getattr(args, 'contact_phase_state_init_mode', 'obs') or 'obs'),
+        contact_phase_state_hidden=int(args.contact_phase_state_hidden or 64),
+        contact_phase_state_delta_max=float(args.contact_phase_state_delta_max or 0.5),
+        contact_phase_state_delta_init=float(args.contact_phase_state_delta_init or (6.283185307179586 / 80.0)),
+        contact_phase_state_event_kind='none',
+        contact_phase_state_event_thr=0.5,
+        contact_phase_state_event_hyst=0.0,
+        contact_phase_state_event_min_interval=0,
+        phase_reset_source='none',
+        use_event_clock=bool(args.use_event_clock),
+        event_clock_max_delta=float(args.event_clock_max_delta or 0.5),
+        event_clock_hidden_dim=int(args.event_clock_hidden_dim or 64),
+        event_clock_gate_hidden_dim=int(args.event_clock_gate_hidden_dim or 32),
+        direct_pose_enable=bool(args.direct_pose_enable),
+        direct_pose_hidden=int(args.direct_pose_hidden or 256),
+        direct_pose_dropout=float(args.direct_pose_dropout or 0.0),
+        direct_pose_detach_plan=bool(args.direct_pose_detach_plan),
+        direct_pose_meas_mode=str(getattr(args, 'direct_pose_meas_mode', 'concat') or 'concat'),
+        direct_pose_meas_drop_prob=float(args.direct_pose_meas_drop_prob or 0.0),
+        direct_pose_meas_noise_std=float(args.direct_pose_meas_noise_std or 0.0),
+        direct_pose_plan_drop_prob=float(args.direct_pose_plan_drop_prob or 0.0),
+        direct_pose_feat_source=str(getattr(args, 'direct_pose_feat_source', 'cond') or 'cond'),
+        direct_pose_time_pe_dim=int(getattr(args, 'direct_pose_time_pe_dim', 0) or 0),
+        direct_pose_time_pe_base=float(getattr(args, 'direct_pose_time_pe_base', 10000.0) or 10000.0),
+        direct_pose_split_enable=bool(direct_pose_split_enable),
+        direct_pose_nonleg_proj_dim=int(direct_pose_nonleg_proj_dim),
+        direct_pose_arm_split_enable=bool(direct_pose_arm_split_enable),
+        direct_pose_arm_bones=direct_pose_arm_bones_resolved,
     ).to(device)
-    if bool(_arg('direct_pose_meas_force_zero', False)):
-        setattr(model, 'direct_pose_meas_force_zero', True)
-    if bool(_arg('direct_pose_meas_detach', False)):
-        setattr(model, 'direct_pose_meas_detach', True)
-    if history_export_frames > 0:
-        if pose_hist_dim_raw <= 0 or pose_hist_len_raw <= 0:
-            print("[AdaptiveHistory][WARN] pose history not available; adaptive history disabled.")
-        elif pose_hist_dim_raw % pose_hist_len_raw != 0:
-            print("[AdaptiveHistory][WARN] pose history dim不整除帧数，跳过 adaptive history。")
+    return SimpleNamespace(
+        model=model,
+        pose_hist_dim_raw=pose_hist_dim_raw,
+        pose_hist_len_raw=pose_hist_len_raw,
+        history_export_frames=history_export_frames,
+        history_frame_dim=history_frame_dim,
+        direct_pose_split_enable=direct_pose_split_enable,
+        direct_pose_arm_split_enable=direct_pose_arm_split_enable,
+        direct_pose_arm_bones_resolved=direct_pose_arm_bones_resolved,
+        direct_pose_nonleg_proj_dim=direct_pose_nonleg_proj_dim,
+    )
+
+
+def _prepare_train_model_runtime(
+    train_ctx: Any,
+    train_data: Any,
+    model_artifacts: Any,
+) -> None:
+    args = train_ctx.args
+    ds_train = train_data.ds_train
+    device = train_ctx.device
+    model = model_artifacts.model
+
+    if model_artifacts.history_export_frames > 0:
+        if model_artifacts.pose_hist_dim_raw <= 0 or model_artifacts.pose_hist_len_raw <= 0:
+            print('[AdaptiveHistory][WARN] pose history not available; adaptive history disabled.')
+        elif model_artifacts.pose_hist_dim_raw % model_artifacts.pose_hist_len_raw != 0:
+            print('[AdaptiveHistory][WARN] pose history dim不整除帧数，跳过 adaptive history。')
         else:
-            max_frames = _arg('history_adaptive_max_frames', None)
+            max_frames = args.history_adaptive_max_frames
             if max_frames is None:
-                max_frames = pose_hist_len_raw
-            try:
-                from .history import AdaptiveHistoryModule
-            except ImportError:  # pragma: no cover
-                from history import AdaptiveHistoryModule
+                max_frames = model_artifacts.pose_hist_len_raw
+            from .history import AdaptiveHistoryModule
 
             module_device = torch.device('cpu') if device.type == 'mps' else device
             history_module = AdaptiveHistoryModule(
-                pose_dim=history_frame_dim,
-                hidden_dim=int(_arg('history_adaptive_hidden', H)),
-                num_history_frames=history_export_frames,
+                pose_dim=model_artifacts.history_frame_dim,
+                hidden_dim=int(args.history_adaptive_hidden or int(args.width)),
+                num_history_frames=model_artifacts.history_export_frames,
                 max_history_frames=int(max_frames),
                 cond_dim=0,
-                num_heads=int(_arg('history_adaptive_heads', 2) or 2),
-                train_variable_history=bool(_arg('history_adaptive_train_variable', False)),
-                history_dropout_prob=float(_arg('history_dropout_prob', 0.15) or 0.0),
-                use_trend_features=bool(_arg('history_use_trend_features', False)),
+                num_heads=int(args.history_adaptive_heads or 2),
+                train_variable_history=bool(args.history_adaptive_train_variable),
+                history_dropout_prob=float(args.history_dropout_prob or 0.0),
+                use_trend_features=bool(args.history_use_trend_features),
             ).to(module_device)
-            model.enable_adaptive_history(history_module, pose_hist_len=pose_hist_len_raw)
+            model.enable_adaptive_history(history_module, pose_hist_len=model_artifacts.pose_hist_len_raw)
 
-    validate_and_fix_model_(model, Dx, Dc)
+    validate_and_fix_model_(model, train_data.dx, train_data.dc)
     validate_and_fix_model_(model)
 
-    # Attach frozen MotionEncoder (optional, used for soft hint embedding)
-    encoder_path_cfg = _arg('encoder_path', '')
+    encoder_path_cfg = getattr(args, 'encoder_path', '')
     resolved_bundle = None
     if encoder_path_cfg:
         base_candidate = Path(encoder_path_cfg).expanduser()
@@ -5690,7 +6470,7 @@ def train_entry():
             Path(__file__).resolve().parent / base_candidate,
             Path(__file__).resolve().parent.parent / base_candidate,
         ]
-        data_root = Path(GLOBAL_ARGS.data).expanduser() if getattr(GLOBAL_ARGS, 'data', None) else None
+        data_root = Path(args.data).expanduser() if getattr(args, 'data', None) else None
         if data_root is not None:
             search_roots.append(data_root.parent / base_candidate)
         for cand in search_roots:
@@ -5698,399 +6478,382 @@ def train_entry():
                 resolved_bundle = cand
                 break
         if resolved_bundle is None:
-            print(f"[MPL][WARN] MotionEncoder bundle not found (tried {encoder_path_cfg})")
+            print(f'[MPL][WARN] MotionEncoder bundle not found (tried {encoder_path_cfg})')
         else:
             try:
                 bundle = torch.load(str(resolved_bundle), map_location='cpu')
                 model.attach_motion_encoder(bundle)
-                print(f"[MPL] Attached MotionEncoder bundle: {resolved_bundle}")
+                print(f'[MPL] Attached MotionEncoder bundle: {resolved_bundle}')
                 try:
                     ds_train.period_dim = getattr(model, 'period_dim', getattr(ds_train, 'period_dim', 0))
-                except Exception:
-                    pass
+                except (AttributeError, TypeError, ValueError) as exc:
+                    _phasec_warn_once(
+                        "train_entry/attach_bundle_period_dim",
+                        "failed to sync dataset period_dim from attached MotionEncoder bundle",
+                        exc,
+                    )
             except Exception as err:
-                resolved_bundle = None
-                print(f"[MPL][WARN] failed to attach MotionEncoder bundle: {err}")
+                print(f'[MPL][WARN] failed to attach MotionEncoder bundle: {err}')
 
-    # Optional: resume / init weights from a checkpoint (safe partial load).
-    resume_path = _arg('resume', None)
+    requested_contacts_source = str(getattr(args, 'trainbase_contacts_source', 'auto') or 'auto').strip().lower()
+    if requested_contacts_source not in ('auto', 'whitebox', 'pretrain_contact'):
+        requested_contacts_source = 'auto'
+    resolved_contacts_source = 'whitebox'
+    if bool(getattr(model, 'contact_plan_enable', False)):
+        has_pretrain_contact = (
+            getattr(model, 'frozen_encoder', None) is not None
+            and getattr(model, 'frozen_contact_head', None) is not None
+        )
+        if requested_contacts_source == 'pretrain_contact':
+            if not has_pretrain_contact:
+                raise SystemExit(
+                    '[FATAL] trainbase_contacts_source=pretrain_contact requires --encoder_path to provide '
+                    'a frozen encoder bundle with contact_head.'
+                )
+            resolved_contacts_source = 'pretrain_contact'
+        elif requested_contacts_source == 'auto':
+            resolved_contacts_source = 'pretrain_contact' if has_pretrain_contact else 'whitebox'
+    setattr(args, '_trainbase_contacts_source_resolved', resolved_contacts_source)
+    print(
+        f'[MPL] trainbase_contacts_source: requested={requested_contacts_source}, '
+        f'resolved={resolved_contacts_source}'
+    )
+
+    resume_path = getattr(args, 'resume', None)
     if resume_path:
         try:
             ckpt_path = Path(str(resume_path)).expanduser()
             if not ckpt_path.is_file():
-                print(f"[Resume][WARN] checkpoint not found: {ckpt_path}")
+                print(f'[Resume][WARN] checkpoint not found: {ckpt_path}')
             else:
                 payload = torch.load(str(ckpt_path), map_location='cpu')
                 state_dict = payload.get('model', payload) if isinstance(payload, dict) else payload
                 if not isinstance(state_dict, dict):
-                    print(f"[Resume][WARN] checkpoint has no state_dict: {ckpt_path}")
+                    print(f'[Resume][WARN] checkpoint has no state_dict: {ckpt_path}')
                 else:
                     try:
                         model.adapt_legacy_state_dict_(state_dict)
-                    except Exception:
-                        pass
+                    except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+                        _phasec_warn_once(
+                            "train_entry/resume_adapt_legacy_state",
+                            "adapt_legacy_state_dict_ failed; loading matching keys directly",
+                            exc,
+                        )
                     cur = model.state_dict()
                     filtered = {}
                     skipped = []
-                    for k, v in state_dict.items():
-                        if k in cur and torch.is_tensor(v) and torch.is_tensor(cur[k]) and tuple(cur[k].shape) == tuple(v.shape):
-                            filtered[k] = v
+                    for key, value in state_dict.items():
+                        if key in cur and torch.is_tensor(value) and torch.is_tensor(cur[key]) and tuple(cur[key].shape) == tuple(value.shape):
+                            filtered[key] = value
                         else:
-                            skipped.append(k)
+                            skipped.append(key)
                     missing, unexpected = model.load_state_dict(filtered, strict=False)
                     print(
-                        f"[Resume] loaded={len(filtered)}/{len(state_dict)} "
-                        f"missing={len(missing)} unexpected={len(unexpected)} skipped_shape={len(skipped)} ckpt={ckpt_path}"
+                        f'[Resume] loaded={len(filtered)}/{len(state_dict)} '
+                        f'missing={len(missing)} unexpected={len(unexpected)} skipped_shape={len(skipped)} ckpt={ckpt_path}'
                     )
         except Exception as err:
-            print(f"[Resume][WARN] failed to load checkpoint: {err}")
-
-    # Experimental: isolate meas-head training by freezing everything else.
-    if bool(_arg('train_only_contact_meas_head', False)):
-        try:
-            for _, p in model.named_parameters():
-                p.requires_grad_(False)
-            meas_head = getattr(model, 'contact_meas_head', None)
-            if meas_head is None:
-                print("[Freeze][WARN] train_only_contact_meas_head set but model.contact_meas_head is None.")
-            else:
-                for _, p in meas_head.named_parameters():
-                    p.requires_grad_(True)
-            total = sum(int(p.numel()) for p in model.parameters())
-            trainable = sum(int(p.numel()) for p in model.parameters() if bool(getattr(p, 'requires_grad', False)))
-            frac = (float(trainable) / float(total)) if total > 0 else 0.0
-            print(f"[Freeze] train_only_contact_meas_head: trainable={trainable}/{total} ({frac:.3%})")
-        except Exception as exc:
-            print(f"[Freeze][WARN] failed to apply train_only_contact_meas_head: {exc}")
+            print(f'[Resume][WARN] failed to load checkpoint: {err}')
 
     with torch.no_grad():
-        _l0 = model.shared_encoder[0]
-        if not torch.isfinite(_l0.weight).all() or (_l0.bias is not None and (not torch.isfinite(_l0.bias).all())):
+        first_linear = model.shared_encoder[0]
+        if not torch.isfinite(first_linear.weight).all() or (
+            first_linear.bias is not None and (not torch.isfinite(first_linear.bias).all())
+        ):
             print('[Guard] first-linear became non-finite post-sanitize, reinitializing')
-            torch.nn.init.kaiming_uniform_(_l0.weight, a=math.sqrt(5))
-            if _l0.bias is not None:
-                fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(_l0.weight)
-                bound = 1.0 / math.sqrt(max(fan_in, 1))
-                torch.nn.init.uniform_(_l0.bias, -bound, bound)
-            assert torch.isfinite(_l0.weight).all() and (_l0.bias is None or torch.isfinite(_l0.bias).all())
+            torch.nn.init.kaiming_uniform_(first_linear.weight, a=_math.sqrt(5))
+            if first_linear.bias is not None:
+                fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(first_linear.weight)
+                bound = 1.0 / _math.sqrt(max(fan_in, 1))
+                torch.nn.init.uniform_(first_linear.bias, -bound, bound)
+            assert torch.isfinite(first_linear.weight).all() and (
+                first_linear.bias is None or torch.isfinite(first_linear.bias).all()
+            )
     with torch.no_grad():
-        lin0 = model.shared_encoder[0]
-        assert torch.isfinite(lin0.weight).all() and (lin0.bias is None or torch.isfinite(lin0.bias).all()), '[PostCheck] shared_encoder.0 still not finite'
+        first_linear = model.shared_encoder[0]
+        assert torch.isfinite(first_linear.weight).all() and (
+            first_linear.bias is None or torch.isfinite(first_linear.bias).all()
+        ), '[PostCheck] shared_encoder.0 still not finite'
     try:
         model._pasa_fps = float(getattr(ds_train, 'fps', 60.0))
-    except Exception:
-        pass
-    fps_data = float(getattr(ds_train, 'fps', 60.0) or 60.0)
-    w_rot_local = float(_arg('w_rot_local', 0.0) or 0.0)
-    w_root_vel = float(_arg('w_root_vel', 0.0) or 0.0)
-    w_root_speed = float(_arg('w_root_speed', 0.0) or 0.0)
+    except (AttributeError, TypeError, ValueError) as exc:
+        _phasec_warn_once(
+            "train_entry/pasa_fps",
+            "failed to set model._pasa_fps from dataset fps",
+            exc,
+        )
 
-    adaptive_bone_weights = bool(_arg('adaptive_bone_weights', True))
+
+def _build_train_loss_and_trainer(
+    train_ctx: Any,
+    train_data: Any,
+    model_artifacts: Any,
+) -> Any:
+    args = train_ctx.args
+    ds_train = train_data.ds_train
+    model = model_artifacts.model
+    direct_pose_arm_split_enable = model_artifacts.direct_pose_arm_split_enable
+    direct_pose_arm_bones_resolved = model_artifacts.direct_pose_arm_bones_resolved
+
+    fps_data = float(getattr(ds_train, 'fps', 60.0) or 60.0)
+    w_rot_local = float(args.w_rot_local or 0.0)
+    w_root_vel = float(args.w_root_vel or 0.0)
+    w_root_speed = float(args.w_root_speed or 0.0)
+    adaptive_bone_weights = bool(args.adaptive_bone_weights)
 
     loss_fn = MotionJointLoss(
         output_layout=ds_train.output_layout,
         fps=fps_data,
         rot6d_spec=getattr(ds_train, 'rot6d_spec', {}),
-        w_rot_ortho=_arg('w_rot_ortho', 0.001),
+        w_rot_ortho=args.w_rot_ortho,
         meta=getattr(ds_train, 'meta', None),
         w_rot_local=w_rot_local,
         w_root_vel=w_root_vel,
         w_root_speed=w_root_speed,
-        w_contact_plan=float(_arg('w_contact_plan', 0.0) or 0.0),
-        w_contact_meas=float(_arg('w_contact_meas', 0.0) or 0.0),
-        w_contact_td_hazard_bce=float(_arg('w_contact_td_hazard_bce', 0.0) or 0.0),
-        w_contact_td_hazard_mass=float(_arg('w_contact_td_hazard_mass', 0.0) or 0.0),
-        w_contact_td_hazard_unimodal=float(_arg('w_contact_td_hazard_unimodal', 0.0) or 0.0),
-        w_direct_pose=float(_arg('w_direct_pose', 0.0) or 0.0),
-        event_clock_lambda_entropy_weight=float(_arg('event_clock_lambda_entropy_weight', 0.01) or 0.01),
-        event_clock_lambda_prior_weight=float(_arg('event_clock_lambda_prior_weight', 0.01) or 0.01),
-        event_clock_delta_z_l2_weight=float(_arg('event_clock_delta_z_l2_weight', 0.001) or 0.001),
-
+        w_contact_plan=float(args.w_contact_plan or 0.0),
+        w_direct_pose=float(args.w_direct_pose or 0.0),
+        direct_pose_loss_leg_split=bool(args.direct_pose_loss_leg_split),
+        direct_pose_arm_split_enable=bool(direct_pose_arm_split_enable),
+        direct_pose_arm_bones=direct_pose_arm_bones_resolved,
+        direct_pose_loss_arm_else_balance_enable=bool(args.direct_pose_loss_arm_else_balance_enable),
+        direct_pose_loss_arm_weight=float(args.direct_pose_loss_arm_weight or 1.0),
+        direct_pose_loss_else_weight=float(args.direct_pose_loss_else_weight or 1.0),
+        direct_pose_loss_group_norm_enable=bool(args.direct_pose_loss_group_norm_enable),
+        direct_pose_loss_group_norm_w_leg=float(args.direct_pose_loss_group_norm_w_leg or 1.0),
+        direct_pose_loss_group_norm_w_nonleg=float(args.direct_pose_loss_group_norm_w_nonleg or 1.0),
+        direct_pose_loss_group_norm_ema_beta=float(args.direct_pose_loss_group_norm_ema_beta or 0.9),
+        direct_pose_loss_group_norm_ratio_min=float(args.direct_pose_loss_group_norm_ratio_min or 0.2),
+        direct_pose_loss_group_norm_ratio_max=float(args.direct_pose_loss_group_norm_ratio_max or 5.0),
+        direct_pose_loss_group_norm_eps=float(args.direct_pose_loss_group_norm_eps or 1e-6),
+        event_clock_lambda_entropy_weight=float(args.event_clock_lambda_entropy_weight or 0.01),
+        event_clock_lambda_prior_weight=float(args.event_clock_lambda_prior_weight or 0.01),
+        event_clock_delta_z_l2_weight=float(args.event_clock_delta_z_l2_weight or 0.001),
         adaptive_bone_weights=adaptive_bone_weights,
     )
-    # Unified bone weight parameters (new scheme)
-    loss_fn.unified_downstream_power = float(_arg('unified_downstream_power', 0.6) or 0.6)
-    loss_fn.unified_self_scale = float(_arg('unified_self_scale', 1.5) or 1.5)
-    loss_fn.unified_min_weight = float(_arg('unified_min_weight', 0.05) or 0.05)
-    loss_fn.rot_local_tail_weight = float(_arg('rot_local_tail_weight', 0.0) or 0.0)
-    loss_fn.rot_local_tail_k = int(_arg('rot_local_tail_k', 0) or 0)
-    loss_fn.rot_local_tail_scope = str(_arg('rot_local_tail_scope', 'all') or 'all')
-    loss_fn.rot_local_tail_select = str(_arg('rot_local_tail_select', 'batch') or 'batch')
-    loss_fn.rot_local_tail_ema_beta = float(_arg('rot_local_tail_ema_beta', 0.9) or 0.9)
-    # Visual importance调制先禁用，如需开启再暴露参数
+    loss_fn.unified_downstream_power = float(args.unified_downstream_power or 0.6)
+    loss_fn.unified_self_scale = float(args.unified_self_scale or 1.5)
+    loss_fn.unified_min_weight = float(args.unified_min_weight or 0.05)
+    loss_fn.rot_local_tail_weight = float(args.rot_local_tail_weight or 0.0)
+    loss_fn.rot_local_tail_k = int(args.rot_local_tail_k or 0)
+    loss_fn.rot_local_tail_scope = str(args.rot_local_tail_scope or 'all')
+    loss_fn.rot_local_tail_select = str(args.rot_local_tail_select or 'batch')
+    loss_fn.rot_local_tail_ema_beta = float(args.rot_local_tail_ema_beta or 0.9)
     loss_fn.unified_use_visual_importance = False
     if getattr(ds_train, 'bone_names', None):
         try:
             loss_fn.set_bone_names(ds_train.bone_names)
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+            _phasec_warn_once(
+                "train_entry/loss_set_bone_names",
+                "loss_fn.set_bone_names failed; continuing with default bone metadata",
+                exc,
+            )
     if getattr(ds_train, 'parents', None):
         try:
             loss_fn.set_skeleton(ds_train.parents, getattr(ds_train, 'bone_offsets', None))
         except Exception as exc:
-            print(f"[Loss][WARN] set_skeleton failed: {exc}")
-    bundle_json_arg = _arg('bundle_json')
+            print(f'[Loss][WARN] set_skeleton failed: {exc}')
+    bundle_json_arg = args.bundle_json
     bundle_json_path = str(Path(bundle_json_arg).expanduser()) if bundle_json_arg else None
-    loss_fn.template_hint = str(norm_template_path) if norm_template_path else None
+    loss_fn.template_hint = str(train_ctx.norm_template_path) if train_ctx.norm_template_path else None
     loss_fn.bundle_hint = bundle_json_path
 
     print(
-        f"[LossWeights] "
-        f"w_rot_ortho={loss_fn.w_rot_ortho} "
-        f"w_rot_local={loss_fn.w_rot_local} "
-        f"rot_local_tail_weight={getattr(loss_fn, 'rot_local_tail_weight', 0.0)} "
-        f"rot_local_tail_k={getattr(loss_fn, 'rot_local_tail_k', 0)} "
-        f"rot_local_tail_scope={getattr(loss_fn, 'rot_local_tail_scope', 'all')} "
-        f"rot_local_tail_select={getattr(loss_fn, 'rot_local_tail_select', 'batch')} "
-        f"rot_local_tail_ema_beta={getattr(loss_fn, 'rot_local_tail_ema_beta', 0.9)} "
-        f"adaptive_bone_weights={loss_fn.use_adaptive_weights}"
+        f'[LossWeights] '
+        f'w_rot_ortho={loss_fn.w_rot_ortho} '
+        f'w_rot_local={loss_fn.w_rot_local} '
+        f'rot_local_tail_weight={getattr(loss_fn, "rot_local_tail_weight", 0.0)} '
+        f'rot_local_tail_k={getattr(loss_fn, "rot_local_tail_k", 0)} '
+        f'rot_local_tail_scope={getattr(loss_fn, "rot_local_tail_scope", "all")} '
+        f'rot_local_tail_select={getattr(loss_fn, "rot_local_tail_select", "batch")} '
+        f'rot_local_tail_ema_beta={getattr(loss_fn, "rot_local_tail_ema_beta", 0.9)} '
+        f'adaptive_bone_weights={loss_fn.use_adaptive_weights}'
     )
 
     loss_fn.dt_traj = 1.0 / max(1e-6, fps_data)
     loss_fn.dt_bone = 1.0 / max(1e-6, fps_data)
-    print(f"[Dt] dt_traj={loss_fn.dt_traj:.6f}s | dt_bone={loss_fn.dt_bone:.6f}s (dataset fps={fps_data})")
+    print(f'[Dt] dt_traj={loss_fn.dt_traj:.6f}s | dt_bone={loss_fn.dt_bone:.6f}s (dataset fps={fps_data})')
 
     if hasattr(loss_fn, 'rot6d_eps'):
         loss_fn.rot6d_eps = 1e-6
-    augmentor = MotionAugmentation(noise_std=_arg('aug_noise_std', 0.0), time_warp_prob=_arg('aug_time_warp_prob', 0.0))
-    trainer = Trainer(model=model, loss_fn=loss_fn, lr=_arg('lr', 0.0001), grad_clip=_arg('grad_clip', 0.0), weight_decay=_arg('weight_decay', 0.01), tf_warmup_steps=_arg('tf_warmup_steps', 5000), tf_total_steps=_arg('tf_total_steps', 200000), augmentor=augmentor, use_amp=_arg('amp', False), accum_steps=_arg('accum_steps', 1), pin_memory=pin, args=GLOBAL_ARGS)
-    trainer._norm_template_path = str(norm_template_path) if norm_template_path else None
-    trainer._bundle_json_path = bundle_json_path
-    trainer.out_dir = str(out_dir)
-    __apply_layout_center(ds_train, trainer)
-    trainer.pose_hist_len = int(getattr(ds_train, 'pose_hist_len', 0) or 0)
-    trainer.pose_hist_dim = int(getattr(ds_train, 'pose_hist_dim', 0) or 0)
-    _pose_norm = getattr(ds_train, 'pose_hist_norm', None)
-    if _pose_norm is not None:
-        trainer.pose_hist_scales = torch.as_tensor(_pose_norm.scales, dtype=torch.float32)
-        trainer.pose_hist_mu = torch.as_tensor(_pose_norm.mu, dtype=torch.float32) if getattr(_pose_norm, 'mu', None) is not None else None
-        trainer.pose_hist_std = torch.as_tensor(_pose_norm.std, dtype=torch.float32) if getattr(_pose_norm, 'std', None) is not None else None
-    else:
-        trainer.pose_hist_scales = None
-        trainer.pose_hist_mu = None
-        trainer.pose_hist_std = None
-    loss_fn.mu_y = getattr(trainer, "mu_y", None)
-    loss_fn.std_y = getattr(trainer, "std_y", None)
-    if getattr(trainer, '_bundle_meta', None):
-        try:
-            loss_fn.meta = dict(trainer._bundle_meta)
-        except Exception:
-            pass
-
-    trainer.foot_contact_threshold = float(_arg('foot_contact_threshold'))
-    # 一次性归一化数值诊断
-    _norm_debug_once(trainer, train_loader, thr=float(_arg('diag_thr')), topk=int(_arg('diag_topk')), print_to_console=False)
-    trainer.bone_hz = fps_data
-    trainer.fps = float(fps_data)
-    # --- Loop-closure knobs: meas input corruption (enhance plan!=meas mismatch) ---
-    trainer.meas_pose_hist_drop_prob = float(_arg('meas_pose_hist_drop_prob', 0.0) or 0.0)
-    trainer.meas_pose_hist_delay_prob = float(_arg('meas_pose_hist_delay_prob', 0.0) or 0.0)
-    trainer.meas_pose_hist_noise_std = float(_arg('meas_pose_hist_noise_std', 0.0) or 0.0)
-    # --- White-box contacts_meas knobs (P2 ground_z stability / ablations) ---
-    gate_raw = str(_arg('contact_meas_gate_by_hit', 'auto') or 'auto').strip().lower()
-    if gate_raw in ('true', '1', 'yes', 'y'):
-        trainer.contact_meas_gate_by_hit_override = True
-    elif gate_raw in ('false', '0', 'no', 'n'):
-        trainer.contact_meas_gate_by_hit_override = False
-    else:
-        trainer.contact_meas_gate_by_hit_override = None
-    trainer.contact_meas_ground_z_mode = str(_arg('contact_meas_ground_z_mode', 'window') or 'window').strip().lower()
-    trainer.contact_meas_ground_z_beta = float(_arg('contact_meas_ground_z_beta', 0.05) or 0.05)
-    trainer.contact_meas_ground_z_window = int(_arg('contact_meas_ground_z_window', 5) or 5)
-    trainer.contact_meas_ground_z_quantile = float(_arg('contact_meas_ground_z_quantile', 0.2) or 0.2)
-    try:
-        up_cm = float(_arg('contact_meas_ground_z_slew_up_cm', 0.0) or 0.0)
-    except Exception:
-        up_cm = 0.0
-    try:
-        down_cm = float(_arg('contact_meas_ground_z_slew_down_cm', 0.0) or 0.0)
-    except Exception:
-        down_cm = 0.0
-    trainer.contact_meas_ground_z_max_up_m = max(0.0, up_cm) / 100.0
-    trainer.contact_meas_ground_z_max_down_m = max(0.0, down_cm) / 100.0
-
-    safe_set_slice(trainer, 'rootvel_x_slice', parse_layout_entry(trainer._x_layout.get('RootVelocity'), 'RootVelocity'))
-    safe_set_slice(trainer, 'angvel_x_slice', parse_layout_entry(trainer._x_layout.get('BoneAngularVelocities'), 'BoneAngularVelocities'))
-
-    # 诊断参数（也可用命令行 --diag_topk/--diag_thr 覆盖）
-    trainer.diag_topk = int(_arg('diag_topk', 8) or 8)
-    trainer.diag_thr = float(_arg('diag_thr', 8.0) or 8.0)
-    import math as _math_local
-    forward_axis_override = _arg('yaw_forward_axis', None)
-    if forward_axis_override is not None:
-        trainer.yaw_forward_axis = int(forward_axis_override)
-    elif getattr(ds_train, 'forward_axis', None) is not None:
-        trainer.yaw_forward_axis = int(ds_train.forward_axis)
-    else:
-        trainer.yaw_forward_axis = int(getattr(trainer, 'yaw_forward_axis', 2))
-    offset_override = _arg('yaw_forward_offset', None)
-    if offset_override is not None:
-        trainer.yaw_forward_axis_offset = float(_math_local.radians(float(offset_override)))
-    else:
-        trainer.yaw_forward_axis_offset = float(getattr(ds_train, 'forward_axis_offset', 0.0) or 0.0)
-    trainer.eval_angvel_dir_percentile = float(_arg('eval_angvel_dir_percentile'))
-    trainer.diag_input_stats = bool(_arg('diag_input_stats'))
-
-    # === validation/monitor switches ===
-    trainer.val_mode = _arg('val_mode', 'online')
-    trainer.no_monitor = bool(_arg('no_monitor', False))
-    trainer.monitor_batches = int(_arg('monitor_batches', 8) or 8)
-    trainer.teacher_eval_max_batches = _arg('teacher_eval_max_batches', None)
-    trainer.force_valfree_eval = bool(_arg('force_valfree_eval', False))
-    trainer.eval_settings = FreeRunSettings(
-        warmup_steps=int(_arg('eval_warmup', 0) or 0),
-        horizon=_arg('eval_horizon', None),
-        max_batches=trainer.monitor_batches,
+    augmentor = MotionAugmentation(noise_std=args.aug_noise_std, time_warp_prob=args.aug_time_warp_prob)
+    trainer = Trainer(
+        model=model,
+        loss_fn=loss_fn,
+        lr=args.lr,
+        grad_clip=args.grad_clip,
+        weight_decay=args.weight_decay,
+        tf_warmup_steps=args.tf_warmup_steps,
+        tf_total_steps=args.tf_total_steps,
+        augmentor=augmentor,
+        use_amp=args.amp,
+        accum_steps=args.accum_steps,
+        pin_memory=train_data.pin_memory,
+        args=args,
     )
-    trainer.ss_chunk_len = int(_arg('ss_chunk_len', getattr(trainer, 'ss_chunk_len', 1)) or 1)
-    trainer.tf_mode = _arg('tf_mode', 'epoch_linear')
-    trainer.tf_warmup_epochs = _arg('tf_warmup_epochs', 3)
-    trainer.tf_start_epoch = _arg('tf_start_epoch', 0)
-    trainer.tf_end_epoch = _arg('tf_end_epoch', 10)
-    trainer.tf_max = _arg('tf_max', 1.0)
-    trainer.tf_min = _arg('tf_min', 0.1)
-    trainer.freerun_horizon = int(_arg('freerun_horizon', 0) or 0)
-    trainer.freerun_weight = float(_arg('freerun_weight', 0.1))
-    trainer.freerun_horizon_min = int(_arg('freerun_horizon_min', 6) or 6)
-    trainer.freerun_debug_steps = int(_arg('freerun_debug_steps', 0) or 0)
-    trainer.history_debug_steps = int(_arg('history_debug_steps', 0) or 0)
-    trainer.history_dropout_prob = float(_arg('history_dropout_prob', 0.10) or 0.0)
-    trainer.history_dropout_prob_min = 0.05
-    trainer.history_dropout_prob_max = 0.30
-    _stage_spec = _arg('freerun_stage_schedule', None)
+    if bool(args.direct_pose_loss_group_norm_enable) and (not bool(args.direct_pose_loss_leg_split)):
+        print('[Loss][WARN] direct_pose_loss_group_norm_enable=true but direct_pose_loss_leg_split=false; group norm will have no effect.')
     try:
-        trainer.freerun_stage_schedule = _parse_stage_schedule(_stage_spec)
+        resolved_config = dict(vars(args))
+    except Exception:
+        resolved_config = {}
+    resolved_config['direct_pose_split_enable'] = bool(model_artifacts.direct_pose_split_enable)
+    resolved_config['direct_pose_arm_split_enable'] = bool(direct_pose_arm_split_enable)
+    resolved_config['direct_pose_arm_bones'] = direct_pose_arm_bones_resolved
+    resolved_config['direct_pose_nonleg_proj_dim'] = int(model_artifacts.direct_pose_nonleg_proj_dim)
+    try:
+        cfg_out = train_ctx.out_dir / 'config_resolved.json'
+        with open(cfg_out, 'w', encoding='utf-8') as f:
+            json.dump(resolved_config, f, ensure_ascii=False, indent=2, default=str)
+        print(f'[Config] saved resolved config to {cfg_out}')
     except Exception as exc:
-        # 保底：无配置或解析失败时使用空列表，而不是抛异常
-        trainer.freerun_stage_schedule = []
-        print(f"[StageSchedule][WARN] failed to parse freerun_stage_schedule ({exc}); fallback to empty schedule.")
-    _assert_no_legacy_loss_keys_in_schedule(
-        trainer.freerun_stage_schedule,
-        context="freerun_stage_schedule",
-    )
-    _init_h_arg = _arg('freerun_init_horizon', None)
-    if _init_h_arg is None:
-        if trainer.freerun_horizon > 0:
-            heur_h = max(
-                trainer.freerun_horizon_min,
-                min(
-                    trainer.freerun_horizon,
-                    max(
-                        trainer.freerun_horizon_min,
-                        int(round(max(trainer.freerun_horizon * 0.7, trainer.freerun_horizon_min)))
-                    ),
-                ),
-            )
-        else:
-            heur_h = trainer.freerun_horizon_min
-        trainer.freerun_init_horizon = int(heur_h)
-    else:
-        trainer.freerun_init_horizon = int(_init_h_arg)
-    _weight_init_arg = _arg('freerun_weight_init', None)
-    if _weight_init_arg is None:
-        inferred = trainer.freerun_weight * 0.2
-        trainer.freerun_weight_init = float(max(0.0, min(trainer.freerun_weight, inferred)))
-    else:
-        trainer.freerun_weight_init = float(_weight_init_arg)
-    if trainer.freerun_weight <= 0.0 or trainer.freerun_weight_init > trainer.freerun_weight:
-        trainer.freerun_weight_init = max(0.0, min(trainer.freerun_weight, trainer.freerun_weight_init))
-    trainer.freerun_horizon_ramp_epochs = int(_arg('freerun_horizon_ramp_epochs', 5) or 5)
-    trainer.freerun_weight_mode = str(_arg('freerun_weight_mode', 'epoch_linear') or 'epoch_linear').lower()
-    trainer.freerun_weight_ramp_epochs = int(_arg('freerun_weight_ramp_epochs', 5) or 5)
-    trainer.freerun_grad_log = bool(_arg('freerun_grad_log', False))
-    trainer.freerun_grad_log_interval = int(_arg('freerun_grad_log_interval', 50) or 50)
-    trainer.freerun_grad_ratio_alert = float(_arg('freerun_grad_ratio_alert', 0.01) or 0.01)
-    trainer.adaptive_loss_module = None
-    trainer.hyperparam_scheduler = None
-    trainer.teacher_rot_noise_deg = float(_arg('teacher_rot_noise_deg', 0.0))
-    trainer.teacher_rot_noise_prob = float(_arg('teacher_rot_noise_prob', 0.0))
-    trainer.input_step_noise_prob = float(_arg('input_step_noise_prob', trainer.input_step_noise_prob) or 0.0)
-    trainer.input_noise_profile = _sanitize_noise_profile_spec(_arg('input_noise_deg_mix', None))
-    trainer.freerun_debug_path = _arg('freerun_debug_path', None)
-    trainer.enable_grad_connection_test = not bool(_arg('no_grad_conn_test', False))
-    trainer._current_run_name = run_name
+        print(f'[Config][WARN] failed to save resolved config: {exc}')
 
-    best_ckpt, history = trainer.fit(
-        train_loader,
-        epochs=_arg('epochs', 300),
-        log_every=_arg('log_every', 50),
-        out_dir=str(out_dir),
-        patience=_arg('patience', 20),
-        run_name=run_name
+    return SimpleNamespace(
+        model=model,
+        loss_fn=loss_fn,
+        trainer=trainer,
+        bundle_json_path=bundle_json_path,
+        resolved_config=resolved_config,
     )
+
+
+def _run_postfit_validation_and_export(
+    train_ctx: Any,
+    train_data: Any,
+    build_artifacts: Any,
+    best_ckpt: Optional[str],
+) -> None:
+    args = train_ctx.args
+    trainer = build_artifacts.trainer
+    model = build_artifacts.model
 
     try:
-
-        vloader = train_loader
-        _mon_batches = int(_arg('monitor_batches', 8) or 8)
-        _metrics = trainer.validate_autoreg_online(vloader, max_batches=_mon_batches)
-        print(f"[ValFree@last] "
-              f"GeoDeg={_metrics.get('GeoDeg', float('nan')):.3f} "
-              f"RootVelMAE={_metrics.get('RootVelMAE', float('nan')):.5f} "
-              f"AngVelMAE={_metrics.get('AngVelMAE', float('nan')):.5f} rad/s")
-    except Exception as _e:
-        print(f"[ValFree] skipped due to error: {_e}")
+        vloader = train_data.train_loader
+        monitor_batches = int(args.monitor_batches or 8)
+        metrics = trainer.validate_autoreg_online(vloader, max_batches=monitor_batches)
+        print(
+            f"[ValFree@last] "
+            f"GeoDeg={metrics.get('GeoDeg', float('nan')):.3f} "
+            f"RootVelMAE={metrics.get('RootVelMAE', float('nan')):.5f} "
+            f"AngVelMAE={metrics.get('AngVelMAE', float('nan')):.5f} rad/s"
+        )
+    except Exception as err:
+        print(f'[ValFree] skipped due to error: {err}')
         import traceback
+
         traceback.print_exc()
-        # 可选：若有 best_ckpt 就加载（保持你原有逻辑）
         try:
             if best_ckpt:
                 ckpt_path = Path(best_ckpt).expanduser()
                 if ckpt_path.is_file():
-                    ckpt = torch.load(str(ckpt_path), map_location=device)
+                    ckpt = torch.load(str(ckpt_path), map_location=train_ctx.device)
                     missing, unexpected = model.load_state_dict(ckpt['model'], strict=True)
-                    assert not missing and (
-                        not unexpected), f'state_dict mismatch: missing={missing}, unexpected={unexpected}'
+                    assert not missing and (not unexpected), f'state_dict mismatch: missing={missing}, unexpected={unexpected}'
                     print(f'[Load] best checkpoint loaded: {ckpt_path}')
                 else:
                     print(f'[WARN] checkpoint not found: {ckpt_path}')
-        except Exception as __e:
-            print(f'[Load][WARN] failed to load best ckpt: {__e}')
+        except Exception as load_err:
+            print(f'[Load][WARN] failed to load best ckpt: {load_err}')
     finally:
-        # === 关键改动：无论上面成功/失败，这里都尝试导出 ONNX ===
-        print('[Export][ENTER] preparing to export ONNX...')
+        _export_postfit_onnx(train_ctx, train_data, model)
+
+
+def _export_postfit_onnx(
+    train_ctx: Any,
+    train_data: Any,
+    model: torch.nn.Module,
+) -> None:
+    print('[Export][ENTER] preparing to export ONNX...')
+    try:
+        import traceback
+
+        model_to_export = model.eval().cpu()
+        onnx_path = os.path.join(str(train_ctx.out_dir), f'{train_ctx.run_name}_step_stateful_nophase.onnx')
+
         try:
-            import os, traceback
-
-            model_to_export = model.eval().cpu()
-
-            onnx_path = os.path.join(str(out_dir), f'{run_name}_step_stateful_nophase.onnx')
-
-            # 维度探测仅用于日志 & sanity；失败也不中断真正导出
+            batch = next(iter(train_data.train_loader))
+            dx = int(batch['motion'].shape[-1])
+            dy = int(batch['gt_motion'].shape[-1])
+            dc = int(batch['cond_in'].shape[-1]) if 'cond_in' in batch else 0
+            print(f'[Export][ProbeDims] Dx={dx} Dy={dy} Dc={dc}')
             try:
-                _b = next(iter(train_loader))
-                Dx = int(_b['motion'].shape[-1])
-                Dy = int(_b['gt_motion'].shape[-1])
-                Dc = int(_b['cond_in'].shape[-1]) if 'cond_in' in _b else 0
-                print(f'[Export][ProbeDims] Dx={Dx} Dy={Dy} Dc={Dc}')
-                try:
-                    sanity_check_model_dims(model_to_export, Dx, Dy, Dc)
-                    print('[Export][Sanity] input dims check OK')
-                except Exception as ee:
-                    print('[Export][Sanity][WARN]', ee)
-            except Exception as ee:
-                print('[Export][ProbeDims][WARN] cannot read a batch for dim probe:', ee)
+                sanity_check_model_dims(model_to_export, dx, dy, dc)
+                print('[Export][Sanity] input dims check OK')
+            except Exception as sanity_err:
+                print('[Export][Sanity][WARN]', sanity_err)
+        except Exception as probe_err:
+            print('[Export][ProbeDims][WARN] cannot read a batch for dim probe:', probe_err)
 
-            os.makedirs(os.path.dirname(onnx_path) or '.', exist_ok=True)
-            export_onnx_step_stateful_nophase(
-                model_to_export,
-                train_loader,
-                onnx_path,
-                opset=18,
-                dynamic_batch=False,
+        os.makedirs(os.path.dirname(onnx_path) or '.', exist_ok=True)
+        export_onnx_step_stateful_nophase(
+            model_to_export,
+            train_data.train_loader,
+            onnx_path,
+            opset=18,
+            dynamic_batch=False,
+        )
+    except Exception as export_err:
+        print('[Export][ERROR]', export_err)
+        traceback.print_exc()
+
+def train_entry():
+    train_ctx = _build_train_components()
+    train_data = _build_train_loaders(train_ctx)
+    model_artifacts = _build_train_model(train_ctx, train_data)
+    _prepare_train_model_runtime(train_ctx, train_data, model_artifacts)
+    build_artifacts = _build_train_loss_and_trainer(train_ctx, train_data, model_artifacts)
+    args = train_ctx.args
+
+    bundle_path = _arg('bundle_json', None)
+    apply_layout_center(train_data.ds_train, build_artifacts.trainer, bundle_path)
+    runtime_cfg = _resolve_trainer_runtime_config(
+        args=args,
+        trainer=build_artifacts.trainer,
+        ds_train=train_data.ds_train,
+        norm_template_path=train_ctx.norm_template_path,
+        bundle_json_path=build_artifacts.bundle_json_path,
+        out_dir=train_ctx.out_dir,
+        resolved_config=build_artifacts.resolved_config,
+        run_name=train_ctx.run_name,
+    )
+    _apply_trainer_runtime_config(build_artifacts.trainer, runtime_cfg)
+    build_artifacts.loss_fn.mu_y = getattr(build_artifacts.trainer, 'mu_y', None)
+    build_artifacts.loss_fn.std_y = getattr(build_artifacts.trainer, 'std_y', None)
+    if getattr(build_artifacts.trainer, '_bundle_meta', None):
+        try:
+            build_artifacts.loss_fn.meta = dict(build_artifacts.trainer._bundle_meta)
+        except (TypeError, ValueError, RuntimeError) as exc:
+            _phasec_warn_once(
+                "train_entry/loss_meta_from_bundle",
+                "failed to copy bundle meta onto loss_fn.meta",
+                exc,
             )
-        except Exception as e:
-            print('[Export][ERROR]', e)
-            traceback.print_exc()
+
+    _norm_debug_once(
+        build_artifacts.trainer,
+        train_data.train_loader,
+        thr=float(args.diag_thr),
+        topk=int(args.diag_topk),
+        print_to_console=False,
+    )
+
+    best_ckpt, _history = build_artifacts.trainer.fit(
+        train_data.train_loader,
+        epochs=args.epochs,
+        log_every=args.log_every,
+        out_dir=str(train_ctx.out_dir),
+        patience=args.patience,
+        run_name=train_ctx.run_name,
+    )
+    _run_postfit_validation_and_export(train_ctx, train_data, build_artifacts, best_ckpt)
 @torch.no_grad()
 def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path: str, opset: int = 18, dynamic_batch: bool = False):
     """
     单步（无隐式状态）ONNX 导出：
       输入:  state[B,Dx], cond[B,Dc], contacts[B,C], angvel[B,A], pose_hist[B,P],
-            (optional) plan_z[B,Hp], (optional) phase_z[B,2C],
-            (optional) td_hazard_acc[B,C] (only when phase_reset_source=td_hazard)
-      输出:  motion_pred[B,Dy], (optional) plan_z_next[B,Hp], (optional) phase_z_next[B,2C],
-            (optional) td_hazard_acc_next[B,C]
+            plan_z[B,Hp], phase_z[B,Hz]
+      输出:  motion_pred[B,Dy], plan_z_next[B,Hp], phase_z_next[B,Hz]
 
     训练与推理均使用显式历史缓冲，对应 UE 中的 PoseHistoryBuffer。
     """
@@ -6129,8 +6892,12 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
     try:
         shape_dbg = {k: tuple(v.shape) for k, v in batch.items() if hasattr(v, 'shape')}
         print('[Export][BatchShapes]', shape_dbg)
-    except Exception:
-        pass
+    except (TypeError, ValueError, RuntimeError, AttributeError) as exc:
+        _phasec_warn_once(
+            "onnx_export/batch_shape_debug",
+            "failed to print ONNX export batch shape debug info",
+            exc,
+        )
 
     cond_seq = _pick('cond_in', 'C', 'conditions')
     contacts_seq = _pick('contacts', 'soft_contact', 'contacts_in')
@@ -6172,249 +6939,57 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
     pose_hist0 = _frame_or_zero(pose_hist_seq, pose_hist_dim, torch.float32)
     plan_z0 = torch.zeros((1, plan_dim), dtype=torch.float32) if plan_dim > 0 else None
     phase_z0 = torch.zeros((1, phase_dim), dtype=torch.float32) if phase_dim > 0 else None
-    td_hazard_dim = int(contact_dim) if (phase_dim > 0 and str(getattr(model, "phase_reset_source", "")).strip().lower() == "td_hazard") else 0
-    td_hazard_acc0 = torch.zeros((1, td_hazard_dim), dtype=torch.float32) if td_hazard_dim > 0 else None
 
     device = torch.device('cpu')
     model = model.to(device).eval()
 
-    if plan_dim > 0 and phase_dim > 0 and td_hazard_dim > 0:
-        class _StatelessWrapper(torch.nn.Module):
-            def __init__(self, core):
-                super().__init__()
-                self.core = core
+    if plan_dim <= 0 or phase_dim <= 0 or plan_z0 is None or phase_z0 is None:
+        raise RuntimeError(
+            f"[Export][FATAL] ONNX export expects fixed mainchain contract plan_z+phase_z, "
+            f"got plan_dim={plan_dim}, phase_dim={phase_dim}."
+        )
 
-            def forward(self, state, cond, contacts, angvel, pose_hist, plan_z, phase_z, td_hazard_acc):
-                cond_in = cond if cond.shape[-1] > 0 else None
-                contacts_in = contacts if contacts.shape[-1] > 0 else None
-                angvel_in = angvel if angvel.shape[-1] > 0 else None
-                pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
-                plan_z_in = plan_z if plan_z.shape[-1] > 0 else None
-                phase_z_in = phase_z if phase_z.shape[-1] > 0 else None
-                td_hazard_acc_in = td_hazard_acc if td_hazard_acc.shape[-1] > 0 else None
-                out = self.core(
-                    state,
-                    cond_in,
-                    contacts=contacts_in,
-                    angvel=angvel_in,
-                    pose_history=pose_hist_in,
-                    plan_z=plan_z_in,
-                    phase_z=phase_z_in,
-                    td_hazard_acc=td_hazard_acc_in,
-                )
-                if isinstance(out, dict):
-                    pred = out.get('out')
-                    if pred is None:
-                        raise RuntimeError("Model dict output missing 'out'.")
-                    z_next = out.get('plan_z_next')
-                    if z_next is None:
-                        z_next = plan_z.new_zeros(plan_z.shape)
-                    p_next = out.get('phase_z_next')
-                    if p_next is None:
-                        p_next = phase_z.new_zeros(phase_z.shape)
-                    hz_next = out.get("td_hazard_acc_next")
-                    if hz_next is None:
-                        hz_next = td_hazard_acc
-                    return pred, z_next, p_next, hz_next
-                return out, plan_z, phase_z, td_hazard_acc
+    class _StatelessWrapper(torch.nn.Module):
+        def __init__(self, core):
+            super().__init__()
+            self.core = core
 
-        wrapper = _StatelessWrapper(model).cpu().eval()
-        sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0, plan_z0, phase_z0, td_hazard_acc0)
-        Dy = int(sample_out[0].shape[-1])
+        def forward(self, state, cond, contacts, angvel, pose_hist, plan_z, phase_z):
+            cond_in = cond if cond.shape[-1] > 0 else None
+            contacts_in = contacts if contacts.shape[-1] > 0 else None
+            angvel_in = angvel if angvel.shape[-1] > 0 else None
+            pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
+            plan_z_in = plan_z if plan_z.shape[-1] > 0 else None
+            phase_z_in = phase_z if phase_z.shape[-1] > 0 else None
+            out = self.core(
+                state,
+                cond_in,
+                contacts=contacts_in,
+                angvel=angvel_in,
+                pose_history=pose_hist_in,
+                plan_z=plan_z_in,
+                phase_z=phase_z_in,
+            )
+            if isinstance(out, dict):
+                pred = out.get('out')
+                if pred is None:
+                    raise RuntimeError("Model dict output missing 'out'.")
+                z_next = out.get('plan_z_next')
+                if z_next is None:
+                    z_next = plan_z.new_zeros(plan_z.shape)
+                p_next = out.get('phase_z_next')
+                if p_next is None:
+                    p_next = phase_z.new_zeros(phase_z.shape)
+                return pred, z_next, p_next
+            return out, plan_z, phase_z
 
-        inputs = (state0, cond0, contacts0, angvel0, pose_hist0, plan_z0, phase_z0, td_hazard_acc0)
-        input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'plan_z', 'phase_z', 'td_hazard_acc']
-        output_names = ['motion_pred', 'plan_z_next', 'phase_z_next', 'td_hazard_acc_next']
-    elif plan_dim > 0 and phase_dim > 0:
-        class _StatelessWrapper(torch.nn.Module):
-            def __init__(self, core):
-                super().__init__()
-                self.core = core
+    wrapper = _StatelessWrapper(model).cpu().eval()
+    sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0, plan_z0, phase_z0)
+    Dy = int(sample_out[0].shape[-1])
 
-            def forward(self, state, cond, contacts, angvel, pose_hist, plan_z, phase_z):
-                cond_in = cond if cond.shape[-1] > 0 else None
-                contacts_in = contacts if contacts.shape[-1] > 0 else None
-                angvel_in = angvel if angvel.shape[-1] > 0 else None
-                pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
-                plan_z_in = plan_z if plan_z.shape[-1] > 0 else None
-                phase_z_in = phase_z if phase_z.shape[-1] > 0 else None
-                out = self.core(
-                    state,
-                    cond_in,
-                    contacts=contacts_in,
-                    angvel=angvel_in,
-                    pose_history=pose_hist_in,
-                    plan_z=plan_z_in,
-                    phase_z=phase_z_in,
-                )
-                if isinstance(out, dict):
-                    pred = out.get('out')
-                    if pred is None:
-                        raise RuntimeError("Model dict output missing 'out'.")
-                    z_next = out.get('plan_z_next')
-                    if z_next is None:
-                        z_next = plan_z.new_zeros(plan_z.shape)
-                    p_next = out.get('phase_z_next')
-                    if p_next is None:
-                        p_next = phase_z.new_zeros(phase_z.shape)
-                    return pred, z_next, p_next
-                return out, plan_z, phase_z
-
-        wrapper = _StatelessWrapper(model).cpu().eval()
-        sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0, plan_z0, phase_z0)
-        Dy = int(sample_out[0].shape[-1])
-
-        inputs = (state0, cond0, contacts0, angvel0, pose_hist0, plan_z0, phase_z0)
-        input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'plan_z', 'phase_z']
-        output_names = ['motion_pred', 'plan_z_next', 'phase_z_next']
-    elif plan_dim > 0:
-        class _StatelessWrapper(torch.nn.Module):
-            def __init__(self, core):
-                super().__init__()
-                self.core = core
-
-            def forward(self, state, cond, contacts, angvel, pose_hist, plan_z):
-                cond_in = cond if cond.shape[-1] > 0 else None
-                contacts_in = contacts if contacts.shape[-1] > 0 else None
-                angvel_in = angvel if angvel.shape[-1] > 0 else None
-                pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
-                plan_z_in = plan_z if plan_z.shape[-1] > 0 else None
-                out = self.core(
-                    state,
-                    cond_in,
-                    contacts=contacts_in,
-                    angvel=angvel_in,
-                    pose_history=pose_hist_in,
-                    plan_z=plan_z_in,
-                )
-                if isinstance(out, dict):
-                    pred = out.get('out')
-                    if pred is None:
-                        raise RuntimeError("Model dict output missing 'out'.")
-                    z_next = out.get('plan_z_next')
-                    if z_next is None:
-                        z_next = plan_z.new_zeros(plan_z.shape)
-                    return pred, z_next
-                return out, plan_z
-
-        wrapper = _StatelessWrapper(model).cpu().eval()
-        sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0, plan_z0)
-        Dy = int(sample_out[0].shape[-1])
-
-        inputs = (state0, cond0, contacts0, angvel0, pose_hist0, plan_z0)
-        input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'plan_z']
-        output_names = ['motion_pred', 'plan_z_next']
-    elif phase_dim > 0 and td_hazard_dim > 0:
-        class _StatelessWrapper(torch.nn.Module):
-            def __init__(self, core):
-                super().__init__()
-                self.core = core
-
-            def forward(self, state, cond, contacts, angvel, pose_hist, phase_z, td_hazard_acc):
-                cond_in = cond if cond.shape[-1] > 0 else None
-                contacts_in = contacts if contacts.shape[-1] > 0 else None
-                angvel_in = angvel if angvel.shape[-1] > 0 else None
-                pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
-                phase_z_in = phase_z if phase_z.shape[-1] > 0 else None
-                td_hazard_acc_in = td_hazard_acc if td_hazard_acc.shape[-1] > 0 else None
-                out = self.core(
-                    state,
-                    cond_in,
-                    contacts=contacts_in,
-                    angvel=angvel_in,
-                    pose_history=pose_hist_in,
-                    phase_z=phase_z_in,
-                    td_hazard_acc=td_hazard_acc_in,
-                )
-                if isinstance(out, dict):
-                    pred = out.get('out')
-                    if pred is None:
-                        raise RuntimeError("Model dict output missing 'out'.")
-                    p_next = out.get('phase_z_next')
-                    if p_next is None:
-                        p_next = phase_z.new_zeros(phase_z.shape)
-                    hz_next = out.get("td_hazard_acc_next")
-                    if hz_next is None:
-                        hz_next = td_hazard_acc
-                    return pred, p_next, hz_next
-                return out, phase_z, td_hazard_acc
-
-        wrapper = _StatelessWrapper(model).cpu().eval()
-        sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0, phase_z0, td_hazard_acc0)
-        Dy = int(sample_out[0].shape[-1])
-
-        inputs = (state0, cond0, contacts0, angvel0, pose_hist0, phase_z0, td_hazard_acc0)
-        input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'phase_z', 'td_hazard_acc']
-        output_names = ['motion_pred', 'phase_z_next', 'td_hazard_acc_next']
-    elif phase_dim > 0:
-        class _StatelessWrapper(torch.nn.Module):
-            def __init__(self, core):
-                super().__init__()
-                self.core = core
-
-            def forward(self, state, cond, contacts, angvel, pose_hist, phase_z):
-                cond_in = cond if cond.shape[-1] > 0 else None
-                contacts_in = contacts if contacts.shape[-1] > 0 else None
-                angvel_in = angvel if angvel.shape[-1] > 0 else None
-                pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
-                phase_z_in = phase_z if phase_z.shape[-1] > 0 else None
-                out = self.core(
-                    state,
-                    cond_in,
-                    contacts=contacts_in,
-                    angvel=angvel_in,
-                    pose_history=pose_hist_in,
-                    phase_z=phase_z_in,
-                )
-                if isinstance(out, dict):
-                    pred = out.get('out')
-                    if pred is None:
-                        raise RuntimeError("Model dict output missing 'out'.")
-                    p_next = out.get('phase_z_next')
-                    if p_next is None:
-                        p_next = phase_z.new_zeros(phase_z.shape)
-                    return pred, p_next
-                return out, phase_z
-
-        wrapper = _StatelessWrapper(model).cpu().eval()
-        sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0, phase_z0)
-        Dy = int(sample_out[0].shape[-1])
-
-        inputs = (state0, cond0, contacts0, angvel0, pose_hist0, phase_z0)
-        input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'phase_z']
-        output_names = ['motion_pred', 'phase_z_next']
-    else:
-        class _StatelessWrapper(torch.nn.Module):
-            def __init__(self, core):
-                super().__init__()
-                self.core = core
-
-            def forward(self, state, cond, contacts, angvel, pose_hist):
-                cond_in = cond if cond.shape[-1] > 0 else None
-                contacts_in = contacts if contacts.shape[-1] > 0 else None
-                angvel_in = angvel if angvel.shape[-1] > 0 else None
-                pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
-                out = self.core(
-                    state,
-                    cond_in,
-                    contacts=contacts_in,
-                    angvel=angvel_in,
-                    pose_history=pose_hist_in,
-                )
-                if isinstance(out, dict):
-                    pred = out.get('out')
-                    if pred is None:
-                        raise RuntimeError("Model dict output missing 'out'.")
-                    return pred
-                return out
-
-        wrapper = _StatelessWrapper(model).cpu().eval()
-        sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0)
-        Dy = int(sample_out.shape[-1])
-
-        inputs = (state0, cond0, contacts0, angvel0, pose_hist0)
-        input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist']
-        output_names = ['motion_pred']
+    inputs = (state0, cond0, contacts0, angvel0, pose_hist0, plan_z0, phase_z0)
+    input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'plan_z', 'phase_z']
+    output_names = ['motion_pred', 'plan_z_next', 'phase_z_next']
     dynamic_axes = {name: {0: 'B'} for name in input_names + output_names} if dynamic_batch else None
 
     os.makedirs(os.path.dirname(onnx_path) or '.', exist_ok=True)
@@ -6429,10 +7004,11 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
         output_names=output_names,
         dynamic_axes=dynamic_axes,
     )
-    if plan_dim > 0:
-        print(f'[Export][OK] saved: {onnx_path} | Dx={Dx} Dy={Dy} Dc={cond_dim} C={contact_dim} A={angvel_dim} P={pose_hist_dim} Hp={plan_dim}')
-    else:
-        print(f'[Export][OK] saved: {onnx_path} | Dx={Dx} Dy={Dy} Dc={cond_dim} C={contact_dim} A={angvel_dim} P={pose_hist_dim}')
+    print(
+        f'[Export][OK] saved: {onnx_path} | '
+        f'Dx={Dx} Dy={Dy} Dc={cond_dim} C={contact_dim} A={angvel_dim} P={pose_hist_dim} '
+        f'Hp={plan_dim} Hz={phase_dim}'
+    )
 
 def main():
     """

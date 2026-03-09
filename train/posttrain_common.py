@@ -57,46 +57,20 @@ def _unfreeze_direct_pose(
     nonleg_only: bool = False,
 ) -> None:
     if bool(leg_gate_only):
-        # Train only the leg gate/scale head (keep base direct + leg omega frozen).
-        if bool(getattr(model, "direct_pose_leg_side_routing", False)) and getattr(model, "direct_pose_leg_gate_head_shared", None) is not None:
-            gate_leg = getattr(model, "direct_pose_leg_gate_head_shared", None)
-            if gate_leg is not None:
-                for p in gate_leg.parameters():
-                    p.requires_grad_(True)
-        else:
-            gate_leg = getattr(model, "direct_pose_leg_gate_head", None)
-            if gate_leg is not None:
-                for p in gate_leg.parameters():
-                    p.requires_grad_(True)
+        gate_leg = getattr(model, "direct_pose_leg_gate_head", None)
+        if gate_leg is not None:
+            for p in gate_leg.parameters():
+                p.requires_grad_(True)
         return
     if bool(leg_only):
-        # Prefer the routed shared head when enabled (legacy head is unused in forward in that mode).
-        if bool(getattr(model, "direct_pose_leg_side_routing", False)) and getattr(model, "direct_pose_leg_head_shared", None) is not None:
-            leg = getattr(model, "direct_pose_leg_head_shared", None)
-            if leg is not None:
-                for p in leg.parameters():
-                    p.requires_grad_(True)
-            gate_leg = getattr(model, "direct_pose_leg_gate_head_shared", None)
-            if gate_leg is not None:
-                for p in gate_leg.parameters():
-                    p.requires_grad_(True)
-            gate = getattr(model, "direct_pose_leg_side_sign_gate_head", None)
-            if gate is not None:
-                for p in gate.parameters():
-                    p.requires_grad_(True)
-            emb = getattr(model, "direct_pose_leg_side_embed", None)
-            if emb is not None:
-                for p in emb.parameters():
-                    p.requires_grad_(True)
-        else:
-            leg = getattr(model, "direct_pose_leg_head", None)
-            if leg is not None:
-                for p in leg.parameters():
-                    p.requires_grad_(True)
-            gate_leg = getattr(model, "direct_pose_leg_gate_head", None)
-            if gate_leg is not None:
-                for p in gate_leg.parameters():
-                    p.requires_grad_(True)
+        leg = getattr(model, "direct_pose_leg_head", None)
+        if leg is not None:
+            for p in leg.parameters():
+                p.requires_grad_(True)
+        gate_leg = getattr(model, "direct_pose_leg_gate_head", None)
+        if gate_leg is not None:
+            for p in gate_leg.parameters():
+                p.requires_grad_(True)
         return
     if bool(nonleg_only):
         arm_proj = getattr(model, "direct_pose_arm_proj", None)
@@ -177,4 +151,3 @@ def _unfreeze_direct_pose(
     if emb is not None:
         for p in emb.parameters():
             p.requires_grad_(True)
-

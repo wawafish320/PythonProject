@@ -123,37 +123,24 @@ def evaluate_teacher(
         if hasattr(trainer, '_diag_scope'):
             delattr(trainer, '_diag_scope')
 
-    def _avg_simple_dict(dict_list):
+    def _avg_dict_recursive(dict_list):
         totals = {}
         counts = {}
+        nested = {}
         for item in dict_list:
             if not isinstance(item, dict):
                 continue
-            for k, v in item.items():
-                if isinstance(v, (int, float)):
-                    totals[k] = totals.get(k, 0.0) + float(v)
-                    counts[k] = counts.get(k, 0) + 1
-        return {k: (totals[k] / max(1, counts[k])) for k in totals}
-
-    def _avg_nested_dict(dict_list):
-        result = {}
-        counts = {}
-        for item in dict_list:
-            if not isinstance(item, dict):
-                continue
-            for bone, metrics in item.items():
-                if not isinstance(metrics, dict):
-                    continue
-                sub_res = result.setdefault(bone, {})
-                sub_cnt = counts.setdefault(bone, {})
-                for mk, mv in metrics.items():
-                    if isinstance(mv, (int, float)):
-                        sub_res[mk] = sub_res.get(mk, 0.0) + float(mv)
-                        sub_cnt[mk] = sub_cnt.get(mk, 0) + 1
-        for bone, metrics in result.items():
-            cnt = counts.get(bone, {})
-            for mk in list(metrics.keys()):
-                metrics[mk] = metrics[mk] / max(1, cnt.get(mk, 1))
+            for key, value in item.items():
+                if isinstance(value, dict):
+                    nested.setdefault(key, []).append(value)
+                elif isinstance(value, (int, float)):
+                    totals[key] = totals.get(key, 0.0) + float(value)
+                    counts[key] = counts.get(key, 0) + 1
+        result = {key: (totals[key] / max(1, counts[key])) for key in totals}
+        for key, values in nested.items():
+            sub = _avg_dict_recursive(values)
+            if sub:
+                result[key] = sub
         return result
 
     summary: Dict[str, Any] = {}
@@ -162,10 +149,7 @@ def evaluate_teacher(
             continue
         sample = values[0]
         if isinstance(sample, dict):
-            if key == "KeyBoneDetails":
-                summary[key] = _avg_nested_dict(values)
-            else:
-                summary[key] = _avg_simple_dict(values)
+            summary[key] = _avg_dict_recursive(values)
             continue
         try:
             summary[key] = float(sum(values) / max(1, len(values)))
@@ -213,8 +197,6 @@ def evaluate_freerun(
     trainer._diag_scope = 'free_run'
     it = iter(loader)
     while batches_processed < settings.max_batches:
-        if hasattr(trainer, "_carry_debug_buffer"):
-            trainer._carry_debug_buffer = []
         try:
             batch = next(it)
         except StopIteration:
@@ -326,7 +308,6 @@ def evaluate_freerun(
         plan_z = None
         phase_z = None
         phase_event_age = None
-        td_hazard_acc = None
 
         prev_foot_pos_meas = None
         for t in range(start_t, end_t):
@@ -374,10 +355,7 @@ def evaluate_freerun(
                     except Exception:
                         pred_yaw = None
                 if gt_yaw is not None and pred_yaw is not None:
-                    try:
-                        cond_proj = trainer._reproject_cond_to_local_frame(cond_raw_step, gt_yaw, pred_yaw)
-                    except Exception:
-                        cond_proj = None
+                    cond_proj = trainer._reproject_cond_to_local_frame(cond_raw_step, gt_yaw, pred_yaw)
                     if cond_proj is not None:
                         cond_raw_for_model = cond_proj
 
@@ -414,7 +392,7 @@ def evaluate_freerun(
                 rollout_step_t = None
 
             contacts_in_t = contacts_t
-            if bool(getattr(model, "contact_plan_enable", False)) and (not bool(getattr(model, "contact_meas_enable", False))):
+            if bool(getattr(model, "contact_plan_enable", False)):
                 try:
                     fn = getattr(trainer, "_contact_meas_whitebox", None)
                     if callable(fn) and motion_raw is not None:
@@ -434,7 +412,6 @@ def evaluate_freerun(
                     plan_z=plan_z,
                     phase_z=phase_z,
                     phase_event_age=phase_event_age,
-                    td_hazard_acc=td_hazard_acc,
                     time_index=time_index_t,
                     rollout_step=rollout_step_t,
                 )
@@ -454,9 +431,6 @@ def evaluate_freerun(
                     a_next = ret.get("phase_event_age_next", None)
                     if a_next is not None:
                         phase_event_age = a_next.detach()
-                    hz_acc_next = ret.get("td_hazard_acc_next", None)
-                    if hz_acc_next is not None:
-                        td_hazard_acc = hz_acc_next.detach()
                 except Exception:
                     pass
 
@@ -552,12 +526,6 @@ def evaluate_freerun(
                 if rec:
                     diag_records.append(rec)
 
-        carry_debug = getattr(trainer, "_carry_debug_buffer", None)
-        if carry_debug:
-            for rec, extra in zip(diag_records, carry_debug):
-                for k, v in extra.items():
-                    rec[f"carry/{k}"] = v
-
         if not predsY:
             continue
 
@@ -629,12 +597,6 @@ def evaluate_freerun(
                         "yaw_world_abs_deg",
                         "root_vel_mae",
                         "delta_norm_abs",
-                        "carry/yaw_cmd_diff_deg",
-                        "carry/cond_speed",
-                        "carry/rot6d_geo_deg",
-                        "carry/rot6d_ortho_err",
-                        "carry/delta_norm_abs_mean",
-                        "carry/delta_raw_abs_mean",
                     )
                     summaries: Dict[str, Dict[str, float]] = {}
                     for key in focus_keys:
@@ -729,16 +691,33 @@ def evaluate_freerun(
                 metrics[mk] = metrics[mk] / max(1, cnt.get(mk, 1))
         return result
 
+    def _avg_dict_recursive(dict_list):
+        totals = {}
+        counts = {}
+        nested = {}
+        for item in dict_list:
+            if not isinstance(item, dict):
+                continue
+            for key, value in item.items():
+                if isinstance(value, dict):
+                    nested.setdefault(key, []).append(value)
+                elif isinstance(value, (int, float)):
+                    totals[key] = totals.get(key, 0.0) + float(value)
+                    counts[key] = counts.get(key, 0) + 1
+        result = {key: (totals[key] / max(1, counts[key])) for key in totals}
+        for key, values in nested.items():
+            sub = _avg_dict_recursive(values)
+            if sub:
+                result[key] = sub
+        return result
+
     summary: Dict[str, Any] = {}
     for key, values in stats_accum.items():
         if not values:
             continue
         sample = values[0]
         if isinstance(sample, dict):
-            if key == 'KeyBoneDetails':
-                summary[key] = _avg_nested_dict(values)
-            else:
-                summary[key] = _avg_simple_dict(values)
+            summary[key] = _avg_dict_recursive(values)
             continue
         try:
             summary[key] = float(sum(values) / max(1, len(values)))

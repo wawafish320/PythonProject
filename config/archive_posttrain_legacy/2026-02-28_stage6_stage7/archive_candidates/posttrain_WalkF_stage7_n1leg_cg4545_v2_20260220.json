@@ -25,7 +25,6 @@
   "eval_horizon": 14,
   "eval_warmup": 0,
   "width": 512,
-  "freerun_debug_steps": 14,
   "yaw_forward_offset": 0,
   "history_debug_steps": 0,
   "history_use_trend_features": true,

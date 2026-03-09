@@ -33,7 +33,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from train.training_MPL import MotionEventDataset, Trainer, validate_and_fix_model_, geodesic_R
 from train.geometry import rot6d_to_matrix, matrix_to_rot6d, reproject_rot6d, normalize_rot6d_delta
-from train.models import EventMotionModel, MotionJointLoss
+from train.models import EventMotionModel, MotionJointLoss, STAGE6_3WAY_ARMCHAIN_BONES_CSV
 from train.layout import LayoutCenter, DataNormalizer
 from train.geometry import compose_rot6d_delta
 
@@ -125,11 +125,6 @@ def parse_args() -> argparse.Namespace:
             "depth<=2 uses the original MLP encoder; depth>2 enables a residual encoder "
             "(2-layer stem + (depth-2) residual blocks)."
         ),
-    )
-    parser.add_argument(
-        "--direct_pose_meas_force_zero",
-        action="store_true",
-        help="Ablation: force direct head to ignore contacts_meas (concat->zeros, mode_select->uniform).",
     )
     parser.add_argument(
         "--angvel_source",
@@ -541,41 +536,77 @@ class TeacherRolloutRunner:
             phase_state_enable = False
             phase_state_hidden = 64
 
-        contact_meas_enable = any(str(k).startswith("contact_meas_head.") for k in self.state_dict.keys())
-        contact_meas_hidden = 64
-        if contact_meas_enable:
-            w0 = self.state_dict.get("contact_meas_head.mlp.0.weight", None)
-            if not (torch.is_tensor(w0) and w0.ndim == 2):
-                raise SystemExit(
-                    "[FATAL] This repo now only supports contact_meas_head v1 (lowerbody_nohist_v1). "
-                    "The provided checkpoint seems to contain a legacy contact_meas_head; please retrain."
-                )
-            contact_meas_hidden = int(w0.shape[0])
-
         direct_pose_enable = False
         direct_pose_hidden = 256
         direct_pose_meas_mode = "concat"
         direct_pose_feat_source = "cond"
         direct_pose_time_pe_dim = 0
+        direct_pose_split_enable = False
+        direct_pose_arm_split_enable = False
+        direct_pose_arm_bones = None
+        direct_pose_nonleg_proj_dim = 0
         try:
             direct_has_weights = any(str(k).startswith("direct_pose_head.") for k in self.state_dict.keys())
-            if direct_has_weights and int(Dy) > 0 and int(Dc) > 0 and int(self.contact_dim or 0) > 0:
+            direct_has_split_weights = any(
+                str(k).startswith(prefix)
+                for prefix in (
+                    "direct_pose_out_leg.",
+                    "direct_pose_out_nonleg.",
+                    "direct_pose_out_arm.",
+                    "direct_pose_out_else.",
+                    "direct_pose_leg_head.",
+                )
+                for k in self.state_dict.keys()
+            )
+            if (direct_has_weights or direct_has_split_weights) and int(Dc) > 0 and int(self.contact_dim or 0) > 0:
                 w_in = self.state_dict.get("direct_pose_head.0.weight", None)
                 w_out = self.state_dict.get("direct_pose_head.6.weight", None)
-                if torch.is_tensor(w_in) and w_in.ndim == 2 and torch.is_tensor(w_out) and w_out.ndim == 2:
+                w_hidden = self.state_dict.get("direct_pose_head.3.weight", None)
+                if torch.is_tensor(w_in) and w_in.ndim == 2:
                     in_dim = int(w_in.shape[1])
                     hid = int(w_in.shape[0])
-                    out_dim = int(w_out.shape[0])
-                    expected_out = int(Dy)
-                    expected_out_modes = int(Dy) * 2
+                    if torch.is_tensor(w_hidden) and w_hidden.ndim == 2 and int(w_hidden.shape[0]) > 0:
+                        hid = int(w_hidden.shape[0])
                     base_candidates = [
                         (int(Dc), "cond"),
                         (int(self.width), "hidden"),
                         (int(Dc + self.width), "cond+hidden"),
                     ]
                     Cc = int(self.contact_dim or 0)
+                    mode_resolved = False
 
-                    if out_dim == expected_out:
+                    if torch.is_tensor(w_out) and w_out.ndim == 2:
+                        out_dim = int(w_out.shape[0])
+                        expected_out = int(Dy)
+                        expected_out_modes = int(Dy) * 2
+                        if out_dim == expected_out:
+                            for base_dim, src in base_candidates:
+                                tdim = int(in_dim - base_dim - (2 * Cc))
+                                if tdim >= 0 and tdim % 2 == 0:
+                                    direct_pose_enable = True
+                                    direct_pose_hidden = hid
+                                    direct_pose_meas_mode = "concat"
+                                    direct_pose_feat_source = src
+                                    direct_pose_time_pe_dim = int(tdim)
+                                    mode_resolved = True
+                                    break
+                        elif out_dim == expected_out_modes:
+                            for base_dim, src in base_candidates:
+                                tdim = int(in_dim - base_dim - Cc)
+                                if tdim >= 0 and tdim % 2 == 0:
+                                    direct_pose_enable = True
+                                    direct_pose_hidden = hid
+                                    direct_pose_meas_mode = "mode_select"
+                                    direct_pose_feat_source = src
+                                    direct_pose_time_pe_dim = int(tdim)
+                                    mode_resolved = True
+                                    break
+                        else:
+                            raise SystemExit(
+                                f"[FATAL] Unrecognized direct_pose_head out_dim={out_dim} (expected {expected_out} or {expected_out_modes})."
+                            )
+
+                    if (not mode_resolved) and direct_has_split_weights:
                         for base_dim, src in base_candidates:
                             tdim = int(in_dim - base_dim - (2 * Cc))
                             if tdim >= 0 and tdim % 2 == 0:
@@ -584,31 +615,71 @@ class TeacherRolloutRunner:
                                 direct_pose_meas_mode = "concat"
                                 direct_pose_feat_source = src
                                 direct_pose_time_pe_dim = int(tdim)
+                                mode_resolved = True
                                 break
-                    elif out_dim == expected_out_modes:
-                        for base_dim, src in base_candidates:
-                            tdim = int(in_dim - base_dim - Cc)
-                            if tdim >= 0 and tdim % 2 == 0:
-                                direct_pose_enable = True
-                                direct_pose_hidden = hid
-                                direct_pose_meas_mode = "mode_select"
-                                direct_pose_feat_source = src
-                                direct_pose_time_pe_dim = int(tdim)
-                                break
-                    else:
-                        raise SystemExit(
-                            f"[FATAL] Unrecognized direct_pose_head out_dim={out_dim} (expected {expected_out} or {expected_out_modes})."
-                        )
 
-                    if not direct_pose_enable:
+                    if direct_has_split_weights and not direct_pose_enable:
+                        direct_pose_enable = True
+                        direct_pose_hidden = hid
+                        direct_pose_meas_mode = "concat"
+                        direct_pose_feat_source = "cond"
+                        direct_pose_time_pe_dim = 0
+
+                    if direct_has_weights and (not direct_pose_enable):
                         raise SystemExit(
-                            f"[FATAL] Unrecognized direct_pose_head shape: in_dim={in_dim} out_dim={out_dim} "
+                            f"[FATAL] Unrecognized direct_pose_head shape: in_dim={in_dim} "
                             f"(cond_dim={Dc}, hidden_dim={self.width}, contact_dim={self.contact_dim})."
                         )
         except Exception:
             direct_pose_enable = False
             direct_pose_feat_source = "cond"
             direct_pose_time_pe_dim = 0
+            direct_pose_split_enable = False
+            direct_pose_arm_split_enable = False
+            direct_pose_arm_bones = None
+            direct_pose_nonleg_proj_dim = 0
+
+        try:
+            direct_pose_split_enable = bool(
+                direct_pose_enable
+                and (
+                    any(str(k).startswith("direct_pose_out_leg.") for k in self.state_dict.keys())
+                    or (
+                        torch.is_tensor(self.state_dict.get("direct_pose_leg_out_idx", None))
+                        and torch.is_tensor(self.state_dict.get("direct_pose_nonleg_out_idx", None))
+                        and int(self.state_dict["direct_pose_leg_out_idx"].numel()) > 0
+                        and int(self.state_dict["direct_pose_nonleg_out_idx"].numel()) > 0
+                    )
+                )
+            )
+            direct_pose_arm_split_enable = bool(
+                direct_pose_split_enable
+                and (
+                    any(str(k).startswith("direct_pose_out_arm.") for k in self.state_dict.keys())
+                    or (
+                        torch.is_tensor(self.state_dict.get("direct_pose_arm_out_idx", None))
+                        and torch.is_tensor(self.state_dict.get("direct_pose_else_out_idx", None))
+                        and int(self.state_dict["direct_pose_arm_out_idx"].numel()) > 0
+                        and int(self.state_dict["direct_pose_else_out_idx"].numel()) > 0
+                    )
+                )
+            )
+            if direct_pose_arm_split_enable:
+                direct_pose_arm_bones = str(STAGE6_3WAY_ARMCHAIN_BONES_CSV)
+            w_nonleg_proj = self.state_dict.get("direct_pose_nonleg_proj.0.weight", None)
+            if torch.is_tensor(w_nonleg_proj) and w_nonleg_proj.ndim == 2 and int(w_nonleg_proj.shape[0]) > 0:
+                direct_pose_nonleg_proj_dim = int(w_nonleg_proj.shape[0])
+            if direct_pose_nonleg_proj_dim <= 0:
+                for proj_key in ("direct_pose_arm_proj.0.weight", "direct_pose_else_proj.0.weight"):
+                    proj_w = self.state_dict.get(proj_key, None)
+                    if torch.is_tensor(proj_w) and proj_w.ndim == 2 and int(proj_w.shape[0]) > 0:
+                        direct_pose_nonleg_proj_dim = int(proj_w.shape[0])
+                        break
+        except Exception:
+            direct_pose_split_enable = False
+            direct_pose_arm_split_enable = False
+            direct_pose_arm_bones = None
+            direct_pose_nonleg_proj_dim = 0
 
         model = EventMotionModel(
             in_state_dim=Dx,
@@ -654,16 +725,15 @@ class TeacherRolloutRunner:
             direct_pose_plan_drop_prob=0.0,
             direct_pose_feat_source=str(direct_pose_feat_source),
             direct_pose_time_pe_dim=int(direct_pose_time_pe_dim),
-            contact_meas_enable=bool(contact_meas_enable),
-            contact_meas_hidden=int(contact_meas_hidden),
-            contact_meas_dropout=0.0,
+            direct_pose_split_enable=bool(direct_pose_split_enable),
+            direct_pose_nonleg_proj_dim=int(direct_pose_nonleg_proj_dim),
+            direct_pose_arm_split_enable=bool(direct_pose_arm_split_enable),
+            direct_pose_arm_bones=direct_pose_arm_bones,
         ).to(self.device)
         validate_and_fix_model_(model, Dx, Dc)
         missing, unexpected = model.load_state_dict(self.state_dict, strict=False)
         if missing or unexpected:
             print(f"[TeacherRollout][WARN] state_dict mismatch: missing={missing}, unexpected={unexpected}")
-        if bool(getattr(self.args, "direct_pose_meas_force_zero", False)):
-            setattr(model, "direct_pose_meas_force_zero", True)
         # Attach frozen motion encoder bundle if提供
         if self.encoder_bundle_path and self.encoder_bundle_path.is_file():
             model.attach_motion_encoder(torch.load(str(self.encoder_bundle_path), map_location="cpu"))
@@ -750,8 +820,7 @@ class TeacherRolloutRunner:
         if not inputs:
             raise SystemExit("[FATAL] ONNX model has no inputs.")
         # Expected signature from `export_onnx_step_stateful_nophase`:
-        #   state, cond, contacts, angvel, pose_hist, (optional) plan_z, (optional) phase_z,
-        #   (optional) td_hazard_acc
+        #   state, cond, contacts, angvel, pose_hist, (optional) plan_z, (optional) phase_z
         ort_input_map: dict[str, str] = {}
         for inp in inputs:
             name_l = inp.name.lower()
@@ -769,10 +838,6 @@ class TeacherRolloutRunner:
                 ort_input_map["plan_z"] = inp.name
             elif "phase" in name_l and "phase_z" not in ort_input_map:
                 ort_input_map["phase_z"] = inp.name
-            elif ("hazard" in name_l or "td_hazard" in name_l) and "td_hazard_acc" not in ort_input_map:
-                # Exported only when phase_reset_source=td_hazard; keep optional for backward compat.
-                ort_input_map["td_hazard_acc"] = inp.name
-
         required = ("state", "cond", "contacts", "angvel", "pose_hist")
         missing = [k for k in required if k not in ort_input_map]
         if missing:
@@ -802,24 +867,12 @@ class TeacherRolloutRunner:
                         self.ort_phase_dim = int(last)
                 except Exception:
                     self.ort_phase_dim = None
-        # Best-effort td_hazard_acc dim inference (exported only when phase_reset_source=td_hazard).
-        self.ort_td_hazard_acc_dim = None
-        if "td_hazard_acc" in ort_input_map:
-            inp_obj = next((i for i in inputs if i.name == ort_input_map["td_hazard_acc"]), None)
-            if inp_obj is not None and getattr(inp_obj, "shape", None):
-                try:
-                    last = inp_obj.shape[-1]
-                    if isinstance(last, int) and last > 0:
-                        self.ort_td_hazard_acc_dim = int(last)
-                except Exception:
-                    self.ort_td_hazard_acc_dim = None
         outputs = session.get_outputs()
         if not outputs:
             raise SystemExit("[FATAL] ONNX model has no outputs.")
         out_motion = None
         out_plan = None
         out_phase = None
-        out_td_hazard_acc = None
         for out in outputs:
             name_l = out.name.lower()
             if out_motion is None and ("motion" in name_l or "pred" in name_l):
@@ -828,12 +881,9 @@ class TeacherRolloutRunner:
                 out_plan = out.name
             if out_phase is None and ("phase_z" in name_l or ("phase" in name_l and "z_next" in name_l)):
                 out_phase = out.name
-            if out_td_hazard_acc is None and ("td_hazard_acc" in name_l or "hazard_acc" in name_l):
-                out_td_hazard_acc = out.name
         self.ort_output_name = out_motion or outputs[0].name
         self.ort_plan_output_name = out_plan
         self.ort_phase_output_name = out_phase
-        self.ort_td_hazard_acc_output_name = out_td_hazard_acc
         self.ort_session = session
 
     def run_clip(self, teacher_path: Path, out_dir: Path, npz_root: Path, quiet: bool = False) -> Optional[Path]:
@@ -1009,7 +1059,6 @@ class TeacherRolloutRunner:
                 "GeoDeg": geo_deg,
             },
             "ablation": {
-                "direct_pose_meas_force_zero": bool(getattr(self.args, "direct_pose_meas_force_zero", False)),
                 "angvel_source": str(getattr(self.args, "angvel_source", "state")),
                 "pose_hist_source": str(getattr(self.args, "pose_hist_source", "buffer")),
                 "pose_hist_ablation": str(getattr(self.args, "pose_hist_ablation", "none")),
@@ -1122,13 +1171,6 @@ class TeacherRolloutRunner:
             if not isinstance(phase_dim, int) or phase_dim <= 0:
                 raise SystemExit("[FATAL] Unable to infer phase_z dim from ONNX input shapes.")
             phase_z = np.zeros((1, phase_dim), dtype=np.float32)
-        td_hazard_acc = None
-        if "td_hazard_acc" in self.ort_input_map:
-            hz_dim = getattr(self, "ort_td_hazard_acc_dim", None)
-            if not isinstance(hz_dim, int) or hz_dim <= 0:
-                raise SystemExit("[FATAL] Unable to infer td_hazard_acc dim from ONNX input shapes.")
-            td_hazard_acc = np.zeros((1, hz_dim), dtype=np.float32)
-
         for t in range(T):
             feeds: dict[str, np.ndarray] = {
                 self.ort_input_map["state"]: state_arr[t : t + 1],
@@ -1140,7 +1182,6 @@ class TeacherRolloutRunner:
             out_names = [self.ort_output_name]
             want_plan_out = False
             want_phase_out = False
-            want_hz_out = False
             if plan_z is not None:
                 feeds[self.ort_input_map["plan_z"]] = plan_z
                 if getattr(self, "ort_plan_output_name", None):
@@ -1151,11 +1192,6 @@ class TeacherRolloutRunner:
                 if getattr(self, "ort_phase_output_name", None):
                     want_phase_out = True
                     out_names.append(self.ort_phase_output_name)
-            if td_hazard_acc is not None:
-                feeds[self.ort_input_map["td_hazard_acc"]] = td_hazard_acc
-                if getattr(self, "ort_td_hazard_acc_output_name", None):
-                    want_hz_out = True
-                    out_names.append(self.ort_td_hazard_acc_output_name)
             outs = self.ort_session.run(out_names, feeds)
             y = outs[0]
             out_k = 1
@@ -1171,11 +1207,6 @@ class TeacherRolloutRunner:
                 except Exception:
                     pass
                 out_k += 1
-            if want_hz_out and len(outs) > out_k:
-                try:
-                    td_hazard_acc = np.asarray(outs[out_k], dtype=np.float32)
-                except Exception:
-                    pass
             delta_norm = torch.as_tensor(np.asarray(y, dtype=np.float32), dtype=torch.float32)  # [1, Dy]
 
             # ΔY_norm -> ΔY_raw

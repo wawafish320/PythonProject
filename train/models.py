@@ -31,6 +31,9 @@ __all__ = [
     '_CondFiLM',
     'EventMotionModel',
     'MotionJointLoss',
+    'DEFAULT_DIRECT_POSE_LEG_BONES',
+    'STAGE6_3WAY_ARMCHAIN_BONES',
+    'STAGE6_3WAY_ARMCHAIN_BONES_CSV',
 ]
 
 # Lower-body joint indices for our default 46-bone skeleton.
@@ -40,6 +43,22 @@ LOWER_BODY_INDICES_V1: tuple[int, ...] = (
     32, 33, 34, 35, 36, 37, 38,
     39, 40, 41, 42, 43, 44, 45,
 )
+
+DEFAULT_DIRECT_POSE_LEG_BONES: tuple[str, ...] = (
+    'thigh_r', 'calf_r', 'foot_r', 'ball_r',
+    'thigh_l', 'calf_l', 'foot_l', 'ball_l',
+)
+
+STAGE6_3WAY_ARMCHAIN_BONES: tuple[str, ...] = (
+    'clavicle_l', 'upperarm_l', 'RUpArmTwist_l_01', 'RUpArmTwist_l_02',
+    'lowerarm_l', 'L_ForeTwist_01', 'L_ForeTwist_02', 'hand_l',
+    'index_01_l', 'middle_01_l', 'ring_01_l', 'pinky_01_l', 'thumb_01_l',
+    'clavicle_r', 'upperarm_r', 'RUpArmTwist_r_01', 'RUpArmTwist_r_02',
+    'lowerarm_r', 'R_ForeTwist_01', 'R_ForeTwist_02', 'hand_r',
+    'index_01_r', 'middle_01_r', 'ring_01_r', 'pinky_01_r', 'thumb_01_r',
+)
+
+STAGE6_3WAY_ARMCHAIN_BONES_CSV = ','.join(STAGE6_3WAY_ARMCHAIN_BONES)
 
 
 class ContactMeasHeadLowerBodyNoHistV1(nn.Module):
@@ -101,64 +120,6 @@ class ContactMeasHeadLowerBodyNoHistV1(nn.Module):
         logits = self.mlp(flat).view(x.shape[0], x.shape[1], -1)
         return logits
 
-
-class ContactTDHazardHeadLowerBodyNoHistV1(nn.Module):
-    """
-    Touchdown hazard head v1:
-    - Input: lower-body pose (6D) + lower-body angvel (3D), current frame only.
-    - Output: per-foot hazard logits (caller should apply sigmoid to get (0,1) hazard mass per step).
-    """
-
-    def __init__(
-        self,
-        *,
-        pose_dim: int,
-        angvel_dim: int,
-        hidden_dim: int,
-        out_dim: int,
-        dropout: float = 0.0,
-    ) -> None:
-        super().__init__()
-        pose_dim = int(pose_dim)
-        angvel_dim = int(angvel_dim)
-        in_dim = max(0, pose_dim) + max(0, angvel_dim)
-        hidden_dim = max(8, int(hidden_dim))
-        self.pose_dim = pose_dim
-        self.angvel_dim = angvel_dim
-        self.in_dim = int(in_dim)
-
-        self.ln_pose = nn.LayerNorm(pose_dim) if pose_dim > 0 else nn.Identity()
-        self.ln_angvel = nn.LayerNorm(angvel_dim) if angvel_dim > 0 else nn.Identity()
-
-        drop = float(dropout)
-        self.mlp = nn.Sequential(
-            nn.Linear(self.in_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(drop) if drop > 0 else nn.Identity(),
-            nn.Linear(hidden_dim, int(out_dim)),
-        )
-        try:
-            last = self.mlp[-1]
-            if isinstance(last, nn.Linear):
-                with torch.no_grad():
-                    last.weight.zero_()
-                    if last.bias is not None:
-                        last.bias.zero_()
-        except Exception:
-            pass
-
-    def forward(self, pose_lower: torch.Tensor, angvel_lower: torch.Tensor) -> torch.Tensor:
-        z_pose = self.ln_pose(pose_lower) if self.pose_dim > 0 else None
-        z_w = self.ln_angvel(angvel_lower) if self.angvel_dim > 0 else None
-        if z_pose is None:
-            x = z_w
-        elif z_w is None:
-            x = z_pose
-        else:
-            x = torch.cat([z_pose, z_w], dim=-1)
-        flat = x.reshape(-1, x.shape[-1])
-        out = self.mlp(flat).view(x.shape[0], x.shape[1], -1)
-        return out
 
 class MotionEncoder(nn.Module):
     """
@@ -532,8 +493,7 @@ class EventMotionModel(nn.Module):
         contact_phase_state_event_hyst: float = 0.0,
         contact_phase_state_event_min_interval: int = 0,
         # Phase reset source for phase_z:
-        # - contacts_meas: threshold crossing on contacts_meas (legacy; brittle under OOD jitter/flip).
-        # - td_hazard: integrate-to-1 on contact_td_hazard_head output (clock-anchor; stable).
+        # - contacts_meas: threshold crossing on contacts_meas.
         # - none: never reset (pure learned clock).
         phase_reset_source: str = "contacts_meas",
         # ===== Event-Clock v3 (contact_plan residual correction) =====
@@ -640,7 +600,6 @@ class EventMotionModel(nn.Module):
         # Optional: extra per-side stateful cue appended to the routed shared leg head input (1 scalar per side).
         # - none: disabled (default; backward-compatible)
         # - phase_event_age: frames since last accepted phase reset event per contact channel (normalized by tau, clipped to [0,1])
-        # - td_hazard_acc: integrate-to-1 accumulator state in [0,1) when phase_reset_source=td_hazard (clipped to [0,1])
         direct_pose_leg_side_cue: str = "none",
         direct_pose_leg_side_cue_tau: float = 30.0,
         # Optional: per-side sign gate for the routed shared leg omega head.
@@ -660,14 +619,6 @@ class EventMotionModel(nn.Module):
         lambda_fusion_detach_err: bool = True,
         lambda_fusion_logit_init: float = -2.0,
         lambda_fusion_use_rollout_step: bool = False,
-        # ===== Contact Meas (pose-derived, no physics) =====
-        contact_meas_enable: bool = False,
-        contact_meas_hidden: int = 64,
-        contact_meas_dropout: float = 0.0,
-        # ===== Touchdown Hazard (integrate-to-1 event intensity) =====
-        contact_td_hazard_enable: bool = False,
-        contact_td_hazard_hidden: int = 64,
-        contact_td_hazard_dropout: float = 0.0,
         # ===== SO(3) Delta Corrector (post-train friendly) =====
         so3_corr_hidden: int = 128,
         so3_corr_dropout: float = 0.0,
@@ -749,12 +700,12 @@ class EventMotionModel(nn.Module):
             self.contact_phase_state_event_min_interval = 0
         # Phase reset source (used only when contact_phase_state_enable=True).
         self.phase_reset_source = str(phase_reset_source or "contacts_meas").strip().lower()
-        if self.phase_reset_source in ("hazard", "tdhazard", "td_hazard", "tdhaz"):
-            self.phase_reset_source = "td_hazard"
-        elif self.phase_reset_source in ("contacts", "contact", "meas", "contacts_meas"):
+        if self.phase_reset_source in ("contacts", "contact", "meas", "contacts_meas"):
             self.phase_reset_source = "contacts_meas"
         elif self.phase_reset_source in ("none", "off", "disable", "disabled"):
             self.phase_reset_source = "none"
+        elif self.phase_reset_source in ("hazard", "tdhazard", "td_hazard", "tdhaz"):
+            raise ValueError("phase_reset_source='td_hazard' has been retired; use 'contacts_meas' or 'none'.")
         else:
             self.phase_reset_source = "contacts_meas"
         # Event-Clock v3: residual correction inside contact_plan loop
@@ -958,7 +909,7 @@ class EventMotionModel(nn.Module):
         elif cue in ("age", "event_age", "eventage", "phase_age", "phase_event_age", "phaseeventage"):
             cue = "phase_event_age"
         elif cue in ("hazard", "td_hazard", "tdhazard", "hazard_acc", "td_hazard_acc", "tdhazard_acc", "hzacc"):
-            cue = "td_hazard_acc"
+            raise ValueError("direct_pose_leg_side_cue='td_hazard_acc' has been retired; use 'none' or 'phase_event_age'.")
         else:
             cue = "none"
         self.direct_pose_leg_side_cue: str = str(cue)
@@ -1178,10 +1129,7 @@ class EventMotionModel(nn.Module):
                 arm_items: list[Any] = []
                 arm_spec = getattr(self, "direct_pose_arm_bones", None)
                 if arm_spec is None:
-                    arm_items = [
-                        "upperarm_l", "lowerarm_l", "hand_l", "thumb_01_l", "pinky_01_l",
-                        "upperarm_r", "lowerarm_r", "hand_r", "thumb_01_r", "pinky_01_r",
-                    ]
+                    arm_items = list(STAGE6_3WAY_ARMCHAIN_BONES)
                 elif isinstance(arm_spec, str):
                     arm_items = [s.strip() for s in arm_spec.split(",") if s.strip()]
                 elif isinstance(arm_spec, (list, tuple)):
@@ -1797,80 +1745,7 @@ class EventMotionModel(nn.Module):
                 except Exception:
                     pass
 
-        # ===== Contact heads (pose-derived, cheap; no physics) =====
-        # - contacts_meas: soft contact probability (for closed-loop error / Event-Clock)
-        self.contact_meas_enable = bool(contact_meas_enable and self.contact_dim > 0)
-        self.contact_meas_head: Optional[nn.Module] = None
-        self._contact_meas_dropout = float(contact_meas_dropout)
-
-        self.contact_td_hazard_enable = bool(contact_td_hazard_enable and self.contact_dim > 0)
-        self.contact_td_hazard_head: Optional[nn.Module] = None
-        self._contact_td_hazard_dropout = float(contact_td_hazard_dropout)
-
-        # Shared v1 lower-body feature extraction (lower-body pose6d + angvel from state_t).
-        self._contact_meas_in_dim = 0
-        self._contact_meas_state_rot_slice: Optional[slice] = None
-        self._contact_meas_state_angvel_slice: Optional[slice] = None
-        self.register_buffer("_contact_meas_lower_joint_idx", torch.empty(0, dtype=torch.long))
-
-        if self.contact_meas_enable or self.contact_td_hazard_enable:
-            rot_sl = parse_layout_entry(
-                self.state_layout.get("BoneRotations6D") or self.state_layout.get("bone_rotations6d"),
-                "BoneRotations6D",
-                self.in_state_dim,
-            )
-            av_sl = parse_layout_entry(
-                self.state_layout.get("BoneAngularVelocities") or self.state_layout.get("bone_angular_velocities"),
-                "BoneAngularVelocities",
-                self.in_state_dim,
-            )
-            if rot_sl is None or av_sl is None:
-                raise ValueError(
-                    "contact_meas/contact_td_hazard heads require state_layout to provide BoneRotations6D and BoneAngularVelocities slices."
-                )
-            rot_dim = int(rot_sl.stop - rot_sl.start)
-            av_dim = int(av_sl.stop - av_sl.start)
-            if rot_dim <= 0 or av_dim <= 0 or (rot_dim % 6) != 0 or (av_dim % 3) != 0:
-                raise ValueError(
-                    f"Invalid contact head v1 input dims from state_layout: rot_dim={rot_dim} (must be %6==0), "
-                    f"angvel_dim={av_dim} (must be %3==0)."
-                )
-            J_rot = int(rot_dim // 6)
-            J_av = int(av_dim // 3)
-            J = int(min(J_rot, J_av))
-            if J <= 0:
-                raise ValueError("Invalid contact head v1: inferred joint count J<=0 from state_layout.")
-
-            lower_idx = [int(i) for i in LOWER_BODY_INDICES_V1 if int(i) < J]
-            if not lower_idx:
-                lower_idx = list(range(J))
-
-            pose_dim = int(len(lower_idx) * 6)
-            w_dim = int(len(lower_idx) * 3)
-            self._contact_meas_in_dim = int(pose_dim + w_dim)
-            self._contact_meas_state_rot_slice = rot_sl
-            self._contact_meas_state_angvel_slice = av_sl
-            self._contact_meas_lower_joint_idx = torch.as_tensor(lower_idx, dtype=torch.long)
-
-            if self.contact_meas_enable:
-                h_meas = max(8, int(contact_meas_hidden))
-                self.contact_meas_head = ContactMeasHeadLowerBodyNoHistV1(
-                    pose_dim=pose_dim,
-                    angvel_dim=w_dim,
-                    hidden_dim=h_meas,
-                    out_dim=self.contact_dim,
-                    dropout=self._contact_meas_dropout,
-                )
-
-            if self.contact_td_hazard_enable:
-                h_hz = max(8, int(contact_td_hazard_hidden))
-                self.contact_td_hazard_head = ContactTDHazardHeadLowerBodyNoHistV1(
-                    pose_dim=pose_dim,
-                    angvel_dim=w_dim,
-                    hidden_dim=h_hz,
-                    out_dim=self.contact_dim,
-                    dropout=self._contact_td_hazard_dropout,
-                )
+        # Contacts are provided externally via `contacts_input`; internal meas/hazard heads are retired.
 
         # ===== SO(3) Delta Corrector (lightweight head) =====
         # - Predicts omega_hat in so(3) to correct ΔR on-manifold.
@@ -1937,6 +1812,7 @@ class EventMotionModel(nn.Module):
         # Optional frozen encoder from预训练，用于提供 soft hint（接触提示 embedding）
         self.frozen_encoder: Optional['MotionEncoder'] = None
         self.frozen_period_head: Optional['PeriodHead'] = None
+        self.frozen_contact_head: Optional[nn.Module] = None
 
     def _forward_direct_pose_readout(self, direct_flat: torch.Tensor, *, B: int, Tq: int) -> torch.Tensor:
         if not bool(getattr(self, "direct_pose_split_enable", False)):
@@ -2416,7 +2292,6 @@ class EventMotionModel(nn.Module):
         plan_z: Optional[torch.Tensor] = None,
         phase_z: Optional[torch.Tensor] = None,
         phase_event_age: Optional[torch.Tensor] = None,
-        td_hazard_acc: Optional[torch.Tensor] = None,
         meas_logits_prev: Optional[torch.Tensor] = None,
         time_index: Optional[torch.Tensor | int | float] = None,
         rollout_step: Optional[torch.Tensor | int | float] = None,
@@ -2438,9 +2313,6 @@ class EventMotionModel(nn.Module):
             phase_z = phase_z.unsqueeze(0)
         if phase_event_age is not None and phase_event_age.ndim == 1:
             phase_event_age = phase_event_age.unsqueeze(0)
-        if td_hazard_acc is not None and td_hazard_acc.ndim == 1:
-            td_hazard_acc = td_hazard_acc.unsqueeze(0)
-
         if cond is None and self.cond_dim > 0:
             cond = torch.zeros(state.shape[:-1] + (self.cond_dim,), device=state.device, dtype=state.dtype)
         if cond is not None and cond.ndim == 2 and state.ndim == 3:
@@ -2459,15 +2331,12 @@ class EventMotionModel(nn.Module):
         # Pre-computed signals for Event-Clock (v3). Populated only when enabled.
         soft_period: Optional[torch.Tensor] = None
         contacts_meas: Optional[torch.Tensor] = None
-        contacts_meas_logits: Optional[torch.Tensor] = None
         event_clock_delta_meas: Optional[torch.Tensor] = None
         event_clock_lr_diff: Optional[torch.Tensor] = None
         event_clock_lambda_corr: Optional[torch.Tensor] = None
         event_clock_lambda_logit: Optional[torch.Tensor] = None
         event_clock_dynamic_prior: Optional[torch.Tensor] = None
         event_clock_delta_z: Optional[torch.Tensor] = None
-        contacts_td_hazard_logit: Optional[torch.Tensor] = None
-        contacts_td_hazard_prob: Optional[torch.Tensor] = None
         _pose_hist_processed = False
 
         # ---- Contact plan (independent anchor) ----
@@ -2477,8 +2346,6 @@ class EventMotionModel(nn.Module):
         plan_z_next = None
         phase_z_next = None
         phase_event_age_next = None
-        td_hazard_acc_next = None
-        td_hazard_event_next = None
         plan_feat_for_inject = None
         contacts_plan_logits = None
         contacts_plan_logits_base = None
@@ -2690,16 +2557,12 @@ class EventMotionModel(nn.Module):
             contacts_meas_obs: Optional[torch.Tensor] = None
             delta_meas_obs: Optional[torch.Tensor] = None
             phase_reset_source = str(getattr(self, "phase_reset_source", "contacts_meas") or "contacts_meas").strip().lower()
-            if phase_reset_source in ("hazard", "tdhazard", "td_hazard", "tdhaz"):
-                phase_reset_source = "td_hazard"
-            elif phase_reset_source in ("contacts", "contact", "meas", "contacts_meas"):
+            if phase_reset_source in ("contacts", "contact", "meas", "contacts_meas"):
                 phase_reset_source = "contacts_meas"
             elif phase_reset_source in ("none", "off", "disable", "disabled"):
                 phase_reset_source = "none"
             else:
                 phase_reset_source = "contacts_meas"
-            td_hazard_acc_t: Optional[torch.Tensor] = None  # (B,C) in [0,1)
-            td_hazard_event_t: Optional[torch.Tensor] = None  # (B,C) bool, last step
             # Optional: capture phase_z_in per step for the direct head (use pre-update phase).
             phase_in_direct_dim = int(getattr(self, "_direct_pose_phase_dim", 0) or 0)
             phase_in_direct_seq: Optional[list[torch.Tensor]] = (
@@ -2741,7 +2604,7 @@ class EventMotionModel(nn.Module):
                     except Exception:
                         pass
 
-                # contacts_meas: prefer external override if provided; else learned head.
+                # contacts_meas: external override only.
                 if contacts_input is not None:
                     try:
                         meas = contacts_input.to(device=device, dtype=dtype)
@@ -2760,34 +2623,8 @@ class EventMotionModel(nn.Module):
                                 else:
                                     meas = F.pad(meas, (0, int(self.contact_dim) - meas.shape[-1]))
                             contacts_meas = meas
-                            contacts_meas_logits = None
                     except Exception:
                         contacts_meas = None
-                        contacts_meas_logits = None
-                elif self.contact_meas_enable and self.contact_meas_head is not None and self._contact_meas_in_dim > 0:
-                    rot_sl = self._contact_meas_state_rot_slice
-                    av_sl = self._contact_meas_state_angvel_slice
-                    idx = self._contact_meas_lower_joint_idx
-                    if rot_sl is None or av_sl is None or (not torch.is_tensor(idx)) or idx.numel() <= 0:
-                        raise RuntimeError("contact_meas_enable=true but v1 slices/indices are not initialized.")
-                    pose_all = state[..., rot_sl]
-                    w_all = state[..., av_sl]
-                    Jp = int(pose_all.shape[-1] // 6)
-                    Jw = int(w_all.shape[-1] // 3)
-                    idx_dev = idx.to(device=pose_all.device)
-                    pose_lower = (
-                        pose_all.view(pose_all.shape[0], pose_all.shape[1], Jp, 6)
-                        .index_select(2, idx_dev)
-                        .reshape(pose_all.shape[0], pose_all.shape[1], -1)
-                    )
-                    w_lower = (
-                        w_all.view(w_all.shape[0], w_all.shape[1], Jw, 3)
-                        .index_select(2, idx_dev)
-                        .reshape(w_all.shape[0], w_all.shape[1], -1)
-                    )
-                    logits = self.contact_meas_head(pose_lower, w_lower)
-                    contacts_meas_logits = logits
-                    contacts_meas = torch.sigmoid(logits)
 
                 if contacts_meas is None:
                     contacts_meas = torch.zeros((B, Tq, int(self.contact_dim)), device=device, dtype=dtype)
@@ -2816,19 +2653,11 @@ class EventMotionModel(nn.Module):
                     except Exception:
                         meas_prev_t = None
 
-                # delta_meas: logits-diff when possible, otherwise prob-diff.
-                if contacts_meas_logits is not None and torch.is_tensor(contacts_meas_logits):
-                    delta_meas = torch.zeros_like(contacts_meas_logits)
-                    if Tq > 1:
-                        delta_meas[:, 1:] = contacts_meas_logits[:, 1:] - contacts_meas_logits[:, :-1]
-                    if meas_prev_t is not None and Tq > 0:
-                        delta_meas[:, 0] = contacts_meas_logits[:, 0] - meas_prev_t
-                else:
-                    delta_meas = torch.zeros_like(contacts_meas)
-                    if Tq > 1:
-                        delta_meas[:, 1:] = contacts_meas[:, 1:] - contacts_meas[:, :-1]
-                    if meas_prev_t is not None and Tq > 0:
-                        delta_meas[:, 0] = contacts_meas[:, 0] - meas_prev_t
+                delta_meas = torch.zeros_like(contacts_meas)
+                if Tq > 1:
+                    delta_meas[:, 1:] = contacts_meas[:, 1:] - contacts_meas[:, :-1]
+                if meas_prev_t is not None and Tq > 0:
+                    delta_meas[:, 0] = contacts_meas[:, 0] - meas_prev_t
 
                 lr_diff = torch.zeros((B, Tq, 1), device=device, dtype=dtype)
                 if int(self.contact_dim) >= 2:
@@ -2841,68 +2670,6 @@ class EventMotionModel(nn.Module):
 
                 event_clock_delta_meas = delta_meas_obs
                 event_clock_lr_diff = lr_diff_obs
-
-                # ---- TD hazard clock-anchor (for phase_reset_source=td_hazard) ----
-                if (
-                    phase_enabled
-                    and phase_reset_source == "td_hazard"
-                    and contacts_td_hazard_prob is None
-                    and self.contact_td_hazard_enable
-                    and self.contact_td_hazard_head is not None
-                    and self._contact_meas_in_dim > 0
-                ):
-                    try:
-                        rot_sl = self._contact_meas_state_rot_slice
-                        av_sl = self._contact_meas_state_angvel_slice
-                        idx = self._contact_meas_lower_joint_idx
-                        if rot_sl is None or av_sl is None or (not torch.is_tensor(idx)) or idx.numel() <= 0:
-                            raise RuntimeError("contact_td_hazard_enable=true but v1 slices/indices are not initialized.")
-                        pose_all = state[..., rot_sl]
-                        w_all = state[..., av_sl]
-                        Jp = int(pose_all.shape[-1] // 6)
-                        Jw = int(w_all.shape[-1] // 3)
-                        idx_dev = idx.to(device=pose_all.device)
-                        pose_lower = (
-                            pose_all.view(pose_all.shape[0], pose_all.shape[1], Jp, 6)
-                            .index_select(2, idx_dev)
-                            .reshape(pose_all.shape[0], pose_all.shape[1], -1)
-                        )
-                        w_lower = (
-                            w_all.view(w_all.shape[0], w_all.shape[1], Jw, 3)
-                            .index_select(2, idx_dev)
-                            .reshape(w_all.shape[0], w_all.shape[1], -1)
-                        )
-                        logits = self.contact_td_hazard_head(pose_lower, w_lower)
-                        contacts_td_hazard_logit = logits
-                        contacts_td_hazard_prob = torch.sigmoid(logits)
-                    except Exception:
-                        contacts_td_hazard_logit = None
-                        contacts_td_hazard_prob = None
-
-                if phase_enabled and phase_reset_source == "td_hazard":
-                    # Canonicalize td_hazard_acc to (B,C) (stateful across forward calls).
-                    Cc = int(self.contact_dim)
-                    try:
-                        if torch.is_tensor(td_hazard_acc):
-                            acc = td_hazard_acc.to(device=device, dtype=dtype)
-                            if acc.ndim == 3 and acc.size(1) == 1:
-                                acc = acc[:, 0]
-                            if acc.ndim == 1:
-                                acc = acc.view(1, -1)
-                            if acc.ndim != 2:
-                                acc = acc.reshape(B, -1)
-                            if acc.shape[0] == 1 and B > 1:
-                                acc = acc.expand(B, -1)
-                            if int(acc.shape[-1]) != int(Cc):
-                                if int(acc.shape[-1]) > int(Cc):
-                                    acc = acc[..., :Cc]
-                                else:
-                                    acc = F.pad(acc, (0, int(Cc) - int(acc.shape[-1])))
-                            td_hazard_acc_t = acc.clamp(0.0, 1.0).detach()
-                        else:
-                            td_hazard_acc_t = torch.zeros((B, Cc), device=device, dtype=dtype)
-                    except Exception:
-                        td_hazard_acc_t = torch.zeros((B, Cc), device=device, dtype=dtype)
 
                 # ---- Phase state init (prev_phase_vec) ----
                 if phase_enabled and phase_z_t is None and phase_dim > 0:
@@ -2967,8 +2734,6 @@ class EventMotionModel(nn.Module):
                     if torch.is_tensor(meas_prev_t):
                         try:
                             prev_prob = meas_prev_t
-                            if contacts_meas_logits is not None and torch.is_tensor(contacts_meas_logits):
-                                prev_prob = torch.sigmoid(prev_prob)
                             prev_prob = prev_prob.to(device=device, dtype=dtype)
                             if prev_prob.ndim == 2 and prev_prob.shape[0] == 1 and B > 1:
                                 prev_prob = prev_prob.expand(B, -1)
@@ -3052,10 +2817,6 @@ class EventMotionModel(nn.Module):
                             if leg_side_cue_mode == "phase_event_age":
                                 leg_side_cue_seq.append(
                                     phase_event_age_t if torch.is_tensor(phase_event_age_t) else leg_side_cue_zero
-                                )
-                            elif leg_side_cue_mode == "td_hazard_acc":
-                                leg_side_cue_seq.append(
-                                    td_hazard_acc_t if torch.is_tensor(td_hazard_acc_t) else leg_side_cue_zero
                                 )
                             else:
                                 leg_side_cue_seq.append(leg_side_cue_zero)
@@ -3156,38 +2917,7 @@ class EventMotionModel(nn.Module):
                             cos_next = cos_prev * cos_d - sin_prev * sin_d
                             v_next = torch.stack([sin_next, cos_next], dim=-1)
 
-                            if phase_reset_source == "td_hazard":
-                                # Deterministic integrate-to-1 on hazard probability mass (no thresholds).
-                                # Provides a stable clock-anchor reset decoupled from contacts_meas jitter/flip.
-                                if torch.is_tensor(contacts_td_hazard_prob) and td_hazard_acc_t is not None:
-                                    try:
-                                        p_t = contacts_td_hazard_prob[:, _t].to(dtype=td_hazard_acc_t.dtype).clamp(0.0, 1.0)
-                                        with torch.no_grad():
-                                            acc_next = td_hazard_acc_t + p_t
-                                            ev = acc_next >= 1.0
-                                            min_interval = int(getattr(self, "contact_phase_state_event_min_interval", 0) or 0)
-                                            if phase_event_age_t is not None and min_interval > 0:
-                                                try:
-                                                    ev = ev & (phase_event_age_t >= float(min_interval))
-                                                except Exception:
-                                                    pass
-                                            td_hazard_event_t = ev
-                                            td_hazard_acc_t = (acc_next - ev.to(dtype=acc_next.dtype)).clamp(0.0, 1.0)
-                                        mask = td_hazard_event_t.to(dtype=v_next.dtype).unsqueeze(-1)
-                                        v_next = v_next * (1.0 - mask) + phase_anchor.expand_as(v_next) * mask
-                                        if phase_event_age_t is not None:
-                                            try:
-                                                phase_event_age_t = torch.where(
-                                                    td_hazard_event_t,
-                                                    torch.zeros_like(phase_event_age_t),
-                                                    phase_event_age_t + 1.0,
-                                                )
-                                            except Exception:
-                                                pass
-                                    except Exception:
-                                        pass
-
-                            elif phase_reset_source == "contacts_meas":
+                            if phase_reset_source == "contacts_meas":
                                 kind = str(getattr(self, "contact_phase_state_event_kind", "touchdown") or "touchdown").lower().strip()
                                 if kind != "none":
                                     thr = float(getattr(self, "contact_phase_state_event_thr", 0.5) or 0.5)
@@ -3237,7 +2967,7 @@ class EventMotionModel(nn.Module):
                 # Event-Clock off: still support explicit phase state + logit residual injection.
                 if phase_enabled:
                     Cc = int(self.contact_dim)
-                    # contacts_meas: prefer external override if provided; else learned head; else zeros.
+                    # contacts_meas: external override only; otherwise zeros.
                     if contacts_input is not None:
                         try:
                             meas = contacts_input.to(device=device, dtype=dtype)
@@ -3256,34 +2986,8 @@ class EventMotionModel(nn.Module):
                                     else:
                                         meas = F.pad(meas, (0, Cc - meas.shape[-1]))
                                 contacts_meas = meas
-                                contacts_meas_logits = None
                         except Exception:
                             contacts_meas = None
-                            contacts_meas_logits = None
-                    elif self.contact_meas_enable and self.contact_meas_head is not None and self._contact_meas_in_dim > 0:
-                        rot_sl = self._contact_meas_state_rot_slice
-                        av_sl = self._contact_meas_state_angvel_slice
-                        idx = self._contact_meas_lower_joint_idx
-                        if rot_sl is None or av_sl is None or (not torch.is_tensor(idx)) or idx.numel() <= 0:
-                            raise RuntimeError("contact_meas_enable=true but v1 slices/indices are not initialized.")
-                        pose_all = state[..., rot_sl]
-                        w_all = state[..., av_sl]
-                        Jp = int(pose_all.shape[-1] // 6)
-                        Jw = int(w_all.shape[-1] // 3)
-                        idx_dev = idx.to(device=pose_all.device)
-                        pose_lower = (
-                            pose_all.view(pose_all.shape[0], pose_all.shape[1], Jp, 6)
-                            .index_select(2, idx_dev)
-                            .reshape(pose_all.shape[0], pose_all.shape[1], -1)
-                        )
-                        w_lower = (
-                            w_all.view(w_all.shape[0], w_all.shape[1], Jw, 3)
-                            .index_select(2, idx_dev)
-                            .reshape(w_all.shape[0], w_all.shape[1], -1)
-                        )
-                        logits = self.contact_meas_head(pose_lower, w_lower)
-                        contacts_meas_logits = logits
-                        contacts_meas = torch.sigmoid(logits)
 
                     if contacts_meas is None:
                         contacts_meas = torch.zeros((B, Tq, Cc), device=device, dtype=dtype)
@@ -3312,83 +3016,15 @@ class EventMotionModel(nn.Module):
                         except Exception:
                             meas_prev_t = None
 
-                    # delta_meas: logits-diff when possible, otherwise prob-diff.
-                    if contacts_meas_logits is not None and torch.is_tensor(contacts_meas_logits):
-                        delta_meas = torch.zeros_like(contacts_meas_logits)
-                        if Tq > 1:
-                            delta_meas[:, 1:] = contacts_meas_logits[:, 1:] - contacts_meas_logits[:, :-1]
-                        if meas_prev_t is not None and Tq > 0:
-                            delta_meas[:, 0] = contacts_meas_logits[:, 0] - meas_prev_t
-                    else:
-                        delta_meas = torch.zeros_like(contacts_meas)
-                        if Tq > 1:
-                            delta_meas[:, 1:] = contacts_meas[:, 1:] - contacts_meas[:, :-1]
-                        if meas_prev_t is not None and Tq > 0:
-                            delta_meas[:, 0] = contacts_meas[:, 0] - meas_prev_t
+                    delta_meas = torch.zeros_like(contacts_meas)
+                    if Tq > 1:
+                        delta_meas[:, 1:] = contacts_meas[:, 1:] - contacts_meas[:, :-1]
+                    if meas_prev_t is not None and Tq > 0:
+                        delta_meas[:, 0] = contacts_meas[:, 0] - meas_prev_t
 
                     # Detach observation signals (avoid co-adaptation).
                     contacts_meas_obs = contacts_meas.detach()
                     delta_meas_obs = delta_meas.detach()
-
-                    # ---- TD hazard clock-anchor (for phase_reset_source=td_hazard) ----
-                    if (
-                        phase_reset_source == "td_hazard"
-                        and contacts_td_hazard_prob is None
-                        and self.contact_td_hazard_enable
-                        and self.contact_td_hazard_head is not None
-                        and self._contact_meas_in_dim > 0
-                    ):
-                        try:
-                            rot_sl = self._contact_meas_state_rot_slice
-                            av_sl = self._contact_meas_state_angvel_slice
-                            idx = self._contact_meas_lower_joint_idx
-                            if rot_sl is None or av_sl is None or (not torch.is_tensor(idx)) or idx.numel() <= 0:
-                                raise RuntimeError("contact_td_hazard_enable=true but v1 slices/indices are not initialized.")
-                            pose_all = state[..., rot_sl]
-                            w_all = state[..., av_sl]
-                            Jp = int(pose_all.shape[-1] // 6)
-                            Jw = int(w_all.shape[-1] // 3)
-                            idx_dev = idx.to(device=pose_all.device)
-                            pose_lower = (
-                                pose_all.view(pose_all.shape[0], pose_all.shape[1], Jp, 6)
-                                .index_select(2, idx_dev)
-                                .reshape(pose_all.shape[0], pose_all.shape[1], -1)
-                            )
-                            w_lower = (
-                                w_all.view(w_all.shape[0], w_all.shape[1], Jw, 3)
-                                .index_select(2, idx_dev)
-                                .reshape(w_all.shape[0], w_all.shape[1], -1)
-                            )
-                            logits = self.contact_td_hazard_head(pose_lower, w_lower)
-                            contacts_td_hazard_logit = logits
-                            contacts_td_hazard_prob = torch.sigmoid(logits)
-                        except Exception:
-                            contacts_td_hazard_logit = None
-                            contacts_td_hazard_prob = None
-
-                    if phase_reset_source == "td_hazard":
-                        # Canonicalize td_hazard_acc to (B,C) (stateful across forward calls).
-                        try:
-                            if torch.is_tensor(td_hazard_acc):
-                                acc = td_hazard_acc.to(device=device, dtype=dtype)
-                                if acc.ndim == 3 and acc.size(1) == 1:
-                                    acc = acc[:, 0]
-                                if acc.ndim == 1:
-                                    acc = acc.view(1, -1)
-                                if acc.ndim != 2:
-                                    acc = acc.reshape(B, -1)
-                                if acc.shape[0] == 1 and B > 1:
-                                    acc = acc.expand(B, -1)
-                                if int(acc.shape[-1]) != int(Cc):
-                                    if int(acc.shape[-1]) > int(Cc):
-                                        acc = acc[..., :Cc]
-                                    else:
-                                        acc = F.pad(acc, (0, int(Cc) - int(acc.shape[-1])))
-                                td_hazard_acc_t = acc.clamp(0.0, 1.0).detach()
-                            else:
-                                td_hazard_acc_t = torch.zeros((B, Cc), device=device, dtype=dtype)
-                        except Exception:
-                            td_hazard_acc_t = torch.zeros((B, Cc), device=device, dtype=dtype)
 
                     # Phase state init (prev_phase_vec)
                     if phase_z_t is None and phase_dim > 0:
@@ -3448,8 +3084,6 @@ class EventMotionModel(nn.Module):
                         if torch.is_tensor(meas_prev_t):
                             try:
                                 prev_prob = meas_prev_t
-                                if contacts_meas_logits is not None and torch.is_tensor(contacts_meas_logits):
-                                    prev_prob = torch.sigmoid(prev_prob)
                                 prev_prob = prev_prob.to(device=device, dtype=dtype)
                                 if prev_prob.ndim == 2 and prev_prob.shape[0] == 1 and B > 1:
                                     prev_prob = prev_prob.expand(B, -1)
@@ -3503,10 +3137,6 @@ class EventMotionModel(nn.Module):
                             if leg_side_cue_mode == "phase_event_age":
                                 leg_side_cue_seq.append(
                                     phase_event_age_t if torch.is_tensor(phase_event_age_t) else leg_side_cue_zero
-                                )
-                            elif leg_side_cue_mode == "td_hazard_acc":
-                                leg_side_cue_seq.append(
-                                    td_hazard_acc_t if torch.is_tensor(td_hazard_acc_t) else leg_side_cue_zero
                                 )
                             else:
                                 leg_side_cue_seq.append(leg_side_cue_zero)
@@ -3577,35 +3207,7 @@ class EventMotionModel(nn.Module):
                             cos_next = cos_prev * cos_d - sin_prev * sin_d
                             v_next = torch.stack([sin_next, cos_next], dim=-1)
 
-                            if phase_reset_source == "td_hazard":
-                                if torch.is_tensor(contacts_td_hazard_prob) and td_hazard_acc_t is not None:
-                                    try:
-                                        p_t = contacts_td_hazard_prob[:, _t].to(dtype=td_hazard_acc_t.dtype).clamp(0.0, 1.0)
-                                        with torch.no_grad():
-                                            acc_next = td_hazard_acc_t + p_t
-                                            ev = acc_next >= 1.0
-                                            min_interval = int(getattr(self, "contact_phase_state_event_min_interval", 0) or 0)
-                                            if phase_event_age_t is not None and min_interval > 0:
-                                                try:
-                                                    ev = ev & (phase_event_age_t >= float(min_interval))
-                                                except Exception:
-                                                    pass
-                                            td_hazard_event_t = ev
-                                            td_hazard_acc_t = (acc_next - ev.to(dtype=acc_next.dtype)).clamp(0.0, 1.0)
-                                        mask = td_hazard_event_t.to(dtype=v_next.dtype).unsqueeze(-1)
-                                        v_next = v_next * (1.0 - mask) + phase_anchor.expand_as(v_next) * mask
-                                        if phase_event_age_t is not None:
-                                            try:
-                                                phase_event_age_t = torch.where(
-                                                    td_hazard_event_t,
-                                                    torch.zeros_like(phase_event_age_t),
-                                                    phase_event_age_t + 1.0,
-                                                )
-                                            except Exception:
-                                                pass
-                                    except Exception:
-                                        pass
-                            elif phase_reset_source == "contacts_meas":
+                            if phase_reset_source == "contacts_meas":
                                 kind = str(getattr(self, "contact_phase_state_event_kind", "touchdown") or "touchdown").lower().strip()
                                 if kind != "none":
                                     thr = float(getattr(self, "contact_phase_state_event_thr", 0.5) or 0.5)
@@ -3693,10 +3295,6 @@ class EventMotionModel(nn.Module):
                 phase_z_next = phase_z_t
             if phase_enabled and phase_event_age_t is not None:
                 phase_event_age_next = phase_event_age_t
-            if phase_enabled and phase_reset_source == "td_hazard" and torch.is_tensor(td_hazard_acc_t):
-                td_hazard_acc_next = td_hazard_acc_t.detach()
-                if torch.is_tensor(td_hazard_event_t):
-                    td_hazard_event_next = td_hazard_event_t.detach().to(dtype=torch.float32)
             if self.contact_plan_inject == "contacts":
                 plan_feat_for_inject = contacts_plan
             elif self.contact_plan_inject == "plan_z" and plan_z_seq is not None:
@@ -3845,92 +3443,20 @@ class EventMotionModel(nn.Module):
         # ---- Contact meas (pose-derived) + error signal ----
         e_t = None
         if contacts_meas is None:
-            contacts_meas_logits = None
             if contacts_input is not None:
                 contacts_meas = contacts_input.to(device=device, dtype=dtype)
                 if contacts_meas.ndim == 2:
                     contacts_meas = contacts_meas.unsqueeze(1)
                 elif contacts_meas.ndim != 3:
                     raise ValueError(f"contacts expects shape (B,C) or (B,T,C), got {tuple(contacts_meas.shape)}")
-            elif self.contact_meas_enable and self.contact_meas_head is not None and self._contact_meas_in_dim > 0:
-                rot_sl = self._contact_meas_state_rot_slice
-                av_sl = self._contact_meas_state_angvel_slice
-                idx = self._contact_meas_lower_joint_idx
-                if rot_sl is None or av_sl is None or (not torch.is_tensor(idx)) or idx.numel() <= 0:
-                    raise RuntimeError("contact_meas_enable=true but v1 slices/indices are not initialized.")
-                pose_all = state[..., rot_sl]
-                w_all = state[..., av_sl]
-                Jp = int(pose_all.shape[-1] // 6)
-                Jw = int(w_all.shape[-1] // 3)
-                idx_dev = idx.to(device=pose_all.device)
-                pose_lower = (
-                    pose_all.view(pose_all.shape[0], pose_all.shape[1], Jp, 6)
-                    .index_select(2, idx_dev)
-                    .reshape(pose_all.shape[0], pose_all.shape[1], -1)
-                )
-                w_lower = (
-                    w_all.view(w_all.shape[0], w_all.shape[1], Jw, 3)
-                    .index_select(2, idx_dev)
-                    .reshape(w_all.shape[0], w_all.shape[1], -1)
-                )
-                logits = self.contact_meas_head(pose_lower, w_lower)
-                contacts_meas_logits = logits
-                contacts_meas = torch.sigmoid(logits)
         if contacts_meas is None:
             if contacts_plan is not None:
                 contacts_meas = torch.zeros_like(contacts_plan)
             elif self.contact_dim > 0:
                 contacts_meas = torch.zeros(state.shape[:-1] + (self.contact_dim,), device=device, dtype=dtype)
 
-        # ---- Touchdown hazard (pose-derived event intensity; integrate-to-1 clock) ----
-        if (
-            contacts_td_hazard_prob is None
-            and self.contact_td_hazard_enable
-            and self.contact_td_hazard_head is not None
-            and self._contact_meas_in_dim > 0
-        ):
-            try:
-                rot_sl = self._contact_meas_state_rot_slice
-                av_sl = self._contact_meas_state_angvel_slice
-                idx = self._contact_meas_lower_joint_idx
-                if rot_sl is None or av_sl is None or (not torch.is_tensor(idx)) or idx.numel() <= 0:
-                    raise RuntimeError("contact_td_hazard_enable=true but v1 slices/indices are not initialized.")
-                pose_all = state[..., rot_sl]
-                w_all = state[..., av_sl]
-                Jp = int(pose_all.shape[-1] // 6)
-                Jw = int(w_all.shape[-1] // 3)
-                idx_dev = idx.to(device=pose_all.device)
-                pose_lower = (
-                    pose_all.view(pose_all.shape[0], pose_all.shape[1], Jp, 6)
-                    .index_select(2, idx_dev)
-                    .reshape(pose_all.shape[0], pose_all.shape[1], -1)
-                )
-                w_lower = (
-                    w_all.view(w_all.shape[0], w_all.shape[1], Jw, 3)
-                    .index_select(2, idx_dev)
-                    .reshape(w_all.shape[0], w_all.shape[1], -1)
-                )
-                logits = self.contact_td_hazard_head(pose_lower, w_lower)
-                contacts_td_hazard_logit = logits
-                contacts_td_hazard_prob = torch.sigmoid(logits)
-            except Exception:
-                contacts_td_hazard_logit = None
-                contacts_td_hazard_prob = None
-
         if contacts_meas is not None:
             result['contacts_meas'] = contacts_meas.squeeze(1) if is_single else contacts_meas
-            if contacts_meas_logits is not None and torch.is_tensor(contacts_meas_logits):
-                result['contacts_meas_logits'] = contacts_meas_logits.squeeze(1) if is_single else contacts_meas_logits
-        if contacts_td_hazard_prob is not None:
-            result['contacts_td_hazard_prob'] = contacts_td_hazard_prob.squeeze(1) if is_single else contacts_td_hazard_prob
-            if contacts_td_hazard_logit is not None and torch.is_tensor(contacts_td_hazard_logit):
-                result['contacts_td_hazard_logit'] = (
-                    contacts_td_hazard_logit.squeeze(1) if is_single else contacts_td_hazard_logit
-                )
-        if td_hazard_acc_next is not None and torch.is_tensor(td_hazard_acc_next):
-            result["td_hazard_acc_next"] = td_hazard_acc_next
-        if td_hazard_event_next is not None and torch.is_tensor(td_hazard_event_next):
-            result["td_hazard_event_next"] = td_hazard_event_next
 
         if contacts_plan is not None:
             result['contacts_plan'] = contacts_plan.squeeze(1) if is_single else contacts_plan
@@ -4047,7 +3573,6 @@ class EventMotionModel(nn.Module):
                     # Optional per-call override (debug): force a specific meas hint source for *direct* only.
                     # - tensor: used as meas_in (after clamp); supports (B,C) / (B,T,C) / (C,)
                     # - "ignore"/"zero": treat as missing (concat->zeros, mode_select->uniform)
-                    _override_applied = False
                     try:
                         override = getattr(self, "direct_pose_meas_override", None)
                         if isinstance(override, str):
@@ -4057,7 +3582,6 @@ class EventMotionModel(nn.Module):
                                     meas_in = torch.zeros_like(plan_in)
                                 elif mode == "mode_select":
                                     meas_in = None
-                                _override_applied = True
                             else:
                                 override = None
                         if torch.is_tensor(override):
@@ -4080,22 +3604,8 @@ class EventMotionModel(nn.Module):
                                     else:
                                         ov = F.pad(ov, (0, target_c - ov.shape[-1]))
                                 meas_in = ov.to(device=device, dtype=dtype).clamp(0.0, 1.0)
-                                _override_applied = True
                     except Exception:
-                        _override_applied = False
-
-                    if not _override_applied:
-                        # Debug/ablation: force direct to ignore meas hint (simulates "no meas" without changing ckpt shape).
-                        # - concat: set meas features to 0
-                        # - mode_select: treat as missing => fallback to uniform blend (0.5/0.5)
-                        if bool(getattr(self, "direct_pose_meas_force_zero", False)):
-                            if mode == "concat":
-                                meas_in = torch.zeros_like(plan_in)
-                            elif mode == "mode_select":
-                                meas_in = None
-                    # Ablation: stop-grad from direct head into contacts_meas (keep values, block gradients).
-                    if torch.is_tensor(meas_in) and bool(getattr(self, "direct_pose_meas_detach", False)):
-                        meas_in = meas_in.detach()
+                        pass
 
                 # Choose which features feed the direct head.
                 direct_feat = cond
@@ -4905,7 +4415,8 @@ class EventMotionModel(nn.Module):
 
     def attach_motion_encoder(self, bundle, *, map_location: str | torch.device = 'cpu'):
         """
-        加载并冻结预训练的 MotionEncoder + PeriodHead，用于提供 soft hint（接触提示 embedding）。
+        加载并冻结预训练的 MotionEncoder + PeriodHead（以及可选 contact_head），
+        用于提供 soft hint / frozen contact logits。
         """
         if isinstance(bundle, (str, os.PathLike)):
             payload = torch.load(bundle, map_location=map_location)
@@ -4916,6 +4427,7 @@ class EventMotionModel(nn.Module):
 
         encoder_state = payload.get('encoder')
         period_state = payload.get('period_head')
+        contact_state = payload.get('contact_head')
         if encoder_state is None or period_state is None:
             raise KeyError("Bundle missing 'encoder' or 'period_head' state_dict.")
 
@@ -4956,6 +4468,23 @@ class EventMotionModel(nn.Module):
         period_head.load_state_dict(period_state)
         period_head.eval().requires_grad_(False)
 
+        frozen_contact_head: Optional[nn.Module] = None
+        if isinstance(contact_state, dict):
+            try:
+                w = contact_state.get("fc.weight")
+                b = contact_state.get("fc.bias")
+                if torch.is_tensor(w):
+                    out_dim = int(w.shape[0])
+                    linear = nn.Linear(hidden_dim, out_dim)
+                    linear_state = {"weight": w}
+                    if torch.is_tensor(b):
+                        linear_state["bias"] = b
+                    linear.load_state_dict(linear_state, strict=False)
+                    linear.eval().requires_grad_(False)
+                    frozen_contact_head = linear
+            except Exception:
+                frozen_contact_head = None
+
         if self.encoder_input_dim and self.encoder_input_dim != input_dim:
             raise ValueError(f"Encoder input dim mismatch: dataset={self.encoder_input_dim} vs bundle={input_dim}")
         self.encoder_input_dim = input_dim
@@ -4963,6 +4492,7 @@ class EventMotionModel(nn.Module):
         device = self._target_device()
         self.frozen_encoder = encoder.to(device)
         self.frozen_period_head = period_head.to(device)
+        self.frozen_contact_head = frozen_contact_head.to(device) if frozen_contact_head is not None else None
 
         if self.period_dim != period_dim or self.period_encoder is None:
             self.period_dim = period_dim
@@ -4986,12 +4516,22 @@ class MotionJointLoss(nn.Module):
         w_contact_plan: float = 0.0,
         # Optional: supervise meas head (pose-derived contacts)
         w_contact_meas: float = 0.0,
-        # Optional: supervise touchdown hazard head (pose-derived event intensity)
-        w_contact_td_hazard_bce: float = 0.0,
-        w_contact_td_hazard_mass: float = 0.0,
-        w_contact_td_hazard_unimodal: float = 0.0,
         # Optional: supervise direct pose head (cond + contacts_plan -> absolute pose)
         w_direct_pose: float = 0.0,
+        direct_pose_loss_leg_split: bool = False,
+        direct_pose_leg_bones: Optional[Sequence[str] | str] = None,
+        direct_pose_arm_split_enable: bool = False,
+        direct_pose_arm_bones: Optional[Sequence[str] | str] = None,
+        direct_pose_loss_arm_else_balance_enable: bool = False,
+        direct_pose_loss_arm_weight: float = 1.0,
+        direct_pose_loss_else_weight: float = 1.0,
+        direct_pose_loss_group_norm_enable: bool = False,
+        direct_pose_loss_group_norm_w_leg: float = 1.0,
+        direct_pose_loss_group_norm_w_nonleg: float = 1.0,
+        direct_pose_loss_group_norm_ema_beta: float = 0.9,
+        direct_pose_loss_group_norm_ratio_min: float = 0.2,
+        direct_pose_loss_group_norm_ratio_max: float = 5.0,
+        direct_pose_loss_group_norm_eps: float = 1e-6,
         # Optional: regularize omega_hat magnitude (prevents aggressive corrections)
         w_omega_l2: float = 0.0,
         # Event-Clock v3 regularization (only active when model returns corresponding tensors)
@@ -5031,10 +4571,54 @@ class MotionJointLoss(nn.Module):
         self.w_root_speed = float(w_root_speed)
         self.w_contact_plan = float(w_contact_plan)
         self.w_contact_meas = float(w_contact_meas)
-        self.w_contact_td_hazard_bce = float(w_contact_td_hazard_bce)
-        self.w_contact_td_hazard_mass = float(w_contact_td_hazard_mass)
-        self.w_contact_td_hazard_unimodal = float(w_contact_td_hazard_unimodal)
         self.w_direct_pose = float(w_direct_pose)
+        self.direct_pose_loss_leg_split = bool(direct_pose_loss_leg_split)
+        self.direct_pose_leg_bones = direct_pose_leg_bones
+        self.direct_pose_arm_split_enable = bool(direct_pose_arm_split_enable)
+        self.direct_pose_arm_bones = direct_pose_arm_bones
+        self.direct_pose_loss_arm_else_balance_enable = bool(direct_pose_loss_arm_else_balance_enable)
+        try:
+            self.direct_pose_loss_arm_weight = float(direct_pose_loss_arm_weight or 1.0)
+        except Exception:
+            self.direct_pose_loss_arm_weight = 1.0
+        try:
+            self.direct_pose_loss_else_weight = float(direct_pose_loss_else_weight or 1.0)
+        except Exception:
+            self.direct_pose_loss_else_weight = 1.0
+        if self.direct_pose_loss_arm_weight < 0.0:
+            self.direct_pose_loss_arm_weight = 0.0
+        if self.direct_pose_loss_else_weight < 0.0:
+            self.direct_pose_loss_else_weight = 0.0
+        if (self.direct_pose_loss_arm_weight + self.direct_pose_loss_else_weight) <= 0.0:
+            self.direct_pose_loss_arm_weight = 1.0
+            self.direct_pose_loss_else_weight = 1.0
+        self.direct_pose_loss_group_norm_enable = bool(direct_pose_loss_group_norm_enable)
+        self.direct_pose_loss_group_norm_w_leg = float(direct_pose_loss_group_norm_w_leg or 1.0)
+        self.direct_pose_loss_group_norm_w_nonleg = float(direct_pose_loss_group_norm_w_nonleg or 1.0)
+        try:
+            self.direct_pose_loss_group_norm_ema_beta = float(direct_pose_loss_group_norm_ema_beta or 0.9)
+        except Exception:
+            self.direct_pose_loss_group_norm_ema_beta = 0.9
+        try:
+            self.direct_pose_loss_group_norm_ratio_min = float(direct_pose_loss_group_norm_ratio_min or 0.2)
+        except Exception:
+            self.direct_pose_loss_group_norm_ratio_min = 0.2
+        try:
+            self.direct_pose_loss_group_norm_ratio_max = float(direct_pose_loss_group_norm_ratio_max or 5.0)
+        except Exception:
+            self.direct_pose_loss_group_norm_ratio_max = 5.0
+        if self.direct_pose_loss_group_norm_ratio_min > self.direct_pose_loss_group_norm_ratio_max:
+            self.direct_pose_loss_group_norm_ratio_min, self.direct_pose_loss_group_norm_ratio_max = (
+                self.direct_pose_loss_group_norm_ratio_max,
+                self.direct_pose_loss_group_norm_ratio_min,
+            )
+        try:
+            self.direct_pose_loss_group_norm_eps = float(direct_pose_loss_group_norm_eps or 1e-6)
+        except Exception:
+            self.direct_pose_loss_group_norm_eps = 1e-6
+        if self.direct_pose_loss_group_norm_eps <= 0.0:
+            self.direct_pose_loss_group_norm_eps = 1e-6
+        self._direct_pose_group_norm_ema: Dict[str, torch.Tensor] = {}
         self.w_omega_l2 = float(w_omega_l2)
         self.event_clock_lambda_entropy_weight = float(event_clock_lambda_entropy_weight or 0.0)
         self.event_clock_lambda_prior_weight = float(event_clock_lambda_prior_weight or 0.0)
@@ -5146,6 +4730,100 @@ class MotionJointLoss(nn.Module):
         self._tail_score_cache = {}
         # reset fk caches when bone count changes
         self._parents_tensor = None
+
+    @staticmethod
+    def _normalize_bone_spec(
+        spec: Optional[Sequence[str] | str],
+        *,
+        default_items: Sequence[str],
+    ) -> list[str]:
+        if spec is None:
+            return [str(x) for x in default_items]
+        if isinstance(spec, str):
+            return [s.strip() for s in spec.split(',') if s.strip()]
+        if isinstance(spec, (list, tuple)):
+            return [str(s).strip() for s in spec if str(s).strip()]
+        txt = str(spec).strip()
+        return [txt] if txt else [str(x) for x in default_items]
+
+    def _resolve_named_joint_indices(
+        self,
+        *,
+        joint_count: int,
+        spec: Optional[Sequence[str] | str],
+        default_items: Sequence[str],
+    ) -> list[int]:
+        if joint_count <= 0 or not self.bone_names or joint_count > len(self.bone_names):
+            return []
+        items = self._normalize_bone_spec(spec, default_items=default_items)
+        idx_map = {str(name): idx for idx, name in enumerate(self.bone_names[:joint_count])}
+        indices: list[int] = []
+        seen: set[int] = set()
+        for item in items:
+            idx = None
+            if item.isdigit() or (item.startswith('-') and item[1:].isdigit()):
+                try:
+                    idx = int(item)
+                except Exception:
+                    idx = None
+            else:
+                idx = idx_map.get(item, None)
+            if idx is None or idx < 0 or idx >= joint_count or idx in seen:
+                continue
+            seen.add(idx)
+            indices.append(int(idx))
+        return indices
+
+    def _resolve_direct_group_masks(self, joint_count: int, device: torch.device) -> Optional[Dict[str, torch.Tensor]]:
+        import torch
+
+        if joint_count <= 0 or not self.bone_names or joint_count > len(self.bone_names):
+            return None
+        leg_idx = self._resolve_named_joint_indices(
+            joint_count=joint_count,
+            spec=self.direct_pose_leg_bones,
+            default_items=DEFAULT_DIRECT_POSE_LEG_BONES,
+        )
+        arm_idx = self._resolve_named_joint_indices(
+            joint_count=joint_count,
+            spec=self.direct_pose_arm_bones,
+            default_items=STAGE6_3WAY_ARMCHAIN_BONES,
+        )
+        leg_mask = torch.zeros(joint_count, dtype=torch.bool, device=device)
+        arm_mask = torch.zeros(joint_count, dtype=torch.bool, device=device)
+        if leg_idx:
+            leg_mask[torch.as_tensor(leg_idx, dtype=torch.long, device=device)] = True
+        if arm_idx:
+            arm_mask[torch.as_tensor(arm_idx, dtype=torch.long, device=device)] = True
+        nonleg_mask = ~leg_mask
+        arm_mask = arm_mask & nonleg_mask
+        else_mask = nonleg_mask & (~arm_mask)
+        all_ex_root = torch.ones(joint_count, dtype=torch.bool, device=device)
+        root_idx = int(getattr(self, 'root_idx', 0) or 0)
+        if 0 <= root_idx < joint_count:
+            all_ex_root[root_idx] = False
+            leg_mask[root_idx] = False
+            nonleg_mask[root_idx] = False
+            arm_mask[root_idx] = False
+            else_mask[root_idx] = False
+        return {
+            'all_ex_root': all_ex_root,
+            'leg': leg_mask,
+            'nonleg': nonleg_mask,
+            'arm': arm_mask,
+            'else': else_mask,
+            'trunk': else_mask,
+        }
+
+    @staticmethod
+    def _masked_group_mean(values: torch.Tensor, mask: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+        if values is None or mask is None or values.numel() == 0:
+            return None
+        if mask.numel() != values.shape[-1]:
+            return None
+        if not bool(mask.any().detach().cpu().item()):
+            return None
+        return values[..., mask].mean()
 
     def set_skeleton(self, parents: Optional[Sequence[int]], offsets: Optional[Sequence[Sequence[float]]]) -> None:
         if parents is not None:
@@ -5903,19 +5581,209 @@ class MotionJointLoss(nn.Module):
                     if direct.dim() == 3 and gm_direct.dim() == 3:
                         T = min(int(direct.shape[1]), int(gm_direct.shape[1]))
                         if T > 0:
-                            l_direct = self.compute_rot6d_geo_loss(direct[:, :T], gm_direct[:, :T])
-                            loss = loss + self.w_direct_pose * l_direct
-                            self._accumulate_loss_contrib('direct_pose', l_direct, self.w_direct_pose, group='core')
-                            stats['direct_pose_geo'] = float(l_direct.detach().cpu())
-                            stats['direct_pose_geo_deg'] = float((l_direct * (180.0 / math.pi)).detach().cpu())
-                            stats['direct_pose_weighted'] = float((self.w_direct_pose * l_direct).detach().cpu())
-                            self._register_component_loss('direct_pose', l_direct, self.w_direct_pose)
+                            geo_payload = self.compute_rot6d_geo_loss(direct[:, :T], gm_direct[:, :T], return_per_joint=True)
+                            if isinstance(geo_payload, tuple):
+                                geo_direct = geo_payload[0]
+                                geo_theta = geo_payload[1] if len(geo_payload) > 1 else None
+                            else:
+                                geo_direct = geo_payload
+                                geo_theta = None
+
+                            direct_objective = geo_direct
+                            dir_base = None
+                            dir_leg_base = None
+                            dir_nonleg_base = None
+                            dir_arm_base = None
+                            dir_else_base = None
+                            dir_nonleg_effective_base = None
+                            leg_over_nonleg = float('nan')
+                            leg_over_nonleg_effective = float('nan')
+                            arm_over_else = float('nan')
+                            arm_else_balance_active = 0.0
+                            arm_else_balance_w_arm = float(getattr(self, 'direct_pose_loss_arm_weight', 1.0) or 1.0)
+                            arm_else_balance_w_else = float(getattr(self, 'direct_pose_loss_else_weight', 1.0) or 1.0)
+                            dir_group_norm_used = 0.0
+                            dir_group_norm_leg = float('nan')
+                            dir_group_norm_nonleg = float('nan')
+                            dir_group_norm_leg_ema = float('nan')
+                            dir_group_norm_nonleg_ema = float('nan')
+                            dir_group_norm_leg_raw = float('nan')
+                            dir_group_norm_nonleg_raw = float('nan')
+                            dir_group_norm_leg_clamped = float('nan')
+                            dir_group_norm_nonleg_clamped = float('nan')
+                            dir_group_norm_leg_hit_min = 0.0
+                            dir_group_norm_leg_hit_max = 0.0
+                            dir_group_norm_nonleg_hit_min = 0.0
+                            dir_group_norm_nonleg_hit_max = 0.0
+                            dir_group_norm_leg_hit_any = 0.0
+                            dir_group_norm_nonleg_hit_any = 0.0
+                            split_masks = None
+                            if torch.is_tensor(geo_theta) and geo_theta.ndim >= 3:
+                                split_masks = self._resolve_direct_group_masks(int(geo_theta.shape[-1]), geo_theta.device)
+                                if split_masks is not None:
+                                    dir_base = self._masked_group_mean(geo_theta, split_masks.get('all_ex_root'))
+                                    dir_leg_base = self._masked_group_mean(geo_theta, split_masks.get('leg'))
+                                    dir_nonleg_base = self._masked_group_mean(geo_theta, split_masks.get('nonleg'))
+                                    dir_arm_base = self._masked_group_mean(geo_theta, split_masks.get('arm'))
+                                    dir_else_base = self._masked_group_mean(geo_theta, split_masks.get('else'))
+                                    if torch.is_tensor(dir_leg_base) and torch.is_tensor(dir_nonleg_base):
+                                        leg_over_nonleg = float(
+                                            (dir_leg_base / dir_nonleg_base.clamp_min(self.direct_pose_loss_group_norm_eps)).detach().cpu()
+                                        )
+                                    if torch.is_tensor(dir_arm_base) and torch.is_tensor(dir_else_base):
+                                        arm_over_else = float(
+                                            (dir_arm_base / dir_else_base.clamp_min(self.direct_pose_loss_group_norm_eps)).detach().cpu()
+                                        )
+                                    dir_nonleg_effective_base = dir_nonleg_base
+                                    if (
+                                        bool(self.direct_pose_loss_arm_else_balance_enable)
+                                        and bool(self.direct_pose_arm_split_enable)
+                                        and torch.is_tensor(dir_arm_base)
+                                        and torch.is_tensor(dir_else_base)
+                                    ):
+                                        arm_w = max(0.0, float(getattr(self, 'direct_pose_loss_arm_weight', 1.0) or 0.0))
+                                        else_w = max(0.0, float(getattr(self, 'direct_pose_loss_else_weight', 1.0) or 0.0))
+                                        denom = max(self.direct_pose_loss_group_norm_eps, arm_w + else_w)
+                                        dir_nonleg_effective_base = (
+                                            dir_arm_base * arm_w + dir_else_base * else_w
+                                        ) / denom
+                                        arm_else_balance_active = 1.0
+                                    if (
+                                        bool(self.direct_pose_loss_leg_split)
+                                        and torch.is_tensor(dir_leg_base)
+                                        and torch.is_tensor(dir_nonleg_effective_base)
+                                    ):
+                                        if torch.is_tensor(dir_leg_base) and torch.is_tensor(dir_nonleg_effective_base):
+                                            leg_over_nonleg_effective = float(
+                                                (dir_leg_base / dir_nonleg_effective_base.clamp_min(self.direct_pose_loss_group_norm_eps)).detach().cpu()
+                                            )
+                                        direct_objective = dir_leg_base + dir_nonleg_effective_base
+                                        if bool(self.direct_pose_loss_group_norm_enable):
+                                            ema_state = getattr(self, '_direct_pose_group_norm_ema', None)
+                                            if not isinstance(ema_state, dict):
+                                                ema_state = {}
+                                            ema_leg_prev = ema_state.get('leg', None)
+                                            ema_non_prev = ema_state.get('nonleg', None)
+                                            if not torch.is_tensor(ema_leg_prev):
+                                                ema_leg_prev = dir_leg_base.detach()
+                                            else:
+                                                ema_leg_prev = ema_leg_prev.to(device=dir_leg_base.device, dtype=dir_leg_base.dtype)
+                                            if not torch.is_tensor(ema_non_prev):
+                                                ema_non_prev = dir_nonleg_effective_base.detach()
+                                            else:
+                                                ema_non_prev = ema_non_prev.to(device=dir_nonleg_effective_base.device, dtype=dir_nonleg_effective_base.dtype)
+                                            leg_ratio_raw_t = dir_leg_base / ema_leg_prev.clamp_min(self.direct_pose_loss_group_norm_eps)
+                                            nonleg_ratio_raw_t = dir_nonleg_effective_base / ema_non_prev.clamp_min(self.direct_pose_loss_group_norm_eps)
+                                            leg_ratio_t = leg_ratio_raw_t.clamp(
+                                                self.direct_pose_loss_group_norm_ratio_min,
+                                                self.direct_pose_loss_group_norm_ratio_max,
+                                            )
+                                            nonleg_ratio_t = nonleg_ratio_raw_t.clamp(
+                                                self.direct_pose_loss_group_norm_ratio_min,
+                                                self.direct_pose_loss_group_norm_ratio_max,
+                                            )
+                                            leg_hit_min_t = (leg_ratio_raw_t <= self.direct_pose_loss_group_norm_ratio_min).to(dtype=dir_leg_base.dtype)
+                                            leg_hit_max_t = (leg_ratio_raw_t >= self.direct_pose_loss_group_norm_ratio_max).to(dtype=dir_leg_base.dtype)
+                                            nonleg_hit_min_t = (nonleg_ratio_raw_t <= self.direct_pose_loss_group_norm_ratio_min).to(dtype=dir_nonleg_base.dtype)
+                                            nonleg_hit_max_t = (nonleg_ratio_raw_t >= self.direct_pose_loss_group_norm_ratio_max).to(dtype=dir_nonleg_base.dtype)
+                                            direct_objective = (
+                                                self.direct_pose_loss_group_norm_w_leg * leg_ratio_t
+                                                + self.direct_pose_loss_group_norm_w_nonleg * nonleg_ratio_t
+                                            )
+                                            dir_group_norm_used = 1.0
+                                            dir_group_norm_leg_raw = float(leg_ratio_raw_t.detach().cpu())
+                                            dir_group_norm_nonleg_raw = float(nonleg_ratio_raw_t.detach().cpu())
+                                            dir_group_norm_leg_clamped = float(leg_ratio_t.detach().cpu())
+                                            dir_group_norm_nonleg_clamped = float(nonleg_ratio_t.detach().cpu())
+                                            dir_group_norm_leg = float(leg_ratio_t.detach().cpu())
+                                            dir_group_norm_nonleg = float(nonleg_ratio_t.detach().cpu())
+                                            dir_group_norm_leg_ema = float(ema_leg_prev.detach().cpu())
+                                            dir_group_norm_nonleg_ema = float(ema_non_prev.detach().cpu())
+                                            dir_group_norm_leg_hit_min = float(leg_hit_min_t.detach().cpu())
+                                            dir_group_norm_leg_hit_max = float(leg_hit_max_t.detach().cpu())
+                                            dir_group_norm_nonleg_hit_min = float(nonleg_hit_min_t.detach().cpu())
+                                            dir_group_norm_nonleg_hit_max = float(nonleg_hit_max_t.detach().cpu())
+                                            dir_group_norm_leg_hit_any = float(torch.maximum(leg_hit_min_t, leg_hit_max_t).detach().cpu())
+                                            dir_group_norm_nonleg_hit_any = float(torch.maximum(nonleg_hit_min_t, nonleg_hit_max_t).detach().cpu())
+                                            with torch.no_grad():
+                                                beta = float(self.direct_pose_loss_group_norm_ema_beta)
+                                                self._direct_pose_group_norm_ema = {
+                                                    'leg': (beta * ema_leg_prev + (1.0 - beta) * dir_leg_base.detach()).detach(),
+                                                    'nonleg': (beta * ema_non_prev + (1.0 - beta) * dir_nonleg_effective_base.detach()).detach(),
+                                                }
+
+                            loss = loss + self.w_direct_pose * direct_objective
+                            self._accumulate_loss_contrib('direct_pose', direct_objective, self.w_direct_pose, group='core')
+                            stats['direct_pose_geo'] = float(geo_direct.detach().cpu())
+                            stats['direct_pose_geo_deg'] = float((geo_direct * (180.0 / math.pi)).detach().cpu())
+                            stats['direct_pose_objective'] = float(direct_objective.detach().cpu())
+                            stats['direct_pose_weighted'] = float((self.w_direct_pose * direct_objective).detach().cpu())
+                            stats['direct_pose_split_active'] = 1.0 if bool(self.direct_pose_loss_leg_split) else 0.0
+                            stats['direct_pose_arm_split_active'] = 1.0 if bool(self.direct_pose_arm_split_enable) else 0.0
+                            stats['dir_base'] = float(dir_base.detach().cpu()) if torch.is_tensor(dir_base) else float('nan')
+                            stats['dir_leg_base'] = float(dir_leg_base.detach().cpu()) if torch.is_tensor(dir_leg_base) else float('nan')
+                            stats['dir_nonleg_base'] = float(dir_nonleg_base.detach().cpu()) if torch.is_tensor(dir_nonleg_base) else float('nan')
+                            stats['dir_nonleg_effective_base'] = float(dir_nonleg_effective_base.detach().cpu()) if torch.is_tensor(dir_nonleg_effective_base) else float('nan')
+                            stats['dir_arm_base'] = float(dir_arm_base.detach().cpu()) if torch.is_tensor(dir_arm_base) else float('nan')
+                            stats['dir_else_base'] = float(dir_else_base.detach().cpu()) if torch.is_tensor(dir_else_base) else float('nan')
+                            stats['leg_over_nonleg'] = float(leg_over_nonleg)
+                            stats['leg_over_nonleg_effective'] = float(leg_over_nonleg_effective)
+                            stats['arm_over_else'] = float(arm_over_else)
+                            stats['direct_pose_arm_else_balance_active'] = float(arm_else_balance_active)
+                            stats['direct_pose_loss_arm_weight'] = float(arm_else_balance_w_arm)
+                            stats['direct_pose_loss_else_weight'] = float(arm_else_balance_w_else)
+                            stats['dir_group_norm_used'] = float(dir_group_norm_used)
+                            stats['dir_group_norm_leg_raw'] = float(dir_group_norm_leg_raw)
+                            stats['dir_group_norm_nonleg_raw'] = float(dir_group_norm_nonleg_raw)
+                            stats['dir_group_norm_leg_clamped'] = float(dir_group_norm_leg_clamped)
+                            stats['dir_group_norm_nonleg_clamped'] = float(dir_group_norm_nonleg_clamped)
+                            stats['dir_group_norm_leg'] = float(dir_group_norm_leg)
+                            stats['dir_group_norm_nonleg'] = float(dir_group_norm_nonleg)
+                            stats['dir_group_norm_leg_ema'] = float(dir_group_norm_leg_ema)
+                            stats['dir_group_norm_nonleg_ema'] = float(dir_group_norm_nonleg_ema)
+                            stats['dir_group_norm_leg_hit_min'] = float(dir_group_norm_leg_hit_min)
+                            stats['dir_group_norm_leg_hit_max'] = float(dir_group_norm_leg_hit_max)
+                            stats['dir_group_norm_nonleg_hit_min'] = float(dir_group_norm_nonleg_hit_min)
+                            stats['dir_group_norm_nonleg_hit_max'] = float(dir_group_norm_nonleg_hit_max)
+                            stats['dir_group_norm_leg_hit_any'] = float(dir_group_norm_leg_hit_any)
+                            stats['dir_group_norm_nonleg_hit_any'] = float(dir_group_norm_nonleg_hit_any)
+                            self._register_component_loss('direct_pose', direct_objective, self.w_direct_pose)
             except Exception:
                 pass
         else:
             stats.setdefault('direct_pose_geo', 0.0)
             stats.setdefault('direct_pose_geo_deg', 0.0)
+            stats.setdefault('direct_pose_objective', 0.0)
             stats.setdefault('direct_pose_weighted', 0.0)
+            stats.setdefault('direct_pose_split_active', 0.0)
+            stats.setdefault('direct_pose_arm_split_active', 0.0)
+            stats.setdefault('dir_base', float('nan'))
+            stats.setdefault('dir_leg_base', float('nan'))
+            stats.setdefault('dir_nonleg_base', float('nan'))
+            stats.setdefault('dir_nonleg_effective_base', float('nan'))
+            stats.setdefault('dir_arm_base', float('nan'))
+            stats.setdefault('dir_else_base', float('nan'))
+            stats.setdefault('leg_over_nonleg', float('nan'))
+            stats.setdefault('leg_over_nonleg_effective', float('nan'))
+            stats.setdefault('arm_over_else', float('nan'))
+            stats.setdefault('direct_pose_arm_else_balance_active', 0.0)
+            stats.setdefault('direct_pose_loss_arm_weight', float(getattr(self, 'direct_pose_loss_arm_weight', 1.0) or 1.0))
+            stats.setdefault('direct_pose_loss_else_weight', float(getattr(self, 'direct_pose_loss_else_weight', 1.0) or 1.0))
+            stats.setdefault('dir_group_norm_used', 0.0)
+            stats.setdefault('dir_group_norm_leg_raw', float('nan'))
+            stats.setdefault('dir_group_norm_nonleg_raw', float('nan'))
+            stats.setdefault('dir_group_norm_leg_clamped', float('nan'))
+            stats.setdefault('dir_group_norm_nonleg_clamped', float('nan'))
+            stats.setdefault('dir_group_norm_leg', float('nan'))
+            stats.setdefault('dir_group_norm_nonleg', float('nan'))
+            stats.setdefault('dir_group_norm_leg_ema', float('nan'))
+            stats.setdefault('dir_group_norm_nonleg_ema', float('nan'))
+            stats.setdefault('dir_group_norm_leg_hit_min', 0.0)
+            stats.setdefault('dir_group_norm_leg_hit_max', 0.0)
+            stats.setdefault('dir_group_norm_nonleg_hit_min', 0.0)
+            stats.setdefault('dir_group_norm_nonleg_hit_max', 0.0)
+            stats.setdefault('dir_group_norm_leg_hit_any', 0.0)
+            stats.setdefault('dir_group_norm_nonleg_hit_any', 0.0)
 
         # Contact plan supervision (soft targets in [0,1])
         if self.w_contact_plan > 0.0 and isinstance(pred_motion, dict) and isinstance(batch, dict):
@@ -6026,40 +5894,12 @@ class MotionJointLoss(nn.Module):
             except Exception:
                 pass
 
-        # Contact meas supervision (optional, small weight; keeps meas head sane)
+        # Contact meas supervision (optional): align contacts_meas probability with GT soft contacts.
         if self.w_contact_meas > 0.0 and isinstance(pred_motion, dict) and isinstance(batch, dict):
             try:
-                meas_logits = pred_motion.get("contacts_meas_logits", None)
                 meas = pred_motion.get("contacts_meas", None)
                 gt_c = batch.get("contacts", None)
-
-                # Training: prefer logits-space BCE when available.
-                if torch.is_tensor(meas_logits) and torch.is_tensor(gt_c):
-                    gt = gt_c.to(device=meas_logits.device, dtype=meas_logits.dtype)
-                    logits = meas_logits
-                    if logits.dim() == 2:
-                        logits = logits.unsqueeze(1)
-                    if gt.dim() == 2:
-                        gt = gt.unsqueeze(1)
-                    T = min(int(logits.shape[1]), int(gt.shape[1]))
-                    if T > 0 and logits.shape[-1] == gt.shape[-1]:
-                        gt_t = gt[:, :T].clamp(0.0, 1.0)
-                        l_bce = F.binary_cross_entropy_with_logits(logits[:, :T], gt_t)
-                        loss = loss + self.w_contact_meas * l_bce
-                        stats["contact_meas_bce"] = float(l_bce.detach().cpu())
-                        stats["contact_meas_weighted"] = float((self.w_contact_meas * l_bce).detach().cpu())
-                        # Metric (continuity): also record MSE on probabilities.
-                        try:
-                            probs = meas if torch.is_tensor(meas) else torch.sigmoid(logits)
-                            if probs.dim() == 2:
-                                probs = probs.unsqueeze(1)
-                            if probs.shape[-1] == gt.shape[-1]:
-                                l_mse = F.mse_loss(probs[:, :T], gt[:, :T])
-                                stats["contact_meas_mse"] = float(l_mse.detach().cpu())
-                        except Exception:
-                            pass
-                # Fallback: old behavior (MSE on probabilities).
-                elif torch.is_tensor(meas) and torch.is_tensor(gt_c):
+                if torch.is_tensor(meas) and torch.is_tensor(gt_c):
                     gt = gt_c.to(device=meas.device, dtype=meas.dtype)
                     probs = meas
                     if probs.dim() == 2:
@@ -6072,84 +5912,6 @@ class MotionJointLoss(nn.Module):
                         loss = loss + self.w_contact_meas * l_mse
                         stats["contact_meas_mse"] = float(l_mse.detach().cpu())
                         stats["contact_meas_weighted"] = float((self.w_contact_meas * l_mse).detach().cpu())
-            except Exception:
-                pass
-
-        # Contact TD hazard supervision (pose-derived event intensity; integrate-to-1 clock)
-        if (
-            (self.w_contact_td_hazard_bce > 0.0 or self.w_contact_td_hazard_mass > 0.0 or self.w_contact_td_hazard_unimodal > 0.0)
-            and isinstance(pred_motion, dict)
-            and isinstance(batch, dict)
-        ):
-            try:
-                hz_logit = pred_motion.get("contacts_td_hazard_logit", None)  # logits (B,T,C) or (B,C)
-                gt_events = batch.get("ttc_td_events", None)                  # bool (B,T,C) or (T,C)
-                gt_valid = batch.get("ttc_td_valid", None)                    # bool (B,T,C) or (T,C)
-
-                if torch.is_tensor(hz_logit) and torch.is_tensor(gt_events):
-                    logit = hz_logit
-                    gt = gt_events.to(device=logit.device, dtype=logit.dtype)
-                    if logit.dim() == 2:
-                        logit = logit.unsqueeze(1)
-                    if gt.dim() == 2:
-                        gt = gt.unsqueeze(1)
-                    T = min(int(logit.shape[1]), int(gt.shape[1]))
-                    if T > 0 and int(logit.shape[-1]) == int(gt.shape[-1]):
-                        gt_t = gt[:, :T].clamp(0.0, 1.0)
-                        m = None
-                        if torch.is_tensor(gt_valid):
-                            v = gt_valid.to(device=logit.device)
-                            if v.dim() == 2:
-                                v = v.unsqueeze(1)
-                            v = v[:, :T]
-                            if v.shape == gt_t.shape:
-                                m = v
-                        if m is None:
-                            m = torch.ones_like(gt_t, dtype=torch.bool, device=gt_t.device)
-                        mf = m.to(dtype=logit.dtype)
-
-                        if self.w_contact_td_hazard_bce > 0.0:
-                            err = F.binary_cross_entropy_with_logits(logit[:, :T], gt_t, reduction="none")
-                            denom = mf.sum().clamp_min(1.0)
-                            l_bce = (err * mf).sum() / denom
-                            loss = loss + self.w_contact_td_hazard_bce * l_bce
-                            stats["contact_td_hazard_bce"] = float(l_bce.detach().cpu())
-                            stats["contact_td_hazard_bce_weighted"] = float(
-                                (self.w_contact_td_hazard_bce * l_bce).detach().cpu()
-                            )
-                            stats["contact_td_hazard_valid_frac"] = float(mf.mean().detach().cpu())
-
-                        if self.w_contact_td_hazard_mass > 0.0:
-                            p = torch.sigmoid(logit[:, :T])
-                            mass_pred = (p * mf).sum(dim=1)     # (B,C)
-                            mass_tgt = (gt_t * mf).sum(dim=1)   # (B,C)
-                            l_mass = (mass_pred - mass_tgt).pow(2).mean()
-                            loss = loss + self.w_contact_td_hazard_mass * l_mass
-                            stats["contact_td_hazard_mass_l2"] = float(l_mass.detach().cpu())
-                            stats["contact_td_hazard_mass_weighted"] = float(
-                                (self.w_contact_td_hazard_mass * l_mass).detach().cpu()
-                            )
-                            try:
-                                stats["contact_td_hazard_mass_pred_mean"] = float(mass_pred.detach().mean().cpu())
-                                stats["contact_td_hazard_mass_tgt_mean"] = float(mass_tgt.detach().mean().cpu())
-                            except Exception:
-                                pass
-
-                        if self.w_contact_td_hazard_unimodal > 0.0 and T >= 3:
-                            # Mask invalid frames for the time-softmax prior.
-                            logit_masked = torch.where(m, logit[:, :T], logit.new_full((), -1e9))
-                            logp = F.log_softmax(logit_masked, dim=1)
-                            d2 = logp[:, :-2] - 2.0 * logp[:, 1:-1] + logp[:, 2:]
-                            pen = F.relu(d2)
-                            triplet = m[:, :-2] & m[:, 1:-1] & m[:, 2:]
-                            tf = triplet.to(dtype=pen.dtype)
-                            denom = tf.sum().clamp_min(1.0)
-                            l_uni = (pen * tf).sum() / denom
-                            loss = loss + self.w_contact_td_hazard_unimodal * l_uni
-                            stats["contact_td_hazard_unimodal"] = float(l_uni.detach().cpu())
-                            stats["contact_td_hazard_unimodal_weighted"] = float(
-                                (self.w_contact_td_hazard_unimodal * l_uni).detach().cpu()
-                            )
             except Exception:
                 pass
 

@@ -330,17 +330,9 @@ def main() -> None:
         h = model.direct_pose_head[0].register_forward_hook(_hook)
         try:
             with torch.enable_grad():
-                # IMPORTANT: do NOT pass GT contacts into `contacts=` when the model has a learned
-                # contact_meas_head. Passing contacts overrides contacts_meas (and removes logits),
-                # making x.requires_grad=False and breaking dL/dx diagnostics.
                 contacts = None
-                try:
-                    use_learned_meas = bool(getattr(model, "contact_meas_enable", False)) and getattr(model, "contact_meas_head", None) is not None
-                except Exception:
-                    use_learned_meas = False
-                if not use_learned_meas:
-                    c = sample.get("contacts")
-                    contacts = c.unsqueeze(0).to(device) if torch.is_tensor(c) else None
+                c = sample.get("contacts")
+                contacts = c.unsqueeze(0).to(device) if torch.is_tensor(c) else None
                 ret = model(
                     state, cond=cond, contacts=contacts, angvel=angvel, pose_history=pose_hist, plan_z=None, time_index=None
                 )

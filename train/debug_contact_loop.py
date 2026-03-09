@@ -47,9 +47,6 @@ def main() -> None:
         contact_plan_enable=True,
         contact_plan_hidden=16,
         contact_plan_inject="none",
-        contact_meas_enable=True,
-        contact_meas_hidden=32,
-        contact_meas_dropout=0.0,
     ).to(device=device, dtype=dtype)
 
     state = torch.randn(B, Dx, device=device, dtype=dtype, requires_grad=True)
