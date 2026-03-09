@@ -544,17 +544,12 @@ class FreeRunCycleRunner:
         self.so3_corr_gate_err_margin = float(getattr(args, "so3_corr_gate_err_margin", 0.0) or 0.0)
         self.so3_corr_gate_err_use_ref = bool(getattr(args, "so3_corr_gate_err_use_ref", False))
         self.so3_corr_gate_scale_max = float(getattr(args, "so3_corr_gate_scale_max", 2.0) or 2.0)
-        self.log_contacts_whitebox = bool(getattr(args, "log_contacts_whitebox", False))
-        self.log_contacts_whitebox_first_steps = max(
-            0, int(getattr(args, "log_contacts_whitebox_first_steps", 4) or 4)
-        )
         self.log_contact_plan_logits_decomp = bool(getattr(args, "log_contact_plan_logits_decomp", False))
         # Exporting contact_meas swap/IO diagnostics requires per-step contact logging.
         self.export_contact_meas_head_swap = bool(getattr(args, "export_contact_meas_head_swap", False))
         self.log_contacts = bool(
             getattr(args, "log_contacts", False)
             or self.so3_corr_gate_from_contacts_err
-            or self.log_contacts_whitebox
             or self.log_contact_plan_logits_decomp
             or self.export_contact_meas_head_swap
         )
@@ -566,20 +561,6 @@ class FreeRunCycleRunner:
             self.contact_plan_time_bias_scale = float(getattr(args, "contact_plan_time_bias_scale", 1.0))
         except Exception:
             self.contact_plan_time_bias_scale = 1.0
-        gate_raw = str(getattr(args, "contact_meas_gate_by_hit", "auto") or "auto").strip().lower()
-        if gate_raw in ("true", "1", "yes", "y"):
-            self.contact_meas_gate_by_hit_override = True
-        elif gate_raw in ("false", "0", "no", "n"):
-            self.contact_meas_gate_by_hit_override = False
-        else:
-            self.contact_meas_gate_by_hit_override = None
-        self.contact_meas_vxy_mode = str(getattr(args, "contact_meas_vxy_mode", "abs") or "abs").strip().lower()
-        self.contact_meas_ground_z_mode = str(getattr(args, "contact_meas_ground_z_mode", "window") or "window").strip().lower()
-        self.contact_meas_ground_z_beta = float(getattr(args, "contact_meas_ground_z_beta", 0.05) or 0.05)
-        self.contact_meas_ground_z_window = int(getattr(args, "contact_meas_ground_z_window", 5) or 5)
-        self.contact_meas_ground_z_quantile = float(getattr(args, "contact_meas_ground_z_quantile", 0.2) or 0.2)
-        self.contact_meas_ground_z_slew_up_cm = float(getattr(args, "contact_meas_ground_z_slew_up_cm", 0.0) or 0.0)
-        self.contact_meas_ground_z_slew_down_cm = float(getattr(args, "contact_meas_ground_z_slew_down_cm", 0.0) or 0.0)
         # Optional: force contact_plan init behavior for ablations (even if ckpt lacks init_head weights).
         self.contact_plan_init_mode_override = getattr(args, "contact_plan_init_mode", None)
         if self.contact_plan_init_mode_override is not None:
@@ -1872,25 +1853,6 @@ class FreeRunCycleRunner:
         trainer.so3_corr_gate_err_use_ref = self.so3_corr_gate_err_use_ref
         trainer.so3_corr_gate_scale_max = self.so3_corr_gate_scale_max
         trainer.log_contacts = self.log_contacts
-        trainer.log_contacts_whitebox = bool(getattr(self, "log_contacts_whitebox", False))
-        trainer.log_contacts_whitebox_first_steps = int(getattr(self, "log_contacts_whitebox_first_steps", 0) or 0)
-        trainer.contact_meas_gate_by_hit_override = getattr(self, "contact_meas_gate_by_hit_override", None)
-        trainer.contact_meas_vxy_mode = str(getattr(self, "contact_meas_vxy_mode", "abs") or "abs")
-        trainer.contact_meas_ground_z_mode = str(getattr(self, "contact_meas_ground_z_mode", "window") or "window")
-        trainer.contact_meas_ground_z_beta = float(getattr(self, "contact_meas_ground_z_beta", 0.05) or 0.05)
-        trainer.contact_meas_ground_z_window = int(getattr(self, "contact_meas_ground_z_window", 5) or 5)
-        trainer.contact_meas_ground_z_quantile = float(getattr(self, "contact_meas_ground_z_quantile", 0.2) or 0.2)
-        # Slew in meters per step (set 0 to disable). Applied after the chosen mode.
-        try:
-            up_cm = float(getattr(self, "contact_meas_ground_z_slew_up_cm", 0.0) or 0.0)
-        except Exception:
-            up_cm = 0.0
-        try:
-            down_cm = float(getattr(self, "contact_meas_ground_z_slew_down_cm", 0.0) or 0.0)
-        except Exception:
-            down_cm = 0.0
-        trainer.contact_meas_ground_z_max_up_m = max(0.0, up_cm) / 100.0
-        trainer.contact_meas_ground_z_max_down_m = max(0.0, down_cm) / 100.0
         trainer.lambda_fusion_apply = bool(self.lambda_fusion_apply)
         trainer.lambda_reliability_mode = str(getattr(self, "lambda_reliability_mode", "none") or "none")
         trainer.lambda_reliability_warmup_steps = int(getattr(self, "lambda_reliability_warmup_steps", 0) or 0)
@@ -2330,14 +2292,6 @@ class FreeRunCycleRunner:
             "lambda_reliability_warmup_steps": int(getattr(self, "lambda_reliability_warmup_steps", 0) or 0),
             "lambda_reliability_contact_err_max": float(getattr(self, "lambda_reliability_contact_err_max", 1.0) or 1.0),
             "lambda_reliability_warmup_joint_scales": getattr(self, "lambda_reliability_warmup_joint_scales", None),
-            "contact_meas_gate_by_hit": getattr(self, "contact_meas_gate_by_hit_override", None),
-            "contact_meas_vxy_mode": str(getattr(self, "contact_meas_vxy_mode", "abs") or "abs"),
-            "contact_meas_ground_z_mode": str(getattr(self, "contact_meas_ground_z_mode", "window") or "window"),
-            "contact_meas_ground_z_beta": float(getattr(self, "contact_meas_ground_z_beta", 0.05) or 0.05),
-            "contact_meas_ground_z_window": int(getattr(self, "contact_meas_ground_z_window", 5) or 5),
-            "contact_meas_ground_z_quantile": float(getattr(self, "contact_meas_ground_z_quantile", 0.2) or 0.2),
-            "contact_meas_ground_z_slew_up_cm": float(getattr(self, "contact_meas_ground_z_slew_up_cm", 0.0) or 0.0),
-            "contact_meas_ground_z_slew_down_cm": float(getattr(self, "contact_meas_ground_z_slew_down_cm", 0.0) or 0.0),
             "model": str(Path(self.args.model).expanduser().resolve()),
             "metrics_per_round": metrics_per_round,
             "metrics_per_step": per_step,
@@ -3532,7 +3486,6 @@ def _run_freerun_cycles(
     ref_err_sum = 0.0
     ref_err_count = 0
     ref_err_value: Optional[float] = None
-    prev_foot_pos_meas = None
 
     # Rotation slice/J for lambda fusion shape checks.
     rot_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
@@ -4508,8 +4461,6 @@ def _run_freerun_cycles(
                     pose_hist_buffer_raw = trainer._pose_hist_inverse_vec(initial_norm, scales, mu, std)
                 except Exception:
                     pass
-            # White-box contact meas caches per-foot positions across steps; reset it when we teleport state.
-            prev_foot_pos_meas = None
         if is_cycle_start and bool(multicycle_reset_plan_z_on_cycle_start) and bool(plan_enable):
             plan_z = None
             phase_z = None
@@ -4655,33 +4606,6 @@ def _run_freerun_cycles(
         contacts_meas_source_cfg = str(getattr(trainer, "contacts_meas_source", "model") or "model").strip().lower()
         contacts_meas_source_applied = str(contacts_meas_source_cfg)
 
-        # Compute whitebox contacts only when needed:
-        # - direct head explicitly requests whitebox,
-        # - plan init_mode is obs-based (t==0 only),
-        # - whitebox debug logging enabled.
-        init_mode = str(getattr(model, "contact_plan_init_mode", "learnable") or "learnable").strip().lower()
-        log_wb = bool(getattr(trainer, "log_contacts_whitebox", False))
-        if log_wb:
-            try:
-                setattr(trainer, "_contact_meas_whitebox_debug", None)
-            except Exception:
-                pass
-
-        need_wb = (contacts_meas_source_cfg in ("whitebox", "wb")) or (
-            bool(plan_enable)
-            and (
-                (direct_meas_source_eff in ("whitebox", "wb"))
-                or (init_mode in ("obs", "learnable+obs") and plan_z is None and step_idx == 0)
-                or log_wb
-            )
-        )
-        contacts_wb_t = None
-        if need_wb:
-            try:
-                contacts_wb_t, prev_foot_pos_meas = trainer._contact_meas_whitebox(motion_raw, prev_foot_pos_meas)
-            except Exception:
-                contacts_wb_t = None
-
         contacts_in_t = None
         if contacts_meas_source_cfg in ("zero", "ignore", "none"):
             try:
@@ -4690,10 +4614,6 @@ def _run_freerun_cycles(
                 cdim = 0
             if cdim > 0:
                 contacts_in_t = motion.new_zeros((motion.shape[0], cdim))
-        elif contacts_meas_source_cfg in ("whitebox", "wb"):
-            contacts_in_t = contacts_wb_t
-            if contacts_in_t is None:
-                contacts_meas_source_applied = "whitebox_missing"
         elif contacts_meas_source_cfg in ("pretrain_contact", "pretrain", "frozen_contact"):
             contacts_in_t, pretrain_affine_applied = _predict_pretrain_contacts_from_frozen(motion, pose_hist_t)
             if contacts_in_t is None:
@@ -4721,18 +4641,6 @@ def _run_freerun_cycles(
             except Exception:
                 contacts_in_t = None
                 contacts_meas_source_applied = "gt_missing"
-        else:
-            # Default: model-produced contacts_meas; keep legacy whitebox injection only for:
-            # - no learned meas head (fallback)
-            # - plan_z0 init when init_mode is obs-based (t==0 only)
-            if plan_enable:
-                if not use_learned_meas:
-                    contacts_in_t = contacts_wb_t
-                    contacts_meas_source_applied = "whitebox_fallback"
-                elif init_mode in ("obs", "learnable+obs") and plan_z is None and step_idx == 0:
-                    contacts_in_t = contacts_wb_t
-                    if contacts_in_t is not None:
-                        contacts_meas_source_applied = "whitebox_init"
 
         # Debug-only: override contacts_meas with teacher contacts only on selected sic.
         if (
@@ -4855,8 +4763,6 @@ def _run_freerun_cycles(
         direct_meas_override = None
         if direct_meas_source_eff in ("zero", "ignore", "none"):
             direct_meas_override = "ignore"
-        elif direct_meas_source_eff in ("whitebox", "wb"):
-            direct_meas_override = contacts_wb_t
         elif direct_meas_source_eff in ("gt", "teacher"):
             try:
                 if torch.is_tensor(contacts_seq) and contacts_seq.dim() == 3 and contacts_seq.shape[0] == motion.shape[0]:
@@ -6345,27 +6251,6 @@ def _run_freerun_cycles(
             # Phase-only logging: keep a tiny dict so phase state diagnostics are exported even when
             # --log_contacts is off.
             contact_entry = {}
-
-        # Optional: attach detailed white-box intermediates for debugging discrete collapses.
-        if contact_entry is not None and bool(getattr(trainer, "log_contacts_whitebox", False)):
-            try:
-                first_steps = int(getattr(trainer, "log_contacts_whitebox_first_steps", 4) or 4)
-                step_idx = int(t - start_t)
-                want_wb = step_idx < max(0, first_steps)
-                if not want_wb:
-                    meas_abs = contact_entry.get("ContactMeasAbsMean", None)
-                    gt_abs = contact_entry.get("ContactGTAbsMean", None)
-                    meas_gt_abs = contact_entry.get("ContactMeasGtAbsMean", None)
-                    if (meas_abs is not None) and (gt_abs is not None) and float(meas_abs) < 0.05 and float(gt_abs) > 0.2:
-                        want_wb = True
-                    elif meas_gt_abs is not None and float(meas_gt_abs) > 0.35:
-                        want_wb = True
-                if want_wb:
-                    wb = getattr(trainer, "_contact_meas_whitebox_debug", None)
-                    if isinstance(wb, dict) and wb:
-                        contact_entry["ContactMeasWhitebox"] = wb
-            except Exception:
-                pass
 
         if plan_enable:
             try:
@@ -9800,9 +9685,6 @@ def _run_freerun_cycles(
                     entry["ContactPlanGtAbsPerC"] = c.get("ContactPlanGtAbsPerC")
                 if "ContactMeasGtAbsPerC" in c:
                     entry["ContactMeasGtAbsPerC"] = c.get("ContactMeasGtAbsPerC")
-                if "ContactMeasWhitebox" in c:
-                    # Nested dict (debug only): keep it grouped instead of flattening dozens of keys.
-                    entry["ContactMeasWhitebox"] = c.get("ContactMeasWhitebox")
         if keybone_geo:
             entry["KeyBoneGeoDeg"] = keybone_geo
         if keybone_geo_local:
@@ -11302,10 +11184,10 @@ def parse_args() -> argparse.Namespace:
         "--direct_pose_meas_source",
         type=str,
         default="model",
-        choices=("model", "whitebox", "gt", "softgt", "zero"),
+        choices=("model", "gt", "softgt", "zero"),
         help=(
             "Override the *direct* head's contacts_meas source: "
-            "'model'=as-is; 'whitebox'=use whitebox contacts_in_t; 'gt'=use teacher soft contacts; "
+            "'model'=as-is; 'gt'=use teacher soft contacts; "
             "'softgt'=use teacher contacts mapped into the model's typical soft range via --direct_pose_softgt_stats; "
             "'zero'=ignore. Does not change contacts_err/lambda (only direct hint)."
         ),
@@ -11314,11 +11196,10 @@ def parse_args() -> argparse.Namespace:
         "--contacts_meas_source",
         type=str,
         default="model",
-        choices=("model", "whitebox", "gt", "zero", "pretrain_contact"),
+        choices=("model", "gt", "zero", "pretrain_contact"),
         help=(
             "Override the model's runtime contacts_meas source used by contacts_err / Event-Clock (and thus λ stats): "
-            "'model'=use learned contact_meas_head; 'whitebox'=use runtime whitebox contacts; "
-            "'gt'=use teacher soft contacts; 'zero'=all zeros; "
+            "'model'=use learned contact_meas_head; 'gt'=use teacher soft contacts; 'zero'=all zeros; "
             "'pretrain_contact'=use frozen pretrain contact_head from --encoder-bundle "
             "(input contact channels are zeroed to avoid leakage). "
             "This affects contacts_err, Event-Clock signals (delta_meas/lr_diff), and any downstream closed-loop stats."
@@ -11588,71 +11469,6 @@ def parse_args() -> argparse.Namespace:
         "--log_contacts",
         action="store_true",
         help="Log contacts_plan/meas/err stats into metrics_per_step JSON (auto-enabled by --so3_corr_gate_from_contacts_err).",
-    )
-    parser.add_argument(
-        "--log_contacts_whitebox",
-        action="store_true",
-        help=(
-            "Attach per-foot white-box intermediates (dist/vel/sweep) into metrics_per_step JSON. "
-            "Useful for debugging step-level collapses (hit_flag flip / ground_z drift)."
-        ),
-    )
-    parser.add_argument(
-        "--log_contacts_whitebox_first_steps",
-        type=int,
-        default=4,
-        help="Always attach white-box debug payload for the first N free-run steps (still logs suspected collapse steps beyond N).",
-    )
-    parser.add_argument(
-        "--contact_meas_gate_by_hit",
-        type=str,
-        default="auto",
-        choices=("auto", "true", "false"),
-        help="Override white-box gate_by_hit (auto uses bundle/meta). Set to 'false' for the first ablation pass.",
-    )
-    parser.add_argument(
-        "--contact_meas_vxy_mode",
-        type=str,
-        default="abs",
-        choices=("abs", "root_rel"),
-        help="White-box vxy gate: abs uses ||v_foot_xy||, root_rel uses ||v_foot_xy - v_root_xy|| (more robust under translation).",
-    )
-    parser.add_argument(
-        "--contact_meas_ground_z_mode",
-        type=str,
-        default="window",
-        choices=("ema", "window", "slew"),
-        help="White-box ground_z update mode (P2).",
-    )
-    parser.add_argument(
-        "--contact_meas_ground_z_beta",
-        type=float,
-        default=0.05,
-        help="EMA beta for --contact_meas_ground_z_mode=ema (higher adapts faster).",
-    )
-    parser.add_argument(
-        "--contact_meas_ground_z_window",
-        type=int,
-        default=5,
-        help="Window length for --contact_meas_ground_z_mode=window.",
-    )
-    parser.add_argument(
-        "--contact_meas_ground_z_quantile",
-        type=float,
-        default=0.2,
-        help="Low-quantile (0..1) over the window for --contact_meas_ground_z_mode=window. q=0.2 ignores single downward spikes when window=5.",
-    )
-    parser.add_argument(
-        "--contact_meas_ground_z_slew_up_cm",
-        type=float,
-        default=0.0,
-        help="Max upward change (cm per step) applied to ground_z after the chosen mode (0 disables).",
-    )
-    parser.add_argument(
-        "--contact_meas_ground_z_slew_down_cm",
-        type=float,
-        default=0.0,
-        help="Max downward change (cm per step) applied to ground_z after the chosen mode (0 disables).",
     )
     parser.add_argument(
         "--analyze_phase_shift",

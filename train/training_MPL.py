@@ -106,19 +106,6 @@ class RolloutPredictionBuffers:
     event_clock_delta_z: Sequence[torch.Tensor]
 
 
-@dataclass(frozen=True)
-class ContactMeasRuntime:
-    x_raw: torch.Tensor
-    contact_dim: int
-    rot_slice: slice
-    rot_flat: torch.Tensor
-    joint_count: int
-    parents: Any
-    offsets: torch.Tensor
-    root_pos: torch.Tensor
-    up_axis: int
-
-
 def _parse_pretrain_contact_affine_spec(spec: Any) -> Optional[Dict[str, Any]]:
     if spec is None:
         return None
@@ -230,7 +217,6 @@ class RolloutExecutionState:
     phase_z: Optional[torch.Tensor] = None
     phase_event_age: Optional[torch.Tensor] = None
     meas_prev_prob: Optional[torch.Tensor] = None
-    prev_foot_pos_meas: Optional[torch.Tensor] = None
     reprojection_applied_count: int = 0
     last_attn: Optional[torch.Tensor] = None
     latest_y_raw: Optional[torch.Tensor] = None
@@ -398,39 +384,12 @@ LEGACY_LOSS_CLI_FLAGS: dict[str, str] = {
     "--bone_prior_samples": "bone_prior_samples",
 }
 
-REMOVED_TRAINBASE_PHASE_RESET_KEYS: tuple[str, ...] = (
-    "contact_phase_state_event_kind",
-    "contact_phase_state_event_thr",
-    "contact_phase_state_event_hyst",
-    "contact_phase_state_event_min_interval",
-    "phase_reset_source",
-)
-
-REMOVED_TRAINBASE_PHASE_RESET_CLI_FLAGS: dict[str, str] = {
-    "--contact_phase_state_event_kind": "contact_phase_state_event_kind",
-    "--contact_phase_state_event_thr": "contact_phase_state_event_thr",
-    "--contact_phase_state_event_hyst": "contact_phase_state_event_hyst",
-    "--contact_phase_state_event_min_interval": "contact_phase_state_event_min_interval",
-    "--phase_reset_source": "phase_reset_source",
-}
-
-
 def _legacy_loss_keys_msg(keys: Sequence[str], *, context: str) -> str:
     keys_sorted = ", ".join(sorted({str(k) for k in keys}))
     return (
         f"[LegacyLossConfig] {context} contains removed keys: {keys_sorted}. "
         "Please remove them; MotionJointLoss now uses unified weights only "
         "(adaptive_bone_weights + unified_* knobs)."
-    )
-
-
-def _removed_trainbase_phase_reset_msg(keys: Sequence[str], *, context: str) -> str:
-    keys_sorted = ", ".join(sorted({str(k) for k in keys}))
-    return (
-        f"[trainbase] {context} contains removed phase-reset keys: {keys_sorted}. "
-        "train/training_MPL.py now hard-disables phase reset/event reset and always builds "
-        "contact_phase_state with phase_reset_source='none' and contact_phase_state_event_kind='none'. "
-        "Please remove these keys from trainbase configs/CLI. Posttrain/validate keep their own phase-reset controls."
     )
 
 
@@ -539,452 +498,6 @@ class Trainer:
                 )
         import torch
         return torch.ones(joint_count, device=ref_tensor.device, dtype=ref_tensor.dtype)
-
-    def _resolve_contact_meas_runtime(self, x_raw) -> Optional[ContactMeasRuntime]:
-        import torch
-
-        if x_raw is None or (not torch.is_tensor(x_raw)):
-            return None
-        if x_raw.dim() == 3 and x_raw.size(1) == 1:
-            x_raw = x_raw[:, 0]
-        if x_raw.dim() != 2:
-            return None
-
-        model = getattr(self, "model", None)
-        contact_dim = int(getattr(model, "contact_dim", 0) or 0) if model is not None else 0
-        if contact_dim <= 0:
-            return None
-
-        x_layout = getattr(self, "_x_layout", None) or {}
-        rot_slice = self._sl_from_layout(x_layout, "BoneRotations6D")
-        if not isinstance(rot_slice, slice):
-            return None
-        rot_flat = x_raw[..., rot_slice]
-        if rot_flat.numel() == 0 or (rot_flat.shape[-1] % 6 != 0):
-            return None
-        joint_count = int(rot_flat.shape[-1] // 6)
-
-        parents = getattr(self.loss_fn, "parents", None)
-        offsets = getattr(self.loss_fn, "bone_offsets", None)
-        if not parents or offsets is None:
-            return None
-        if offsets.shape[0] < joint_count:
-            return None
-
-        root_slice = self._sl_from_layout(x_layout, "RootPosition")
-        if isinstance(root_slice, slice) and (root_slice.stop - root_slice.start) == 3:
-            root_pos = x_raw[..., root_slice]
-        else:
-            root_pos = x_raw.new_zeros((x_raw.shape[0], 3))
-
-        up_axis = int(getattr(self, "eval_up_axis", getattr(self, "_up_axis", 2)))
-        up_axis = 2 if up_axis not in (0, 1, 2) else up_axis
-        return ContactMeasRuntime(
-            x_raw=x_raw,
-            contact_dim=contact_dim,
-            rot_slice=rot_slice,
-            rot_flat=rot_flat,
-            joint_count=joint_count,
-            parents=parents,
-            offsets=offsets,
-            root_pos=root_pos,
-            up_axis=up_axis,
-        )
-
-    def _resolve_contact_meas_cfg(self) -> dict[str, Any]:
-        cfg = getattr(self, "_contact_meas_cfg", None)
-        if not isinstance(cfg, dict):
-            meta = getattr(self.loss_fn, "meta", None)
-            foot_evidence = (meta.get("foot_evidence") if isinstance(meta, dict) else {}) or {}
-            sweep = (foot_evidence.get("sweep") if isinstance(foot_evidence, dict) else {}) or {}
-            spec = (foot_evidence.get("soft_score_spec") if isinstance(foot_evidence, dict) else {}) or {}
-
-            def _finite_float(mapping: Mapping[str, Any], key: str, default: float) -> float:
-                if not isinstance(mapping, Mapping):
-                    return default
-                try:
-                    value = float(mapping.get(key, default))
-                except Exception:
-                    value = default
-                return default if not math.isfinite(value) else value
-
-            radius_cm = _finite_float(sweep, "sphere_radius_cm", 0.0)
-            up_offset_cm = _finite_float(sweep, "up_offset_cm", 0.0)
-            down_distance_cm = _finite_float(sweep, "down_distance_cm", 0.0)
-            cfg = {
-                "radius_m": max(0.0, radius_cm) / 100.0,
-                "up_offset_m": max(0.0, up_offset_cm) / 100.0,
-                "down_distance_m": max(0.0, down_distance_cm) / 100.0,
-                "dist0_cm": max(0.0, _finite_float(spec, "dist0_cm", 0.5)),
-                "alpha_dist": max(1e-6, _finite_float(spec, "alpha_dist", 2.0)),
-                "vz0_cmps": max(1e-6, _finite_float(spec, "vz0_cmps", 40.0)),
-                "alpha_vz": max(1e-6, _finite_float(spec, "alpha_vz", 0.5)),
-                "vxy0_cmps": max(1e-6, _finite_float(spec, "vxy0_cmps", 96.0)),
-                "alpha_vxy": max(1e-6, _finite_float(spec, "alpha_vxy", 0.2)),
-                "gate_by_hit": bool(spec.get("gate_by_hit", True)) if isinstance(spec, dict) else True,
-                "min_score": 1e-4,
-                "max_score": 0.9,
-                "scale": 0.92,
-            }
-            self._contact_meas_cfg = cfg
-
-        gate_override = getattr(self, "contact_meas_gate_by_hit_override", None)
-        if gate_override is not None:
-            cfg["gate_by_hit"] = bool(gate_override)
-        return cfg
-
-    def _resolve_contact_meas_foot_indices(
-        self,
-        *,
-        bone_names: Sequence[str],
-        joint_count: int,
-        contact_dim: int,
-    ) -> Optional[list[int]]:
-        foot_indices = getattr(self, "_contact_meas_foot_idxs", None)
-        if not isinstance(foot_indices, (list, tuple)) or len(foot_indices) != contact_dim:
-            foot_indices = None
-        if foot_indices is not None:
-            return [int(idx) for idx in foot_indices]
-
-        resolved: list[int] = []
-        name_to_idx = {name: idx for idx, name in enumerate(bone_names[:joint_count])} if bone_names else {}
-        meta = getattr(self.loss_fn, "meta", None)
-        if isinstance(meta, dict):
-            markers = meta.get("foot_evidence", {}).get("markers")
-            if isinstance(markers, str):
-                for name in [item.strip() for item in markers.split(",") if item.strip()]:
-                    idx = name_to_idx.get(name)
-                    if isinstance(idx, int):
-                        resolved.append(int(idx))
-        for name in ("ball_l", "ball_r", "foot_l", "foot_r"):
-            if len(resolved) >= contact_dim:
-                break
-            idx = name_to_idx.get(name)
-            if isinstance(idx, int) and 0 <= idx < joint_count and idx not in resolved:
-                resolved.append(int(idx))
-        if len(resolved) != contact_dim:
-            return None
-        self._contact_meas_foot_idxs = list(resolved)
-        return resolved
-
-    def _contact_meas_whitebox(self, x_raw, prev_foot_pos=None):
-        """
-        White-box contacts_meas:
-            pose (rot6d) -> FK -> foot height/velocity -> contact score
-
-        Returns:
-            contacts_meas: (B, C) or None
-            foot_pos: (B, C, 3) detached for next-step velocity, or None
-        """
-        import torch
-        log_wb = bool(getattr(self, "log_contacts_whitebox", False))
-        debug_payload: Optional[Dict[str, Any]] = None
-        runtime = self._resolve_contact_meas_runtime(x_raw)
-        if runtime is None:
-            if log_wb:
-                self._contact_meas_whitebox_debug = None
-            return None, prev_foot_pos
-        bone_names_src = getattr(self.loss_fn, "bone_names", None) or getattr(self, "_bone_names", None)
-        if not bone_names_src:
-            meta = getattr(self.loss_fn, "meta", None)
-            if isinstance(meta, dict):
-                bone_names_src = meta.get("bone_names") or meta.get("skeleton", {}).get("bone_names")
-        bone_names = [str(name) for name in bone_names_src] if isinstance(bone_names_src, (list, tuple)) else []
-        if runtime.joint_count > 0:
-            bone_names = bone_names[:runtime.joint_count]
-        foot_idxs = self._resolve_contact_meas_foot_indices(
-            bone_names=bone_names,
-            joint_count=runtime.joint_count,
-            contact_dim=runtime.contact_dim,
-        )
-        if foot_idxs is None:
-            if log_wb:
-                self._contact_meas_whitebox_debug = None
-            return None, prev_foot_pos
-        cfg = self._resolve_contact_meas_cfg()
-
-        x_raw = runtime.x_raw
-        contact_dim = runtime.contact_dim
-        rot_flat = runtime.rot_flat
-        J = runtime.joint_count
-        parents = runtime.parents
-        offsets = runtime.offsets
-        root_pos = runtime.root_pos
-        up_axis = runtime.up_axis
-
-        with torch.no_grad():
-            from .geometry import fk_positions_from_rot6d, reproject_rot6d
-
-            cols = getattr(self.loss_fn, "_rot6d_columns", ("X", "Z"))
-            rot_proj = reproject_rot6d(rot_flat).view(x_raw.shape[0], J, 6)
-            pos = fk_positions_from_rot6d(rot_proj, parents, offsets, root_pos=root_pos, columns=cols)  # (B,J,3)
-            foot_pos = pos[:, torch.as_tensor(foot_idxs, device=pos.device, dtype=torch.long)]  # (B,C,3)
-
-            has_prev = not (
-                prev_foot_pos is None or (not torch.is_tensor(prev_foot_pos)) or prev_foot_pos.shape != foot_pos.shape
-            )
-            if not has_prev:
-                vel = torch.zeros_like(foot_pos)
-            else:
-                vel = (foot_pos - prev_foot_pos.to(device=foot_pos.device, dtype=foot_pos.dtype)) * float(
-                    getattr(self, "fps", 60.0) or 60.0
-                )
-
-            # Root velocity (for root-relative planar speed gating).
-            # Important: only use it when prev_foot_pos is valid; otherwise treat as cold-start and reset.
-            if not has_prev:
-                root_vel = torch.zeros_like(root_pos)
-            else:
-                prev_root_pos = getattr(self, "_contact_meas_prev_root_pos", None)
-                if prev_root_pos is None or (not torch.is_tensor(prev_root_pos)) or prev_root_pos.shape != root_pos.shape:
-                    root_vel = torch.zeros_like(root_pos)
-                else:
-                    root_vel = (root_pos - prev_root_pos.to(device=root_pos.device, dtype=root_pos.dtype)) * float(
-                        getattr(self, "fps", 60.0) or 60.0
-                    )
-
-            planar_axes = [0, 1, 2]
-            planar_axes.remove(up_axis)
-            vel_xy = vel[..., planar_axes]  # (B,C,2)
-            root_vel_xy = root_vel[..., planar_axes]  # (B,2)
-            vxy_abs_mps = vel_xy.norm(dim=-1)
-            vxy_rel_mps = (vel_xy - root_vel_xy.unsqueeze(-2)).norm(dim=-1)
-            vz_mps = vel[..., up_axis].abs()
-
-            # Use abs speed by default; root-relative speed is more robust under global translation.
-            vxy_mode = getattr(self, "contact_meas_vxy_mode", None)
-            if vxy_mode is None and isinstance(cfg, dict):
-                vxy_mode = cfg.get("vxy_mode", None)
-            vxy_mode = str(vxy_mode or "abs").strip().lower()
-            if vxy_mode in ("root", "root_rel", "root-relative", "rel", "relative"):
-                vxy_mps_used = vxy_rel_mps
-                vxy_mode = "root_rel"
-            else:
-                vxy_mps_used = vxy_abs_mps
-                vxy_mode = "abs"
-
-            # FootEvidence-style soft score uses cm / cmps.
-            vz_cmps = vz_mps * 100.0
-            vxy_abs_cmps = vxy_abs_mps * 100.0
-            vxy_rel_cmps = vxy_rel_mps * 100.0
-            vxy_cmps = vxy_mps_used * 100.0
-            root_vxy_cmps = root_vel_xy.norm(dim=-1) * 100.0
-
-            # Velocity scores (also used for stance-conditioned ground selection).
-            vz0_cmps = float(cfg.get("vz0_cmps", 40.0) or 40.0)
-            vz0_cmps = max(1e-6, vz0_cmps)
-            alpha_vz = float(cfg.get("alpha_vz", 0.5) or 0.5)
-            if (not math.isfinite(alpha_vz)) or alpha_vz <= 0.0:
-                alpha_vz = 0.5
-            denom_vz = max(1e-6, alpha_vz * vz0_cmps)
-            vz_score = torch.exp(-torch.relu(vz_cmps - vz0_cmps) / denom_vz)
-
-            vxy0_cmps = float(cfg.get("vxy0_cmps", 96.0) or 96.0)
-            vxy0_cmps = max(1e-6, vxy0_cmps)
-            alpha_vxy = float(cfg.get("alpha_vxy", 0.2) or 0.2)
-            if (not math.isfinite(alpha_vxy)) or alpha_vxy <= 0.0:
-                alpha_vxy = 0.2
-            denom_vxy = max(1e-6, alpha_vxy * vxy0_cmps)
-            vxy_score = torch.exp(-torch.relu(vxy_cmps - vxy0_cmps) / denom_vxy)
-
-            radius_m = float(cfg.get("radius_m", 0.0) or 0.0)
-            bottom_z = foot_pos[..., up_axis] - radius_m  # (B, C)
-            # Choose the most stance-like foot (low planar+vertical speed) to estimate ground_z_now.
-            stance_score = (vxy_score * vz_score).detach()  # higher => more likely stance
-            idx = stance_score.argmax(dim=-1)  # (B,)
-            ground_z_now = bottom_z.gather(-1, idx.unsqueeze(-1)).squeeze(-1)  # (B,)
-            ground_z_prev = getattr(self, "_contact_meas_ground_z", None)
-            mode = str(getattr(self, "contact_meas_ground_z_mode", "window") or "window").strip().lower()
-            if mode not in ("ema", "window", "slew"):
-                mode = "window"
-            prev_ok = (
-                torch.is_tensor(ground_z_prev)
-                and ground_z_prev.shape == ground_z_now.shape
-                and (prev_foot_pos is not None)
-            )
-            if not prev_ok:
-                ground_z = ground_z_now
-                # Reset history buffer for window mode (avoid cross-clip leakage).
-                if mode == "window":
-                    win = int(getattr(self, "contact_meas_ground_z_window", 5) or 5)
-                    win = max(1, win)
-                    if win > 1:
-                        self._contact_meas_ground_z_hist = ground_z_now.unsqueeze(-1).repeat(1, win).detach()
-                    else:
-                        self._contact_meas_ground_z_hist = None
-            else:
-                ground_z_prev = ground_z_prev.to(device=ground_z_now.device, dtype=ground_z_now.dtype)
-                ground_z_cand = ground_z_now
-                if mode == "ema":
-                    beta = float(getattr(self, "contact_meas_ground_z_beta", 0.05) or 0.05)
-                    if (not math.isfinite(beta)) or beta <= 0.0:
-                        beta = 0.05
-                    beta = min(1.0, beta)
-                    ground_z_cand = ground_z_prev + beta * (ground_z_now - ground_z_prev)
-                elif mode == "window":
-                    win = int(getattr(self, "contact_meas_ground_z_window", 5) or 5)
-                    win = max(1, win)
-                    q = float(getattr(self, "contact_meas_ground_z_quantile", 0.2) or 0.2)
-                    if (not math.isfinite(q)) or q < 0.0:
-                        q = 0.0
-                    q = min(1.0, q)
-                    hist = getattr(self, "_contact_meas_ground_z_hist", None)
-                    if (not torch.is_tensor(hist)) or hist.shape != (ground_z_now.shape[0], win):
-                        hist = ground_z_prev.unsqueeze(-1).repeat(1, win)
-                    else:
-                        hist = hist.to(device=ground_z_now.device, dtype=ground_z_now.dtype)
-                    if win > 1:
-                        hist = torch.roll(hist, shifts=-1, dims=-1)
-                        hist[..., -1] = ground_z_now
-                        self._contact_meas_ground_z_hist = hist.detach()
-                    try:
-                        # Robust low-quantile over the last `win` observations (ignore single downward spikes).
-                        vals = hist.sort(dim=-1).values
-                        idx = int(math.ceil(q * float(win - 1)))
-                        idx = max(0, min(win - 1, idx))
-                        ground_z_cand = vals[..., idx]
-                    except Exception:
-                        ground_z_cand = ground_z_prev
-                else:
-                    # mode == "slew": cand is now, then apply rate limits below.
-                    ground_z_cand = ground_z_now
-
-                max_down = getattr(self, "contact_meas_ground_z_max_down_m", None)
-                max_up = getattr(self, "contact_meas_ground_z_max_up_m", None)
-                try:
-                    max_down_m = float(max_down) if max_down is not None else 0.0
-                except Exception:
-                    max_down_m = 0.0
-                try:
-                    max_up_m = float(max_up) if max_up is not None else 0.0
-                except Exception:
-                    max_up_m = 0.0
-                if mode == "slew" and max_down_m <= 0.0 and max_up_m <= 0.0:
-                    # Reasonable defaults for a first ablation: allow recovery but prevent one-step explosions.
-                    max_down_m = 0.01  # 1cm / frame
-                    max_up_m = 0.002   # 0.2cm / frame
-                max_down_m = max(0.0, max_down_m)
-                max_up_m = max(0.0, max_up_m)
-                if max_down_m > 0.0 or max_up_m > 0.0:
-                    delta = (ground_z_cand - ground_z_prev).clamp(-max_down_m, max_up_m)
-                    ground_z = ground_z_prev + delta
-                else:
-                    ground_z = ground_z_cand
-
-            self._contact_meas_ground_z = ground_z.detach()
-
-            dist_to_ground_m = (bottom_z - ground_z.unsqueeze(-1)).clamp_min(0.0)
-
-            # Gate by sweep hit (matches JSON behavior: hit_flag=0 => contact=0).
-            start_z = None
-            sweep_target_z = None
-            hit_flag = None
-            if bool(cfg.get("gate_by_hit", True)):
-                up_off = float(cfg.get("up_offset_m", 0.0) or 0.0)
-                down_dist = float(cfg.get("down_distance_m", 0.0) or 0.0)
-                start_z = foot_pos[..., up_axis] + up_off
-                # Sphere-sweep hits the ground when the *center* crosses (ground_z + radius).
-                sweep_target_z = ground_z.unsqueeze(-1) + radius_m
-                hit_flag = (start_z >= sweep_target_z) & ((start_z - down_dist) <= sweep_target_z)
-
-            # FootEvidence-style soft score in cm / cmps.
-            # A robust, explainable sensor: contact is high when the foot is close to the estimated ground plane
-            # and the foot is not moving too fast (esp. vertical velocity).
-            #
-            # We intentionally use a hinge-style velocity gate (no penalty below threshold) to keep the meas signal
-            # sharp and interpretable; thresholds/softness are taken from meta['foot_evidence']['soft_score_spec'].
-            dist_cm = dist_to_ground_m * 100.0
-
-            dist0_cm = float(cfg.get("dist0_cm", 0.5) or 0.5)
-            dist0_cm = max(1e-6, dist0_cm)
-            alpha_dist = float(cfg.get("alpha_dist", 2.0) or 2.0)
-            if (not math.isfinite(alpha_dist)) or alpha_dist <= 0.0:
-                alpha_dist = 2.0
-            # Normalize so dist_score==1 at dist=0 (i.e., on the ground) regardless of alpha_dist.
-            # dist_raw in (0,1) with dist_raw(dist=0)=sigmoid(alpha_dist).
-            dist_raw = torch.sigmoid((alpha_dist * (dist0_cm - dist_cm)) / dist0_cm)
-            dist_raw_max = 1.0 / (1.0 + math.exp(-alpha_dist))  # sigmoid(alpha_dist)
-            dist_score = (dist_raw / max(1e-6, float(dist_raw_max))).clamp(0.0, 1.0)
-
-            contacts_meas = dist_score * vz_score * vxy_score
-            scale = float(cfg.get("scale", 1.0) or 1.0)
-            if math.isfinite(scale) and scale > 0.0:
-                contacts_meas = contacts_meas * scale
-            if hit_flag is not None:
-                contacts_meas = contacts_meas * hit_flag.to(dtype=contacts_meas.dtype)
-
-            contacts_meas = contacts_meas.clamp(0.0, float(cfg.get("max_score", 1.0) or 1.0))
-            min_score = float(cfg.get("min_score", 0.0) or 0.0)
-            if min_score > 0.0:
-                if hit_flag is not None:
-                    contacts_meas = torch.where(hit_flag, contacts_meas.clamp_min(min_score), contacts_meas)
-                else:
-                    contacts_meas = contacts_meas.clamp_min(min_score)
-
-            if log_wb:
-                try:
-                    def _mean_list(x: torch.Tensor | None) -> list[float] | None:
-                        if x is None or (not torch.is_tensor(x)):
-                            return None
-                        if x.ndim == 1:
-                            return [float(x.detach().mean().item())]
-                        if x.ndim == 2:
-                            return x.detach().mean(dim=0).cpu().tolist()
-                        # Fallback: flatten per-sample then mean over batch.
-                        flat = x.detach().reshape(x.shape[0], -1)
-                        return flat.mean(dim=0).cpu().tolist()
-
-                    foot_pos_z = foot_pos[..., up_axis]
-                    foot_names = None
-                    if bone_names:
-                        foot_names = [bone_names[int(i)] if int(i) < len(bone_names) else str(int(i)) for i in foot_idxs]
-                    wb_cfg = {}
-                    try:
-                        for k, v in (cfg or {}).items():
-                            if isinstance(v, bool):
-                                wb_cfg[str(k)] = bool(v)
-                            else:
-                                wb_cfg[str(k)] = float(v)
-                    except Exception:
-                        wb_cfg = None
-
-                    wb_debug = {
-                        "UpAxis": int(up_axis),
-                        "Batch": int(foot_pos.shape[0]),
-                        "ContactDim": int(contact_dim),
-                        "FootIdxs": [int(i) for i in foot_idxs],
-                        "FootNames": foot_names,
-                        "VxyMode": str(vxy_mode),
-                        "GroundZSelect": "stance",
-                        "Cfg": wb_cfg,
-                        "GroundZNowMean": float(ground_z_now.detach().mean().item()) if torch.is_tensor(ground_z_now) else None,
-                        "GroundZMean": float(ground_z.detach().mean().item()) if torch.is_tensor(ground_z) else None,
-                        "GroundZPrevMean": float(ground_z_prev.detach().mean().item()) if torch.is_tensor(ground_z_prev) else None,
-                        "FootPosZMean": _mean_list(foot_pos_z),
-                        "BottomZMean": _mean_list(bottom_z),
-                        "DistCmMean": _mean_list(dist_cm),
-                        "VzCmpsMean": _mean_list(vz_cmps),
-                        "RootVxyCmpsMean": _mean_list(root_vxy_cmps),
-                        "VxyCmpsMean": _mean_list(vxy_cmps),
-                        "VxyAbsCmpsMean": _mean_list(vxy_abs_cmps),
-                        "VxyRelCmpsMean": _mean_list(vxy_rel_cmps),
-                        "StartZMean": _mean_list(start_z),
-                        "SweepTargetZMean": _mean_list(sweep_target_z),
-                        "HitRate": _mean_list(hit_flag.to(dtype=contacts_meas.dtype)) if hit_flag is not None else None,
-                        "DistScoreMean": _mean_list(dist_score),
-                        "VzScoreMean": _mean_list(vz_score),
-                        "VxyScoreMean": _mean_list(vxy_score),
-                        "MeasMean": _mean_list(contacts_meas),
-                    }
-                    debug_payload = wb_debug
-                except Exception:
-                    debug_payload = None
-
-        # Cache root_pos for the next-step velocity estimate (kept in Trainer state).
-        self._contact_meas_prev_root_pos = root_pos.detach() if torch.is_tensor(root_pos) else root_pos
-        if log_wb:
-            self._contact_meas_whitebox_debug = debug_payload
-        return contacts_meas, foot_pos.detach()
 
     def _predict_pretrain_contacts_from_frozen(
         self,
@@ -1167,7 +680,6 @@ class Trainer:
 
         step_idx = int(context.step_idx)
         cond_input = context.cond_seq[:, step_idx] if context.has_time_dim['cond'] else context.cond_seq
-        prev_foot_pos_meas = context.prev_foot_pos_meas
 
         angvel_slice = getattr(self, "angvel_x_slice", None)
         if bool(getattr(self, "use_freerun_state_sync", False)) and isinstance(angvel_slice, slice):
@@ -1182,25 +694,15 @@ class Trainer:
 
         contacts_in_t = None
         if context.plan_enable:
-            contacts_source = str(getattr(self, 'trainbase_contacts_source', 'whitebox') or 'whitebox').strip().lower()
-            if contacts_source == 'pretrain_contact':
-                contacts_in_t = self._predict_pretrain_contacts_from_frozen(
-                    motion_step_t=context.motion,
-                    pose_hist_step_t=pose_history_t,
+            contacts_in_t = self._predict_pretrain_contacts_from_frozen(
+                motion_step_t=context.motion,
+                pose_hist_step_t=pose_history_t,
+            )
+            if contacts_in_t is None:
+                raise RuntimeError(
+                    '[FATAL] trainbase_contacts_source=pretrain_contact requires valid frozen encoder+contact_head '
+                    'and runtime-compatible encoder input dimensions.'
                 )
-                if contacts_in_t is None:
-                    raise RuntimeError(
-                        '[FATAL] trainbase_contacts_source=pretrain_contact requires valid frozen encoder+contact_head '
-                        'and runtime-compatible encoder input dimensions.'
-                    )
-            else:
-                try:
-                    contacts_in_t, prev_foot_pos_meas = self._contact_meas_whitebox(
-                        context.motion_raw_local,
-                        prev_foot_pos_meas,
-                    )
-                except Exception:
-                    contacts_in_t = None
 
         cond_raw_t = None
         if context.cond_raw_seq is not None:
@@ -1271,7 +773,6 @@ class Trainer:
             angvel_t=angvel_t,
             pose_history_t=pose_history_t,
             cond_raw_for_env=cond_raw_for_env,
-            prev_foot_pos_meas=prev_foot_pos_meas,
             time_index_t=time_index_t,
             rollout_step_t=rollout_step_t,
             reprojection_applied=reprojection_applied,
@@ -1610,10 +1111,8 @@ class Trainer:
                 mode=rollout.mode,
                 enable_reprojection=rollout.enable_reprojection,
                 time_base_local=rollout.time_base_local,
-                prev_foot_pos_meas=rollout.prev_foot_pos_meas,
             )
         )
-        rollout.prev_foot_pos_meas = step_inputs.prev_foot_pos_meas
         if step_inputs.reprojection_applied:
             rollout.reprojection_applied_count += 1
 
@@ -5525,13 +5024,6 @@ class TrainerRuntimeConfig:
     trainbase_contacts_pretrain_clamp: float
     trainbase_contacts_pretrain_affine_stats: Optional[str]
     trainbase_contacts_pretrain_affine: Optional[Dict[str, Any]]
-    contact_meas_gate_by_hit_override: Optional[bool]
-    contact_meas_ground_z_mode: str
-    contact_meas_ground_z_beta: float
-    contact_meas_ground_z_window: int
-    contact_meas_ground_z_quantile: float
-    contact_meas_ground_z_max_up_m: float
-    contact_meas_ground_z_max_down_m: float
     diag_topk: int
     diag_thr: float
     yaw_forward_axis: int
@@ -5578,9 +5070,6 @@ def _load_train_entry_config_defaults(config_path: Optional[str], parser: argpar
     legacy_unknown = [k for k in unknown_keys if k in LEGACY_LOSS_TOPLEVEL_KEYS]
     if legacy_unknown:
         parser.error(_legacy_loss_keys_msg(legacy_unknown, context='config_json(top-level)'))
-    removed_phase_reset = [k for k in unknown_keys if k in REMOVED_TRAINBASE_PHASE_RESET_KEYS]
-    if removed_phase_reset:
-        parser.error(_removed_trainbase_phase_reset_msg(removed_phase_reset, context='config_json(top-level)'))
     if unknown_keys:
         parser.error(f"[config_json] 存在未识别字段: {', '.join(unknown_keys)}")
     try:
@@ -5628,8 +5117,6 @@ def _apply_train_entry_config_overrides(
         key = key.strip()
         if not key:
             parser.error('[config_override] 键名不能为空')
-        if key in REMOVED_TRAINBASE_PHASE_RESET_KEYS:
-            parser.error(_removed_trainbase_phase_reset_msg([key], context='config_override'))
         if not hasattr(namespace, key):
             parser.error(f"[config_override] 未知键名: {key}")
         new_value = _parse_literal(value_expr)
@@ -5731,9 +5218,9 @@ def _build_train_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentPar
     p.add_argument(
         '--trainbase_contacts_source',
         type=str,
-        default='auto',
-        choices=('auto', 'whitebox', 'pretrain_contact'),
-        help='Basetrain rollout contacts source：auto 优先接 frozen pretrain_contact，缺失时回退 whitebox。',
+        default='pretrain_contact',
+        choices=('pretrain_contact',),
+        help='Basetrain rollout contacts source：mainline 仅接受 frozen pretrain_contact。',
     )
     p.add_argument(
         '--trainbase_contacts_pretrain_clamp',
@@ -5772,26 +5259,6 @@ def _build_train_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentPar
                    help='contact plan init MLP hidden dim（仅 init_mode=obs/learnable+obs 生效）')
     p.add_argument('--contact_plan_init_dropout', type=float, default=0.0,
                    help='contact plan init MLP dropout（仅 init_mode=obs/learnable+obs 生效）')
-    # ---- Contact phase state (prev_phase_vec clock; step-stateful like plan_z) ----
-    p.add_argument(
-        '--contact_phase_state_enable',
-        action='store_true',
-        default=False,
-        help='启用显式相位状态 prev_phase_vec（phase_z）并作为 contact_plan GRU 输入的一部分；见 docs/contact_phase_state_prevphase_tta.md',
-    )
-    p.add_argument(
-        '--contact_phase_state_init_mode',
-        type=str,
-        default='obs',
-        choices=['zeros', 'learnable', 'obs', 'learnable+obs'],
-        help='phase_z 冷启动 init：obs(默认)|learnable+obs|learnable|zeros',
-    )
-    p.add_argument('--contact_phase_state_hidden', type=int, default=64,
-                   help='phase Δφ head hidden dim')
-    p.add_argument('--contact_phase_state_delta_max', type=float, default=0.5,
-                   help='每步相位推进 Δφ 的最大幅度（rad/step，tanh 缩放）')
-    p.add_argument('--contact_phase_state_delta_init', type=float, default=(6.283185307179586 / 80.0),
-                   help='Δφ 初始 bias（rad/step；默认约等于 80 帧一周期）')
     # ---- Event-Clock v3 (contact_plan residual correction) ----
     p.add_argument('--use_event_clock', action='store_true', default=False,
                    help='启用 Event-Clock v3：在 contact_plan GRU loop 内做 gated residual correction')
@@ -5865,34 +5332,6 @@ def _build_train_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentPar
                    help='group norm ratio clamp 最大值')
     p.add_argument('--direct_pose_loss_group_norm_eps', type=float, default=1e-6,
                    help='group norm 数值稳定 epsilon')
-    # ---- White-box contacts_meas knobs (P2 ground_z stability / ablations) ----
-    # NOTE: when contact_plan_enable=True, training/rollout will resolve contacts_in_t from
-    # trainbase_contacts_source=auto|whitebox|pretrain_contact; whitebox knobs below remain active
-    # for fallback / ablation when the resolved source is whitebox.
-    p.add_argument(
-        '--contact_meas_gate_by_hit',
-        type=str,
-        default='auto',
-        choices=('auto', 'true', 'false'),
-        help="Override white-box gate_by_hit: auto uses bundle/meta; false disables discrete sweep hit gate (ablation).",
-    )
-    p.add_argument(
-        '--contact_meas_ground_z_mode',
-        type=str,
-        default='window',
-        choices=('ema', 'window', 'slew'),
-        help="White-box ground_z update mode: ema | window(quantile) | slew(rate-limit).",
-    )
-    p.add_argument('--contact_meas_ground_z_beta', type=float, default=0.05,
-                   help='EMA beta for contact_meas_ground_z_mode=ema.')
-    p.add_argument('--contact_meas_ground_z_window', type=int, default=5,
-                   help='Window length for contact_meas_ground_z_mode=window.')
-    p.add_argument('--contact_meas_ground_z_quantile', type=float, default=0.2,
-                   help='Low-quantile (0..1) for contact_meas_ground_z_mode=window.')
-    p.add_argument('--contact_meas_ground_z_slew_up_cm', type=float, default=0.0,
-                   help='Max upward change (cm/step) applied to ground_z after the chosen mode (0 disables).')
-    p.add_argument('--contact_meas_ground_z_slew_down_cm', type=float, default=0.0,
-                   help='Max downward change (cm/step) applied to ground_z after the chosen mode (0 disables).')
     # ---- (Reserved) post-train corrector knobs live in dedicated scripts ----
     p.add_argument('--adaptive_bone_weights', type=lambda x: str(x).lower() in ('1', 'true', 'yes'), default=True,
                    help='是否根据骨骼运动幅度自适应权重（默认开启）。')
@@ -5958,14 +5397,6 @@ def _parse_train_entry_args(argv: Optional[Sequence[str]] = None) -> argparse.Na
     if legacy_cli_hits:
         parser.error(_legacy_loss_keys_msg(legacy_cli_hits, context='CLI args'))
 
-    removed_phase_reset_cli_hits: list[str] = []
-    for token in remaining_argv:
-        for flag, key in REMOVED_TRAINBASE_PHASE_RESET_CLI_FLAGS.items():
-            if token == flag or token.startswith(f'{flag}='):
-                removed_phase_reset_cli_hits.append(key)
-    if removed_phase_reset_cli_hits:
-        parser.error(_removed_trainbase_phase_reset_msg(removed_phase_reset_cli_hits, context='CLI args'))
-
     namespace = argparse.Namespace(**config_defaults)
     namespace.config_json = config_args.config_json
     parsed_args = parser.parse_args(remaining_argv, namespace=namespace)
@@ -6012,15 +5443,6 @@ def _resolve_trainer_runtime_config(
             else None
         )
 
-    try:
-        up_cm = float(args.contact_meas_ground_z_slew_up_cm or 0.0)
-    except Exception:
-        up_cm = 0.0
-    try:
-        down_cm = float(args.contact_meas_ground_z_slew_down_cm or 0.0)
-    except Exception:
-        down_cm = 0.0
-
     forward_axis_override = args.yaw_forward_axis
     if forward_axis_override is not None:
         yaw_forward_axis = int(forward_axis_override)
@@ -6052,20 +5474,11 @@ def _resolve_trainer_runtime_config(
         context='freerun_stage_schedule',
     )
 
-    gate_raw = getattr(args, 'contact_meas_gate_by_hit', 'auto')
-    gate_value = str(gate_raw if gate_raw is not None else 'auto').strip().lower()
-    if gate_value in ('true', '1', 'yes', 'y'):
-        contact_meas_gate_by_hit_override: Optional[bool] = True
-    elif gate_value in ('false', '0', 'no', 'n'):
-        contact_meas_gate_by_hit_override = False
-    else:
-        contact_meas_gate_by_hit_override = None
-
     trainbase_contacts_source = str(
-        getattr(args, '_trainbase_contacts_source_resolved', getattr(args, 'trainbase_contacts_source', 'auto')) or 'auto'
+        getattr(args, 'trainbase_contacts_source', 'pretrain_contact') or 'pretrain_contact'
     ).strip().lower()
-    if trainbase_contacts_source not in ('whitebox', 'pretrain_contact'):
-        trainbase_contacts_source = 'whitebox'
+    if trainbase_contacts_source != 'pretrain_contact':
+        trainbase_contacts_source = 'pretrain_contact'
     try:
         trainbase_contacts_pretrain_clamp = float(getattr(args, 'trainbase_contacts_pretrain_clamp', 1.0) or 0.0)
     except Exception:
@@ -6100,13 +5513,6 @@ def _resolve_trainer_runtime_config(
             else None
         ),
         trainbase_contacts_pretrain_affine=trainbase_contacts_pretrain_affine,
-        contact_meas_gate_by_hit_override=contact_meas_gate_by_hit_override,
-        contact_meas_ground_z_mode=str(getattr(args, 'contact_meas_ground_z_mode', 'window') or 'window').strip().lower(),
-        contact_meas_ground_z_beta=float(getattr(args, 'contact_meas_ground_z_beta', 0.05) or 0.05),
-        contact_meas_ground_z_window=int(getattr(args, 'contact_meas_ground_z_window', 5) or 5),
-        contact_meas_ground_z_quantile=float(getattr(args, 'contact_meas_ground_z_quantile', 0.2) or 0.2),
-        contact_meas_ground_z_max_up_m=max(0.0, up_cm) / 100.0,
-        contact_meas_ground_z_max_down_m=max(0.0, down_cm) / 100.0,
         diag_topk=int(args.diag_topk or 8),
         diag_thr=float(args.diag_thr or 8.0),
         yaw_forward_axis=yaw_forward_axis,
@@ -6162,13 +5568,6 @@ def _apply_trainer_runtime_config(trainer: Trainer, runtime_cfg: TrainerRuntimeC
     trainer.trainbase_contacts_pretrain_clamp = runtime_cfg.trainbase_contacts_pretrain_clamp
     trainer.trainbase_contacts_pretrain_affine_stats_spec = runtime_cfg.trainbase_contacts_pretrain_affine_stats
     trainer.trainbase_contacts_pretrain_affine = runtime_cfg.trainbase_contacts_pretrain_affine
-    trainer.contact_meas_gate_by_hit_override = runtime_cfg.contact_meas_gate_by_hit_override
-    trainer.contact_meas_ground_z_mode = runtime_cfg.contact_meas_ground_z_mode
-    trainer.contact_meas_ground_z_beta = runtime_cfg.contact_meas_ground_z_beta
-    trainer.contact_meas_ground_z_window = runtime_cfg.contact_meas_ground_z_window
-    trainer.contact_meas_ground_z_quantile = runtime_cfg.contact_meas_ground_z_quantile
-    trainer.contact_meas_ground_z_max_up_m = runtime_cfg.contact_meas_ground_z_max_up_m
-    trainer.contact_meas_ground_z_max_down_m = runtime_cfg.contact_meas_ground_z_max_down_m
     safe_set_slice(trainer, 'rootvel_x_slice', parse_layout_entry(trainer._x_layout.get('RootVelocity'), 'RootVelocity'))
     safe_set_slice(trainer, 'angvel_x_slice', parse_layout_entry(trainer._x_layout.get('BoneAngularVelocities'), 'BoneAngularVelocities'))
     trainer.diag_topk = runtime_cfg.diag_topk
@@ -6380,16 +5779,6 @@ def _build_train_model(
         contact_plan_init_mode=str(getattr(args, 'contact_plan_init_mode', 'learnable') or 'learnable'),
         contact_plan_init_hidden=int(args.contact_plan_init_hidden or 128),
         contact_plan_init_dropout=float(args.contact_plan_init_dropout or 0.0),
-        contact_phase_state_enable=bool(getattr(args, 'contact_phase_state_enable', False)),
-        contact_phase_state_init_mode=str(getattr(args, 'contact_phase_state_init_mode', 'obs') or 'obs'),
-        contact_phase_state_hidden=int(args.contact_phase_state_hidden or 64),
-        contact_phase_state_delta_max=float(args.contact_phase_state_delta_max or 0.5),
-        contact_phase_state_delta_init=float(args.contact_phase_state_delta_init or (6.283185307179586 / 80.0)),
-        contact_phase_state_event_kind='none',
-        contact_phase_state_event_thr=0.5,
-        contact_phase_state_event_hyst=0.0,
-        contact_phase_state_event_min_interval=0,
-        phase_reset_source='none',
         use_event_clock=bool(args.use_event_clock),
         event_clock_max_delta=float(args.event_clock_max_delta or 0.5),
         event_clock_hidden_dim=int(args.event_clock_hidden_dim or 64),
@@ -6495,29 +5884,20 @@ def _prepare_train_model_runtime(
             except Exception as err:
                 print(f'[MPL][WARN] failed to attach MotionEncoder bundle: {err}')
 
-    requested_contacts_source = str(getattr(args, 'trainbase_contacts_source', 'auto') or 'auto').strip().lower()
-    if requested_contacts_source not in ('auto', 'whitebox', 'pretrain_contact'):
-        requested_contacts_source = 'auto'
-    resolved_contacts_source = 'whitebox'
+    requested_contacts_source = str(getattr(args, 'trainbase_contacts_source', 'pretrain_contact') or 'pretrain_contact').strip().lower()
+    if requested_contacts_source != 'pretrain_contact':
+        requested_contacts_source = 'pretrain_contact'
     if bool(getattr(model, 'contact_plan_enable', False)):
         has_pretrain_contact = (
             getattr(model, 'frozen_encoder', None) is not None
             and getattr(model, 'frozen_contact_head', None) is not None
         )
-        if requested_contacts_source == 'pretrain_contact':
-            if not has_pretrain_contact:
-                raise SystemExit(
-                    '[FATAL] trainbase_contacts_source=pretrain_contact requires --encoder_path to provide '
-                    'a frozen encoder bundle with contact_head.'
-                )
-            resolved_contacts_source = 'pretrain_contact'
-        elif requested_contacts_source == 'auto':
-            resolved_contacts_source = 'pretrain_contact' if has_pretrain_contact else 'whitebox'
-    setattr(args, '_trainbase_contacts_source_resolved', resolved_contacts_source)
-    print(
-        f'[MPL] trainbase_contacts_source: requested={requested_contacts_source}, '
-        f'resolved={resolved_contacts_source}'
-    )
+        if not has_pretrain_contact:
+            raise SystemExit(
+                '[FATAL] trainbase_contacts_source=pretrain_contact requires --encoder_path to provide '
+                'a frozen encoder bundle with contact_head.'
+            )
+    print(f'[MPL] trainbase_contacts_source: {requested_contacts_source}')
 
     resume_path = getattr(args, 'resume', None)
     if resume_path:
@@ -6852,8 +6232,8 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
     """
     单步（无隐式状态）ONNX 导出：
       输入:  state[B,Dx], cond[B,Dc], contacts[B,C], angvel[B,A], pose_hist[B,P],
-            plan_z[B,Hp], phase_z[B,Hz]
-      输出:  motion_pred[B,Dy], plan_z_next[B,Hp], phase_z_next[B,Hz]
+            (optional) plan_z[B,Hp], (optional) phase_z[B,Hz]
+      输出:  motion_pred[B,Dy], (optional) plan_z_next[B,Hp], (optional) phase_z_next[B,Hz]
 
     训练与推理均使用显式历史缓冲，对应 UE 中的 PoseHistoryBuffer。
     """
@@ -6939,28 +6319,34 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
     pose_hist0 = _frame_or_zero(pose_hist_seq, pose_hist_dim, torch.float32)
     plan_z0 = torch.zeros((1, plan_dim), dtype=torch.float32) if plan_dim > 0 else None
     phase_z0 = torch.zeros((1, phase_dim), dtype=torch.float32) if phase_dim > 0 else None
+    use_plan_state = plan_z0 is not None
+    use_phase_state = phase_z0 is not None
 
     device = torch.device('cpu')
     model = model.to(device).eval()
 
-    if plan_dim <= 0 or phase_dim <= 0 or plan_z0 is None or phase_z0 is None:
-        raise RuntimeError(
-            f"[Export][FATAL] ONNX export expects fixed mainchain contract plan_z+phase_z, "
-            f"got plan_dim={plan_dim}, phase_dim={phase_dim}."
-        )
-
     class _StatelessWrapper(torch.nn.Module):
-        def __init__(self, core):
+        def __init__(self, core, *, use_plan: bool, use_phase: bool):
             super().__init__()
             self.core = core
+            self.use_plan = bool(use_plan)
+            self.use_phase = bool(use_phase)
 
-        def forward(self, state, cond, contacts, angvel, pose_hist, plan_z, phase_z):
+        def forward(self, state, cond, contacts, angvel, pose_hist, *extra_states):
             cond_in = cond if cond.shape[-1] > 0 else None
             contacts_in = contacts if contacts.shape[-1] > 0 else None
             angvel_in = angvel if angvel.shape[-1] > 0 else None
             pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
-            plan_z_in = plan_z if plan_z.shape[-1] > 0 else None
-            phase_z_in = phase_z if phase_z.shape[-1] > 0 else None
+            extra_idx = 0
+            plan_z = None
+            phase_z = None
+            if self.use_plan:
+                plan_z = extra_states[extra_idx]
+                extra_idx += 1
+            if self.use_phase:
+                phase_z = extra_states[extra_idx]
+            plan_z_in = plan_z if (plan_z is not None and plan_z.shape[-1] > 0) else None
+            phase_z_in = phase_z if (phase_z is not None and phase_z.shape[-1] > 0) else None
             out = self.core(
                 state,
                 cond_in,
@@ -6974,22 +6360,47 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
                 pred = out.get('out')
                 if pred is None:
                     raise RuntimeError("Model dict output missing 'out'.")
-                z_next = out.get('plan_z_next')
-                if z_next is None:
-                    z_next = plan_z.new_zeros(plan_z.shape)
-                p_next = out.get('phase_z_next')
-                if p_next is None:
-                    p_next = phase_z.new_zeros(phase_z.shape)
-                return pred, z_next, p_next
-            return out, plan_z, phase_z
+                outputs = [pred]
+                if self.use_plan:
+                    z_next = out.get('plan_z_next')
+                    if z_next is None:
+                        z_next = plan_z.new_zeros(plan_z.shape)
+                    outputs.append(z_next)
+                if self.use_phase:
+                    p_next = out.get('phase_z_next')
+                    if p_next is None:
+                        p_next = phase_z.new_zeros(phase_z.shape)
+                    outputs.append(p_next)
+                if len(outputs) == 1:
+                    return outputs[0]
+                return tuple(outputs)
+            outputs = [out]
+            if self.use_plan and plan_z is not None:
+                outputs.append(plan_z)
+            if self.use_phase and phase_z is not None:
+                outputs.append(phase_z)
+            if len(outputs) == 1:
+                return outputs[0]
+            return tuple(outputs)
 
-    wrapper = _StatelessWrapper(model).cpu().eval()
-    sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0, plan_z0, phase_z0)
-    Dy = int(sample_out[0].shape[-1])
+    wrapper = _StatelessWrapper(model, use_plan=use_plan_state, use_phase=use_phase_state).cpu().eval()
+    inputs_list = [state0, cond0, contacts0, angvel0, pose_hist0]
+    input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist']
+    output_names = ['motion_pred']
+    if use_plan_state:
+        inputs_list.append(plan_z0)
+        input_names.append('plan_z')
+        output_names.append('plan_z_next')
+    if use_phase_state:
+        inputs_list.append(phase_z0)
+        input_names.append('phase_z')
+        output_names.append('phase_z_next')
+    inputs = tuple(inputs_list)
 
-    inputs = (state0, cond0, contacts0, angvel0, pose_hist0, plan_z0, phase_z0)
-    input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'plan_z', 'phase_z']
-    output_names = ['motion_pred', 'plan_z_next', 'phase_z_next']
+    sample_out = wrapper(*inputs)
+    motion_out = sample_out[0] if isinstance(sample_out, tuple) else sample_out
+    Dy = int(motion_out.shape[-1])
+
     dynamic_axes = {name: {0: 'B'} for name in input_names + output_names} if dynamic_batch else None
 
     os.makedirs(os.path.dirname(onnx_path) or '.', exist_ok=True)
@@ -7007,7 +6418,7 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
     print(
         f'[Export][OK] saved: {onnx_path} | '
         f'Dx={Dx} Dy={Dy} Dc={cond_dim} C={contact_dim} A={angvel_dim} P={pose_hist_dim} '
-        f'Hp={plan_dim} Hz={phase_dim}'
+        f'Hp={plan_dim} Hz={phase_dim} use_plan={use_plan_state} use_phase={use_phase_state}'
     )
 
 def main():

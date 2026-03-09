@@ -309,7 +309,6 @@ def evaluate_freerun(
         phase_z = None
         phase_event_age = None
 
-        prev_foot_pos_meas = None
         for t in range(start_t, end_t):
             cond_input = cond_seq[:, t] if (cond_seq is not None and cond_seq.dim() == 3) else cond_seq
             contacts_t = contacts_seq[:, t] if (contacts_seq is not None and contacts_seq.dim() == 3) else contacts_seq
@@ -393,14 +392,14 @@ def evaluate_freerun(
 
             contacts_in_t = contacts_t
             if bool(getattr(model, "contact_plan_enable", False)):
-                try:
-                    fn = getattr(trainer, "_contact_meas_whitebox", None)
-                    if callable(fn) and motion_raw is not None:
-                        contacts_in_t, prev_foot_pos_meas = fn(motion_raw, prev_foot_pos_meas)
-                    else:
-                        contacts_in_t = None
-                except Exception:
-                    contacts_in_t = None
+                contacts_in_t = trainer._predict_pretrain_contacts_from_frozen(
+                    motion_step_t=motion,
+                    pose_hist_step_t=pose_hist_t,
+                )
+                if contacts_in_t is None:
+                    raise RuntimeError(
+                        "[FATAL] basetrain freerun eval requires valid frozen encoder+contact_head for pretrain_contact."
+                    )
 
             with amp_ctx:
                 ret = model(

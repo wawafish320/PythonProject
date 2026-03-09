@@ -81,8 +81,6 @@
   "depth": 3,
   "contact_plan_init_mode": "learnable+obs",
   "contact_plan_init_hidden": 128,
-  "contact_phase_state_enable": true,
-  "contact_phase_state_init_mode": "obs",
   "direct_pose_enable": true,
   "w_direct_pose": 0.2,
   "contact_plan_time_pe_dim": 16,
