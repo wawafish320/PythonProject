@@ -13,6 +13,8 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import torch
 
+from .rotvec_semantics import require_standard_rotvec_spec
+
 __all__ = [
     "parse_layout_entry",
     "normalize_layout",
@@ -185,6 +187,7 @@ class LayoutCenter:
     def __init__(self, bundle_path: str):
         with open(bundle_path, "r", encoding="utf-8") as f:
             b = json.load(f)
+        require_standard_rotvec_spec(b, context=f"norm bundle {bundle_path}")
         self.bundle = b
         self.meta = b.get("meta", {}) or {}
         self.mu_x = np.asarray(b["MuX"], dtype=np.float32)

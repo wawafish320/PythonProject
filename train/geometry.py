@@ -471,7 +471,7 @@ def geodesic_R_safe(
 
 def _matrix_log_map(R: torch.Tensor) -> torch.Tensor:
     """
-    Log map from SO(3) to so(3) as a 3D rotation vector
+    Log map from SO(3) to so(3) as a standard axis-angle / rotvec.
 
     Args:
         R: (..., 3, 3) - 旋转矩阵
@@ -479,41 +479,88 @@ def _matrix_log_map(R: torch.Tensor) -> torch.Tensor:
     Returns:
         (..., 3) - 旋转向量 (axis * angle)
     """
-    trace = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]
-    cos_theta = ((trace - 1.0) * 0.5).clamp(-1.0 + 1e-6, 1.0 - 1e-6)
-    theta = torch.acos(cos_theta)
-    sin_theta = torch.sin(theta)
-    skew = R - R.transpose(-1, -2)
-    vec = torch.stack([skew[..., 2, 1], skew[..., 0, 2], skew[..., 1, 0]], dim=-1) * 0.5
-    denom = (2.0 * sin_theta).unsqueeze(-1)
-    factor = theta.unsqueeze(-1) / denom.clamp_min(1e-6)
-    small = (sin_theta.abs() < 1e-4).unsqueeze(-1)
-    approx = 0.5 * vec
-    exact = vec * factor
-    return torch.where(small, approx, exact)
+    return so3_log_map(R)
+
+
+def _axis_from_rotation_near_pi(R: torch.Tensor) -> torch.Tensor:
+    """
+    Recover a stable rotation axis when theta≈pi.
+
+    For theta≈pi, vee(0.5 * (R-R^T)) = sin(theta) * axis becomes numerically tiny, so
+    we extract the axis from the symmetric part of (R + I) / 2 instead.
+    """
+    eps = 1e-8
+    xx = ((R[..., 0, 0] + 1.0) * 0.5).clamp_min(0.0)
+    yy = ((R[..., 1, 1] + 1.0) * 0.5).clamp_min(0.0)
+    zz = ((R[..., 2, 2] + 1.0) * 0.5).clamp_min(0.0)
+    xy = (R[..., 0, 1] + R[..., 1, 0]) * 0.25
+    xz = (R[..., 0, 2] + R[..., 2, 0]) * 0.25
+    yz = (R[..., 1, 2] + R[..., 2, 1]) * 0.25
+
+    idx = torch.stack([xx, yy, zz], dim=-1).argmax(dim=-1)
+    ax = torch.zeros_like(xx)
+    ay = torch.zeros_like(yy)
+    az = torch.zeros_like(zz)
+
+    mask_x = idx == 0
+    if bool(mask_x.any().detach().cpu().item()):
+        x = torch.sqrt(xx[mask_x].clamp_min(eps))
+        ax[mask_x] = x
+        ay[mask_x] = xy[mask_x] / x.clamp_min(eps)
+        az[mask_x] = xz[mask_x] / x.clamp_min(eps)
+
+    mask_y = idx == 1
+    if bool(mask_y.any().detach().cpu().item()):
+        y = torch.sqrt(yy[mask_y].clamp_min(eps))
+        ay[mask_y] = y
+        ax[mask_y] = xy[mask_y] / y.clamp_min(eps)
+        az[mask_y] = yz[mask_y] / y.clamp_min(eps)
+
+    mask_z = idx == 2
+    if bool(mask_z.any().detach().cpu().item()):
+        z = torch.sqrt(zz[mask_z].clamp_min(eps))
+        az[mask_z] = z
+        ax[mask_z] = xz[mask_z] / z.clamp_min(eps)
+        ay[mask_z] = yz[mask_z] / z.clamp_min(eps)
+
+    axis = torch.stack([ax, ay, az], dim=-1)
+    norm = axis.norm(dim=-1, keepdim=True)
+    fallback = torch.zeros_like(axis)
+    fallback[..., 0] = 1.0
+    return torch.where(norm > 0.0, axis / norm.clamp_min(eps), fallback)
 
 
 def so3_log_map(R: torch.Tensor) -> torch.Tensor:
     """
-    SO(3) log map: 旋转矩阵 -> 轴角向量
+    SO(3) log map: 旋转矩阵 -> 标准 axis-angle / rotvec.
 
     Args:
         R: [..., 3, 3] - 旋转矩阵
 
     Returns:
-        [..., 3] - 轴角向量 phi = axis * angle (弧度 * 轴)
+        [..., 3] - rotvec = axis * angle (弧度)
     """
-    tr = (R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2] - 1.0) * 0.5
-    tr = torch.clamp(tr, -1.0 + 1e-7, 1.0 - 1e-7)
-    theta = torch.acos(tr)
+    if R.shape[-2:] != (3, 3):
+        raise ValueError(f"[so3_log_map] expects (...,3,3), got {R.shape}")
+
+    trace = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]
+    cos_theta = ((trace - 1.0) * 0.5).clamp(-1.0, 1.0)
     W = R - R.transpose(-1, -2)
     vee = torch.stack([W[..., 2, 1], W[..., 0, 2], W[..., 1, 0]], dim=-1) * 0.5
-    sin_theta = torch.sin(theta)
-    k = theta / torch.clamp(2.0 * sin_theta, min=1e-6)
-    k = k.unsqueeze(-1)
-    phi = k * vee
-    small = (theta < 1e-5).unsqueeze(-1)
-    phi = torch.where(small, 0.5 * vee, phi)
+    sin_theta = vee.norm(dim=-1)
+    theta = torch.atan2(sin_theta, cos_theta)
+
+    small = theta < 1e-6
+    near_pi = (cos_theta < (-1.0 + 1e-4)) & (~small)
+
+    scale = theta / sin_theta.clamp_min(1e-8)
+    phi = vee * scale.unsqueeze(-1)
+    phi = torch.where(small.unsqueeze(-1), vee, phi)
+
+    if bool(near_pi.any().detach().cpu().item()):
+        axis_pi = _axis_from_rotation_near_pi(R)
+        phi_pi = axis_pi * theta.unsqueeze(-1)
+        phi = torch.where(near_pi.unsqueeze(-1), phi_pi, phi)
     return phi
 
 
@@ -551,7 +598,7 @@ def angvel_vec_from_delta_R(delta_R: torch.Tensor, fps: float) -> torch.Tensor:
         fps: float - 采样帧率
 
     Returns:
-        omega: (..., T, J, 3) 或 (..., J, 3) - 角速度 (rad/s)
+        omega: (..., T, J, 3) 或 (..., J, 3) - 标准 rotvec 角速度 (rad/s)
     """
     if delta_R.shape[-2:] != (3, 3):
         raise ValueError(f"[angvel_vec_from_delta_R] expects (..., 3, 3), got {tuple(delta_R.shape)}")

@@ -36,6 +36,7 @@ from train.geometry import rot6d_to_matrix, matrix_to_rot6d, reproject_rot6d, no
 from train.models import EventMotionModel, MotionJointLoss, STAGE6_3WAY_ARMCHAIN_BONES_CSV
 from train.layout import LayoutCenter, DataNormalizer
 from train.geometry import compose_rot6d_delta
+from train.rotvec_semantics import require_standard_rotvec_spec
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,7 +77,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--encoder-bundle",
         type=str,
-        default="models/motion_encoder_equiv.pt",
+        default="models/motion_encoder_equiv_stageA.pt",
         help="Frozen motion encoder bundle (.pt) if your checkpoint expects it.",
     )
     parser.add_argument(
@@ -231,10 +232,12 @@ def load_json(path: Path) -> Dict[str, object]:
 def merge_norm_spec(bundle_path: Path, pretrain_path: Optional[Path]) -> Dict[str, object]:
     with bundle_path.open("r", encoding="utf-8") as f:
         base = json.load(f)
+    require_standard_rotvec_spec(base, context=f"bundle {bundle_path}")
     spec = dict(base)
     if pretrain_path and pretrain_path.is_file():
         with pretrain_path.open("r", encoding="utf-8") as f:
             pre = json.load(f)
+        require_standard_rotvec_spec(pre, context=f"pretrain_template {pretrain_path}")
         for key in (
             "MuAngVel",
             "StdAngVel",

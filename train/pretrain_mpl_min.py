@@ -46,6 +46,7 @@ from train.normalizers import (
     AngvelNormalizer,
     _make_angnorm_from_spec,
 )  # noqa: E402
+from train.rotvec_semantics import stamp_standard_rotvec_spec  # noqa: E402
 from train.io import npz_scalar_to_str, load_soft_contacts_from_json as _load_soft_contacts_from_json  # noqa: E402
 
 
@@ -265,6 +266,7 @@ def _build_angvel_norm_spec(in_glob: str, save_path: str, pose_hist_len: int = 3
         "StdPoseTarget": pose_cur_sd.tolist(),
         "meta": {"built_in": "pretrain(self-build-spec)", "quantiles": [2.5, 97.5]},
     }
+    stamp_standard_rotvec_spec(spec, asset_kind="pretrain_template", source="pretrain_mpl_min")
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     with open(save_path, "w", encoding="utf-8") as f:
         json.dump(spec, f, ensure_ascii=False, indent=2)

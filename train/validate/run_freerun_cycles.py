@@ -42,6 +42,7 @@ from train.geometry import matrix_to_rot6d, reproject_rot6d, rot6d_to_matrix, so
 from train.models import EventMotionModel, MotionJointLoss
 from train.layout import LayoutCenter, DataNormalizer
 from train.geometry import compose_rot6d_delta
+from train.rotvec_semantics import require_standard_rotvec_spec
 from train.ttc import ttc_to_next_event_np
 
 
@@ -80,10 +81,12 @@ def _load_json(path: Path) -> Dict[str, Any]:
 def _merge_norm_spec(bundle_path: Path, pretrain_path: Optional[Path]) -> Dict[str, Any]:
     with bundle_path.open("r", encoding="utf-8") as f:
         base = json.load(f)
+    require_standard_rotvec_spec(base, context=f"bundle {bundle_path}")
     spec = dict(base)
     if pretrain_path and pretrain_path.is_file():
         with pretrain_path.open("r", encoding="utf-8") as f:
             pre = json.load(f)
+        require_standard_rotvec_spec(pre, context=f"pretrain_template {pretrain_path}")
         for key in (
             "MuAngVel",
             "StdAngVel",
@@ -7481,7 +7484,7 @@ def _run_freerun_cycles(
 
     # Debug-only: alpha-sweep and oracle alignment for direct_leg_omega.
     # - Uses the *pre-leg-apply* direct output captured during rollout, so the sweep is on a fixed rollout stream.
-    # - Also computes omega_oracle from GT: omega_oracle = so3_log_map(R_gt @ R_base^T) * 2 (full axis-angle),
+    # - Also computes omega_oracle from GT: omega_oracle = so3_log_map(R_gt @ R_base^T),
     #   then logs cos(pred, oracle) and ||pred||/||oracle||.
     if bool(export_direct_leg_omega_alpha_sweep):
         try:
@@ -7721,21 +7724,21 @@ def _run_freerun_cycles(
                 except Exception:
                     continue
 
-                # Oracle omega (full axis-angle):
-                #   left : omega_oracle_left  = log(R_gt @ R_base^T) * 2  (matches left-mul apply: Exp(ω) @ R_base)
-                #   right: omega_oracle_right = log(R_base^T @ R_gt) * 2  (matches right-mul apply: R_base @ Exp(ω))
+                # Oracle omega (standard axis-angle):
+                #   left : omega_oracle_left  = log(R_gt @ R_base^T)      (matches left-mul apply: Exp(ω) @ R_base)
+                #   right: omega_oracle_right = log(R_base^T @ R_gt)      (matches right-mul apply: R_base @ Exp(ω))
                 omega_oracle = None
                 omega_oracle_right = None
                 try:
                     R_delta_oracle = torch.matmul(R_leg_gt, R_leg_base.transpose(-1, -2))
-                    omega_oracle = _geo.so3_log_map(R_delta_oracle) * 2.0  # (B,K,3)
+                    omega_oracle = _geo.so3_log_map(R_delta_oracle)  # (B,K,3)
                 except Exception as e:
                     omega_oracle = None
                     if oracle_err_any is None:
                         oracle_err_any = repr(e)
                 try:
                     R_delta_oracle_right = torch.matmul(R_leg_base.transpose(-1, -2), R_leg_gt)
-                    omega_oracle_right = _geo.so3_log_map(R_delta_oracle_right) * 2.0  # (B,K,3)
+                    omega_oracle_right = _geo.so3_log_map(R_delta_oracle_right)  # (B,K,3)
                 except Exception as e:
                     omega_oracle_right = None
                     if oracle_right_err_any is None:
@@ -7853,8 +7856,8 @@ def _run_freerun_cycles(
                     per_bone[str(name)] = {
                         "joint_idx": int(j_idx),
                         # Export mean omega vectors (rad) for axis-level diagnostics.
-                        # Note: so3_log_map in train.geometry returns half-angle; we multiply by 2 above so oracle here
-                        # is a standard axis-angle vector matching so3_exp_map(omega_pred).
+                        # omega_oracle already uses the standard axis-angle semantics expected by
+                        # so3_exp_map(omega_pred).
                         "omega_pred_xyz_rad": (
                             [float(v.item()) for v in omega_sel[:, ii, :].mean(dim=0)]
                             if torch.is_tensor(omega_sel) and omega_sel.dim() == 3 and omega_sel.shape[1] > ii
@@ -7930,8 +7933,8 @@ def _run_freerun_cycles(
                     "R_base is the pre-leg-apply direct output (after hinge, before leg omega) on the same rollout stream.\n"
                     "omega_pred_xyz_rad / omega_oracle_xyz_rad / omega_oracle_right_xyz_rad are mean-over-batch omega vectors (rad).\n"
                     "omega_oracle is derived from GT:\n"
-                    "  - left : omega_oracle  = so3_log_map(R_gt @ R_base^T) * 2 (full axis-angle)\n"
-                    "  - right: omega_oracle_right = so3_log_map(R_base^T @ R_gt) * 2"
+                    "  - left : omega_oracle  = so3_log_map(R_gt @ R_base^T)\n"
+                    "  - right: omega_oracle_right = so3_log_map(R_base^T @ R_gt)"
                 ),
                 "steps": out_steps,
             }
@@ -8828,9 +8831,7 @@ def _run_freerun_cycles(
                     # body / joint-local
                     R_err = torch.matmul(R_pred.transpose(-1, -2), Rg_full)  # (1,T,J,3,3)
 
-                # NOTE: train.geometry.so3_log_map historically returns half-angle rotation vectors
-                # (||phi|| = theta/2). Multiply by 2 to obtain the standard axis-angle magnitude (||omega|| = theta).
-                w = so3_log_map(R_err) * 2.0  # (1,T,J,3) in radians
+                w = so3_log_map(R_err)  # (1,T,J,3) in radians
                 w_deg = (w * float(deg)).detach().cpu()[0]  # (T,J,3) in degrees
                 ang_deg = w_deg.norm(dim=-1)  # (T,J) in degrees
 
@@ -8881,9 +8882,8 @@ def _run_freerun_cycles(
                     "units": {"rotvec_deg_xyz": "deg", "ang_deg": "deg"},
                     "note": (
                         "per_step_joint_so3_error provides vector-form SO(3) errors epsilon_{t,j} for offline analysis.\n"
-                        "- body: epsilon = so3_log_map(R_pred^T @ R_gt) * 2 (deg), axis in joint-local (pred) frame.\n"
-                        "- world: epsilon = so3_log_map(R_gt @ R_pred^T) * 2 (deg), axis in world frame.\n"
-                        "NOTE: train.geometry.so3_log_map returns half-angle vectors; hence the *2.\n"
+                        "- body: epsilon = so3_log_map(R_pred^T @ R_gt) converted to degrees, axis in joint-local (pred) frame.\n"
+                        "- world: epsilon = so3_log_map(R_gt @ R_pred^T) converted to degrees, axis in world frame.\n"
                         "Recommended mask (for Stage7-style analysis): cycle>=1 + drop wrap_boundary_step + exclude root."
                     ),
                     "branches": out_br,
@@ -8966,8 +8966,7 @@ def _run_freerun_cycles(
                     "bone_indices": [int(j) for j in sel_idx],
                     "units": {"pred_rotvec_deg_xyz": "deg", "pred_ang_deg": "deg"},
                     "note": (
-                        "pred_rotvec_deg_xyz[t] is so3_log_map(R_pred)*2 converted to degrees (joint-local rotation).\n"
-                        "NOTE: train.geometry.so3_log_map returns half-angle vectors, hence the *2.\n"
+                        "pred_rotvec_deg_xyz[t] is so3_log_map(R_pred) converted to degrees (joint-local rotation).\n"
                         "pred_ang_deg[t] = ||pred_rotvec_deg_xyz[t]||.\n"
                         "This export is meant for offline feature probing (e.g., predicting oracle hinge delta*)."
                     ),
@@ -8983,7 +8982,7 @@ def _run_freerun_cycles(
                         continue
                     try:
                         R_sel = R_any[:, :, sel_idx]  # (1,T,K,3,3)
-                        w = so3_log_map(R_sel) * 2.0  # (1,T,K,3) axis-angle (rad)
+                        w = so3_log_map(R_sel)  # (1,T,K,3) axis-angle (rad)
                         w_deg = (w * float(deg)).detach().cpu()[0]  # (T,K,3)
                         ang_deg = w_deg.norm(dim=-1)  # (T,K)
 
@@ -9084,7 +9083,7 @@ def _run_freerun_cycles(
                             "bones": list(series_bones),
                             "note": (
                                 "omega_axis_deg[t] is the selected component (x/y/z) of "
-                                "omega=so3_log_map(R_pred^T@R_gt)*2 converted to degrees (joint local frame). "
+                                "omega=so3_log_map(R_pred^T@R_gt) converted to degrees (joint local frame). "
                                 "omega_deg_xyz[t] is the full omega vector [wx,wy,wz] in degrees (joint local frame). "
                                 "ang_deg[t]=||omega|| in degrees."
                             ),
@@ -9098,10 +9097,7 @@ def _run_freerun_cycles(
                     try:
                         Rp_k = Rp_any[:, :, idx]  # (1,T,K,3,3)
                         R_err = torch.matmul(Rp_k.transpose(-1, -2), Rg_k)  # (1,T,K,3,3)
-                        # NOTE: train.geometry.so3_log_map historically returned a half-angle rotation vector
-                        # (||omega|| = theta/2). For diagnostics we want the standard axis-angle magnitude
-                        # (||omega|| = theta), so we multiply by 2 here.
-                        w = so3_log_map(R_err) * 2.0  # (1,T,K,3)
+                        w = so3_log_map(R_err)  # (1,T,K,3)
                         w = w[0]  # (T,K,3)
                         ang = w.norm(dim=-1)  # (T,K)
                         ang_deg = ang * float(deg)
@@ -11126,7 +11122,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Export per-step predicted local joint rotations for selected bones/branches into output JSON under 'keybone_state'. "
-            "Each rotation is represented by rotvec_deg_xyz = so3_log_map(R_pred)*2 converted to degrees (joint local). "
+            "Each rotation is represented by rotvec_deg_xyz = so3_log_map(R_pred) converted to degrees (joint local). "
             "This helps test whether adding joint-local pose state would explain residual δ* variation."
         ),
     )

@@ -29,7 +29,7 @@
 - **无状态架构**: 通过显式历史缓冲替代隐式RNN状态
 - **分阶段训练**: Teacher Forcing → Mixed Mode → Free-Run 渐进式训练
 - **多头监督**: 主运动头 + 接触规划头 + 直接姿态头 + SO(3)修正头
-- **自适应学习**: 自适应损失权重、超参调度、历史长度适配
+- **自适应学习**: 历史长度适配（AdaptiveHistory）
 
 ### 目录结构
 
@@ -40,13 +40,12 @@ train/
 ├── geometry.py             # 几何数学工具
 ├── training_MPL.py         # 主训练循环
 ├── eval_utils.py           # 评估工具
-├── adaptive/
-│   ├── manager.py          # 自适应管理器
-│   ├── loss.py             # 自适应损失权重
-│   └── scheduler.py        # 超参调度器
+├── train_configurator.py   # 配置CLI入口（wrapper）
 ├── configuration/
+│   ├── cli.py              # 配置CLI实现
 │   ├── stages.py           # 分阶段配置
-│   └── profile.py          # 数据集profiling
+│   ├── profile.py          # 数据集profiling
+│   └── io.py               # JSON IO
 ├── history.py              # 自适应历史模块
 ├── normalizers.py          # 归一化器
 ├── layout.py               # 数据布局工具
@@ -122,7 +121,7 @@ train/
 #### Forward Axis推断
 
 - 自动推断骨盆前向轴 (`forward_axis`)
-- 通过比对 `root_yaw` / `velocity_yaw` / `cond_tgt` 找到最佳匹配轴
+- 通过比对 `pelvis_yaw`（由 rot6d 推回）/ `velocity_yaw` / `cond_tgt` 找到最佳匹配轴
 - 用于Yaw旋转增强和推理时的方向对齐
 
 ---
@@ -374,7 +373,7 @@ rot6d_next = compose_rot6d_delta(
 
 - **Log**: `R → omega`
   ```python
-  omega = so3_log_map(R)  # matrix → axis-angle
+  omega = so3_log_map(R)  # matrix → standard axis-angle / rotvec
   ```
 
 #### 4. 角速度计算
@@ -531,49 +530,7 @@ def compute_tf_ratio(epoch, stage_cfg):
 
 ## 自适应机制
 
-### 1. 自适应损失权重 (`adaptive/loss.py`)
-
-#### GradNorm
-
-```python
-# 基于梯度范数动态平衡多任务
-for loss_name, loss in losses.items():
-    grad = autograd.grad(loss, last_layer)
-    grad_norms[loss_name] = ||grad||
-
-weights[name] = (total_norm / grad_norms[name]) ^ alpha
-```
-
-#### Uncertainty Weighting
-
-```python
-# 学习任务不确定性
-log_vars = nn.Parameter(torch.zeros(num_tasks))
-precision = exp(-log_vars)
-loss_total = sum(precision * loss + log_vars)
-```
-
-#### DWA (Dynamic Weight Averaging)
-
-```python
-# 基于损失变化率动态调整
-rate[t] = loss[t] / loss[t-1]
-weight = exp(rate / T) / sum(exp(rate / T))
-```
-
-### 2. 自适应超参调度 (`adaptive/scheduler.py`)
-
-```python
-class AdaptiveHyperparamScheduler:
-    def step(self, loss, grad_norm):
-        # 根据loss/gradient动态调整lr, weight_decay等
-        if loss > threshold:
-            self.params['lr'] *= decay_factor
-        if grad_norm > max_norm:
-            self.params['clip_norm'] = min(grad_norm * 0.9)
-```
-
-### 3. 自适应历史模块 (`history.py`)
+### 自适应历史模块 (`train/history.py`)
 
 #### 设计目标
 
@@ -850,8 +807,6 @@ loss_fn(preds, gt, attn, batch)
   ├─ loss_omega_l2
   └─ ...
   ↓
-AdaptiveLossWeighting (GradNorm/DWA)
-  ↓
 loss.backward()
   ↓
 optimizer.step()
@@ -865,7 +820,7 @@ optimizer.step()
 
 1. **数据层**: 窗口归一化 + 多模态特征 + Yaw增强
 2. **模型层**: 无状态架构 + 多头监督 + SO(3)流形操作
-3. **训练层**: 分阶段渐进 + 自适应权重 + 混合TF/Free
+3. **训练层**: 分阶段渐进 + 混合TF/Free
 4. **评估层**: Teacher/FreeRun双模式 + 丰富诊断指标
 5. **配置层**: 数据驱动的自动配置 + 灵活的阶段调度
 

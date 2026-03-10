@@ -47,6 +47,7 @@ from .layout import (
     DataNormalizer,
     apply_layout_center,
 )
+from .rotvec_semantics import require_standard_rotvec_spec
 from .dataset import (
     MotionAugmentation,
     MotionEventDataset,
@@ -5645,9 +5646,14 @@ def _build_train_components() -> Any:
     norm_spec = _load_json_spec(norm_template_arg, 'norm_template')
     if norm_spec is None:
         raise SystemExit(f"[FATAL] norm_template 缺失或无效，请确认路径：{norm_template_path}")
+    require_standard_rotvec_spec(norm_spec, context=f"norm_template {norm_template_path}")
     pretrain_template_arg = args.pretrain_template
     pretrain_spec = _load_json_spec(pretrain_template_arg, 'pretrain_template')
     if pretrain_spec is not None:
+        require_standard_rotvec_spec(
+            pretrain_spec,
+            context=f"pretrain_template {Path(pretrain_template_arg).expanduser() if pretrain_template_arg else 'None'}",
+        )
         for key in (
             'MuAngVel',
             'StdAngVel',

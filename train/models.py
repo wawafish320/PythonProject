@@ -24,6 +24,7 @@ from .geometry import (
     parent_relative_matrices,
 )
 from .layout import parse_layout_entry
+from .rotvec_semantics import require_standard_rotvec_bundle
 
 __all__ = [
     'MotionEncoder',
@@ -4424,6 +4425,7 @@ class EventMotionModel(nn.Module):
             payload = bundle
         if not isinstance(payload, dict):
             raise TypeError("MotionEncoder bundle must be a dict or path to a dict.")
+        require_standard_rotvec_bundle(payload, context="MotionEncoder bundle")
 
         encoder_state = payload.get('encoder')
         period_state = payload.get('period_head')

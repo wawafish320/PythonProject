@@ -10,6 +10,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from .rotvec_semantics import require_standard_rotvec_spec
+
 __all__ = [
     "VectorTanhNormalizer",
     "VectorTanhNormalizerTorch",
@@ -130,6 +132,7 @@ class AngvelNormalizer:
     def __init__(self, tpl_path: str, J_times_3: int, require_zscore: bool = False):
         with open(tpl_path, "r", encoding="utf-8") as f:
             TPL = json.load(f)
+        require_standard_rotvec_spec(TPL, context=f"angvel template {tpl_path}")
 
         def _vec(name):
             v = TPL.get(name, None)
@@ -178,6 +181,7 @@ class AngvelNormalizer:
 
 
 def _make_angnorm_from_spec(spec: dict, J_times_3: int, require_zscore: bool):
+    require_standard_rotvec_spec(spec, context="angvel norm spec")
     s = np.asarray(spec.get("tanh_scales_angvel") or spec.get("s_eff_angvel"), dtype=np.float32)
     if s.size != J_times_3:
         raise RuntimeError(f"norm spec: tanh_scales_angvel length {s.size} != J*3 {J_times_3}")

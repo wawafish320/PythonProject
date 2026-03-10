@@ -142,6 +142,8 @@ python -m train.training_MPL \
 - `w_root_vel`, `w_root_speed`
 - （可选）`w_contact_plan`, `w_contact_meas`, `w_direct_pose`, `w_direct_delta` 等
 
+注：当前仓库已统一到标准 axis-angle / rotvec 语义，`rot_vel_log_scale=1.0` 表示直接使用标准 `so3_log_map` 输出。
+
 ### 4.6 模型结构参数
 
 - `width`（hidden dim）

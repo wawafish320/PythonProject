@@ -18,6 +18,16 @@ UE JSON → NPZ 转换工具（v4）。
 依赖：Python 3.8+，仅依赖标准库与 numpy
 """
 import os, sys, json, argparse, math
+from pathlib import Path
+
+if __package__ is None or __package__ == "":
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from train.rotvec_semantics import (
+    STANDARD_ANGVEL_SEMANTICS,
+    STANDARD_ROTVEC_SEMANTICS,
+    stamp_standard_rotvec_spec,
+)
 
 # --- canonicalize state_layout keys for training-time alignment ---
 def _canon_state_layout(d: dict) -> dict:
@@ -360,6 +370,7 @@ class GroupedNormalizer:
         if 'out_layout' in meta:
             del meta['out_layout']
         d['meta'] = meta
+        stamp_standard_rotvec_spec(d, asset_kind="norm_template", source="convert_json_to_npz")
 
         # ---- Precompute s_eff_X / s_eff_Y for training-time loss weighting ----
         try:
@@ -426,6 +437,7 @@ class GroupedNormalizer:
         if 'out_layout' in meta:
             del meta['out_layout']
         d['meta'] = meta
+        stamp_standard_rotvec_spec(d, asset_kind="norm_template", source="convert_json_to_npz")
         with open(out_json, 'w', encoding='utf-8') as f:
             json.dump(d, f, ensure_ascii=False, indent=2)
         # --------- internals ---------
@@ -1329,8 +1341,11 @@ def convert_one(json_path: str,
         motion_stats = meta_payload.setdefault("motion_stats", {})
         motion_stats["bone_angular_velocity"] = {
             "mode": "tanh",
-            "scale_hint": scale.astype(np.float32).tolist()
+            "scale_hint": scale.astype(np.float32).tolist(),
+            "raw_semantics": STANDARD_ANGVEL_SEMANTICS,
         }
+    meta_payload["rotvec_semantics"] = STANDARD_ROTVEC_SEMANTICS
+    meta_payload["angvel_semantics"] = STANDARD_ANGVEL_SEMANTICS
     if not meta_payload.get("handedness"):
         traj_hand = (meta_payload.get("trajectory") or {}).get("handedness")
         meta_payload["handedness"] = traj_hand or "right"

@@ -41,6 +41,7 @@ from train.geometry import (
 )
 from train.layout import DataNormalizer, parse_layout_entry
 from train.models import EventMotionModel, MotionJointLoss
+from train.rotvec_semantics import require_standard_rotvec_spec
 from train.training_MPL import Trainer, validate_and_fix_model_
 
 
@@ -219,7 +220,7 @@ class PostTrainConfig:
     direct_pose_leg_gate_sup_weight: float
     # Optional: direction alignment loss for leg SO(3) residual omega (see docs/Problems/... 8.10).
     # align_mode='cos':  L_align = relu(-cos(omega_pred, omega_oracle))  (cheatable by ||omega_pred||->0)
-    # align_mode='proj': omega_oracle = log(R_gt @ R_base^T) * 2; L = w_mag*(proj-||oracle||)^2 + w_res*||res||^2 (+ w_sign*relu(-proj)^2)
+    # align_mode='proj': omega_oracle = log(R_gt @ R_base^T); L = w_mag*(proj-||oracle||)^2 + w_res*||res||^2 (+ w_sign*relu(-proj)^2)
     direct_pose_leg_align_weight: float
     direct_pose_leg_align_oracle_min_deg: float
     direct_pose_leg_align_oracle_weight_deg: float
@@ -1273,20 +1274,18 @@ def _resolve_device(pref: str) -> torch.device:
 
 
 def _merge_norm_spec(bundle_path: Path, pretrain_path: Optional[Path]) -> Dict[str, Any]:
-    spec = {}
     try:
         with bundle_path.open("r", encoding="utf-8") as f:
             spec = json.load(f)
-    except Exception:
-        spec = {}
+    except Exception as err:
+        raise RuntimeError(f"[FATAL] failed to read bundle_json {bundle_path}: {err}") from err
+    require_standard_rotvec_spec(spec, context=f"bundle_json {bundle_path}")
     if pretrain_path is not None and pretrain_path.is_file():
-        try:
-            with pretrain_path.open("r", encoding="utf-8") as f:
-                extra = json.load(f)
-            if isinstance(extra, dict):
-                spec = dict(extra, **spec)
-        except Exception:
-            pass
+        with pretrain_path.open("r", encoding="utf-8") as f:
+            extra = json.load(f)
+        require_standard_rotvec_spec(extra, context=f"pretrain_template {pretrain_path}")
+        if isinstance(extra, dict):
+            spec = dict(extra, **spec)
     return spec
 
 
@@ -2152,14 +2151,14 @@ def _lambda_rollout_apply_direct_leg_adjustments(
                             oracle_norm = None
 
                             # Optional: direction alignment supervision for leg omega.
-                            # Match run_freerun_cycles: omega_oracle = so3_log_map(R_gt @ R_base^T) * 2.
+                            # Match run_freerun_cycles: omega_oracle = so3_log_map(R_gt @ R_base^T).
                             align_w = float(direct_pose_leg_align_weight or 0.0)
                             if align_w > 0.0:
                                 try:
                                     with torch.no_grad():
                                         R_gt_leg = R_gt[:, idx_use, :, :]
                                         R_delta_oracle = torch.matmul(R_gt_leg, R_leg_base.transpose(-1, -2))
-                                        omega_oracle = so3_log_map(R_delta_oracle) * 2.0  # full axis-angle
+                                        omega_oracle = so3_log_map(R_delta_oracle)
                                         oracle_norm = omega_oracle.norm(dim=-1)  # (B,K)
 
                                         min_deg = float(direct_pose_leg_align_oracle_min_deg or 0.0)
@@ -2250,7 +2249,7 @@ def _lambda_rollout_apply_direct_leg_adjustments(
                                                     with torch.no_grad():
                                                         R_gt_leg = R_gt[:, idx_use, :, :]
                                                         R_delta_oracle = torch.matmul(R_gt_leg, R_leg_base.transpose(-1, -2))
-                                                        omega_oracle = so3_log_map(R_delta_oracle) * 2.0  # full axis-angle
+                                                        omega_oracle = so3_log_map(R_delta_oracle)
                                                         oracle_norm = omega_oracle.norm(dim=-1)
                                                 if torch.is_tensor(oracle_norm):
                                                     with torch.no_grad():

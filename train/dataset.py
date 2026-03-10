@@ -26,6 +26,7 @@ from .io import (
 )
 from .layout import normalize_layout as _normalize_layout
 from .normalizers import VectorTanhNormalizer
+from .rotvec_semantics import require_standard_rotvec_spec
 from torch.utils.data._utils.collate import default_collate as _default_collate
 from .ttc import ttc_to_next_event_np
 
@@ -373,6 +374,8 @@ class MotionEventDataset(Dataset):
         self.contact_dim = 2
         self.angvel_norm = None
         self.pose_hist_norm = None
+        if isinstance(norm_spec, dict):
+            require_standard_rotvec_spec(norm_spec, context="MotionEventDataset.norm_spec")
         self.mu_x = np.asarray(norm_spec.get("MuX"), dtype=np.float32) if norm_spec and norm_spec.get("MuX") is not None else None
         self.std_x = np.asarray(norm_spec.get("StdX"), dtype=np.float32) if norm_spec and norm_spec.get("StdX") is not None else None
         if norm_spec:
