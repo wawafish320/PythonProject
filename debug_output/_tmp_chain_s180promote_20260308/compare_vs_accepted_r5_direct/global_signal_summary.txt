@@ -1,0 +1,50 @@
+# Global signal summary (old vs new Stage7.2)
+old_json=debug_output/_tmp_phaseD_direct_geolocal_compare_20260305_r5/new_fullchain_pretrain/Walk_F_freerun_cycles.json
+new_json=debug_output/_tmp_lambda_from_s180_72_eval_20260308_Walk_F/Walk_F_freerun_cycles.json
+mask=cycle>=1,drop_wrap
+
+[overall]
+mean_old=0.147802
+mean_new=0.112947
+mean_delta=-0.034855
+bones_excl_root=45
+bones_regress_by_mean=7
+bones_improve_by_mean=38
+
+[region_split]
+leg8_mean_old=0.313692
+leg8_mean_new=0.274360
+leg8_mean_delta=-0.039333
+non_leg_mean_old=0.111934
+non_leg_mean_new=0.078048
+non_leg_mean_delta=-0.033887
+
+[pointwise_signal]
+points=15480
+improved_ratio=0.630103
+worse_ratio=0.369897
+median_delta=-0.011453
+
+[top_regressions_by_mean]
+LCalfTwist_01: base=0.039278 new=0.047301 delta=+0.008022
+LCalfTwist_03: base=0.057899 new=0.061927 delta=+0.004029
+hand_l: base=0.180965 new=0.183692 delta=+0.002727
+RUpArmTwist_r_02: base=0.092989 new=0.095217 delta=+0.002228
+L_ForeTwist_02: base=0.018585 new=0.020056 delta=+0.001471
+R_ForeTwist_01: base=0.019426 new=0.019835 delta=+0.000409
+Bip001: base=0.000006 new=0.000007 delta=+0.000001
+L_ForeTwist_01: base=0.014255 new=0.012963 delta=-0.001292
+LCalfTwist_02: base=0.041782 new=0.039449 delta=-0.002333
+RCalfTwist_02: base=0.029763 new=0.027239 delta=-0.002524
+
+[top_improvements_by_mean]
+lowerarm_l: base=0.463884 new=0.192108 delta=-0.271776
+upperarm_l: base=0.382729 new=0.253191 delta=-0.129537
+thumb_01_l: base=0.263635 new=0.134768 delta=-0.128867
+pinky_01_l: base=0.204323 new=0.092717 delta=-0.111607
+ball_l: base=0.343602 new=0.249804 delta=-0.093798
+thumb_01_r: base=0.111719 new=0.020798 delta=-0.090921
+hand_r: base=0.350297 new=0.282919 delta=-0.067378
+foot_l: base=0.401532 new=0.335614 delta=-0.065918
+upperarm_r: base=0.307877 new=0.245363 delta=-0.062515
+lowerarm_r: base=0.198215 new=0.137598 delta=-0.060617

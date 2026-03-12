@@ -1,0 +1,13 @@
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[LR-DBG:init] arg_lr=3.00e-04 opt_pg0=3.00e-04
+[posttrain] mode=train_direct_pose
+[posttrain] trainable=6 params: direct_pose_leg_head.0.weight, direct_pose_leg_head.0.bias, direct_pose_leg_head.3.weight, direct_pose_leg_head.3.bias, direct_pose_leg_head.6.weight, direct_pose_leg_head.6.bias
+[posttrain][e1 i0/60] total=2.000000 dir=2.000000 blend=0.311582 inc=0.311582 λ=0.000±0.000 gnorm(L/N)=1.000/1.000 raw=1.000/1.000 ema=0.009/0.001 hit=0/0
+[posttrain][e1 i20/60] total=1.790474 dir=1.790435 blend=0.311273 inc=0.311273 λ=0.000±0.000 leg_align=1.979e-05 w=2.000 frac=0.908 gnorm(L/N)=0.624/1.167 raw=0.624/1.167 ema=0.006/0.001 hit=0/0
+[posttrain][e1 i40/60] total=1.798596 dir=1.798460 blend=0.311025 inc=0.311025 λ=0.000±0.000 leg_align=1.356e-05 w=10.000 frac=0.913 gnorm(L/N)=0.692/1.107 raw=0.692/1.107 ema=0.004/0.001 hit=0/0
+[posttrain][epoch 1] avg_total=1.686933 ok_steps=60 skipped=0
+[posttrain][OK] saved: models/__tmp_71m_from_s180_70R_20260308/ckpt_last_WalkF_stage7_71m_from_s180_70R_20260308.pth

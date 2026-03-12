@@ -62,6 +62,91 @@ STAGE6_3WAY_ARMCHAIN_BONES: tuple[str, ...] = (
 STAGE6_3WAY_ARMCHAIN_BONES_CSV = ','.join(STAGE6_3WAY_ARMCHAIN_BONES)
 
 
+def _normalize_joint_spec_items(
+    spec: Optional[Sequence[Any] | str],
+    *,
+    default_items: Sequence[Any],
+) -> list[Any]:
+    raw_items: Any = default_items if spec is None else spec
+    if isinstance(raw_items, str):
+        candidates = raw_items.split(',')
+    elif isinstance(raw_items, (list, tuple)):
+        candidates = list(raw_items)
+    else:
+        candidates = [raw_items]
+
+    items: list[Any] = []
+    for item in candidates:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                items.append(text)
+        elif isinstance(item, (int, np.integer)):
+            items.append(int(item))
+        elif item is not None:
+            text = str(item).strip()
+            if text:
+                items.append(text)
+    return items
+
+
+def _resolve_joint_spec_indices(
+    spec: Optional[Sequence[Any] | str],
+    *,
+    default_items: Sequence[Any],
+    bone_names: Optional[Sequence[str]],
+    joint_count: int,
+    collect_names: bool = False,
+) -> tuple[list[int], list[str]]:
+    items = _normalize_joint_spec_items(spec, default_items=default_items)
+    name_to_idx = {str(name): int(idx) for idx, name in enumerate(bone_names or [])}
+    indices: list[int] = []
+    names: list[str] = []
+    seen: set[int] = set()
+    for item in items:
+        idx = None
+        name = None
+        if isinstance(item, (int, np.integer)):
+            idx = int(item)
+        else:
+            text = str(item).strip()
+            if text.isdigit() or (text.startswith('-') and text[1:].isdigit()):
+                try:
+                    idx = int(text)
+                except Exception:
+                    idx = None
+            else:
+                name = text
+                idx = name_to_idx.get(text, None)
+        if idx is None or idx < 0 or (joint_count > 0 and idx >= joint_count) or idx in seen:
+            continue
+        seen.add(int(idx))
+        indices.append(int(idx))
+        if collect_names:
+            if name is None and bone_names is not None and int(idx) < len(bone_names):
+                name = str(bone_names[int(idx)])
+            if name is not None:
+                names.append(str(name))
+    return indices, names
+
+
+def _resolve_rot6d_joint_count(rot_slice: Optional[slice], bone_names: Optional[Sequence[str]]) -> int:
+    joint_count = 0
+    try:
+        if isinstance(rot_slice, slice) and rot_slice.start is not None and rot_slice.stop is not None:
+            rot_len = int(rot_slice.stop - rot_slice.start)
+            if rot_len > 0 and (rot_len % 6) == 0:
+                joint_count = int(rot_len // 6)
+    except Exception:
+        joint_count = 0
+    if joint_count <= 0 and bone_names is not None:
+        try:
+            joint_count = int(len(bone_names))
+        except Exception:
+            joint_count = 0
+    return joint_count
+
+
 class ContactMeasHeadLowerBodyNoHistV1(nn.Module):
     """
     ContactMeas head v1 (docs/contact_meas_head_redesign_lowerbody_nohist.md):
@@ -929,16 +1014,6 @@ class EventMotionModel(nn.Module):
         if bool(self.direct_pose_leg_side_rank1) and bool(self.direct_pose_leg_side_sign_gate):
             raise ValueError("direct_pose_leg_side_rank1 is incompatible with direct_pose_leg_side_sign_gate (pick one).")
         if self.direct_pose_leg_enable:
-            leg_items: list[Any] = []
-            if direct_pose_leg_bones is None:
-                leg_items = ["ball_r", "ball_l", "foot_r", "foot_l", "calf_r", "calf_l", "thigh_r", "thigh_l"]
-            elif isinstance(direct_pose_leg_bones, str):
-                leg_items = [s.strip() for s in direct_pose_leg_bones.split(",") if s.strip()]
-            elif isinstance(direct_pose_leg_bones, (list, tuple)):
-                leg_items = list(direct_pose_leg_bones)
-            else:
-                leg_items = [direct_pose_leg_bones]
-
             # Determine BoneRotations6D slice and joint count.
             rot_sl = None
             if isinstance(output_layout, dict):
@@ -948,49 +1023,16 @@ class EventMotionModel(nn.Module):
             if isinstance(rot_sl, slice):
                 self.direct_pose_leg_rot6d_slice = rot_sl
 
-            J = 0
-            try:
-                if isinstance(rot_sl, slice) and rot_sl.start is not None and rot_sl.stop is not None:
-                    rot_len = int(rot_sl.stop - rot_sl.start)
-                    if rot_len > 0 and (rot_len % 6) == 0:
-                        J = int(rot_len // 6)
-            except Exception:
-                J = 0
-            if J <= 0 and bone_names is not None:
-                try:
-                    J = int(len(bone_names))
-                except Exception:
-                    J = 0
-
-            name_to_idx = {str(n): int(i) for i, n in enumerate(bone_names or [])}
-            seen: set[int] = set()
-            for item in leg_items:
-                idx = None
-                name = None
-                if isinstance(item, (int, np.integer)):
-                    idx = int(item)
-                else:
-                    s = str(item).strip()
-                    if s.isdigit() or (s.startswith("-") and s[1:].isdigit()):
-                        try:
-                            idx = int(s)
-                        except Exception:
-                            idx = None
-                    else:
-                        name = s
-                        idx = name_to_idx.get(s, None)
-                if idx is None:
-                    continue
-                if idx < 0 or (J > 0 and idx >= J):
-                    continue
-                if int(idx) in seen:
-                    continue
-                seen.add(int(idx))
-                self.direct_pose_leg_joint_idx.append(int(idx))
-                if name is None and bone_names is not None and int(idx) < len(bone_names):
-                    name = str(bone_names[int(idx)])
-                if name is not None:
-                    self.direct_pose_leg_joint_names.append(str(name))
+            J = _resolve_rot6d_joint_count(rot_sl, bone_names)
+            leg_idx, leg_names = _resolve_joint_spec_indices(
+                direct_pose_leg_bones,
+                default_items=("ball_r", "ball_l", "foot_r", "foot_l", "calf_r", "calf_l", "thigh_r", "thigh_l"),
+                bone_names=bone_names,
+                joint_count=J,
+                collect_names=True,
+            )
+            self.direct_pose_leg_joint_idx.extend(int(i) for i in leg_idx)
+            self.direct_pose_leg_joint_names.extend(str(name) for name in leg_names)
 
             # Persist joint indices into state_dict so evaluation scripts can reconstruct the head.
             if self.direct_pose_leg_joint_idx:
@@ -1010,59 +1052,19 @@ class EventMotionModel(nn.Module):
 
             split_leg_joint_idx = list(getattr(self, "direct_pose_leg_joint_idx", None) or [])
             if not split_leg_joint_idx:
-                split_leg_items: list[Any] = []
-                if direct_pose_leg_bones is None:
-                    split_leg_items = ["thigh_r", "calf_r", "foot_r", "ball_r", "thigh_l", "calf_l", "foot_l", "ball_l"]
-                elif isinstance(direct_pose_leg_bones, str):
-                    split_leg_items = [s.strip() for s in direct_pose_leg_bones.split(",") if s.strip()]
-                elif isinstance(direct_pose_leg_bones, (list, tuple)):
-                    split_leg_items = list(direct_pose_leg_bones)
-                else:
-                    split_leg_items = [direct_pose_leg_bones]
-
                 rot_sl_split = None
                 if isinstance(output_layout, dict):
                     rot_sl_split = parse_layout_entry(output_layout.get("BoneRotations6D"), "BoneRotations6D", self.out_motion_dim)
                 if rot_sl_split is None and bone_names is not None and len(bone_names) > 0:
                     rot_sl_split = slice(0, min(self.out_motion_dim, int(len(bone_names) * 6)))
 
-                J_split = 0
-                try:
-                    if isinstance(rot_sl_split, slice) and rot_sl_split.start is not None and rot_sl_split.stop is not None:
-                        rot_len = int(rot_sl_split.stop - rot_sl_split.start)
-                        if rot_len > 0 and (rot_len % 6) == 0:
-                            J_split = int(rot_len // 6)
-                except Exception:
-                    J_split = 0
-                if J_split <= 0 and bone_names is not None:
-                    try:
-                        J_split = int(len(bone_names))
-                    except Exception:
-                        J_split = 0
-
-                name_to_idx = {str(n): int(i) for i, n in enumerate(bone_names or [])}
-                seen_split: set[int] = set()
-                for item in split_leg_items:
-                    idx = None
-                    if isinstance(item, (int, np.integer)):
-                        idx = int(item)
-                    else:
-                        s = str(item).strip()
-                        if s.isdigit() or (s.startswith("-") and s[1:].isdigit()):
-                            try:
-                                idx = int(s)
-                            except Exception:
-                                idx = None
-                        else:
-                            idx = name_to_idx.get(s, None)
-                    if idx is None:
-                        continue
-                    if idx < 0 or (J_split > 0 and idx >= J_split):
-                        continue
-                    if int(idx) in seen_split:
-                        continue
-                    seen_split.add(int(idx))
-                    split_leg_joint_idx.append(int(idx))
+                J_split = _resolve_rot6d_joint_count(rot_sl_split, bone_names)
+                split_leg_joint_idx, _ = _resolve_joint_spec_indices(
+                    direct_pose_leg_bones,
+                    default_items=DEFAULT_DIRECT_POSE_LEG_BONES,
+                    bone_names=bone_names,
+                    joint_count=J_split,
+                )
 
             # Keep split leg joint indices available to posttrain loss even when
             # direct_pose_leg_enable=false (split-head-only training).
@@ -1104,83 +1106,59 @@ class EventMotionModel(nn.Module):
                     f"direct_pose_split_enable requires BoneRotations6D dim to be a positive multiple of 6 (got {rot_len})."
                 )
             J_rot = int(rot_len // 6)
-            leg_dim_mask = torch.zeros((out_dim_total,), dtype=torch.bool)
-            for j_idx in split_leg_joint_idx:
-                jj = int(j_idx)
-                if jj < 0 or jj >= J_rot:
-                    continue
-                d0 = int(rot_start + jj * 6)
-                d1 = int(d0 + 6)
-                if d0 < 0 or d1 > out_dim_total:
-                    continue
-                leg_dim_mask[d0:d1] = True
 
-            if not bool(leg_dim_mask.any().item()):
-                raise ValueError("direct_pose_split_enable resolved empty leg output dims; check direct_pose_leg_bones mapping.")
+            def build_split_out_index(
+                joint_indices: Sequence[int],
+                *,
+                base_mask: Optional[torch.Tensor] = None,
+                empty_error: str,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
+                dim_mask = torch.zeros((out_dim_total,), dtype=torch.bool)
+                for j_idx in joint_indices:
+                    jj = int(j_idx)
+                    if 0 <= jj < J_rot:
+                        d0 = int(rot_start + jj * 6)
+                        d1 = int(d0 + 6)
+                        if 0 <= d0 and d1 <= out_dim_total:
+                            dim_mask[d0:d1] = True
+                if torch.is_tensor(base_mask):
+                    dim_mask = dim_mask & base_mask
+                if not bool(dim_mask.any().item()):
+                    raise ValueError(empty_error)
+                out_idx = torch.nonzero(dim_mask, as_tuple=False).flatten().to(dtype=torch.long)
+                return dim_mask, out_idx
+
+            leg_dim_mask, leg_out_idx = build_split_out_index(
+                split_leg_joint_idx,
+                empty_error="direct_pose_split_enable resolved empty leg output dims; check direct_pose_leg_bones mapping.",
+            )
             nonleg_dim_mask = ~leg_dim_mask
             if not bool(nonleg_dim_mask.any().item()):
                 raise ValueError("direct_pose_split_enable resolved empty non-leg output dims.")
-            leg_out_idx = torch.nonzero(leg_dim_mask, as_tuple=False).flatten().to(dtype=torch.long)
             nonleg_out_idx = torch.nonzero(nonleg_dim_mask, as_tuple=False).flatten().to(dtype=torch.long)
             if int(leg_out_idx.numel() + nonleg_out_idx.numel()) != int(out_dim_total):
                 raise ValueError("direct split head index coverage mismatch (D_leg + D_nonleg != out_motion_dim).")
             self.direct_pose_leg_out_idx = leg_out_idx
             self.direct_pose_nonleg_out_idx = nonleg_out_idx
             if bool(getattr(self, "direct_pose_arm_split_enable", False)):
-                arm_items: list[Any] = []
-                arm_spec = getattr(self, "direct_pose_arm_bones", None)
-                if arm_spec is None:
-                    arm_items = list(STAGE6_3WAY_ARMCHAIN_BONES)
-                elif isinstance(arm_spec, str):
-                    arm_items = [s.strip() for s in arm_spec.split(",") if s.strip()]
-                elif isinstance(arm_spec, (list, tuple)):
-                    arm_items = list(arm_spec)
-                else:
-                    arm_items = [arm_spec]
+                arm_joint_idx, _ = _resolve_joint_spec_indices(
+                    getattr(self, "direct_pose_arm_bones", None),
+                    default_items=STAGE6_3WAY_ARMCHAIN_BONES,
+                    bone_names=bone_names,
+                    joint_count=J_rot,
+                )
 
-                name_to_idx_arm = {str(n): int(i) for i, n in enumerate(bone_names or [])}
-                arm_joint_idx: list[int] = []
-                seen_arm: set[int] = set()
-                for item in arm_items:
-                    idx = None
-                    if isinstance(item, (int, np.integer)):
-                        idx = int(item)
-                    else:
-                        s = str(item).strip()
-                        if s.isdigit() or (s.startswith("-") and s[1:].isdigit()):
-                            try:
-                                idx = int(s)
-                            except Exception:
-                                idx = None
-                        else:
-                            idx = name_to_idx_arm.get(s, None)
-                    if idx is None:
-                        continue
-                    if idx < 0 or idx >= J_rot:
-                        continue
-                    if int(idx) in seen_arm:
-                        continue
-                    seen_arm.add(int(idx))
-                    arm_joint_idx.append(int(idx))
-
-                arm_dim_mask = torch.zeros((out_dim_total,), dtype=torch.bool)
-                for j_idx in arm_joint_idx:
-                    d0 = int(rot_start + int(j_idx) * 6)
-                    d1 = int(d0 + 6)
-                    if d0 < 0 or d1 > out_dim_total:
-                        continue
-                    arm_dim_mask[d0:d1] = True
-                # arm branch must be a subset of non-leg dims.
-                arm_dim_mask = arm_dim_mask & nonleg_dim_mask
-                else_dim_mask = nonleg_dim_mask & (~arm_dim_mask)
-                if not bool(arm_dim_mask.any().item()):
-                    raise ValueError(
+                arm_dim_mask, arm_out_idx = build_split_out_index(
+                    arm_joint_idx,
+                    base_mask=nonleg_dim_mask,
+                    empty_error=(
                         "direct_pose_arm_split_enable resolved empty arm output dims; "
                         "check direct_pose_arm_bones mapping."
-                    )
+                    ),
+                )
+                else_dim_mask = nonleg_dim_mask & (~arm_dim_mask)
                 if not bool(else_dim_mask.any().item()):
                     raise ValueError("direct_pose_arm_split_enable resolved empty else output dims.")
-                arm_out_idx = torch.nonzero(arm_dim_mask, as_tuple=False).flatten().to(dtype=torch.long)
                 else_out_idx = torch.nonzero(else_dim_mask, as_tuple=False).flatten().to(dtype=torch.long)
                 if int(arm_out_idx.numel() + else_out_idx.numel()) != int(nonleg_out_idx.numel()):
                     raise ValueError("direct arm/else split index coverage mismatch (D_arm + D_else != D_nonleg).")
@@ -1487,8 +1465,11 @@ class EventMotionModel(nn.Module):
                 hid = int(self.direct_pose_hidden)
                 drop = float(self._direct_pose_dropout)
                 if bool(getattr(self, "direct_pose_split_enable", False)):
-                    leg_out_dim = int(getattr(self, "direct_pose_leg_out_idx", torch.empty(0, dtype=torch.long)).numel())
-                    nonleg_out_dim = int(getattr(self, "direct_pose_nonleg_out_idx", torch.empty(0, dtype=torch.long)).numel())
+                    split_state = self._direct_pose_split_state()
+                    if split_state is None:
+                        raise ValueError("direct_pose_split_enable requires split output index buffers.")
+                    leg_out_dim = int(split_state["idx_leg"].numel())
+                    nonleg_out_dim = int(split_state["idx_nonleg"].numel())
                     if leg_out_dim <= 0 or nonleg_out_dim <= 0:
                         raise ValueError("direct_pose_split_enable requires non-empty leg/non-leg output indices.")
                     if int(leg_out_dim + nonleg_out_dim) != int(self.out_motion_dim):
@@ -1505,10 +1486,10 @@ class EventMotionModel(nn.Module):
                         nn.ReLU(),
                         nn.Dropout(drop) if drop > 0 else nn.Identity(),
                     )
-                    self.direct_pose_out_leg = nn.Linear(hid, int(leg_out_dim))
-                    if bool(getattr(self, "direct_pose_arm_split_enable", False)):
-                        arm_out_dim = int(getattr(self, "direct_pose_arm_out_idx", torch.empty(0, dtype=torch.long)).numel())
-                        else_out_dim = int(getattr(self, "direct_pose_else_out_idx", torch.empty(0, dtype=torch.long)).numel())
+                    self.direct_pose_out_leg, _ = self._build_split_head_branch(trunk_dim=hid, out_dim=leg_out_dim)
+                    if bool(split_state["arm_split"]):
+                        arm_out_dim = int(split_state["idx_arm"].numel())
+                        else_out_dim = int(split_state["idx_else"].numel())
                         if arm_out_dim <= 0 or else_out_dim <= 0:
                             raise ValueError("direct_pose_arm_split_enable requires non-empty arm/else output indices.")
                         if int(arm_out_dim + else_out_dim) != int(nonleg_out_dim):
@@ -1516,32 +1497,18 @@ class EventMotionModel(nn.Module):
                                 f"direct arm/else split index mismatch: D_arm={arm_out_dim} D_else={else_out_dim} "
                                 f"D_nonleg={nonleg_out_dim}"
                             )
-                        arm_in_dim = int(hid)
-                        else_in_dim = int(hid)
                         proj_dim = int(getattr(self, "direct_pose_nonleg_proj_dim", 0) or 0)
-                        if proj_dim > 0:
-                            arm_in_dim = int(proj_dim)
-                            else_in_dim = int(proj_dim)
-                            self.direct_pose_arm_proj = nn.Sequential(
-                                nn.Linear(hid, int(proj_dim)),
-                                nn.ReLU(),
-                            )
-                            self.direct_pose_else_proj = nn.Sequential(
-                                nn.Linear(hid, int(proj_dim)),
-                                nn.ReLU(),
-                            )
-                        self.direct_pose_out_arm = nn.Linear(int(arm_in_dim), int(arm_out_dim))
-                        self.direct_pose_out_else = nn.Linear(int(else_in_dim), int(else_out_dim))
+                        self.direct_pose_out_arm, self.direct_pose_arm_proj = self._build_split_head_branch(
+                            trunk_dim=hid, out_dim=arm_out_dim, proj_dim=proj_dim
+                        )
+                        self.direct_pose_out_else, self.direct_pose_else_proj = self._build_split_head_branch(
+                            trunk_dim=hid, out_dim=else_out_dim, proj_dim=proj_dim
+                        )
                     else:
-                        nonleg_in_dim = int(hid)
                         proj_dim = int(getattr(self, "direct_pose_nonleg_proj_dim", 0) or 0)
-                        if proj_dim > 0:
-                            nonleg_in_dim = int(proj_dim)
-                            self.direct_pose_nonleg_proj = nn.Sequential(
-                                nn.Linear(hid, int(proj_dim)),
-                                nn.ReLU(),
-                            )
-                        self.direct_pose_out_nonleg = nn.Linear(int(nonleg_in_dim), int(nonleg_out_dim))
+                        self.direct_pose_out_nonleg, self.direct_pose_nonleg_proj = self._build_split_head_branch(
+                            trunk_dim=hid, out_dim=nonleg_out_dim, proj_dim=proj_dim
+                        )
                 else:
                     out_dim = int(self.out_motion_dim)
                     if self.direct_pose_meas_mode == "mode_select":
@@ -1815,45 +1782,154 @@ class EventMotionModel(nn.Module):
         self.frozen_period_head: Optional['PeriodHead'] = None
         self.frozen_contact_head: Optional[nn.Module] = None
 
+    def _direct_pose_split_state(self) -> Optional[Dict[str, Any]]:
+        if not bool(getattr(self, "direct_pose_split_enable", False)):
+            return None
+        state = {
+            "arm_split": bool(getattr(self, "direct_pose_arm_split_enable", False)),
+            "head": getattr(self, "direct_pose_head", None),
+            "leg_head": getattr(self, "direct_pose_out_leg", None),
+            "nonleg_head": getattr(self, "direct_pose_out_nonleg", None),
+            "arm_head": getattr(self, "direct_pose_out_arm", None),
+            "else_head": getattr(self, "direct_pose_out_else", None),
+            "nonleg_proj": getattr(self, "direct_pose_nonleg_proj", None),
+            "arm_proj": getattr(self, "direct_pose_arm_proj", None),
+            "else_proj": getattr(self, "direct_pose_else_proj", None),
+            "idx_leg": getattr(self, "direct_pose_leg_out_idx", None),
+            "idx_nonleg": getattr(self, "direct_pose_nonleg_out_idx", None),
+            "idx_arm": getattr(self, "direct_pose_arm_out_idx", None),
+            "idx_else": getattr(self, "direct_pose_else_out_idx", None),
+        }
+        if (not torch.is_tensor(state["idx_leg"])) or (not torch.is_tensor(state["idx_nonleg"])):
+            return None
+        if state["arm_split"] and ((not torch.is_tensor(state["idx_arm"])) or (not torch.is_tensor(state["idx_else"]))):
+            return None
+        return state
+
+    @staticmethod
+    def _direct_pose_first_linear(module: Any) -> Optional[nn.Linear]:
+        if isinstance(module, nn.Sequential) and len(module) > 0 and isinstance(module[0], nn.Linear):
+            return module[0]
+        if isinstance(module, nn.Linear):
+            return module
+        return None
+
+    @staticmethod
+    def _build_split_head_branch(
+        *,
+        trunk_dim: int,
+        out_dim: int,
+        proj_dim: int = 0,
+    ) -> tuple[nn.Linear, Optional[nn.Module]]:
+        proj_dim = int(proj_dim or 0)
+        if proj_dim > 0:
+            proj = nn.Sequential(nn.Linear(int(trunk_dim), proj_dim), nn.ReLU())
+            return nn.Linear(proj_dim, int(out_dim)), proj
+        return nn.Linear(int(trunk_dim), int(out_dim)), None
+
+    @staticmethod
+    def _direct_pose_local_index(parent_idx: torch.Tensor, child_idx: torch.Tensor, *, device: torch.device) -> Optional[torch.Tensor]:
+        try:
+            pos_map = {int(v): i for i, v in enumerate(parent_idx.detach().cpu().tolist())}
+            local_idx = [int(pos_map[int(v)]) for v in child_idx.detach().cpu().tolist()]
+        except Exception:
+            return None
+        local_tensor = torch.as_tensor(local_idx, dtype=torch.long, device=device)
+        if int(local_tensor.numel()) != int(child_idx.numel()):
+            return None
+        return local_tensor
+
+    @staticmethod
+    def _normalize_split_index_buffer(state_dict: Dict[str, Any], key: str, target_idx: torch.Tensor) -> bool:
+        value = state_dict.get(key, None)
+        if not torch.is_tensor(value):
+            return False
+        if tuple(value.shape) != tuple(target_idx.shape):
+            state_dict.pop(key, None)
+            return True
+        if value.dtype == target_idx.dtype:
+            return False
+        try:
+            state_dict[key] = value.to(dtype=target_idx.dtype)
+        except Exception:
+            state_dict.pop(key, None)
+        return True
+
+    @staticmethod
+    def _copy_tensor_if_compatible(
+        state_dict: Dict[str, Any],
+        *,
+        target_key: str,
+        target_tensor: Optional[torch.Tensor],
+        source_tensor: Optional[torch.Tensor],
+    ) -> bool:
+        if (not torch.is_tensor(target_tensor)) or (not torch.is_tensor(source_tensor)):
+            return False
+        current = state_dict.get(target_key, None)
+        if torch.is_tensor(current) and tuple(current.shape) == tuple(target_tensor.shape):
+            return False
+        if tuple(source_tensor.shape) != tuple(target_tensor.shape):
+            return False
+        state_dict[target_key] = source_tensor
+        return True
+
+    @staticmethod
+    def _copy_indexed_tensor_if_needed(
+        state_dict: Dict[str, Any],
+        *,
+        target_key: str,
+        target_tensor: Optional[torch.Tensor],
+        source_tensor: Optional[torch.Tensor],
+        index_tensor: Optional[torch.Tensor],
+    ) -> bool:
+        if (
+            (not torch.is_tensor(target_tensor))
+            or (not torch.is_tensor(source_tensor))
+            or (not torch.is_tensor(index_tensor))
+        ):
+            return False
+        current = state_dict.get(target_key, None)
+        if torch.is_tensor(current) and tuple(current.shape) == tuple(target_tensor.shape):
+            return False
+        try:
+            copied = source_tensor.index_select(0, index_tensor.to(device=source_tensor.device, dtype=torch.long))
+        except Exception:
+            return False
+        if tuple(copied.shape) != tuple(target_tensor.shape):
+            return False
+        state_dict[target_key] = copied
+        return True
+
     def _forward_direct_pose_readout(self, direct_flat: torch.Tensor, *, B: int, Tq: int) -> torch.Tensor:
         if not bool(getattr(self, "direct_pose_split_enable", False)):
             return self.direct_pose_head(direct_flat).view(B, Tq, -1)
 
-        if self.direct_pose_head is None or self.direct_pose_out_leg is None:
+        split_state = self._direct_pose_split_state()
+        if split_state is None or split_state["head"] is None or split_state["leg_head"] is None:
             raise RuntimeError("direct_pose_split_enable=true but split trunk/leg head modules are missing.")
-        idx_leg = getattr(self, "direct_pose_leg_out_idx", None)
-        idx_nonleg = getattr(self, "direct_pose_nonleg_out_idx", None)
-        if not torch.is_tensor(idx_leg) or not torch.is_tensor(idx_nonleg):
-            raise RuntimeError("direct_pose_split_enable=true but split output index buffers are missing.")
-
-        hidden = self.direct_pose_head(direct_flat)
-        leg_out = self.direct_pose_out_leg(hidden)
+        idx_leg = split_state["idx_leg"]
+        idx_nonleg = split_state["idx_nonleg"]
+        hidden = split_state["head"](direct_flat)
+        leg_out = split_state["leg_head"](hidden)
         out_flat = hidden.new_zeros((hidden.shape[0], int(self.out_motion_dim)))
         idx_leg_use = idx_leg.to(device=out_flat.device)
         out_flat = out_flat.index_copy(1, idx_leg_use, leg_out)
 
-        if bool(getattr(self, "direct_pose_arm_split_enable", False)):
-            idx_arm = getattr(self, "direct_pose_arm_out_idx", None)
-            idx_else = getattr(self, "direct_pose_else_out_idx", None)
-            out_arm = getattr(self, "direct_pose_out_arm", None)
-            out_else = getattr(self, "direct_pose_out_else", None)
-            if (
-                (not torch.is_tensor(idx_arm))
-                or (not torch.is_tensor(idx_else))
-                or out_arm is None
-                or out_else is None
-            ):
+        if bool(split_state["arm_split"]):
+            idx_arm = split_state["idx_arm"]
+            idx_else = split_state["idx_else"]
+            if split_state["arm_head"] is None or split_state["else_head"] is None:
                 raise RuntimeError("direct_pose_arm_split_enable=true but arm/else head modules are missing.")
             arm_in = hidden
             else_in = hidden
-            arm_proj = getattr(self, "direct_pose_arm_proj", None)
-            else_proj = getattr(self, "direct_pose_else_proj", None)
+            arm_proj = split_state["arm_proj"]
+            else_proj = split_state["else_proj"]
             if arm_proj is not None:
                 arm_in = arm_proj(arm_in)
             if else_proj is not None:
                 else_in = else_proj(else_in)
-            arm_out = out_arm(arm_in)
-            else_out = out_else(else_in)
+            arm_out = split_state["arm_head"](arm_in)
+            else_out = split_state["else_head"](else_in)
             if (
                 int(leg_out.shape[-1]) != int(idx_leg.numel())
                 or int(arm_out.shape[-1]) != int(idx_arm.numel())
@@ -1865,14 +1941,13 @@ class EventMotionModel(nn.Module):
             out_flat = out_flat.index_copy(1, idx_else.to(device=out_flat.device), else_out)
             return out_flat.view(B, Tq, -1)
 
-        out_nonleg = getattr(self, "direct_pose_out_nonleg", None)
-        if out_nonleg is None:
+        if split_state["nonleg_head"] is None:
             raise RuntimeError("direct_pose_split_enable=true but non-leg head module is missing.")
         nonleg_in = hidden
-        nonleg_proj = getattr(self, "direct_pose_nonleg_proj", None)
+        nonleg_proj = split_state["nonleg_proj"]
         if nonleg_proj is not None:
             nonleg_in = nonleg_proj(nonleg_in)
-        nonleg_out = out_nonleg(nonleg_in)
+        nonleg_out = split_state["nonleg_head"](nonleg_in)
         if int(leg_out.shape[-1]) != int(idx_leg.numel()) or int(nonleg_out.shape[-1]) != int(idx_nonleg.numel()):
             raise RuntimeError("direct split-head output dim mismatch with index buffers.")
         idx_nonleg_use = idx_nonleg.to(device=out_flat.device)
@@ -1880,37 +1955,25 @@ class EventMotionModel(nn.Module):
         return out_flat.view(B, Tq, -1)
 
     def _maybe_upgrade_direct_pose_split_state_dict(self, state_dict: Dict[str, Any]) -> bool:
-        if not bool(getattr(self, "direct_pose_split_enable", False)):
+        split_state = self._direct_pose_split_state()
+        if (not isinstance(state_dict, dict)) or split_state is None:
             return False
-        if not isinstance(state_dict, dict):
+        arm_split = bool(split_state["arm_split"])
+        leg_head = split_state["leg_head"]
+        nonleg_head = split_state["nonleg_head"]
+        arm_head = split_state["arm_head"]
+        else_head = split_state["else_head"]
+        idx_leg = split_state["idx_leg"]
+        idx_nonleg = split_state["idx_nonleg"]
+        idx_arm = split_state["idx_arm"]
+        idx_else = split_state["idx_else"]
+        if leg_head is None:
             return False
-        arm_split = bool(getattr(self, "direct_pose_arm_split_enable", False))
-        leg_head = getattr(self, "direct_pose_out_leg", None)
-        idx_leg = getattr(self, "direct_pose_leg_out_idx", None)
-        idx_nonleg = getattr(self, "direct_pose_nonleg_out_idx", None)
-        if leg_head is None or (not torch.is_tensor(idx_leg)) or (not torch.is_tensor(idx_nonleg)):
-            return False
-        nonleg_head = None
-        arm_head = None
-        else_head = None
-        idx_arm = None
-        idx_else = None
         if arm_split:
-            arm_head = getattr(self, "direct_pose_out_arm", None)
-            else_head = getattr(self, "direct_pose_out_else", None)
-            idx_arm = getattr(self, "direct_pose_arm_out_idx", None)
-            idx_else = getattr(self, "direct_pose_else_out_idx", None)
-            if (
-                arm_head is None
-                or else_head is None
-                or (not torch.is_tensor(idx_arm))
-                or (not torch.is_tensor(idx_else))
-            ):
+            if arm_head is None or else_head is None:
                 return False
-        else:
-            nonleg_head = getattr(self, "direct_pose_out_nonleg", None)
-            if nonleg_head is None:
-                return False
+        elif nonleg_head is None:
+            return False
 
         old_w = state_dict.get("direct_pose_head.6.weight", None)
         old_b = state_dict.get("direct_pose_head.6.bias", None)
@@ -1925,18 +1988,9 @@ class EventMotionModel(nn.Module):
         if arm_split:
             idx_arm_use = idx_arm.to(device=ref_device, dtype=torch.long)
             idx_else_use = idx_else.to(device=ref_device, dtype=torch.long)
-            try:
-                pos_map = {int(v): i for i, v in enumerate(idx_nonleg_use.detach().cpu().tolist())}
-                arm_local = [int(pos_map[int(v)]) for v in idx_arm_use.detach().cpu().tolist()]
-                else_local = [int(pos_map[int(v)]) for v in idx_else_use.detach().cpu().tolist()]
-                arm_nonleg_local = torch.as_tensor(arm_local, dtype=torch.long, device=ref_device)
-                else_nonleg_local = torch.as_tensor(else_local, dtype=torch.long, device=ref_device)
-            except Exception:
-                return False
-            if (
-                int(arm_nonleg_local.numel()) != int(idx_arm_use.numel())
-                or int(else_nonleg_local.numel()) != int(idx_else_use.numel())
-            ):
+            arm_nonleg_local = self._direct_pose_local_index(idx_nonleg_use, idx_arm_use, device=ref_device)
+            else_nonleg_local = self._direct_pose_local_index(idx_nonleg_use, idx_else_use, device=ref_device)
+            if arm_nonleg_local is None or else_nonleg_local is None:
                 return False
         converted = False
 
@@ -1950,98 +2004,47 @@ class EventMotionModel(nn.Module):
             idx_pairs.append(("direct_pose_arm_out_idx", idx_arm))
             idx_pairs.append(("direct_pose_else_out_idx", idx_else))
         for key, idx_tgt in idx_pairs:
-            v = state_dict.get(key, None)
-            if not torch.is_tensor(v):
-                continue
-            if tuple(v.shape) != tuple(idx_tgt.shape):
-                state_dict.pop(key, None)
-                converted = True
-                continue
-            if v.dtype != idx_tgt.dtype:
-                try:
-                    state_dict[key] = v.to(dtype=idx_tgt.dtype)
-                    converted = True
-                except Exception:
-                    state_dict.pop(key, None)
-                    converted = True
+            converted = self._normalize_split_index_buffer(state_dict, key, idx_tgt) or converted
 
         if has_old:
-            tgt_leg_w = leg_head.weight
-            cur_leg_w = state_dict.get("direct_pose_out_leg.weight", None)
-            if (not torch.is_tensor(cur_leg_w)) or tuple(cur_leg_w.shape) != tuple(tgt_leg_w.shape):
-                leg_w = old_w.index_select(0, idx_leg_use)
-                if tuple(leg_w.shape) == tuple(tgt_leg_w.shape):
-                    state_dict["direct_pose_out_leg.weight"] = leg_w
-                    converted = True
-
-            if not arm_split:
-                tgt_nonleg_w = nonleg_head.weight
-                cur_nonleg_w = state_dict.get("direct_pose_out_nonleg.weight", None)
-                if (not torch.is_tensor(cur_nonleg_w)) or tuple(cur_nonleg_w.shape) != tuple(tgt_nonleg_w.shape):
-                    nonleg_w = old_w.index_select(0, idx_nonleg_use)
-                    if tuple(nonleg_w.shape) == tuple(tgt_nonleg_w.shape):
-                        state_dict["direct_pose_out_nonleg.weight"] = nonleg_w
-                        converted = True
+            copy_specs = [
+                ("direct_pose_out_leg.weight", leg_head.weight, idx_leg_use),
+            ]
+            if arm_split:
+                copy_specs.extend([
+                    ("direct_pose_out_arm.weight", arm_head.weight, idx_arm_use),
+                    ("direct_pose_out_else.weight", else_head.weight, idx_else_use),
+                ])
             else:
-                tgt_arm_w = arm_head.weight
-                tgt_else_w = else_head.weight
-                cur_arm_w = state_dict.get("direct_pose_out_arm.weight", None)
-                cur_else_w = state_dict.get("direct_pose_out_else.weight", None)
-                if (not torch.is_tensor(cur_arm_w)) or tuple(cur_arm_w.shape) != tuple(tgt_arm_w.shape):
-                    arm_w = old_w.index_select(0, idx_arm_use)
-                    if tuple(arm_w.shape) == tuple(tgt_arm_w.shape):
-                        state_dict["direct_pose_out_arm.weight"] = arm_w
-                        converted = True
-                if (not torch.is_tensor(cur_else_w)) or tuple(cur_else_w.shape) != tuple(tgt_else_w.shape):
-                    else_w = old_w.index_select(0, idx_else_use)
-                    if tuple(else_w.shape) == tuple(tgt_else_w.shape):
-                        state_dict["direct_pose_out_else.weight"] = else_w
-                        converted = True
+                copy_specs.append(("direct_pose_out_nonleg.weight", nonleg_head.weight, idx_nonleg_use))
+            for target_key, target_tensor, index_tensor in copy_specs:
+                converted = self._copy_indexed_tensor_if_needed(
+                    state_dict,
+                    target_key=target_key,
+                    target_tensor=target_tensor,
+                    source_tensor=old_w,
+                    index_tensor=index_tensor,
+                ) or converted
 
         if has_old and torch.is_tensor(old_b):
-            tgt_leg_b = leg_head.bias
-            cur_leg_b = state_dict.get("direct_pose_out_leg.bias", None)
-            if (
-                torch.is_tensor(tgt_leg_b)
-                and ((not torch.is_tensor(cur_leg_b)) or tuple(cur_leg_b.shape) != tuple(tgt_leg_b.shape))
-            ):
-                leg_b = old_b.index_select(0, idx_leg_use)
-                if tuple(leg_b.shape) == tuple(tgt_leg_b.shape):
-                    state_dict["direct_pose_out_leg.bias"] = leg_b
-                    converted = True
-
-            if not arm_split:
-                tgt_nonleg_b = nonleg_head.bias
-                cur_nonleg_b = state_dict.get("direct_pose_out_nonleg.bias", None)
-                if (
-                    torch.is_tensor(tgt_nonleg_b)
-                    and ((not torch.is_tensor(cur_nonleg_b)) or tuple(cur_nonleg_b.shape) != tuple(tgt_nonleg_b.shape))
-                ):
-                    nonleg_b = old_b.index_select(0, idx_nonleg_use)
-                    if tuple(nonleg_b.shape) == tuple(tgt_nonleg_b.shape):
-                        state_dict["direct_pose_out_nonleg.bias"] = nonleg_b
-                        converted = True
+            copy_specs = [
+                ("direct_pose_out_leg.bias", leg_head.bias, idx_leg_use),
+            ]
+            if arm_split:
+                copy_specs.extend([
+                    ("direct_pose_out_arm.bias", arm_head.bias, idx_arm_use),
+                    ("direct_pose_out_else.bias", else_head.bias, idx_else_use),
+                ])
             else:
-                tgt_arm_b = arm_head.bias
-                tgt_else_b = else_head.bias
-                cur_arm_b = state_dict.get("direct_pose_out_arm.bias", None)
-                cur_else_b = state_dict.get("direct_pose_out_else.bias", None)
-                if (
-                    torch.is_tensor(tgt_arm_b)
-                    and ((not torch.is_tensor(cur_arm_b)) or tuple(cur_arm_b.shape) != tuple(tgt_arm_b.shape))
-                ):
-                    arm_b = old_b.index_select(0, idx_arm_use)
-                    if tuple(arm_b.shape) == tuple(tgt_arm_b.shape):
-                        state_dict["direct_pose_out_arm.bias"] = arm_b
-                        converted = True
-                if (
-                    torch.is_tensor(tgt_else_b)
-                    and ((not torch.is_tensor(cur_else_b)) or tuple(cur_else_b.shape) != tuple(tgt_else_b.shape))
-                ):
-                    else_b = old_b.index_select(0, idx_else_use)
-                    if tuple(else_b.shape) == tuple(tgt_else_b.shape):
-                        state_dict["direct_pose_out_else.bias"] = else_b
-                        converted = True
+                copy_specs.append(("direct_pose_out_nonleg.bias", nonleg_head.bias, idx_nonleg_use))
+            for target_key, target_tensor, index_tensor in copy_specs:
+                converted = self._copy_indexed_tensor_if_needed(
+                    state_dict,
+                    target_key=target_key,
+                    target_tensor=target_tensor,
+                    source_tensor=old_b,
+                    index_tensor=index_tensor,
+                ) or converted
 
         src_nonleg_w = None
         src_nonleg_b = None
@@ -2064,66 +2067,41 @@ class EventMotionModel(nn.Module):
             if torch.is_tensor(b_ckpt_nonleg) and b_ckpt_nonleg.ndim == 1:
                 src_nonleg_b = b_ckpt_nonleg
 
-        if arm_split and torch.is_tensor(src_nonleg_w):
-            try:
-                tgt_arm_w = arm_head.weight
-                tgt_else_w = else_head.weight
-                cur_arm_w = state_dict.get("direct_pose_out_arm.weight", None)
-                cur_else_w = state_dict.get("direct_pose_out_else.weight", None)
-                if (
-                    int(src_nonleg_w.shape[0]) == int(idx_nonleg_use.numel())
-                    and int(arm_nonleg_local.numel()) == int(tgt_arm_w.shape[0])
-                    and int(else_nonleg_local.numel()) == int(tgt_else_w.shape[0])
-                ):
-                    if (not torch.is_tensor(cur_arm_w)) or tuple(cur_arm_w.shape) != tuple(tgt_arm_w.shape):
-                        arm_w = src_nonleg_w.index_select(0, arm_nonleg_local.to(device=src_nonleg_w.device))
-                        if tuple(arm_w.shape) == tuple(tgt_arm_w.shape):
-                            state_dict["direct_pose_out_arm.weight"] = arm_w
-                            converted = True
-                    if (not torch.is_tensor(cur_else_w)) or tuple(cur_else_w.shape) != tuple(tgt_else_w.shape):
-                        else_w = src_nonleg_w.index_select(0, else_nonleg_local.to(device=src_nonleg_w.device))
-                        if tuple(else_w.shape) == tuple(tgt_else_w.shape):
-                            state_dict["direct_pose_out_else.weight"] = else_w
-                            converted = True
-            except Exception:
-                pass
-        if arm_split and torch.is_tensor(src_nonleg_b):
-            try:
-                tgt_arm_b = arm_head.bias
-                tgt_else_b = else_head.bias
-                cur_arm_b = state_dict.get("direct_pose_out_arm.bias", None)
-                cur_else_b = state_dict.get("direct_pose_out_else.bias", None)
-                if (
-                    int(src_nonleg_b.shape[0]) == int(idx_nonleg_use.numel())
-                    and int(arm_nonleg_local.numel()) == int(tgt_arm_b.shape[0])
-                    and int(else_nonleg_local.numel()) == int(tgt_else_b.shape[0])
-                ):
-                    if (not torch.is_tensor(cur_arm_b)) or tuple(cur_arm_b.shape) != tuple(tgt_arm_b.shape):
-                        arm_b = src_nonleg_b.index_select(0, arm_nonleg_local.to(device=src_nonleg_b.device))
-                        if tuple(arm_b.shape) == tuple(tgt_arm_b.shape):
-                            state_dict["direct_pose_out_arm.bias"] = arm_b
-                            converted = True
-                    if (not torch.is_tensor(cur_else_b)) or tuple(cur_else_b.shape) != tuple(tgt_else_b.shape):
-                        else_b = src_nonleg_b.index_select(0, else_nonleg_local.to(device=src_nonleg_b.device))
-                        if tuple(else_b.shape) == tuple(tgt_else_b.shape):
-                            state_dict["direct_pose_out_else.bias"] = else_b
-                            converted = True
-            except Exception:
-                pass
-
-        def _first_linear(m: Any) -> Optional[nn.Linear]:
-            if isinstance(m, nn.Sequential) and len(m) > 0 and isinstance(m[0], nn.Linear):
-                return m[0]
-            if isinstance(m, nn.Linear):
-                return m
-            return None
+        if arm_split:
+            for source_tensor, targets in (
+                (
+                    src_nonleg_w,
+                    (
+                        ("direct_pose_out_arm.weight", arm_head.weight, arm_nonleg_local),
+                        ("direct_pose_out_else.weight", else_head.weight, else_nonleg_local),
+                    ),
+                ),
+                (
+                    src_nonleg_b,
+                    (
+                        ("direct_pose_out_arm.bias", arm_head.bias, arm_nonleg_local),
+                        ("direct_pose_out_else.bias", else_head.bias, else_nonleg_local),
+                    ),
+                ),
+            ):
+                if not torch.is_tensor(source_tensor):
+                    continue
+                if int(source_tensor.shape[0]) != int(idx_nonleg_use.numel()):
+                    continue
+                for target_key, target_tensor, local_idx in targets:
+                    converted = self._copy_indexed_tensor_if_needed(
+                        state_dict,
+                        target_key=target_key,
+                        target_tensor=target_tensor,
+                        source_tensor=source_tensor,
+                        index_tensor=local_idx,
+                    ) or converted
 
         if not arm_split:
             # Optional projection bottleneck for non-leg branch:
             # if checkpoint has legacy non-leg readout W_old: (D_nonleg, hid),
             # factorize it to W_old ~= W_out @ W_proj with rank=proj_dim.
-            nonleg_proj = getattr(self, "direct_pose_nonleg_proj", None)
-            proj_linear = _first_linear(nonleg_proj)
+            proj_linear = self._direct_pose_first_linear(split_state["nonleg_proj"])
             if proj_linear is not None:
                 tgt_proj_w = proj_linear.weight
                 tgt_nonleg_w = nonleg_head.weight
@@ -2171,32 +2149,24 @@ class EventMotionModel(nn.Module):
             src_proj_w = state_dict.get("direct_pose_nonleg_proj.0.weight", None)
             src_proj_b = state_dict.get("direct_pose_nonleg_proj.0.bias", None)
             for branch, key in (
-                (getattr(self, "direct_pose_arm_proj", None), "direct_pose_arm_proj"),
-                (getattr(self, "direct_pose_else_proj", None), "direct_pose_else_proj"),
+                (split_state["arm_proj"], "direct_pose_arm_proj"),
+                (split_state["else_proj"], "direct_pose_else_proj"),
             ):
-                lin = _first_linear(branch)
+                lin = self._direct_pose_first_linear(branch)
                 if lin is None:
                     continue
-                k_w = f"{key}.0.weight"
-                k_b = f"{key}.0.bias"
-                cur_w = state_dict.get(k_w, None)
-                cur_b = state_dict.get(k_b, None)
-                if (
-                    torch.is_tensor(src_proj_w)
-                    and src_proj_w.ndim == 2
-                    and ((not torch.is_tensor(cur_w)) or tuple(cur_w.shape) != tuple(lin.weight.shape))
-                    and tuple(src_proj_w.shape) == tuple(lin.weight.shape)
-                ):
-                    state_dict[k_w] = src_proj_w
-                    converted = True
-                if (
-                    torch.is_tensor(src_proj_b)
-                    and src_proj_b.ndim == 1
-                    and ((not torch.is_tensor(cur_b)) or tuple(cur_b.shape) != tuple(lin.bias.shape))
-                    and tuple(src_proj_b.shape) == tuple(lin.bias.shape)
-                ):
-                    state_dict[k_b] = src_proj_b
-                    converted = True
+                converted = self._copy_tensor_if_compatible(
+                    state_dict,
+                    target_key=f"{key}.0.weight",
+                    target_tensor=lin.weight,
+                    source_tensor=src_proj_w if torch.is_tensor(src_proj_w) and src_proj_w.ndim == 2 else None,
+                ) or converted
+                converted = self._copy_tensor_if_compatible(
+                    state_dict,
+                    target_key=f"{key}.0.bias",
+                    target_tensor=lin.bias,
+                    source_tensor=src_proj_b if torch.is_tensor(src_proj_b) and src_proj_b.ndim == 1 else None,
+                ) or converted
             # Remove stale two-way branch tensors when loading into three-way model.
             for k in (
                 "direct_pose_out_nonleg.weight",
@@ -4733,21 +4703,6 @@ class MotionJointLoss(nn.Module):
         # reset fk caches when bone count changes
         self._parents_tensor = None
 
-    @staticmethod
-    def _normalize_bone_spec(
-        spec: Optional[Sequence[str] | str],
-        *,
-        default_items: Sequence[str],
-    ) -> list[str]:
-        if spec is None:
-            return [str(x) for x in default_items]
-        if isinstance(spec, str):
-            return [s.strip() for s in spec.split(',') if s.strip()]
-        if isinstance(spec, (list, tuple)):
-            return [str(s).strip() for s in spec if str(s).strip()]
-        txt = str(spec).strip()
-        return [txt] if txt else [str(x) for x in default_items]
-
     def _resolve_named_joint_indices(
         self,
         *,
@@ -4757,23 +4712,12 @@ class MotionJointLoss(nn.Module):
     ) -> list[int]:
         if joint_count <= 0 or not self.bone_names or joint_count > len(self.bone_names):
             return []
-        items = self._normalize_bone_spec(spec, default_items=default_items)
-        idx_map = {str(name): idx for idx, name in enumerate(self.bone_names[:joint_count])}
-        indices: list[int] = []
-        seen: set[int] = set()
-        for item in items:
-            idx = None
-            if item.isdigit() or (item.startswith('-') and item[1:].isdigit()):
-                try:
-                    idx = int(item)
-                except Exception:
-                    idx = None
-            else:
-                idx = idx_map.get(item, None)
-            if idx is None or idx < 0 or idx >= joint_count or idx in seen:
-                continue
-            seen.add(idx)
-            indices.append(int(idx))
+        indices, _ = _resolve_joint_spec_indices(
+            spec,
+            default_items=default_items,
+            bone_names=self.bone_names[:joint_count],
+            joint_count=joint_count,
+        )
         return indices
 
     def _resolve_direct_group_masks(self, joint_count: int, device: torch.device) -> Optional[Dict[str, torch.Tensor]]:
@@ -5110,13 +5054,14 @@ class MotionJointLoss(nn.Module):
             # Avoid selecting too many tiny leaves (e.g. fingers) as candidates.
             max_leaf = int(max(16, 4 * max(1, int(k))))
             if len(leaves) > max_leaf:
-                try:
-                    w = self._compute_unified_weights_cpu(J)
-                    vals = w[torch.as_tensor(leaves, dtype=torch.long)]
-                    _, sel = torch.topk(vals, k=min(max_leaf, int(vals.numel())), largest=True, sorted=False)
+                w = self._compute_unified_weights_cpu(J)
+                vals = w.index_select(0, torch.as_tensor(leaves, dtype=torch.long))
+                keep = min(max_leaf, int(vals.numel()))
+                if keep > 0:
+                    _, sel = torch.topk(vals, k=keep, largest=True, sorted=False)
                     leaves = [leaves[int(i)] for i in sel.tolist()]
-                except Exception:
-                    leaves = leaves[:max_leaf]
+                else:
+                    leaves = []
 
             if scope_norm in ('keybones', 'key_bones'):
                 root_idx = int(getattr(self, 'root_idx', 0))
@@ -5441,499 +5386,682 @@ class MotionJointLoss(nn.Module):
         return torch.nn.functional.smooth_l1_loss(log_p, log_g)
 
 
-    def forward(self, pred_motion, gt_motion, attn_weights=None, batch=None):
-        # 统一拿出模型输出（可能是 dict 或 tensor）
-        self._init_loss_group_tracker()
+    def _prepare_forward_inputs(
+        self,
+        pred_motion: Any,
+        gt_motion: torch.Tensor,
+    ) -> tuple[Any, torch.Tensor, Optional[torch.Tensor], bool]:
         delta_fallback = False
         if isinstance(pred_motion, dict):
             delta_fallback = bool(pred_motion.get('_delta_fallback', False))
-        pm = pred_motion.get('out') if isinstance(pred_motion, dict) else pred_motion
-        gm = gt_motion
-        delta_pm = pred_motion.get('delta') if isinstance(pred_motion, dict) else None
-        self._reset_adaptive_tracking()
+            pm = pred_motion.get('out')
+            delta_pm = pred_motion.get('delta')
+        else:
+            pm = pred_motion
+            delta_pm = None
+        return pm, gt_motion, delta_pm, delta_fallback
 
-        # _forward_base_inner 已包含核心动作损失与统计
-        base_out = self._forward_base_inner(pm, gt_motion, attn_weights=attn_weights)  # type: ignore
+    def _coerce_forward_base_output(self, base_out: Any) -> tuple[torch.Tensor, dict[str, float]]:
         if isinstance(base_out, tuple):
             loss, stats = base_out
         else:
             loss, stats = base_out, {}
-
         if isinstance(stats, dict):
-            stats = dict(stats)
-        else:
-            stats = {}
+            return loss, dict(stats)
+        return loss, {}
 
+    def _run_forward_base(
+        self,
+        pred_motion: torch.Tensor,
+        gt_motion: torch.Tensor,
+        attn_weights=None,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        base_out = self._forward_base_inner(pred_motion, gt_motion, attn_weights=attn_weights)  # type: ignore[arg-type]
+        return self._coerce_forward_base_output(base_out)
+
+    def _apply_rot_ortho_component(
+        self,
+        total_loss: torch.Tensor,
+        stats: Dict[str, float],
+        pred_motion: torch.Tensor,
+        delta_motion: Optional[torch.Tensor],
+        delta_fallback: bool,
+    ) -> torch.Tensor:
         if self.w_rot_ortho > 0 and not delta_fallback:
-            target_for_ortho = delta_pm if delta_pm is not None else pm
+            target_for_ortho = delta_motion if delta_motion is not None else pred_motion
             l_ortho = self.compute_rot6d_ortho_loss(target_for_ortho)
-            weighted_ortho = self.w_rot_ortho * l_ortho
-            loss = loss + weighted_ortho
-            self._accumulate_loss_contrib('rot_ortho', l_ortho, self.w_rot_ortho, group='core')
-            stats['rot_ortho'] = float(l_ortho.detach().cpu())
-            stats['rot_ortho_weighted'] = float(weighted_ortho.detach().cpu())
-            stats['rot_ortho_raw'] = float(l_ortho.detach().cpu())
-            self._register_component_loss('rot_ortho', l_ortho, self.w_rot_ortho)
+            return self._submit_component_loss(
+                total_loss,
+                stats=stats,
+                name='rot_ortho',
+                tensor=l_ortho,
+                weight=self.w_rot_ortho,
+                group='core',
+                raw_key='rot_ortho',
+                weighted_key='rot_ortho_weighted',
+                extra={'rot_ortho_raw': l_ortho},
+            )
+
+        self._setdefault_stats(stats, {
+            'rot_ortho': 0.0,
+            'rot_ortho_weighted': 0.0,
+            'rot_ortho_raw': 0.0,
+        })
+        if delta_fallback and self.w_rot_ortho > 0 and delta_motion is not None:
+            l_ortho = self.compute_rot6d_ortho_loss(delta_motion)
+            stats['rot_ortho_fallback'] = self._stats_float_or(l_ortho, default=float('nan'))
+        return total_loss
+
+    def _apply_rot_local_tail_component(
+        self,
+        total_loss: torch.Tensor,
+        stats: Dict[str, float],
+        geo_local: torch.Tensor,
+        deg_per_rad: float,
+    ) -> torch.Tensor:
+        tail_w = float(getattr(self, 'rot_local_tail_weight', 0.0) or 0.0)
+        tail_k = int(getattr(self, 'rot_local_tail_k', 0) or 0)
+        tail_scope = str(getattr(self, 'rot_local_tail_scope', 'all') or 'all').lower()
+        joint_count = int(geo_local.shape[-1])
+        if tail_w <= 0.0 or tail_k <= 0 or joint_count <= 0:
+            return total_loss
+
+        k = min(max(1, tail_k), joint_count)
+        cand_idx = self._rot_local_tail_candidates(tail_scope, joint_count, geo_local.device, k=k)
+        per_bone = torch.nanmean(geo_local.detach(), dim=tuple(range(geo_local.dim() - 1)))
+        scores = self._rot_local_tail_scores(per_bone)
+        select_mode = str(getattr(self, 'rot_local_tail_select', 'batch') or 'batch').lower()
+        score_count = int(scores.numel())
+        if score_count <= 0:
+            return total_loss
+        if cand_idx is not None and cand_idx.numel() > 0:
+            valid_idx = cand_idx[(cand_idx >= 0) & (cand_idx < score_count)]
+            if valid_idx.numel() <= 0:
+                return total_loss
+            k_eff = min(k, int(valid_idx.numel()))
+            vals = scores.index_select(0, valid_idx)
+            _, sel = torch.topk(vals, k=k_eff, largest=True, sorted=False)
+            idx = valid_idx.index_select(0, sel)
         else:
-            stats.setdefault('rot_ortho', 0.0)
-            stats.setdefault('rot_ortho_weighted', 0.0)
-            stats.setdefault('rot_ortho_raw', 0.0)
+            k_eff = min(k, score_count)
+            _, idx = torch.topk(scores, k=k_eff, largest=True, sorted=False)
+        tail_loss = torch.nanmean(geo_local.index_select(-1, idx))
+        total_loss = self._submit_component_loss(
+            total_loss,
+            stats=stats,
+            name='rot_local_tail',
+            tensor=tail_loss,
+            weight=tail_w,
+            group='core',
+            extra={
+                'rot_local_tail_deg': tail_loss * deg_per_rad,
+                'rot_local_tail_k': float(k_eff),
+                'rot_local_tail_scope': float({'all': 0.0, 'limbs': 1.0, 'keybones': 2.0}.get(tail_scope, 0.0)),
+                'rot_local_tail_select': float({'batch': 0.0, 'ema': 1.0}.get(select_mode, 0.0)),
+            },
+        )
+        return total_loss
 
-        if delta_fallback and self.w_rot_ortho > 0 and delta_pm is not None:
-            # 即使跳过 rot_ortho，也在 stats 中记录原生值方便诊断
-            try:
-                l_ortho = self.compute_rot6d_ortho_loss(delta_pm)
-                stats['rot_ortho_fallback'] = float(l_ortho.detach().cpu())
-            except Exception:
-                stats['rot_ortho_fallback'] = float('nan')
-
-
-        Rp_world = Rg_world = None
-        Rp_root = Rg_root = None
-        if self.w_rot_local > 0.0:
-            Rp_world = self._rot6d_matrices(pm)
-            Rg_world = self._rot6d_matrices(gm)
-            if Rp_world is not None and Rg_world is not None:
-                Rp_root = self._root_relative(Rp_world)
-                Rg_root = self._root_relative(Rg_world)
-
-        if self.w_rot_local > 0.0:
-            if Rp_root is not None and Rg_root is not None:
-                Rp_local = self._parent_relative_matrices(Rp_root)
-                Rg_local = self._parent_relative_matrices(Rg_root)
-                geo_local = geodesic_R(Rp_local, Rg_local)
-                weights = self._joint_weight_vector(Rp_local.device, Rp_local.dtype, Rp_local.shape[-3])
-                w = weights.view(1, 1, -1)
-                local_loss = (geo_local * w).mean()
-                loss = loss + self.w_rot_local * local_loss
-                self._accumulate_loss_contrib('rot_local', local_loss, self.w_rot_local, group='core')
-                stats['rot_local_deg'] = float((local_loss * (180.0 / math.pi)).detach().cpu())
-                self._register_component_loss('rot_local', local_loss, self.w_rot_local)
-
-                # Optional tail loss on worst bones (unweighted selection; gradients flow to selected bones).
-                tail_w = float(getattr(self, 'rot_local_tail_weight', 0.0) or 0.0)
-                tail_k = int(getattr(self, 'rot_local_tail_k', 0) or 0)
-                tail_scope = str(getattr(self, 'rot_local_tail_scope', 'all') or 'all').lower()
-                J = int(geo_local.shape[-1])
-                if tail_w > 0.0 and tail_k > 0 and J > 0:
-                    k = min(max(1, tail_k), J)
-
-                    cand_idx = self._rot_local_tail_candidates(tail_scope, J, geo_local.device, k=k)
-                    per_bone = torch.nanmean(geo_local.detach(), dim=tuple(range(geo_local.dim() - 1)))  # (J,)
-                    scores = self._rot_local_tail_scores(per_bone)
-                    select_mode = str(getattr(self, 'rot_local_tail_select', 'batch') or 'batch').lower()
-                    try:
-                        if cand_idx is not None and cand_idx.numel() > 0:
-                            vals = scores.index_select(0, cand_idx)
-                            _, sel = torch.topk(vals, k=k, largest=True, sorted=False)
-                            idx = cand_idx.index_select(0, sel)
-                        else:
-                            _, idx = torch.topk(scores, k=k, largest=True, sorted=False)
-                        tail_loss = torch.nanmean(geo_local.index_select(-1, idx))
-                        loss = loss + tail_w * tail_loss
-                        self._accumulate_loss_contrib('rot_local_tail', tail_loss, tail_w, group='core')
-                        stats['rot_local_tail_deg'] = float((tail_loss * (180.0 / math.pi)).detach().cpu())
-                        stats['rot_local_tail_k'] = float(k)
-                        stats['rot_local_tail_scope'] = float({'all': 0.0, 'limbs': 1.0, 'keybones': 2.0}.get(tail_scope, 0.0))
-                        stats['rot_local_tail_select'] = float({'batch': 0.0, 'ema': 1.0}.get(select_mode, 0.0))
-                        self._register_component_loss('rot_local_tail', tail_loss, tail_w)
-                    except Exception:
-                        pass
-        else:
+    def _apply_rot_local_component(
+        self,
+        total_loss: torch.Tensor,
+        stats: Dict[str, float],
+        pred_motion: torch.Tensor,
+        gt_motion: torch.Tensor,
+        deg_per_rad: float,
+    ) -> torch.Tensor:
+        if self.w_rot_local <= 0.0:
             stats.setdefault('rot_local_deg', 0.0)
+            return total_loss
 
-        # Root velocity losses（向量 + 模长），对应输出布局中的 RootVelocity 切片
+        Rp_world = self._rot6d_matrices(pred_motion)
+        Rg_world = self._rot6d_matrices(gt_motion)
+        if Rp_world is None or Rg_world is None:
+            return total_loss
+
+        Rp_root = self._root_relative(Rp_world)
+        Rg_root = self._root_relative(Rg_world)
+        Rp_local = self._parent_relative_matrices(Rp_root)
+        Rg_local = self._parent_relative_matrices(Rg_root)
+        geo_local = geodesic_R(Rp_local, Rg_local)
+        weights = self._joint_weight_vector(Rp_local.device, Rp_local.dtype, Rp_local.shape[-3])
+        local_loss = (geo_local * weights.view(1, 1, -1)).mean()
+        total_loss = self._submit_component_loss(
+            total_loss,
+            stats=stats,
+            name='rot_local',
+            tensor=local_loss,
+            weight=self.w_rot_local,
+            group='core',
+            extra={'rot_local_deg': local_loss * deg_per_rad},
+        )
+        return self._apply_rot_local_tail_component(total_loss, stats, geo_local, deg_per_rad)
+
+    def _apply_root_velocity_components(
+        self,
+        total_loss: torch.Tensor,
+        stats: Dict[str, float],
+        pred_motion: torch.Tensor,
+        gt_motion: torch.Tensor,
+    ) -> torch.Tensor:
         rv_slice = self.group_slices.get('RootVelocity')
-        if rv_slice is not None and (self.w_root_vel > 0.0 or self.w_root_speed > 0.0):
-            pred_vel = pm[..., rv_slice]
-            gt_vel = gm[..., rv_slice]
-            if self.w_root_vel > 0.0:
-                vel_mse = F.mse_loss(pred_vel, gt_vel)
-                loss = loss + self.w_root_vel * vel_mse
-                self._accumulate_loss_contrib('root_vel', vel_mse, self.w_root_vel, group='core')
-                stats['root_vel_mse'] = float(vel_mse.detach().cpu())
-                self._register_component_loss('root_vel', vel_mse, self.w_root_vel)
-            else:
-                stats.setdefault('root_vel_mse', 0.0)
+        if rv_slice is None or (self.w_root_vel <= 0.0 and self.w_root_speed <= 0.0):
+            self._setdefault_stats(stats, {
+                'root_vel_mse': 0.0,
+                'root_speed_mae': 0.0,
+            })
+            return total_loss
 
-            if self.w_root_speed > 0.0:
-                pred_speed = torch.norm(pred_vel, dim=-1)
-                gt_speed = torch.norm(gt_vel, dim=-1)
-                speed_mae = F.l1_loss(pred_speed, gt_speed)
-                loss = loss + self.w_root_speed * speed_mae
-                self._accumulate_loss_contrib('root_speed', speed_mae, self.w_root_speed, group='core')
-                stats['root_speed_mae'] = float(speed_mae.detach().cpu())
-                self._register_component_loss('root_speed', speed_mae, self.w_root_speed)
-            else:
-                stats.setdefault('root_speed_mae', 0.0)
+        pred_vel = pred_motion[..., rv_slice]
+        gt_vel = gt_motion[..., rv_slice]
+        if self.w_root_vel > 0.0:
+            vel_mse = F.mse_loss(pred_vel, gt_vel)
+            total_loss = self._submit_component_loss(
+                total_loss,
+                stats=stats,
+                name='root_vel',
+                tensor=vel_mse,
+                weight=self.w_root_vel,
+                group='core',
+                raw_key='root_vel_mse',
+            )
         else:
             stats.setdefault('root_vel_mse', 0.0)
-            stats.setdefault('root_speed_mae', 0.0)
 
-        # Direct pose supervision (cond + contacts_plan -> absolute pose)
-        if self.w_direct_pose > 0.0 and isinstance(pred_motion, dict):
-            try:
-                direct = pred_motion.get('out_direct', None)
-                if torch.is_tensor(direct):
-                    if direct.dim() == 2 and gm.dim() == 3:
-                        direct = direct.unsqueeze(1)
-                    gm_direct = gm
-                    if gm_direct.dim() == 2 and direct.dim() == 3:
-                        gm_direct = gm_direct.unsqueeze(1)
-                    if direct.dim() == 3 and gm_direct.dim() == 3:
-                        T = min(int(direct.shape[1]), int(gm_direct.shape[1]))
-                        if T > 0:
-                            geo_payload = self.compute_rot6d_geo_loss(direct[:, :T], gm_direct[:, :T], return_per_joint=True)
-                            if isinstance(geo_payload, tuple):
-                                geo_direct = geo_payload[0]
-                                geo_theta = geo_payload[1] if len(geo_payload) > 1 else None
-                            else:
-                                geo_direct = geo_payload
-                                geo_theta = None
-
-                            direct_objective = geo_direct
-                            dir_base = None
-                            dir_leg_base = None
-                            dir_nonleg_base = None
-                            dir_arm_base = None
-                            dir_else_base = None
-                            dir_nonleg_effective_base = None
-                            leg_over_nonleg = float('nan')
-                            leg_over_nonleg_effective = float('nan')
-                            arm_over_else = float('nan')
-                            arm_else_balance_active = 0.0
-                            arm_else_balance_w_arm = float(getattr(self, 'direct_pose_loss_arm_weight', 1.0) or 1.0)
-                            arm_else_balance_w_else = float(getattr(self, 'direct_pose_loss_else_weight', 1.0) or 1.0)
-                            dir_group_norm_used = 0.0
-                            dir_group_norm_leg = float('nan')
-                            dir_group_norm_nonleg = float('nan')
-                            dir_group_norm_leg_ema = float('nan')
-                            dir_group_norm_nonleg_ema = float('nan')
-                            dir_group_norm_leg_raw = float('nan')
-                            dir_group_norm_nonleg_raw = float('nan')
-                            dir_group_norm_leg_clamped = float('nan')
-                            dir_group_norm_nonleg_clamped = float('nan')
-                            dir_group_norm_leg_hit_min = 0.0
-                            dir_group_norm_leg_hit_max = 0.0
-                            dir_group_norm_nonleg_hit_min = 0.0
-                            dir_group_norm_nonleg_hit_max = 0.0
-                            dir_group_norm_leg_hit_any = 0.0
-                            dir_group_norm_nonleg_hit_any = 0.0
-                            split_masks = None
-                            if torch.is_tensor(geo_theta) and geo_theta.ndim >= 3:
-                                split_masks = self._resolve_direct_group_masks(int(geo_theta.shape[-1]), geo_theta.device)
-                                if split_masks is not None:
-                                    dir_base = self._masked_group_mean(geo_theta, split_masks.get('all_ex_root'))
-                                    dir_leg_base = self._masked_group_mean(geo_theta, split_masks.get('leg'))
-                                    dir_nonleg_base = self._masked_group_mean(geo_theta, split_masks.get('nonleg'))
-                                    dir_arm_base = self._masked_group_mean(geo_theta, split_masks.get('arm'))
-                                    dir_else_base = self._masked_group_mean(geo_theta, split_masks.get('else'))
-                                    if torch.is_tensor(dir_leg_base) and torch.is_tensor(dir_nonleg_base):
-                                        leg_over_nonleg = float(
-                                            (dir_leg_base / dir_nonleg_base.clamp_min(self.direct_pose_loss_group_norm_eps)).detach().cpu()
-                                        )
-                                    if torch.is_tensor(dir_arm_base) and torch.is_tensor(dir_else_base):
-                                        arm_over_else = float(
-                                            (dir_arm_base / dir_else_base.clamp_min(self.direct_pose_loss_group_norm_eps)).detach().cpu()
-                                        )
-                                    dir_nonleg_effective_base = dir_nonleg_base
-                                    if (
-                                        bool(self.direct_pose_loss_arm_else_balance_enable)
-                                        and bool(self.direct_pose_arm_split_enable)
-                                        and torch.is_tensor(dir_arm_base)
-                                        and torch.is_tensor(dir_else_base)
-                                    ):
-                                        arm_w = max(0.0, float(getattr(self, 'direct_pose_loss_arm_weight', 1.0) or 0.0))
-                                        else_w = max(0.0, float(getattr(self, 'direct_pose_loss_else_weight', 1.0) or 0.0))
-                                        denom = max(self.direct_pose_loss_group_norm_eps, arm_w + else_w)
-                                        dir_nonleg_effective_base = (
-                                            dir_arm_base * arm_w + dir_else_base * else_w
-                                        ) / denom
-                                        arm_else_balance_active = 1.0
-                                    if (
-                                        bool(self.direct_pose_loss_leg_split)
-                                        and torch.is_tensor(dir_leg_base)
-                                        and torch.is_tensor(dir_nonleg_effective_base)
-                                    ):
-                                        if torch.is_tensor(dir_leg_base) and torch.is_tensor(dir_nonleg_effective_base):
-                                            leg_over_nonleg_effective = float(
-                                                (dir_leg_base / dir_nonleg_effective_base.clamp_min(self.direct_pose_loss_group_norm_eps)).detach().cpu()
-                                            )
-                                        direct_objective = dir_leg_base + dir_nonleg_effective_base
-                                        if bool(self.direct_pose_loss_group_norm_enable):
-                                            ema_state = getattr(self, '_direct_pose_group_norm_ema', None)
-                                            if not isinstance(ema_state, dict):
-                                                ema_state = {}
-                                            ema_leg_prev = ema_state.get('leg', None)
-                                            ema_non_prev = ema_state.get('nonleg', None)
-                                            if not torch.is_tensor(ema_leg_prev):
-                                                ema_leg_prev = dir_leg_base.detach()
-                                            else:
-                                                ema_leg_prev = ema_leg_prev.to(device=dir_leg_base.device, dtype=dir_leg_base.dtype)
-                                            if not torch.is_tensor(ema_non_prev):
-                                                ema_non_prev = dir_nonleg_effective_base.detach()
-                                            else:
-                                                ema_non_prev = ema_non_prev.to(device=dir_nonleg_effective_base.device, dtype=dir_nonleg_effective_base.dtype)
-                                            leg_ratio_raw_t = dir_leg_base / ema_leg_prev.clamp_min(self.direct_pose_loss_group_norm_eps)
-                                            nonleg_ratio_raw_t = dir_nonleg_effective_base / ema_non_prev.clamp_min(self.direct_pose_loss_group_norm_eps)
-                                            leg_ratio_t = leg_ratio_raw_t.clamp(
-                                                self.direct_pose_loss_group_norm_ratio_min,
-                                                self.direct_pose_loss_group_norm_ratio_max,
-                                            )
-                                            nonleg_ratio_t = nonleg_ratio_raw_t.clamp(
-                                                self.direct_pose_loss_group_norm_ratio_min,
-                                                self.direct_pose_loss_group_norm_ratio_max,
-                                            )
-                                            leg_hit_min_t = (leg_ratio_raw_t <= self.direct_pose_loss_group_norm_ratio_min).to(dtype=dir_leg_base.dtype)
-                                            leg_hit_max_t = (leg_ratio_raw_t >= self.direct_pose_loss_group_norm_ratio_max).to(dtype=dir_leg_base.dtype)
-                                            nonleg_hit_min_t = (nonleg_ratio_raw_t <= self.direct_pose_loss_group_norm_ratio_min).to(dtype=dir_nonleg_base.dtype)
-                                            nonleg_hit_max_t = (nonleg_ratio_raw_t >= self.direct_pose_loss_group_norm_ratio_max).to(dtype=dir_nonleg_base.dtype)
-                                            direct_objective = (
-                                                self.direct_pose_loss_group_norm_w_leg * leg_ratio_t
-                                                + self.direct_pose_loss_group_norm_w_nonleg * nonleg_ratio_t
-                                            )
-                                            dir_group_norm_used = 1.0
-                                            dir_group_norm_leg_raw = float(leg_ratio_raw_t.detach().cpu())
-                                            dir_group_norm_nonleg_raw = float(nonleg_ratio_raw_t.detach().cpu())
-                                            dir_group_norm_leg_clamped = float(leg_ratio_t.detach().cpu())
-                                            dir_group_norm_nonleg_clamped = float(nonleg_ratio_t.detach().cpu())
-                                            dir_group_norm_leg = float(leg_ratio_t.detach().cpu())
-                                            dir_group_norm_nonleg = float(nonleg_ratio_t.detach().cpu())
-                                            dir_group_norm_leg_ema = float(ema_leg_prev.detach().cpu())
-                                            dir_group_norm_nonleg_ema = float(ema_non_prev.detach().cpu())
-                                            dir_group_norm_leg_hit_min = float(leg_hit_min_t.detach().cpu())
-                                            dir_group_norm_leg_hit_max = float(leg_hit_max_t.detach().cpu())
-                                            dir_group_norm_nonleg_hit_min = float(nonleg_hit_min_t.detach().cpu())
-                                            dir_group_norm_nonleg_hit_max = float(nonleg_hit_max_t.detach().cpu())
-                                            dir_group_norm_leg_hit_any = float(torch.maximum(leg_hit_min_t, leg_hit_max_t).detach().cpu())
-                                            dir_group_norm_nonleg_hit_any = float(torch.maximum(nonleg_hit_min_t, nonleg_hit_max_t).detach().cpu())
-                                            with torch.no_grad():
-                                                beta = float(self.direct_pose_loss_group_norm_ema_beta)
-                                                self._direct_pose_group_norm_ema = {
-                                                    'leg': (beta * ema_leg_prev + (1.0 - beta) * dir_leg_base.detach()).detach(),
-                                                    'nonleg': (beta * ema_non_prev + (1.0 - beta) * dir_nonleg_effective_base.detach()).detach(),
-                                                }
-
-                            loss = loss + self.w_direct_pose * direct_objective
-                            self._accumulate_loss_contrib('direct_pose', direct_objective, self.w_direct_pose, group='core')
-                            stats['direct_pose_geo'] = float(geo_direct.detach().cpu())
-                            stats['direct_pose_geo_deg'] = float((geo_direct * (180.0 / math.pi)).detach().cpu())
-                            stats['direct_pose_objective'] = float(direct_objective.detach().cpu())
-                            stats['direct_pose_weighted'] = float((self.w_direct_pose * direct_objective).detach().cpu())
-                            stats['direct_pose_split_active'] = 1.0 if bool(self.direct_pose_loss_leg_split) else 0.0
-                            stats['direct_pose_arm_split_active'] = 1.0 if bool(self.direct_pose_arm_split_enable) else 0.0
-                            stats['dir_base'] = float(dir_base.detach().cpu()) if torch.is_tensor(dir_base) else float('nan')
-                            stats['dir_leg_base'] = float(dir_leg_base.detach().cpu()) if torch.is_tensor(dir_leg_base) else float('nan')
-                            stats['dir_nonleg_base'] = float(dir_nonleg_base.detach().cpu()) if torch.is_tensor(dir_nonleg_base) else float('nan')
-                            stats['dir_nonleg_effective_base'] = float(dir_nonleg_effective_base.detach().cpu()) if torch.is_tensor(dir_nonleg_effective_base) else float('nan')
-                            stats['dir_arm_base'] = float(dir_arm_base.detach().cpu()) if torch.is_tensor(dir_arm_base) else float('nan')
-                            stats['dir_else_base'] = float(dir_else_base.detach().cpu()) if torch.is_tensor(dir_else_base) else float('nan')
-                            stats['leg_over_nonleg'] = float(leg_over_nonleg)
-                            stats['leg_over_nonleg_effective'] = float(leg_over_nonleg_effective)
-                            stats['arm_over_else'] = float(arm_over_else)
-                            stats['direct_pose_arm_else_balance_active'] = float(arm_else_balance_active)
-                            stats['direct_pose_loss_arm_weight'] = float(arm_else_balance_w_arm)
-                            stats['direct_pose_loss_else_weight'] = float(arm_else_balance_w_else)
-                            stats['dir_group_norm_used'] = float(dir_group_norm_used)
-                            stats['dir_group_norm_leg_raw'] = float(dir_group_norm_leg_raw)
-                            stats['dir_group_norm_nonleg_raw'] = float(dir_group_norm_nonleg_raw)
-                            stats['dir_group_norm_leg_clamped'] = float(dir_group_norm_leg_clamped)
-                            stats['dir_group_norm_nonleg_clamped'] = float(dir_group_norm_nonleg_clamped)
-                            stats['dir_group_norm_leg'] = float(dir_group_norm_leg)
-                            stats['dir_group_norm_nonleg'] = float(dir_group_norm_nonleg)
-                            stats['dir_group_norm_leg_ema'] = float(dir_group_norm_leg_ema)
-                            stats['dir_group_norm_nonleg_ema'] = float(dir_group_norm_nonleg_ema)
-                            stats['dir_group_norm_leg_hit_min'] = float(dir_group_norm_leg_hit_min)
-                            stats['dir_group_norm_leg_hit_max'] = float(dir_group_norm_leg_hit_max)
-                            stats['dir_group_norm_nonleg_hit_min'] = float(dir_group_norm_nonleg_hit_min)
-                            stats['dir_group_norm_nonleg_hit_max'] = float(dir_group_norm_nonleg_hit_max)
-                            stats['dir_group_norm_leg_hit_any'] = float(dir_group_norm_leg_hit_any)
-                            stats['dir_group_norm_nonleg_hit_any'] = float(dir_group_norm_nonleg_hit_any)
-                            self._register_component_loss('direct_pose', direct_objective, self.w_direct_pose)
-            except Exception:
-                pass
-        else:
-            stats.setdefault('direct_pose_geo', 0.0)
-            stats.setdefault('direct_pose_geo_deg', 0.0)
-            stats.setdefault('direct_pose_objective', 0.0)
-            stats.setdefault('direct_pose_weighted', 0.0)
-            stats.setdefault('direct_pose_split_active', 0.0)
-            stats.setdefault('direct_pose_arm_split_active', 0.0)
-            stats.setdefault('dir_base', float('nan'))
-            stats.setdefault('dir_leg_base', float('nan'))
-            stats.setdefault('dir_nonleg_base', float('nan'))
-            stats.setdefault('dir_nonleg_effective_base', float('nan'))
-            stats.setdefault('dir_arm_base', float('nan'))
-            stats.setdefault('dir_else_base', float('nan'))
-            stats.setdefault('leg_over_nonleg', float('nan'))
-            stats.setdefault('leg_over_nonleg_effective', float('nan'))
-            stats.setdefault('arm_over_else', float('nan'))
-            stats.setdefault('direct_pose_arm_else_balance_active', 0.0)
-            stats.setdefault('direct_pose_loss_arm_weight', float(getattr(self, 'direct_pose_loss_arm_weight', 1.0) or 1.0))
-            stats.setdefault('direct_pose_loss_else_weight', float(getattr(self, 'direct_pose_loss_else_weight', 1.0) or 1.0))
-            stats.setdefault('dir_group_norm_used', 0.0)
-            stats.setdefault('dir_group_norm_leg_raw', float('nan'))
-            stats.setdefault('dir_group_norm_nonleg_raw', float('nan'))
-            stats.setdefault('dir_group_norm_leg_clamped', float('nan'))
-            stats.setdefault('dir_group_norm_nonleg_clamped', float('nan'))
-            stats.setdefault('dir_group_norm_leg', float('nan'))
-            stats.setdefault('dir_group_norm_nonleg', float('nan'))
-            stats.setdefault('dir_group_norm_leg_ema', float('nan'))
-            stats.setdefault('dir_group_norm_nonleg_ema', float('nan'))
-            stats.setdefault('dir_group_norm_leg_hit_min', 0.0)
-            stats.setdefault('dir_group_norm_leg_hit_max', 0.0)
-            stats.setdefault('dir_group_norm_nonleg_hit_min', 0.0)
-            stats.setdefault('dir_group_norm_nonleg_hit_max', 0.0)
-            stats.setdefault('dir_group_norm_leg_hit_any', 0.0)
-            stats.setdefault('dir_group_norm_nonleg_hit_any', 0.0)
-
-        # Contact plan supervision (soft targets in [0,1])
-        if self.w_contact_plan > 0.0 and isinstance(pred_motion, dict) and isinstance(batch, dict):
-            try:
-                plan_logits = pred_motion.get("contacts_plan_logits", None)
-                plan = pred_motion.get("contacts_plan", None)
-                gt_c = batch.get("contacts", None)
-
-                # Training: prefer logits-space BCE when available (avoids "hedge to mean" under MSE).
-                if torch.is_tensor(plan_logits) and torch.is_tensor(gt_c):
-                    gt = gt_c.to(device=plan_logits.device, dtype=plan_logits.dtype)
-                    logits = plan_logits
-                    if logits.dim() == 2:
-                        logits = logits.unsqueeze(1)
-                    if gt.dim() == 2:
-                        gt = gt.unsqueeze(1)
-                    T = min(int(logits.shape[1]), int(gt.shape[1]))
-                    if T > 0 and logits.shape[-1] == gt.shape[-1]:
-                        gt_t = gt[:, :T].clamp(0.0, 1.0)
-                        l_bce = F.binary_cross_entropy_with_logits(logits[:, :T], gt_t)
-                        loss = loss + self.w_contact_plan * l_bce
-                        stats["contact_plan_bce"] = float(l_bce.detach().cpu())
-                        stats["contact_plan_weighted"] = float((self.w_contact_plan * l_bce).detach().cpu())
-                        # Metric (continuity): also record MSE on probabilities.
-                        try:
-                            probs = plan if torch.is_tensor(plan) else torch.sigmoid(logits)
-                            if probs.dim() == 2:
-                                probs = probs.unsqueeze(1)
-                            if probs.shape[-1] == gt.shape[-1]:
-                                l_mse = F.mse_loss(probs[:, :T], gt[:, :T])
-                                stats["contact_plan_mse"] = float(l_mse.detach().cpu())
-                        except Exception:
-                            pass
-                # Fallback: old behavior (MSE on probabilities).
-                elif torch.is_tensor(plan) and torch.is_tensor(gt_c):
-                    gt = gt_c.to(device=plan.device, dtype=plan.dtype)
-                    probs = plan
-                    if probs.dim() == 2:
-                        probs = probs.unsqueeze(1)
-                    if gt.dim() == 2:
-                        gt = gt.unsqueeze(1)
-                    T = min(int(probs.shape[1]), int(gt.shape[1]))
-                    if T > 0 and probs.shape[-1] == gt.shape[-1]:
-                        l_mse = F.mse_loss(probs[:, :T], gt[:, :T])
-                        loss = loss + self.w_contact_plan * l_mse
-                        stats["contact_plan_mse"] = float(l_mse.detach().cpu())
-                        stats["contact_plan_weighted"] = float((self.w_contact_plan * l_mse).detach().cpu())
-            except Exception:
-                pass
-
-        # Event-Clock v3 regularization (entropy + dynamic prior + Δz magnitude)
-        if (
-            isinstance(pred_motion, dict)
-            and (
-                self.event_clock_lambda_entropy_weight > 0.0
-                or self.event_clock_lambda_prior_weight > 0.0
-                or self.event_clock_delta_z_l2_weight > 0.0
+        if self.w_root_speed > 0.0:
+            pred_speed = torch.norm(pred_vel, dim=-1)
+            gt_speed = torch.norm(gt_vel, dim=-1)
+            speed_mae = F.l1_loss(pred_speed, gt_speed)
+            total_loss = self._submit_component_loss(
+                total_loss,
+                stats=stats,
+                name='root_speed',
+                tensor=speed_mae,
+                weight=self.w_root_speed,
+                group='core',
+                raw_key='root_speed_mae',
             )
+        else:
+            stats.setdefault('root_speed_mae', 0.0)
+        return total_loss
+
+    def _apply_motion_components(
+        self,
+        total_loss: torch.Tensor,
+        stats: Dict[str, float],
+        pred_motion: torch.Tensor,
+        gt_motion: torch.Tensor,
+        delta_motion: Optional[torch.Tensor],
+        delta_fallback: bool,
+        deg_per_rad: float,
+    ) -> torch.Tensor:
+        total_loss = self._apply_rot_ortho_component(
+            total_loss,
+            stats,
+            pred_motion,
+            delta_motion,
+            delta_fallback,
+        )
+        total_loss = self._apply_rot_local_component(
+            total_loss,
+            stats,
+            pred_motion,
+            gt_motion,
+            deg_per_rad,
+        )
+        return self._apply_root_velocity_components(total_loss, stats, pred_motion, gt_motion)
+
+    def _direct_pose_default_stats(self) -> Dict[str, float]:
+        return {
+            'direct_pose_geo': 0.0,
+            'direct_pose_geo_deg': 0.0,
+            'direct_pose_objective': 0.0,
+            'direct_pose_weighted': 0.0,
+            'direct_pose_split_active': 0.0,
+            'direct_pose_arm_split_active': 0.0,
+            'dir_base': float('nan'),
+            'dir_leg_base': float('nan'),
+            'dir_nonleg_base': float('nan'),
+            'dir_nonleg_effective_base': float('nan'),
+            'dir_arm_base': float('nan'),
+            'dir_else_base': float('nan'),
+            'leg_over_nonleg': float('nan'),
+            'leg_over_nonleg_effective': float('nan'),
+            'arm_over_else': float('nan'),
+            'direct_pose_arm_else_balance_active': 0.0,
+            'direct_pose_loss_arm_weight': float(getattr(self, 'direct_pose_loss_arm_weight', 1.0) or 1.0),
+            'direct_pose_loss_else_weight': float(getattr(self, 'direct_pose_loss_else_weight', 1.0) or 1.0),
+            'dir_group_norm_used': 0.0,
+            'dir_group_norm_leg_raw': float('nan'),
+            'dir_group_norm_nonleg_raw': float('nan'),
+            'dir_group_norm_leg_clamped': float('nan'),
+            'dir_group_norm_nonleg_clamped': float('nan'),
+            'dir_group_norm_leg': float('nan'),
+            'dir_group_norm_nonleg': float('nan'),
+            'dir_group_norm_leg_ema': float('nan'),
+            'dir_group_norm_nonleg_ema': float('nan'),
+            'dir_group_norm_leg_hit_min': 0.0,
+            'dir_group_norm_leg_hit_max': 0.0,
+            'dir_group_norm_nonleg_hit_min': 0.0,
+            'dir_group_norm_nonleg_hit_max': 0.0,
+            'dir_group_norm_leg_hit_any': 0.0,
+            'dir_group_norm_nonleg_hit_any': 0.0,
+        }
+
+    def _direct_pose_extra_defaults(self) -> Dict[str, float]:
+        defaults = self._direct_pose_default_stats()
+        defaults.pop('direct_pose_objective', None)
+        defaults.pop('direct_pose_weighted', None)
+        return defaults
+
+    def _prepare_direct_pose_pair(
+        self,
+        direct: torch.Tensor,
+        gt_motion: torch.Tensor,
+    ) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
+        if direct.dim() == 2 and gt_motion.dim() == 3:
+            direct = direct.unsqueeze(1)
+        gt_direct = gt_motion
+        if gt_direct.dim() == 2 and direct.dim() == 3:
+            gt_direct = gt_direct.unsqueeze(1)
+        if direct.dim() != 3 or gt_direct.dim() != 3:
+            return None
+        steps = min(int(direct.shape[1]), int(gt_direct.shape[1]))
+        if steps <= 0:
+            return None
+        return direct[:, :steps], gt_direct[:, :steps]
+
+    def _compute_direct_pose_group_norm_payload(
+        self,
+        dir_leg_base: torch.Tensor,
+        dir_nonleg_base: torch.Tensor,
+        dir_nonleg_effective_base: torch.Tensor,
+    ) -> tuple[torch.Tensor, Dict[str, float]]:
+        ema_state = getattr(self, '_direct_pose_group_norm_ema', None)
+        if not isinstance(ema_state, dict):
+            ema_state = {}
+        ema_leg_prev = ema_state.get('leg', None)
+        ema_non_prev = ema_state.get('nonleg', None)
+        if not torch.is_tensor(ema_leg_prev):
+            ema_leg_prev = dir_leg_base.detach()
+        else:
+            ema_leg_prev = ema_leg_prev.to(device=dir_leg_base.device, dtype=dir_leg_base.dtype)
+        if not torch.is_tensor(ema_non_prev):
+            ema_non_prev = dir_nonleg_effective_base.detach()
+        else:
+            ema_non_prev = ema_non_prev.to(device=dir_nonleg_effective_base.device, dtype=dir_nonleg_effective_base.dtype)
+
+        leg_ratio_raw_t = dir_leg_base / ema_leg_prev.clamp_min(self.direct_pose_loss_group_norm_eps)
+        nonleg_ratio_raw_t = dir_nonleg_effective_base / ema_non_prev.clamp_min(self.direct_pose_loss_group_norm_eps)
+        leg_ratio_t = leg_ratio_raw_t.clamp(
+            self.direct_pose_loss_group_norm_ratio_min,
+            self.direct_pose_loss_group_norm_ratio_max,
+        )
+        nonleg_ratio_t = nonleg_ratio_raw_t.clamp(
+            self.direct_pose_loss_group_norm_ratio_min,
+            self.direct_pose_loss_group_norm_ratio_max,
+        )
+        leg_hit_min_t = (leg_ratio_raw_t <= self.direct_pose_loss_group_norm_ratio_min).to(dtype=dir_leg_base.dtype)
+        leg_hit_max_t = (leg_ratio_raw_t >= self.direct_pose_loss_group_norm_ratio_max).to(dtype=dir_leg_base.dtype)
+        nonleg_hit_min_t = (nonleg_ratio_raw_t <= self.direct_pose_loss_group_norm_ratio_min).to(dtype=dir_nonleg_base.dtype)
+        nonleg_hit_max_t = (nonleg_ratio_raw_t >= self.direct_pose_loss_group_norm_ratio_max).to(dtype=dir_nonleg_base.dtype)
+        direct_objective = (
+            self.direct_pose_loss_group_norm_w_leg * leg_ratio_t
+            + self.direct_pose_loss_group_norm_w_nonleg * nonleg_ratio_t
+        )
+        payload = {
+            'dir_group_norm_used': 1.0,
+            'dir_group_norm_leg_raw': float(leg_ratio_raw_t.detach().cpu()),
+            'dir_group_norm_nonleg_raw': float(nonleg_ratio_raw_t.detach().cpu()),
+            'dir_group_norm_leg_clamped': float(leg_ratio_t.detach().cpu()),
+            'dir_group_norm_nonleg_clamped': float(nonleg_ratio_t.detach().cpu()),
+            'dir_group_norm_leg': float(leg_ratio_t.detach().cpu()),
+            'dir_group_norm_nonleg': float(nonleg_ratio_t.detach().cpu()),
+            'dir_group_norm_leg_ema': float(ema_leg_prev.detach().cpu()),
+            'dir_group_norm_nonleg_ema': float(ema_non_prev.detach().cpu()),
+            'dir_group_norm_leg_hit_min': float(leg_hit_min_t.detach().cpu()),
+            'dir_group_norm_leg_hit_max': float(leg_hit_max_t.detach().cpu()),
+            'dir_group_norm_nonleg_hit_min': float(nonleg_hit_min_t.detach().cpu()),
+            'dir_group_norm_nonleg_hit_max': float(nonleg_hit_max_t.detach().cpu()),
+            'dir_group_norm_leg_hit_any': float(torch.maximum(leg_hit_min_t, leg_hit_max_t).detach().cpu()),
+            'dir_group_norm_nonleg_hit_any': float(torch.maximum(nonleg_hit_min_t, nonleg_hit_max_t).detach().cpu()),
+        }
+        with torch.no_grad():
+            beta = float(self.direct_pose_loss_group_norm_ema_beta)
+            self._direct_pose_group_norm_ema = {
+                'leg': (beta * ema_leg_prev + (1.0 - beta) * dir_leg_base.detach()).detach(),
+                'nonleg': (beta * ema_non_prev + (1.0 - beta) * dir_nonleg_effective_base.detach()).detach(),
+            }
+        return direct_objective, payload
+
+    def _compute_direct_pose_payload(
+        self,
+        direct: torch.Tensor,
+        gt_motion: torch.Tensor,
+        deg_per_rad: float,
+    ) -> Optional[tuple[torch.Tensor, Dict[str, Any]]]:
+        pair = self._prepare_direct_pose_pair(direct, gt_motion)
+        if pair is None:
+            return None
+
+        direct_seq, gt_direct = pair
+        geo_payload = self.compute_rot6d_geo_loss(direct_seq, gt_direct, return_per_joint=True)
+        if isinstance(geo_payload, tuple):
+            geo_direct = geo_payload[0]
+            geo_theta = geo_payload[1] if len(geo_payload) > 1 else None
+        else:
+            geo_direct = geo_payload
+            geo_theta = None
+
+        direct_objective = geo_direct
+        extra: Dict[str, Any] = self._direct_pose_extra_defaults()
+        extra.update({
+            'direct_pose_geo': geo_direct,
+            'direct_pose_geo_deg': geo_direct * deg_per_rad,
+            'direct_pose_split_active': 1.0 if bool(self.direct_pose_loss_leg_split) else 0.0,
+            'direct_pose_arm_split_active': 1.0 if bool(self.direct_pose_arm_split_enable) else 0.0,
+        })
+
+        if torch.is_tensor(geo_theta) and geo_theta.ndim >= 3:
+            split_masks = self._resolve_direct_group_masks(int(geo_theta.shape[-1]), geo_theta.device)
+            if split_masks is not None:
+                dir_base = self._masked_group_mean(geo_theta, split_masks.get('all_ex_root'))
+                dir_leg_base = self._masked_group_mean(geo_theta, split_masks.get('leg'))
+                dir_nonleg_base = self._masked_group_mean(geo_theta, split_masks.get('nonleg'))
+                dir_arm_base = self._masked_group_mean(geo_theta, split_masks.get('arm'))
+                dir_else_base = self._masked_group_mean(geo_theta, split_masks.get('else'))
+                dir_nonleg_effective_base = dir_nonleg_base
+                arm_else_balance_active = 0.0
+                if (
+                    bool(self.direct_pose_loss_arm_else_balance_enable)
+                    and bool(self.direct_pose_arm_split_enable)
+                    and torch.is_tensor(dir_arm_base)
+                    and torch.is_tensor(dir_else_base)
+                ):
+                    arm_w = max(0.0, float(getattr(self, 'direct_pose_loss_arm_weight', 1.0) or 0.0))
+                    else_w = max(0.0, float(getattr(self, 'direct_pose_loss_else_weight', 1.0) or 0.0))
+                    denom = max(self.direct_pose_loss_group_norm_eps, arm_w + else_w)
+                    dir_nonleg_effective_base = (dir_arm_base * arm_w + dir_else_base * else_w) / denom
+                    arm_else_balance_active = 1.0
+
+                extra.update({
+                    'dir_base': dir_base if torch.is_tensor(dir_base) else float('nan'),
+                    'dir_leg_base': dir_leg_base if torch.is_tensor(dir_leg_base) else float('nan'),
+                    'dir_nonleg_base': dir_nonleg_base if torch.is_tensor(dir_nonleg_base) else float('nan'),
+                    'dir_nonleg_effective_base': dir_nonleg_effective_base if torch.is_tensor(dir_nonleg_effective_base) else float('nan'),
+                    'dir_arm_base': dir_arm_base if torch.is_tensor(dir_arm_base) else float('nan'),
+                    'dir_else_base': dir_else_base if torch.is_tensor(dir_else_base) else float('nan'),
+                    'direct_pose_arm_else_balance_active': arm_else_balance_active,
+                })
+                if torch.is_tensor(dir_leg_base) and torch.is_tensor(dir_nonleg_base):
+                    extra['leg_over_nonleg'] = float(
+                        (dir_leg_base / dir_nonleg_base.clamp_min(self.direct_pose_loss_group_norm_eps)).detach().cpu()
+                    )
+                if torch.is_tensor(dir_arm_base) and torch.is_tensor(dir_else_base):
+                    extra['arm_over_else'] = float(
+                        (dir_arm_base / dir_else_base.clamp_min(self.direct_pose_loss_group_norm_eps)).detach().cpu()
+                    )
+                if (
+                    bool(self.direct_pose_loss_leg_split)
+                    and torch.is_tensor(dir_leg_base)
+                    and torch.is_tensor(dir_nonleg_base)
+                    and torch.is_tensor(dir_nonleg_effective_base)
+                ):
+                    extra['leg_over_nonleg_effective'] = float(
+                        (dir_leg_base / dir_nonleg_effective_base.clamp_min(self.direct_pose_loss_group_norm_eps)).detach().cpu()
+                    )
+                    direct_objective = dir_leg_base + dir_nonleg_effective_base
+                    if bool(self.direct_pose_loss_group_norm_enable):
+                        direct_objective, norm_payload = self._compute_direct_pose_group_norm_payload(
+                            dir_leg_base,
+                            dir_nonleg_base,
+                            dir_nonleg_effective_base,
+                        )
+                        extra.update(norm_payload)
+
+        return direct_objective, extra
+
+    def _apply_direct_pose_component(
+        self,
+        total_loss: torch.Tensor,
+        stats: Dict[str, float],
+        pred_motion: Any,
+        gt_motion: torch.Tensor,
+        deg_per_rad: float,
+    ) -> torch.Tensor:
+        if self.w_direct_pose <= 0.0 or not isinstance(pred_motion, dict):
+            self._setdefault_stats(stats, self._direct_pose_default_stats())
+            return total_loss
+
+        direct = pred_motion.get('out_direct', None)
+        if torch.is_tensor(direct):
+            payload = self._compute_direct_pose_payload(direct, gt_motion, deg_per_rad)
+            if payload is not None:
+                direct_objective, extra = payload
+                total_loss = self._submit_component_loss(
+                    total_loss,
+                    stats=stats,
+                    name='direct_pose',
+                    tensor=direct_objective,
+                    weight=self.w_direct_pose,
+                    group='core',
+                    raw_key='direct_pose_objective',
+                    weighted_key='direct_pose_weighted',
+                    extra=extra,
+                )
+        return total_loss
+
+    def _contact_plan_extra_stats(
+        self,
+        plan: Any,
+        logits: torch.Tensor,
+        gt: torch.Tensor,
+        steps: int,
+    ) -> Optional[Dict[str, torch.Tensor]]:
+        probs = plan if torch.is_tensor(plan) else torch.sigmoid(logits)
+        probs = self._ensure_temporal_axis(probs)
+        if probs.dim() < 3 or probs.shape[-1] != gt.shape[-1] or int(probs.shape[1]) < steps:
+            return None
+        l_mse = F.mse_loss(probs[:, :steps], gt[:, :steps])
+        return {'contact_plan_mse': l_mse}
+
+    def _apply_contact_plan_component(
+        self,
+        total_loss: torch.Tensor,
+        stats: Dict[str, float],
+        pred_motion: Any,
+        batch: Optional[Dict[str, Any]],
+    ) -> torch.Tensor:
+        if self.w_contact_plan <= 0.0 or not isinstance(pred_motion, dict) or not isinstance(batch, dict):
+            return total_loss
+
+        plan_logits = pred_motion.get('contacts_plan_logits', None)
+        plan = pred_motion.get('contacts_plan', None)
+        gt_contacts = batch.get('contacts', None)
+        if torch.is_tensor(plan_logits) and torch.is_tensor(gt_contacts):
+            logits, gt, steps = self._prepare_aux_supervision_pair(plan_logits, gt_contacts)
+            if steps > 0 and logits.shape[-1] == gt.shape[-1]:
+                gt_t = gt[:, :steps].clamp(0.0, 1.0)
+                l_bce = F.binary_cross_entropy_with_logits(logits[:, :steps], gt_t)
+                extra_stats = self._contact_plan_extra_stats(plan, logits, gt, steps)
+                total_loss = self._submit_component_loss(
+                    total_loss,
+                    stats=stats,
+                    name='contact_plan',
+                    tensor=l_bce,
+                    weight=self.w_contact_plan,
+                    group='aux',
+                    raw_key='contact_plan_bce',
+                    weighted_key='contact_plan_weighted',
+                    extra=extra_stats,
+                )
+        elif torch.is_tensor(plan) and torch.is_tensor(gt_contacts):
+            probs, gt, steps = self._prepare_aux_supervision_pair(plan, gt_contacts)
+            if steps > 0 and probs.shape[-1] == gt.shape[-1]:
+                l_mse = F.mse_loss(probs[:, :steps], gt[:, :steps])
+                total_loss = self._submit_component_loss(
+                    total_loss,
+                    stats=stats,
+                    name='contact_plan',
+                    tensor=l_mse,
+                    weight=self.w_contact_plan,
+                    group='aux',
+                    raw_key='contact_plan_mse',
+                    weighted_key='contact_plan_weighted',
+                )
+        return total_loss
+
+    def _apply_event_clock_components(
+        self,
+        total_loss: torch.Tensor,
+        stats: Dict[str, float],
+        pred_motion: Any,
+    ) -> torch.Tensor:
+        if not isinstance(pred_motion, dict):
+            return total_loss
+        if (
+            self.event_clock_lambda_entropy_weight <= 0.0
+            and self.event_clock_lambda_prior_weight <= 0.0
+            and self.event_clock_delta_z_l2_weight <= 0.0
         ):
-            try:
-                lam_logit = pred_motion.get("event_clock_lambda_logit", None)
-                dyn_prior = pred_motion.get("event_clock_dynamic_prior", None)
-                delta_z = pred_motion.get("event_clock_delta_z", None)
+            return total_loss
 
-                if torch.is_tensor(lam_logit):
-                    logits = lam_logit
-                    if logits.dim() == 2:
-                        logits = logits.unsqueeze(1)
-                    p = torch.sigmoid(logits)
-                    eps = 1e-6
-                    ent = -p * torch.log(p + eps) - (1.0 - p) * torch.log(1.0 - p + eps)
+        lam_logit = pred_motion.get('event_clock_lambda_logit', None)
+        dyn_prior = pred_motion.get('event_clock_dynamic_prior', None)
+        delta_z = pred_motion.get('event_clock_delta_z', None)
+        if torch.is_tensor(lam_logit):
+            logits = lam_logit.unsqueeze(1) if lam_logit.dim() == 2 else lam_logit
+            p = torch.sigmoid(logits)
+            eps = 1e-6
+            ent = -p * torch.log(p + eps) - (1.0 - p) * torch.log(1.0 - p + eps)
+            if self.event_clock_lambda_entropy_weight > 0.0:
+                l_ent = -ent.mean()
+                total_loss = self._submit_component_loss(
+                    total_loss,
+                    stats=stats,
+                    name='event_clock_lambda_entropy',
+                    tensor=l_ent,
+                    weight=self.event_clock_lambda_entropy_weight,
+                    group='aux',
+                    raw_key='event_clock_lambda_entropy',
+                    weighted_key='event_clock_lambda_entropy_weighted',
+                )
+            if self.event_clock_lambda_prior_weight > 0.0 and torch.is_tensor(dyn_prior):
+                prior = dyn_prior.unsqueeze(1) if dyn_prior.dim() == 2 else dyn_prior
+                if prior.shape == p.shape:
+                    l_prior = (p - prior.detach()).pow(2).mean()
+                    total_loss = self._submit_component_loss(
+                        total_loss,
+                        stats=stats,
+                        name='event_clock_lambda_prior',
+                        tensor=l_prior,
+                        weight=self.event_clock_lambda_prior_weight,
+                        group='aux',
+                        raw_key='event_clock_lambda_prior',
+                        weighted_key='event_clock_lambda_prior_weighted',
+                    )
+            stats['event_clock_lambda_mean'] = self._stats_float_or(p.detach().mean(), default=float('nan'))
 
-                    if self.event_clock_lambda_entropy_weight > 0.0:
-                        l_ent = (-ent.mean())
-                        loss = loss + self.event_clock_lambda_entropy_weight * l_ent
-                        self._accumulate_loss_contrib('event_clock_lambda_entropy', l_ent, self.event_clock_lambda_entropy_weight, group='aux')
-                        stats['event_clock_lambda_entropy'] = float(l_ent.detach().cpu())
-                        stats['event_clock_lambda_entropy_weighted'] = float((self.event_clock_lambda_entropy_weight * l_ent).detach().cpu())
-                        self._register_component_loss('event_clock_lambda_entropy', l_ent, self.event_clock_lambda_entropy_weight)
+        if self.event_clock_delta_z_l2_weight > 0.0 and torch.is_tensor(delta_z) and delta_z.numel() > 0:
+            dz = delta_z.unsqueeze(1) if delta_z.dim() == 2 else delta_z
+            l2 = (dz * dz).mean()
+            total_loss = self._submit_component_loss(
+                total_loss,
+                stats=stats,
+                name='event_clock_delta_z_l2',
+                tensor=l2,
+                weight=self.event_clock_delta_z_l2_weight,
+                group='aux',
+                raw_key='event_clock_delta_z_l2',
+                weighted_key='event_clock_delta_z_l2_weighted',
+            )
+        return total_loss
 
-                    if self.event_clock_lambda_prior_weight > 0.0 and torch.is_tensor(dyn_prior):
-                        prior = dyn_prior
-                        if prior.dim() == 2:
-                            prior = prior.unsqueeze(1)
-                        if prior.shape == p.shape:
-                            l_prior = (p - prior.detach()).pow(2).mean()
-                            loss = loss + self.event_clock_lambda_prior_weight * l_prior
-                            self._accumulate_loss_contrib('event_clock_lambda_prior', l_prior, self.event_clock_lambda_prior_weight, group='aux')
-                            stats['event_clock_lambda_prior'] = float(l_prior.detach().cpu())
-                            stats['event_clock_lambda_prior_weighted'] = float((self.event_clock_lambda_prior_weight * l_prior).detach().cpu())
-                            self._register_component_loss('event_clock_lambda_prior', l_prior, self.event_clock_lambda_prior_weight)
+    def _apply_contact_meas_component(
+        self,
+        total_loss: torch.Tensor,
+        stats: Dict[str, float],
+        pred_motion: Any,
+        batch: Optional[Dict[str, Any]],
+    ) -> torch.Tensor:
+        if self.w_contact_meas <= 0.0 or not isinstance(pred_motion, dict) or not isinstance(batch, dict):
+            return total_loss
 
-                    try:
-                        stats['event_clock_lambda_mean'] = float(p.detach().mean().cpu())
-                    except Exception:
-                        pass
+        meas = pred_motion.get('contacts_meas', None)
+        gt_contacts = batch.get('contacts', None)
+        if torch.is_tensor(meas) and torch.is_tensor(gt_contacts):
+            probs, gt, steps = self._prepare_aux_supervision_pair(meas, gt_contacts)
+            if steps > 0 and probs.shape[-1] == gt.shape[-1]:
+                l_mse = F.mse_loss(probs[:, :steps], gt[:, :steps])
+                total_loss = self._submit_component_loss(
+                    total_loss,
+                    stats=stats,
+                    name='contact_meas',
+                    tensor=l_mse,
+                    weight=self.w_contact_meas,
+                    group='aux',
+                    raw_key='contact_meas_mse',
+                    weighted_key='contact_meas_weighted',
+                )
+        return total_loss
 
-                if self.event_clock_delta_z_l2_weight > 0.0 and torch.is_tensor(delta_z) and delta_z.numel() > 0:
-                    dz = delta_z
-                    if dz.dim() == 2:
-                        dz = dz.unsqueeze(1)
-                    l2 = (dz * dz).mean()
-                    loss = loss + self.event_clock_delta_z_l2_weight * l2
-                    self._accumulate_loss_contrib('event_clock_delta_z_l2', l2, self.event_clock_delta_z_l2_weight, group='aux')
-                    stats['event_clock_delta_z_l2'] = float(l2.detach().cpu())
-                    stats['event_clock_delta_z_l2_weighted'] = float((self.event_clock_delta_z_l2_weight * l2).detach().cpu())
-                    self._register_component_loss('event_clock_delta_z_l2', l2, self.event_clock_delta_z_l2_weight)
-            except Exception:
-                pass
+    def _apply_omega_l2_component(
+        self,
+        total_loss: torch.Tensor,
+        stats: Dict[str, float],
+        pred_motion: Any,
+    ) -> torch.Tensor:
+        if self.w_omega_l2 <= 0.0 or not isinstance(pred_motion, dict):
+            return total_loss
 
-        # Contact meas supervision (optional): align contacts_meas probability with GT soft contacts.
-        if self.w_contact_meas > 0.0 and isinstance(pred_motion, dict) and isinstance(batch, dict):
-            try:
-                meas = pred_motion.get("contacts_meas", None)
-                gt_c = batch.get("contacts", None)
-                if torch.is_tensor(meas) and torch.is_tensor(gt_c):
-                    gt = gt_c.to(device=meas.device, dtype=meas.dtype)
-                    probs = meas
-                    if probs.dim() == 2:
-                        probs = probs.unsqueeze(1)
-                    if gt.dim() == 2:
-                        gt = gt.unsqueeze(1)
-                    T = min(int(probs.shape[1]), int(gt.shape[1]))
-                    if T > 0 and probs.shape[-1] == gt.shape[-1]:
-                        l_mse = F.mse_loss(probs[:, :T], gt[:, :T])
-                        loss = loss + self.w_contact_meas * l_mse
-                        stats["contact_meas_mse"] = float(l_mse.detach().cpu())
-                        stats["contact_meas_weighted"] = float((self.w_contact_meas * l_mse).detach().cpu())
-            except Exception:
-                pass
+        omega = pred_motion.get('omega_hat', None)
+        if torch.is_tensor(omega) and omega.numel() > 0:
+            if omega.dim() == 3:
+                omega = omega.unsqueeze(1)
+            l2 = (omega * omega).mean()
+            total_loss = self._submit_component_loss(
+                total_loss,
+                stats=stats,
+                name='omega_l2',
+                tensor=l2,
+                weight=self.w_omega_l2,
+                group='aux',
+                raw_key='omega_l2',
+                weighted_key='omega_l2_weighted',
+            )
+        return total_loss
 
-        # Omega regularization (optional)
-        if self.w_omega_l2 > 0.0 and isinstance(pred_motion, dict):
-            try:
-                omega = pred_motion.get('omega_hat', None)
-                if torch.is_tensor(omega) and omega.numel() > 0:
-                    if omega.dim() == 3:  # (B,J,3)
-                        omega = omega.unsqueeze(1)
-                    l2 = (omega * omega).mean()
-                    loss = loss + self.w_omega_l2 * l2
-                    stats['omega_l2'] = float(l2.detach().cpu())
-                    stats['omega_l2_weighted'] = float((self.w_omega_l2 * l2).detach().cpu())
-            except Exception:
-                pass
+    def _apply_aux_components(
+        self,
+        total_loss: torch.Tensor,
+        stats: Dict[str, float],
+        pred_motion: Any,
+        batch: Optional[Dict[str, Any]],
+    ) -> torch.Tensor:
+        total_loss = self._apply_contact_plan_component(total_loss, stats, pred_motion, batch)
+        total_loss = self._apply_event_clock_components(total_loss, stats, pred_motion)
+        total_loss = self._apply_contact_meas_component(total_loss, stats, pred_motion, batch)
+        return self._apply_omega_l2_component(total_loss, stats, pred_motion)
 
-        self._finalize_adaptive_payload(loss)
+    def _finalize_forward_outputs(
+        self,
+        total_loss: torch.Tensor,
+        stats: Dict[str, float],
+    ) -> tuple[torch.Tensor, Dict[str, float]]:
+        self._finalize_adaptive_payload(total_loss)
         stats.update(self._loss_group_stats())
-        return loss, stats
+        return total_loss, stats
+
+    def forward(self, pred_motion, gt_motion, attn_weights=None, batch=None):
+        self._init_loss_group_tracker()
+        pm, gm, delta_pm, delta_fallback = self._prepare_forward_inputs(pred_motion, gt_motion)
+        self._reset_adaptive_tracking()
+        loss, stats = self._run_forward_base(pm, gm, attn_weights=attn_weights)
+        deg_per_rad = 180.0 / _math.pi
+        loss = self._apply_motion_components(loss, stats, pm, gm, delta_pm, delta_fallback, deg_per_rad)
+        loss = self._apply_direct_pose_component(loss, stats, pred_motion, gm, deg_per_rad)
+        loss = self._apply_aux_components(loss, stats, pred_motion, batch)
+        return self._finalize_forward_outputs(loss, stats)
 
     def _reset_adaptive_tracking(self):
         self._last_component_losses: Dict[str, torch.Tensor] = {}
@@ -5949,7 +6077,7 @@ class MotionJointLoss(nn.Module):
             return
         try:
             w = float(weight)
-        except Exception:
+        except (RuntimeError, TypeError, ValueError):
             w = float(weight.item()) if hasattr(weight, 'item') else 0.0
         if not _math.isfinite(w) or abs(w) < 1e-9:
             return
@@ -5957,15 +6085,76 @@ class MotionJointLoss(nn.Module):
             group = self._loss_group_alias.get(name, 'core')
         if group not in self._loss_group_totals:
             self._loss_group_totals[group] = 0.0
-        try:
-            contrib = float((tensor.detach().cpu()) * w)
-        except Exception:
-            contrib = 0.0
+        contrib = self._stats_float_or(tensor.detach() * w, default=0.0)
         if _math.isfinite(contrib):
             self._loss_group_totals[group] += contrib
 
     def _loss_group_stats(self) -> Dict[str, float]:
         return {f'loss_group/{k}': float(v) for k, v in self._loss_group_totals.items()}
+
+    @staticmethod
+    def _stats_float(value: Any) -> float:
+        if torch.is_tensor(value):
+            return float(value.detach().cpu())
+        return float(value)
+
+    @staticmethod
+    def _stats_float_or(value: Any, default: float = 0.0) -> float:
+        try:
+            return MotionJointLoss._stats_float(value)
+        except (RuntimeError, TypeError, ValueError):
+            return float(default)
+
+    @staticmethod
+    def _ensure_temporal_axis(tensor: torch.Tensor) -> torch.Tensor:
+        if tensor.dim() == 2:
+            tensor = tensor.unsqueeze(1)
+        return tensor
+
+    def _prepare_aux_supervision_pair(
+        self,
+        pred_tensor: torch.Tensor,
+        target_tensor: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, int]:
+        pred = self._ensure_temporal_axis(pred_tensor)
+        target = self._ensure_temporal_axis(target_tensor.to(device=pred.device, dtype=pred.dtype))
+        steps = min(int(pred.shape[1]), int(target.shape[1]))
+        return pred, target, steps
+
+    @staticmethod
+    def _setdefault_stats(stats: Dict[str, float], defaults: Dict[str, float]) -> None:
+        for key, value in defaults.items():
+            stats.setdefault(key, value)
+
+    def _submit_component_loss(
+        self,
+        total_loss: torch.Tensor,
+        *,
+        stats: Dict[str, float],
+        name: str,
+        tensor: Optional[torch.Tensor],
+        weight: float,
+        group: Optional[str] = None,
+        raw_key: Optional[str] = None,
+        weighted_key: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> torch.Tensor:
+        if tensor is None:
+            return total_loss
+        total_loss = total_loss + tensor * float(weight)
+        self._accumulate_loss_contrib(name, tensor, weight, group=group)
+        payload: Dict[str, float] = {}
+        if raw_key is not None:
+            payload[raw_key] = self._stats_float(tensor)
+        if weighted_key is not None:
+            payload[weighted_key] = self._stats_float(tensor * float(weight))
+        if isinstance(extra, dict):
+            for key, value in extra.items():
+                payload[key] = self._stats_float(value)
+        if payload:
+            stats.update(payload)
+        self._register_component_loss(name, tensor, weight)
+        return total_loss
 
     def _register_component_loss(self, name: str, tensor: Optional[torch.Tensor], weight: float):
         if tensor is None or weight <= 0:

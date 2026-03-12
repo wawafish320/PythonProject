@@ -39,6 +39,14 @@ import torch  # ensure torch is bound before any inner scope uses it
 
 from train.training_MPL import MotionEventDataset, Trainer, geodesic_R, validate_and_fix_model_
 from train.geometry import matrix_to_rot6d, reproject_rot6d, rot6d_to_matrix, so3_exp_map, so3_log_map
+from train.history import (
+    PoseHistState,
+    advance_pose_hist_state_with_tail,
+    init_pose_hist_state,
+    pose_hist_inverse_vec,
+    pose_hist_transform_vec,
+    resolve_pose_hist_input,
+)
 from train.models import EventMotionModel, MotionJointLoss
 from train.layout import LayoutCenter, DataNormalizer
 from train.geometry import compose_rot6d_delta
@@ -132,6 +140,71 @@ def _select_pose_hist_initial_norm(
     if pose_hist_seq is not None and pose_hist_seq.dim() == 2:
         return pose_hist_seq
     return torch.zeros((batch_size, pose_hist_dim), device=device, dtype=dtype)
+
+
+def _init_eval_pose_hist_state(
+    trainer: Trainer,
+    *,
+    ref_tensor: torch.Tensor,
+    pose_hist_seq: Optional[torch.Tensor],
+    step: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> PoseHistState:
+    pose_hist_len = int(getattr(trainer, "pose_hist_len", 0) or 0)
+    pose_hist_dim = int(getattr(trainer, "pose_hist_dim", 0) or 0)
+    initial_norm = _select_pose_hist_initial_norm(
+        pose_hist_seq,
+        step=step,
+        batch_size=int(ref_tensor.shape[0]),
+        pose_hist_dim=pose_hist_dim,
+        device=device,
+        dtype=dtype,
+    )
+    return init_pose_hist_state(
+        ref_tensor=ref_tensor,
+        pose_hist_seq=initial_norm,
+        y_prev_raw=None,
+        rot_slice=None,
+        pose_hist_len=pose_hist_len,
+        pose_hist_dim=pose_hist_dim,
+        params_fn=trainer._pose_hist_params,
+    )
+
+
+def _resolve_eval_pose_hist_input(
+    *,
+    state: PoseHistState,
+    pose_hist_seq: Optional[torch.Tensor],
+    idx: int,
+    source: str,
+    batch_size: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> Optional[torch.Tensor]:
+    source_norm = str(source or "buffer").strip().lower()
+    if source_norm == "zero":
+        return torch.zeros((batch_size, int(state.dim)), device=device, dtype=dtype)
+    if source_norm == "seq":
+        resolved = resolve_pose_hist_input(
+            state=PoseHistState(
+                enabled=False,
+                length=state.length,
+                dim=state.dim,
+                stride=state.stride,
+            ),
+            pose_hist_seq=pose_hist_seq,
+            idx=idx,
+        )
+    else:
+        resolved = resolve_pose_hist_input(
+            state=state,
+            pose_hist_seq=None,
+            idx=idx,
+        )
+    if resolved is None and int(state.dim) > 0:
+        return torch.zeros((batch_size, int(state.dim)), device=device, dtype=dtype)
+    return resolved
 
 
 def _compose_pose_hist_hybrid_rot_write(
@@ -547,12 +620,17 @@ class FreeRunCycleRunner:
         self.so3_corr_gate_err_margin = float(getattr(args, "so3_corr_gate_err_margin", 0.0) or 0.0)
         self.so3_corr_gate_err_use_ref = bool(getattr(args, "so3_corr_gate_err_use_ref", False))
         self.so3_corr_gate_scale_max = float(getattr(args, "so3_corr_gate_scale_max", 2.0) or 2.0)
+        self.log_contacts_whitebox = bool(getattr(args, "log_contacts_whitebox", False))
+        self.log_contacts_whitebox_first_steps = max(
+            0, int(getattr(args, "log_contacts_whitebox_first_steps", 4) or 4)
+        )
         self.log_contact_plan_logits_decomp = bool(getattr(args, "log_contact_plan_logits_decomp", False))
         # Exporting contact_meas swap/IO diagnostics requires per-step contact logging.
         self.export_contact_meas_head_swap = bool(getattr(args, "export_contact_meas_head_swap", False))
         self.log_contacts = bool(
             getattr(args, "log_contacts", False)
             or self.so3_corr_gate_from_contacts_err
+            or self.log_contacts_whitebox
             or self.log_contact_plan_logits_decomp
             or self.export_contact_meas_head_swap
         )
@@ -564,6 +642,20 @@ class FreeRunCycleRunner:
             self.contact_plan_time_bias_scale = float(getattr(args, "contact_plan_time_bias_scale", 1.0))
         except Exception:
             self.contact_plan_time_bias_scale = 1.0
+        gate_raw = str(getattr(args, "contact_meas_gate_by_hit", "auto") or "auto").strip().lower()
+        if gate_raw in ("true", "1", "yes", "y"):
+            self.contact_meas_gate_by_hit_override = True
+        elif gate_raw in ("false", "0", "no", "n"):
+            self.contact_meas_gate_by_hit_override = False
+        else:
+            self.contact_meas_gate_by_hit_override = None
+        self.contact_meas_vxy_mode = str(getattr(args, "contact_meas_vxy_mode", "abs") or "abs").strip().lower()
+        self.contact_meas_ground_z_mode = str(getattr(args, "contact_meas_ground_z_mode", "window") or "window").strip().lower()
+        self.contact_meas_ground_z_beta = float(getattr(args, "contact_meas_ground_z_beta", 0.05) or 0.05)
+        self.contact_meas_ground_z_window = int(getattr(args, "contact_meas_ground_z_window", 5) or 5)
+        self.contact_meas_ground_z_quantile = float(getattr(args, "contact_meas_ground_z_quantile", 0.2) or 0.2)
+        self.contact_meas_ground_z_slew_up_cm = float(getattr(args, "contact_meas_ground_z_slew_up_cm", 0.0) or 0.0)
+        self.contact_meas_ground_z_slew_down_cm = float(getattr(args, "contact_meas_ground_z_slew_down_cm", 0.0) or 0.0)
         # Optional: force contact_plan init behavior for ablations (even if ckpt lacks init_head weights).
         self.contact_plan_init_mode_override = getattr(args, "contact_plan_init_mode", None)
         if self.contact_plan_init_mode_override is not None:
@@ -1856,6 +1948,25 @@ class FreeRunCycleRunner:
         trainer.so3_corr_gate_err_use_ref = self.so3_corr_gate_err_use_ref
         trainer.so3_corr_gate_scale_max = self.so3_corr_gate_scale_max
         trainer.log_contacts = self.log_contacts
+        trainer.log_contacts_whitebox = bool(getattr(self, "log_contacts_whitebox", False))
+        trainer.log_contacts_whitebox_first_steps = int(getattr(self, "log_contacts_whitebox_first_steps", 0) or 0)
+        trainer.contact_meas_gate_by_hit_override = getattr(self, "contact_meas_gate_by_hit_override", None)
+        trainer.contact_meas_vxy_mode = str(getattr(self, "contact_meas_vxy_mode", "abs") or "abs")
+        trainer.contact_meas_ground_z_mode = str(getattr(self, "contact_meas_ground_z_mode", "window") or "window")
+        trainer.contact_meas_ground_z_beta = float(getattr(self, "contact_meas_ground_z_beta", 0.05) or 0.05)
+        trainer.contact_meas_ground_z_window = int(getattr(self, "contact_meas_ground_z_window", 5) or 5)
+        trainer.contact_meas_ground_z_quantile = float(getattr(self, "contact_meas_ground_z_quantile", 0.2) or 0.2)
+        # Slew in meters per step (set 0 to disable). Applied after the chosen mode.
+        try:
+            up_cm = float(getattr(self, "contact_meas_ground_z_slew_up_cm", 0.0) or 0.0)
+        except Exception:
+            up_cm = 0.0
+        try:
+            down_cm = float(getattr(self, "contact_meas_ground_z_slew_down_cm", 0.0) or 0.0)
+        except Exception:
+            down_cm = 0.0
+        trainer.contact_meas_ground_z_max_up_m = max(0.0, up_cm) / 100.0
+        trainer.contact_meas_ground_z_max_down_m = max(0.0, down_cm) / 100.0
         trainer.lambda_fusion_apply = bool(self.lambda_fusion_apply)
         trainer.lambda_reliability_mode = str(getattr(self, "lambda_reliability_mode", "none") or "none")
         trainer.lambda_reliability_warmup_steps = int(getattr(self, "lambda_reliability_warmup_steps", 0) or 0)
@@ -2295,6 +2406,14 @@ class FreeRunCycleRunner:
             "lambda_reliability_warmup_steps": int(getattr(self, "lambda_reliability_warmup_steps", 0) or 0),
             "lambda_reliability_contact_err_max": float(getattr(self, "lambda_reliability_contact_err_max", 1.0) or 1.0),
             "lambda_reliability_warmup_joint_scales": getattr(self, "lambda_reliability_warmup_joint_scales", None),
+            "contact_meas_gate_by_hit": getattr(self, "contact_meas_gate_by_hit_override", None),
+            "contact_meas_vxy_mode": str(getattr(self, "contact_meas_vxy_mode", "abs") or "abs"),
+            "contact_meas_ground_z_mode": str(getattr(self, "contact_meas_ground_z_mode", "window") or "window"),
+            "contact_meas_ground_z_beta": float(getattr(self, "contact_meas_ground_z_beta", 0.05) or 0.05),
+            "contact_meas_ground_z_window": int(getattr(self, "contact_meas_ground_z_window", 5) or 5),
+            "contact_meas_ground_z_quantile": float(getattr(self, "contact_meas_ground_z_quantile", 0.2) or 0.2),
+            "contact_meas_ground_z_slew_up_cm": float(getattr(self, "contact_meas_ground_z_slew_up_cm", 0.0) or 0.0),
+            "contact_meas_ground_z_slew_down_cm": float(getattr(self, "contact_meas_ground_z_slew_down_cm", 0.0) or 0.0),
             "model": str(Path(self.args.model).expanduser().resolve()),
             "metrics_per_round": metrics_per_round,
             "metrics_per_step": per_step,
@@ -2576,23 +2695,26 @@ def _run_freerun_cycles(
         pose_hist_update_source = "freeze"
     else:
         pose_hist_update_source = "pred"
-    pose_hist_buffer_norm = None
-    pose_hist_buffer_raw = None
-    scales = mu = std = None
+    pose_hist_state = PoseHistState(
+        enabled=False,
+        length=pose_hist_len,
+        dim=pose_hist_dim,
+        stride=pose_hist_stride,
+    )
     if pose_hist_enabled:
-        scales, mu, std = trainer._pose_hist_params(state_seq)
-        if scales is None:
-            pose_hist_enabled = False
-        else:
-            if pose_hist_seq is not None and pose_hist_seq.dim() == 3 and pose_hist_seq.size(1) > 0:
-                initial_norm = pose_hist_seq[:, 0]
-            elif pose_hist_seq is not None:
-                initial_norm = pose_hist_seq
-            else:
-                # B is not yet defined here; keep a safe fallback for rare "pose_hist missing" cases.
-                initial_norm = torch.zeros((state_seq.shape[0], pose_hist_dim), device=device, dtype=state_seq.dtype)
-            pose_hist_buffer_norm = initial_norm
-            pose_hist_buffer_raw = trainer._pose_hist_inverse_vec(initial_norm, scales, mu, std)
+        pose_hist_state = _init_eval_pose_hist_state(
+            trainer,
+            ref_tensor=state_seq,
+            pose_hist_seq=pose_hist_seq,
+            step=0,
+            device=device,
+            dtype=state_seq.dtype,
+        )
+        pose_hist_enabled = pose_hist_state.enabled
+        pose_hist_stride = int(pose_hist_state.stride)
+    scales = pose_hist_state.scales
+    mu = pose_hist_state.mu
+    std = pose_hist_state.std
 
     B, T, Dx = state_seq.shape
     assert T == T_total, "Internal error: tiled length mismatch."
@@ -3489,6 +3611,7 @@ def _run_freerun_cycles(
     ref_err_sum = 0.0
     ref_err_count = 0
     ref_err_value: Optional[float] = None
+    prev_foot_pos_meas = None
 
     # Rotation slice/J for lambda fusion shape checks.
     rot_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
@@ -3580,9 +3703,6 @@ def _run_freerun_cycles(
                 "pose_hist hybrid donor pose_history layout mismatch: "
                 f"current stride={pose_hist_stride}, donor stride={donor_pose_hist_stride}."
             )
-        donor_scales, donor_mu, donor_std = donor_trainer._pose_hist_params(state_seq)
-        if donor_scales is None:
-            raise ValueError("pose_hist hybrid donor missing pose_history normalization stats.")
 
         donor_motion = state_seq[:, start_t]
         donor_motion_raw = None
@@ -3638,29 +3758,18 @@ def _run_freerun_cycles(
             "phase_event_age": donor_phase_event_age,
             "meas_prev_logits": None,
             "meas_prev_prob": None,
-            "pose_hist_enabled": True,
-            "pose_hist_dim": donor_pose_hist_dim,
-            "pose_hist_stride": donor_pose_hist_stride,
-            "pose_hist_scales": donor_scales,
-            "pose_hist_mu": donor_mu,
-            "pose_hist_std": donor_std,
-            "pose_hist_buffer_norm": _select_pose_hist_initial_norm(
-                pose_hist_seq,
+            "pose_hist_state": _init_eval_pose_hist_state(
+                donor_trainer,
+                ref_tensor=state_seq,
+                pose_hist_seq=pose_hist_seq,
                 step=0,
-                batch_size=B,
-                pose_hist_dim=donor_pose_hist_dim,
                 device=device,
                 dtype=state_seq.dtype,
             ),
-            "pose_hist_buffer_raw": None,
             "rot_slice": donor_rot_slice,
         }
-        donor_state["pose_hist_buffer_raw"] = donor_trainer._pose_hist_inverse_vec(
-            donor_state["pose_hist_buffer_norm"],
-            donor_scales,
-            donor_mu,
-            donor_std,
-        )
+        if not bool(donor_state["pose_hist_state"].enabled):
+            raise ValueError("pose_hist hybrid donor missing pose_history normalization stats.")
         pose_hist_hybrid_enabled = True
 
     def _advance_pose_hist_hybrid_donor_step(
@@ -3686,27 +3795,22 @@ def _run_freerun_cycles(
         donor_motion = donor_state["motion"]
         donor_motion_raw = donor_state["motion_raw"]
         donor_y_raw_prev = donor_state["y_raw_prev"]
+        donor_pose_hist_state = donor_state["pose_hist_state"]
 
         if (
             is_cycle_start_step
             and bool(multicycle_reset_pose_hist_on_cycle_start)
-            and bool(donor_state["pose_hist_enabled"])
+            and bool(donor_pose_hist_state.enabled)
         ):
-            donor_initial_norm = _select_pose_hist_initial_norm(
-                pose_hist_seq,
+            donor_pose_hist_state = _init_eval_pose_hist_state(
+                dtr,
+                ref_tensor=state_seq,
+                pose_hist_seq=pose_hist_seq,
                 step=step_t,
-                batch_size=B,
-                pose_hist_dim=int(donor_state["pose_hist_dim"]),
                 device=device,
                 dtype=state_seq.dtype,
             )
-            donor_state["pose_hist_buffer_norm"] = donor_initial_norm
-            donor_state["pose_hist_buffer_raw"] = dtr._pose_hist_inverse_vec(
-                donor_initial_norm,
-                donor_state["pose_hist_scales"],
-                donor_state["pose_hist_mu"],
-                donor_state["pose_hist_std"],
-            )
+            donor_state["pose_hist_state"] = donor_pose_hist_state
         if is_cycle_start_step and bool(multicycle_sync_state_on_cycle_start):
             try:
                 donor_motion = state_seq[:, step_t].detach()
@@ -3721,22 +3825,16 @@ def _run_freerun_cycles(
                 donor_y_raw_prev = dtr._denorm(gt_seq[:, step_t])
             except Exception:
                 donor_y_raw_prev = None
-            if bool(donor_state["pose_hist_enabled"]):
-                donor_initial_norm = _select_pose_hist_initial_norm(
-                    pose_hist_seq,
+            if bool(donor_pose_hist_state.enabled):
+                donor_pose_hist_state = _init_eval_pose_hist_state(
+                    dtr,
+                    ref_tensor=state_seq,
+                    pose_hist_seq=pose_hist_seq,
                     step=step_t,
-                    batch_size=B,
-                    pose_hist_dim=int(donor_state["pose_hist_dim"]),
                     device=device,
                     dtype=state_seq.dtype,
                 )
-                donor_state["pose_hist_buffer_norm"] = donor_initial_norm
-                donor_state["pose_hist_buffer_raw"] = dtr._pose_hist_inverse_vec(
-                    donor_initial_norm,
-                    donor_state["pose_hist_scales"],
-                    donor_state["pose_hist_mu"],
-                    donor_state["pose_hist_std"],
-                )
+                donor_state["pose_hist_state"] = donor_pose_hist_state
         if is_cycle_start_step and bool(multicycle_reset_plan_z_on_cycle_start) and bool(donor_state["plan_enable"]):
             donor_state["plan_z"] = None
             donor_state["phase_z"] = None
@@ -3755,10 +3853,14 @@ def _run_freerun_cycles(
         else:
             donor_angvel_t = angvel_seq[:, step_t] if (angvel_seq is not None and angvel_seq.dim() == 3) else angvel_seq
 
-        donor_pose_hist_t = donor_state["pose_hist_buffer_norm"]
+        donor_pose_hist_t = resolve_pose_hist_input(
+            state=donor_pose_hist_state,
+            pose_hist_seq=None,
+            idx=step_t,
+        )
         if donor_pose_hist_t is None:
             donor_pose_hist_t = torch.zeros(
-                (B, int(donor_state["pose_hist_dim"])),
+                (B, int(donor_pose_hist_state.dim)),
                 device=device,
                 dtype=state_seq.dtype,
             )
@@ -3950,26 +4052,17 @@ def _run_freerun_cycles(
         donor_state["motion"] = donor_motion
         donor_state["motion_raw"] = donor_motion_raw
 
-        if bool(donor_state["pose_hist_enabled"]) and int(donor_state["pose_hist_stride"]) > 0:
-            with torch.no_grad():
-                donor_pose_hist_buffer_raw = donor_state["pose_hist_buffer_raw"]
-                donor_pose_hist_buffer_raw = torch.roll(
-                    donor_pose_hist_buffer_raw,
-                    shifts=-int(donor_state["pose_hist_stride"]),
-                    dims=-1,
-                )
-                if torch.is_tensor(donor_y_used_raw):
-                    donor_pose_hist_buffer_raw[..., -int(donor_state["pose_hist_stride"]):] = donor_y_used_raw[
-                        ...,
-                        donor_state["rot_slice"],
-                    ]
-                donor_state["pose_hist_buffer_raw"] = donor_pose_hist_buffer_raw
-                donor_state["pose_hist_buffer_norm"] = dtr._pose_hist_transform_vec(
-                    donor_pose_hist_buffer_raw,
-                    donor_state["pose_hist_scales"],
-                    donor_state["pose_hist_mu"],
-                    donor_state["pose_hist_std"],
-                )
+        if bool(donor_pose_hist_state.enabled) and int(donor_pose_hist_state.stride) > 0:
+            donor_rot_write = None
+            if torch.is_tensor(donor_y_used_raw):
+                donor_rot_slice = donor_state.get("rot_slice")
+                if isinstance(donor_rot_slice, slice):
+                    donor_rot_write = donor_y_used_raw[..., donor_rot_slice]
+            donor_pose_hist_state = advance_pose_hist_state_with_tail(
+                donor_pose_hist_state,
+                rot_tail_raw=donor_rot_write,
+            )
+            donor_state["pose_hist_state"] = donor_pose_hist_state
         return donor_y_used_raw
 
     # Optional: autograd gradient diagnostics for the leg-omega head (DirectGeoLocalDeg loss).
@@ -4428,14 +4521,19 @@ def _run_freerun_cycles(
             and scales is not None
         ):
             try:
-                if pose_hist_seq is not None and pose_hist_seq.dim() == 3 and int(pose_hist_seq.size(1)) > int(t):
-                    initial_norm = pose_hist_seq[:, t]
-                elif pose_hist_seq is not None and pose_hist_seq.dim() == 2:
-                    initial_norm = pose_hist_seq
-                else:
-                    initial_norm = torch.zeros((B, pose_hist_dim), device=device, dtype=state_seq.dtype)
-                pose_hist_buffer_norm = initial_norm
-                pose_hist_buffer_raw = trainer._pose_hist_inverse_vec(initial_norm, scales, mu, std)
+                pose_hist_state = _init_eval_pose_hist_state(
+                    trainer,
+                    ref_tensor=state_seq,
+                    pose_hist_seq=pose_hist_seq,
+                    step=t,
+                    device=device,
+                    dtype=state_seq.dtype,
+                )
+                pose_hist_enabled = pose_hist_state.enabled
+                pose_hist_stride = int(pose_hist_state.stride)
+                scales = pose_hist_state.scales
+                mu = pose_hist_state.mu
+                std = pose_hist_state.std
             except Exception:
                 pass
         if is_cycle_start and bool(multicycle_sync_state_on_cycle_start):
@@ -4454,16 +4552,23 @@ def _run_freerun_cycles(
                 y_raw_prev = None
             if pose_hist_enabled and pose_hist_stride > 0 and scales is not None:
                 try:
-                    if pose_hist_seq is not None and pose_hist_seq.dim() == 3 and int(pose_hist_seq.size(1)) > int(t):
-                        initial_norm = pose_hist_seq[:, t]
-                    elif pose_hist_seq is not None and pose_hist_seq.dim() == 2:
-                        initial_norm = pose_hist_seq
-                    else:
-                        initial_norm = torch.zeros((B, pose_hist_dim), device=device, dtype=state_seq.dtype)
-                    pose_hist_buffer_norm = initial_norm
-                    pose_hist_buffer_raw = trainer._pose_hist_inverse_vec(initial_norm, scales, mu, std)
+                    pose_hist_state = _init_eval_pose_hist_state(
+                        trainer,
+                        ref_tensor=state_seq,
+                        pose_hist_seq=pose_hist_seq,
+                        step=t,
+                        device=device,
+                        dtype=state_seq.dtype,
+                    )
+                    pose_hist_enabled = pose_hist_state.enabled
+                    pose_hist_stride = int(pose_hist_state.stride)
+                    scales = pose_hist_state.scales
+                    mu = pose_hist_state.mu
+                    std = pose_hist_state.std
                 except Exception:
                     pass
+            # White-box contact meas caches per-foot positions across steps; reset it when we teleport state.
+            prev_foot_pos_meas = None
         if is_cycle_start and bool(multicycle_reset_plan_z_on_cycle_start) and bool(plan_enable):
             plan_z = None
             phase_z = None
@@ -4497,21 +4602,26 @@ def _run_freerun_cycles(
         else:
             angvel_t = angvel_seq[:, t] if (angvel_seq is not None and angvel_seq.dim() == 3) else angvel_seq
         if pose_hist_enabled:
-            if pose_hist_source == "seq":
-                if pose_hist_seq is not None and pose_hist_seq.dim() == 3 and int(pose_hist_seq.size(1)) > int(t):
-                    pose_hist_t = pose_hist_seq[:, t]
-                elif pose_hist_seq is not None and pose_hist_seq.dim() == 2:
-                    pose_hist_t = pose_hist_seq
-                else:
-                    pose_hist_t = torch.zeros((B, pose_hist_dim), device=device, dtype=state_seq.dtype)
-            elif pose_hist_source == "zero":
-                pose_hist_t = torch.zeros((B, pose_hist_dim), device=device, dtype=state_seq.dtype)
-            else:
-                pose_hist_t = pose_hist_buffer_norm
-                if pose_hist_t is None:
-                    pose_hist_t = torch.zeros((B, pose_hist_dim), device=device, dtype=state_seq.dtype)
+            pose_hist_t = _resolve_eval_pose_hist_input(
+                state=pose_hist_state,
+                pose_hist_seq=pose_hist_seq,
+                idx=t,
+                source=pose_hist_source,
+                batch_size=B,
+                device=device,
+                dtype=state_seq.dtype,
+            )
         else:
-            pose_hist_t = pose_hist_seq[:, t] if (pose_hist_seq is not None and pose_hist_seq.dim() == 3) else pose_hist_seq
+            pose_hist_t = resolve_pose_hist_input(
+                state=PoseHistState(
+                    enabled=False,
+                    length=pose_hist_len,
+                    dim=pose_hist_dim,
+                    stride=pose_hist_stride,
+                ),
+                pose_hist_seq=pose_hist_seq,
+                idx=t,
+            )
         gt_motion_next = state_seq[:, t + 1]
         if gt_motion_raw is not None:
             try:
@@ -4609,6 +4719,33 @@ def _run_freerun_cycles(
         contacts_meas_source_cfg = str(getattr(trainer, "contacts_meas_source", "model") or "model").strip().lower()
         contacts_meas_source_applied = str(contacts_meas_source_cfg)
 
+        # Compute whitebox contacts only when needed:
+        # - direct head explicitly requests whitebox,
+        # - plan init_mode is obs-based (t==0 only),
+        # - whitebox debug logging enabled.
+        init_mode = str(getattr(model, "contact_plan_init_mode", "learnable") or "learnable").strip().lower()
+        log_wb = bool(getattr(trainer, "log_contacts_whitebox", False))
+        if log_wb:
+            try:
+                setattr(trainer, "_contact_meas_whitebox_debug", None)
+            except Exception:
+                pass
+
+        need_wb = (contacts_meas_source_cfg in ("whitebox", "wb")) or (
+            bool(plan_enable)
+            and (
+                (direct_meas_source_eff in ("whitebox", "wb"))
+                or (init_mode in ("obs", "learnable+obs") and plan_z is None and step_idx == 0)
+                or log_wb
+            )
+        )
+        contacts_wb_t = None
+        if need_wb:
+            try:
+                contacts_wb_t, prev_foot_pos_meas = trainer._contact_meas_whitebox(motion_raw, prev_foot_pos_meas)
+            except Exception:
+                contacts_wb_t = None
+
         contacts_in_t = None
         if contacts_meas_source_cfg in ("zero", "ignore", "none"):
             try:
@@ -4617,6 +4754,10 @@ def _run_freerun_cycles(
                 cdim = 0
             if cdim > 0:
                 contacts_in_t = motion.new_zeros((motion.shape[0], cdim))
+        elif contacts_meas_source_cfg in ("whitebox", "wb"):
+            contacts_in_t = contacts_wb_t
+            if contacts_in_t is None:
+                contacts_meas_source_applied = "whitebox_missing"
         elif contacts_meas_source_cfg in ("pretrain_contact", "pretrain", "frozen_contact"):
             contacts_in_t, pretrain_affine_applied = _predict_pretrain_contacts_from_frozen(motion, pose_hist_t)
             if contacts_in_t is None:
@@ -4644,6 +4785,18 @@ def _run_freerun_cycles(
             except Exception:
                 contacts_in_t = None
                 contacts_meas_source_applied = "gt_missing"
+        else:
+            # Default: model-produced contacts_meas; keep legacy whitebox injection only for:
+            # - no learned meas head (fallback)
+            # - plan_z0 init when init_mode is obs-based (t==0 only)
+            if plan_enable:
+                if not use_learned_meas:
+                    contacts_in_t = contacts_wb_t
+                    contacts_meas_source_applied = "whitebox_fallback"
+                elif init_mode in ("obs", "learnable+obs") and plan_z is None and step_idx == 0:
+                    contacts_in_t = contacts_wb_t
+                    if contacts_in_t is not None:
+                        contacts_meas_source_applied = "whitebox_init"
 
         # Debug-only: override contacts_meas with teacher contacts only on selected sic.
         if (
@@ -4766,6 +4919,8 @@ def _run_freerun_cycles(
         direct_meas_override = None
         if direct_meas_source_eff in ("zero", "ignore", "none"):
             direct_meas_override = "ignore"
+        elif direct_meas_source_eff in ("whitebox", "wb"):
+            direct_meas_override = contacts_wb_t
         elif direct_meas_source_eff in ("gt", "teacher"):
             try:
                 if torch.is_tensor(contacts_seq) and contacts_seq.dim() == 3 and contacts_seq.shape[0] == motion.shape[0]:
@@ -4828,7 +4983,11 @@ def _run_freerun_cycles(
         meas_prev_in_in = meas_prev_in.detach() if torch.is_tensor(meas_prev_in) else meas_prev_in
         motion_raw_in = motion_raw.detach() if torch.is_tensor(motion_raw) else None
         y_raw_prev_in = y_raw_prev.detach() if torch.is_tensor(y_raw_prev) else None
-        pose_hist_buffer_raw_in = pose_hist_buffer_raw.detach() if torch.is_tensor(pose_hist_buffer_raw) else None
+        pose_hist_buffer_raw_in = (
+            pose_hist_state.buffer_raw.detach()
+            if torch.is_tensor(pose_hist_state.buffer_raw)
+            else None
+        )
 
         if bool(export_plan_state_series):
             def _mean_vec(x: Any) -> Optional[List[float]]:
@@ -6255,6 +6414,27 @@ def _run_freerun_cycles(
             # --log_contacts is off.
             contact_entry = {}
 
+        # Optional: attach detailed white-box intermediates for debugging discrete collapses.
+        if contact_entry is not None and bool(getattr(trainer, "log_contacts_whitebox", False)):
+            try:
+                first_steps = int(getattr(trainer, "log_contacts_whitebox_first_steps", 4) or 4)
+                step_idx = int(t - start_t)
+                want_wb = step_idx < max(0, first_steps)
+                if not want_wb:
+                    meas_abs = contact_entry.get("ContactMeasAbsMean", None)
+                    gt_abs = contact_entry.get("ContactGTAbsMean", None)
+                    meas_gt_abs = contact_entry.get("ContactMeasGtAbsMean", None)
+                    if (meas_abs is not None) and (gt_abs is not None) and float(meas_abs) < 0.05 and float(gt_abs) > 0.2:
+                        want_wb = True
+                    elif meas_gt_abs is not None and float(meas_gt_abs) > 0.35:
+                        want_wb = True
+                if want_wb:
+                    wb = getattr(trainer, "_contact_meas_whitebox_debug", None)
+                    if isinstance(wb, dict) and wb:
+                        contact_entry["ContactMeasWhitebox"] = wb
+            except Exception:
+                pass
+
         if plan_enable:
             try:
                 z_next = ret.get("plan_z_next", None)
@@ -6566,7 +6746,7 @@ def _run_freerun_cycles(
                         try:
                             buf_raw_pert = pose_hist_buffer_raw_in.clone()
                             buf_raw_pert[..., -int(pose_hist_stride):] = prev_flat_pert
-                            pose_hist_t_pert = trainer._pose_hist_transform_vec(buf_raw_pert, scales, mu, std)
+                            pose_hist_t_pert = pose_hist_transform_vec(buf_raw_pert, scales, mu, std)
                         except Exception:
                             pose_hist_t_pert = pose_hist_t
 
@@ -6879,39 +7059,42 @@ def _run_freerun_cycles(
         )
 
         if pose_hist_enabled and pose_hist_stride > 0 and pose_hist_source == "buffer" and pose_hist_update_source != "freeze":
-            with torch.no_grad():
-                pose_hist_buffer_raw = torch.roll(pose_hist_buffer_raw, shifts=-pose_hist_stride, dims=-1)
-                rot_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
-                rot_write = None
-                if pose_hist_update_source == "gt":
-                    try:
-                        gt_raw_step = trainer._denorm(gt_seq[:, t])
-                    except Exception:
-                        gt_raw_step = None
-                    if torch.is_tensor(gt_raw_step) and isinstance(rot_slice, slice):
-                        rot_write = gt_raw_step[..., rot_slice]
-                elif pose_hist_update_source == "zero":
-                    rot_write = torch.zeros_like(pose_hist_buffer_raw[..., -pose_hist_stride:])
-                else:
-                    if torch.is_tensor(y_used_raw) and isinstance(rot_slice, slice):
-                        rot_write = y_used_raw[..., rot_slice]
-                        is_cycle_boundary = bool(int(T_cycle) > 0 and (int(t) % int(T_cycle)) == (int(T_cycle) - 1))
-                        if pose_hist_hybrid_enabled and is_cycle_boundary:
-                            donor_rot_write = None
-                            if torch.is_tensor(donor_y_used_raw):
-                                donor_rot_slice = donor_state.get("rot_slice") if isinstance(donor_state, dict) else None
-                                if isinstance(donor_rot_slice, slice):
-                                    donor_rot_write = donor_y_used_raw[..., donor_rot_slice]
-                            hybrid_rot_write = _compose_pose_hist_hybrid_rot_write(
-                                rot_write,
-                                donor_rot_write,
-                                leg_joint_idx=pose_hist_hybrid_leg_idx,
-                            )
-                            if torch.is_tensor(hybrid_rot_write):
-                                rot_write = hybrid_rot_write
-                if torch.is_tensor(rot_write):
-                    pose_hist_buffer_raw[..., -pose_hist_stride:] = rot_write
-                pose_hist_buffer_norm = trainer._pose_hist_transform_vec(pose_hist_buffer_raw, scales, mu, std)
+            rot_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
+            rot_write = None
+            if pose_hist_update_source == "gt":
+                try:
+                    gt_raw_step = trainer._denorm(gt_seq[:, t])
+                except Exception:
+                    gt_raw_step = None
+                if torch.is_tensor(gt_raw_step) and isinstance(rot_slice, slice):
+                    rot_write = gt_raw_step[..., rot_slice]
+            elif pose_hist_update_source == "zero":
+                rot_write = torch.zeros(
+                    (B, pose_hist_stride),
+                    device=device,
+                    dtype=state_seq.dtype,
+                )
+            else:
+                if torch.is_tensor(y_used_raw) and isinstance(rot_slice, slice):
+                    rot_write = y_used_raw[..., rot_slice]
+                    is_cycle_boundary = bool(int(T_cycle) > 0 and (int(t) % int(T_cycle)) == (int(T_cycle) - 1))
+                    if pose_hist_hybrid_enabled and is_cycle_boundary:
+                        donor_rot_write = None
+                        if torch.is_tensor(donor_y_used_raw):
+                            donor_rot_slice = donor_state.get("rot_slice") if isinstance(donor_state, dict) else None
+                            if isinstance(donor_rot_slice, slice):
+                                donor_rot_write = donor_y_used_raw[..., donor_rot_slice]
+                        hybrid_rot_write = _compose_pose_hist_hybrid_rot_write(
+                            rot_write,
+                            donor_rot_write,
+                            leg_joint_idx=pose_hist_hybrid_leg_idx,
+                        )
+                        if torch.is_tensor(hybrid_rot_write):
+                            rot_write = hybrid_rot_write
+            pose_hist_state = advance_pose_hist_state_with_tail(
+                pose_hist_state,
+                rot_tail_raw=rot_write,
+            )
 
     if not predsY:
         raise RuntimeError("No predictions produced during free‑run.")
@@ -7964,7 +8147,7 @@ def _run_freerun_cycles(
                     rot6d_y_slice = slice(0, y_used_raw_full.shape[-1])
 
                 buf_norm = pose_hist_seq[:, 0]
-                buf_raw = trainer._pose_hist_inverse_vec(buf_norm, scales, mu, std)
+                buf_raw = pose_hist_inverse_vec(buf_norm, scales, mu, std)
                 for t in range(int(free_steps)):
                     if int(t) > 0 and (int(t) % int(T_cycle)) == 0:
                         k = int(t) // int(T_cycle)
@@ -7988,7 +8171,7 @@ def _run_freerun_cycles(
                     # Advance buffer using the rollout-updated pose for this step.
                     buf_raw = torch.roll(buf_raw, shifts=-pose_hist_stride, dims=-1)
                     buf_raw[..., -pose_hist_stride:] = y_used_raw_full[:, t, rot6d_y_slice]
-                    buf_norm = trainer._pose_hist_transform_vec(buf_raw, scales, mu, std)
+                    buf_norm = pose_hist_transform_vec(buf_raw, scales, mu, std)
 
         if cycle_start_mismatch:
             extra["multicycle_cycle_start_mismatch"] = cycle_start_mismatch
@@ -9681,6 +9864,9 @@ def _run_freerun_cycles(
                     entry["ContactPlanGtAbsPerC"] = c.get("ContactPlanGtAbsPerC")
                 if "ContactMeasGtAbsPerC" in c:
                     entry["ContactMeasGtAbsPerC"] = c.get("ContactMeasGtAbsPerC")
+                if "ContactMeasWhitebox" in c:
+                    # Nested dict (debug only): keep it grouped instead of flattening dozens of keys.
+                    entry["ContactMeasWhitebox"] = c.get("ContactMeasWhitebox")
         if keybone_geo:
             entry["KeyBoneGeoDeg"] = keybone_geo
         if keybone_geo_local:
@@ -11180,10 +11366,10 @@ def parse_args() -> argparse.Namespace:
         "--direct_pose_meas_source",
         type=str,
         default="model",
-        choices=("model", "gt", "softgt", "zero"),
+        choices=("model", "whitebox", "gt", "softgt", "zero"),
         help=(
             "Override the *direct* head's contacts_meas source: "
-            "'model'=as-is; 'gt'=use teacher soft contacts; "
+            "'model'=as-is; 'whitebox'=use whitebox contacts_in_t; 'gt'=use teacher soft contacts; "
             "'softgt'=use teacher contacts mapped into the model's typical soft range via --direct_pose_softgt_stats; "
             "'zero'=ignore. Does not change contacts_err/lambda (only direct hint)."
         ),
@@ -11192,10 +11378,11 @@ def parse_args() -> argparse.Namespace:
         "--contacts_meas_source",
         type=str,
         default="model",
-        choices=("model", "gt", "zero", "pretrain_contact"),
+        choices=("model", "whitebox", "gt", "zero", "pretrain_contact"),
         help=(
             "Override the model's runtime contacts_meas source used by contacts_err / Event-Clock (and thus λ stats): "
-            "'model'=use learned contact_meas_head; 'gt'=use teacher soft contacts; 'zero'=all zeros; "
+            "'model'=use learned contact_meas_head; 'whitebox'=use runtime whitebox contacts; "
+            "'gt'=use teacher soft contacts; 'zero'=all zeros; "
             "'pretrain_contact'=use frozen pretrain contact_head from --encoder-bundle "
             "(input contact channels are zeroed to avoid leakage). "
             "This affects contacts_err, Event-Clock signals (delta_meas/lr_diff), and any downstream closed-loop stats."
@@ -11465,6 +11652,71 @@ def parse_args() -> argparse.Namespace:
         "--log_contacts",
         action="store_true",
         help="Log contacts_plan/meas/err stats into metrics_per_step JSON (auto-enabled by --so3_corr_gate_from_contacts_err).",
+    )
+    parser.add_argument(
+        "--log_contacts_whitebox",
+        action="store_true",
+        help=(
+            "Attach per-foot white-box intermediates (dist/vel/sweep) into metrics_per_step JSON. "
+            "Useful for debugging step-level collapses (hit_flag flip / ground_z drift)."
+        ),
+    )
+    parser.add_argument(
+        "--log_contacts_whitebox_first_steps",
+        type=int,
+        default=4,
+        help="Always attach white-box debug payload for the first N free-run steps (still logs suspected collapse steps beyond N).",
+    )
+    parser.add_argument(
+        "--contact_meas_gate_by_hit",
+        type=str,
+        default="auto",
+        choices=("auto", "true", "false"),
+        help="Override white-box gate_by_hit (auto uses bundle/meta). Set to 'false' for the first ablation pass.",
+    )
+    parser.add_argument(
+        "--contact_meas_vxy_mode",
+        type=str,
+        default="abs",
+        choices=("abs", "root_rel"),
+        help="White-box vxy gate: abs uses ||v_foot_xy||, root_rel uses ||v_foot_xy - v_root_xy|| (more robust under translation).",
+    )
+    parser.add_argument(
+        "--contact_meas_ground_z_mode",
+        type=str,
+        default="window",
+        choices=("ema", "window", "slew"),
+        help="White-box ground_z update mode (P2).",
+    )
+    parser.add_argument(
+        "--contact_meas_ground_z_beta",
+        type=float,
+        default=0.05,
+        help="EMA beta for --contact_meas_ground_z_mode=ema (higher adapts faster).",
+    )
+    parser.add_argument(
+        "--contact_meas_ground_z_window",
+        type=int,
+        default=5,
+        help="Window length for --contact_meas_ground_z_mode=window.",
+    )
+    parser.add_argument(
+        "--contact_meas_ground_z_quantile",
+        type=float,
+        default=0.2,
+        help="Low-quantile (0..1) over the window for --contact_meas_ground_z_mode=window. q=0.2 ignores single downward spikes when window=5.",
+    )
+    parser.add_argument(
+        "--contact_meas_ground_z_slew_up_cm",
+        type=float,
+        default=0.0,
+        help="Max upward change (cm per step) applied to ground_z after the chosen mode (0 disables).",
+    )
+    parser.add_argument(
+        "--contact_meas_ground_z_slew_down_cm",
+        type=float,
+        default=0.0,
+        help="Max downward change (cm per step) applied to ground_z after the chosen mode (0 disables).",
     )
     parser.add_argument(
         "--analyze_phase_shift",

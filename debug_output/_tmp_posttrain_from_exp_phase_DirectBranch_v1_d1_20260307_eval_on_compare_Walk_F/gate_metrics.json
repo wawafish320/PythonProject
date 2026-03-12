@@ -1,0 +1,17 @@
+{
+  "leg8_mean_delta": -0.02168916104972929,
+  "non_leg_mean_delta": -0.015361449690976886,
+  "global_mean_old": 0.14780221704995444,
+  "global_mean_new": 0.13131584089519935,
+  "global_mean_rel_delta_pct": -11.15434970043988,
+  "sic12_15_footl_balll_old": 0.5511649581603706,
+  "sic12_15_footl_balll_new": 0.5725710056722164,
+  "calf_r_global_old": 0.27078741867376793,
+  "calf_r_global_new": 0.2885736009690824,
+  "calf_r_sic2_4_old": 0.13670364022254944,
+  "calf_r_sic2_4_new": 0.1311351122955481,
+  "gate_keep_lower_body": false,
+  "gate_fix_non_leg": true,
+  "gate_calf_main": false,
+  "gate_calf_aux": true
+}

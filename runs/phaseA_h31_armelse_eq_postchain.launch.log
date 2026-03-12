@@ -1,0 +1,22 @@
+[H3-1-post] 2026-03-06 23:21:56 waiting for phaseA_h31_armelse_eq train_ep018: runs/phaseA_h31_armelse_eq/metrics/train_ep018.json (60s)
+[H3-1-post] 2026-03-06 23:22:56 waiting for phaseA_h31_armelse_eq train_ep018: runs/phaseA_h31_armelse_eq/metrics/train_ep018.json (120s)
+[H3-1-post] 2026-03-06 23:23:56 waiting for phaseA_h31_armelse_eq train_ep018: runs/phaseA_h31_armelse_eq/metrics/train_ep018.json (180s)
+[H3-1-post] 2026-03-06 23:23:56 found phaseA_h31_armelse_eq train_ep018: runs/phaseA_h31_armelse_eq/metrics/train_ep018.json
+[H3-1-post] 2026-03-06 23:23:56 found phaseA_h31_armelse_eq ckpt_best_free: runs/phaseA_h31_armelse_eq/ckpt_best_free_phaseA_h31_armelse_eq.pth
+[H3-1-post] 2026-03-06 23:23:56 running freerun for phaseA_h31_armelse_eq
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[FreeRun][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[FreeRun][WARN] dropping unsupported EventMotionModel kwargs: direct_pose_hinge_axis, direct_pose_hinge_base_feat, direct_pose_hinge_bones, direct_pose_hinge_clean, direct_pose_hinge_enable, direct_pose_hinge_eps_dropout, direct_pose_hinge_eps_hidden, direct_pose_hinge_eps_max_deg, direct_pose_hinge_eps_max_scale, direct_pose_hinge_eps_source, direct_pose_hinge_feat_source, direct_pose_hinge_gate_mode, ... (+4)
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/phaseA_h31_armelse_eq_freerun/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+[H3-1-post] 2026-03-06 23:24:01 aggregating group_summary for phaseA_h31_armelse_eq
+debug_output/phaseA_h31_armelse_eq_freerun/group_summary.json
+[H3-1-post] 2026-03-06 23:24:02 comparing vs phaseA_h30_gnorm
+debug_output/phaseA_h31_armelse_eq_compare_vs_phaseA_h30_gnorm.json
+[H3-1-post] 2026-03-06 23:24:02 all post steps completed

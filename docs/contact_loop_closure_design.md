@@ -102,7 +102,7 @@ R_blend = Exp(λ_eff * ω) @ R_inc
 
 ### 3.1 multi-cycle 的时间与 round 切片
 
-- `--round-seg-mode intra`：每个 cycle 统计 **cycle 内部 transition（len=cycle_len-1）**，跳过 wrap boundary
+- freerun_cycles 的 round 切片固定为 **cycle 内部 transition（len=cycle_len-1）**，自动跳过 wrap boundary（不再提供 round-seg-mode 开关）
 - `--time-index-mode cycle`：多轮循环时给 model 的 `time_index` 用 `t % cycle_len`，避免 Round1 time-PE OOD（如果启用了 time-PE）
 
 ### 3.2 诊断 direct 是否真的准：请先关掉 apply
@@ -251,7 +251,7 @@ python tools/make_lambda_reliability_joint_scales.py \
 ### 8.1 先把评估与输入域固定住（避免无效 ablation）
 
 - freerun_cycles 统一：
-  - `--round-seg-mode intra`
+  - round 切片固定为 **cycle 内部 transition（len=cycle_len-1）**
   - multi-cycle 时 `--time-index-mode cycle`
 - meas 统一 white-box（先保证闭环信号“能用”）
 
@@ -334,7 +334,7 @@ PYTHONPATH=. python train/validate/run_freerun_cycles.py \
 
 - 专家诊断（不改 rollout state）：不要传 `--lambda_fusion_apply`
 - 系统效果评估（会改 rollout state）：加 `--lambda_fusion_apply`
-- multi-cycle + time-PE：优先 `--time-index-mode cycle` + `--round-seg-mode intra`
+- multi-cycle + time-PE：优先 `--time-index-mode cycle`（round 切片固定为 intra-cycle）
 - per-joint 统计导出：`--export_joint_geolocal`（输出 `per_joint_geolocal` 字段）
 
 ### 11.2 Reliability factor `r_t`（`λ_eff = λ * r_t`）

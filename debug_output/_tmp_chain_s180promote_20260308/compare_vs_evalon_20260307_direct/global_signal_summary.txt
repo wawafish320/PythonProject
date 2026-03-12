@@ -1,0 +1,50 @@
+# Global signal summary (old vs new Stage7.2)
+old_json=debug_output/_tmp_posttrain_from_exp_phase_DirectBranch_v1_d1_20260307_eval_on_Walk_F_series/Walk_F_freerun_cycles.json
+new_json=debug_output/_tmp_lambda_from_s180_72_eval_20260308_Walk_F/Walk_F_freerun_cycles.json
+mask=cycle>=1,drop_wrap
+
+[overall]
+mean_old=0.131316
+mean_new=0.112947
+mean_delta=-0.018368
+bones_excl_root=45
+bones_regress_by_mean=10
+bones_improve_by_mean=35
+
+[region_split]
+leg8_mean_old=0.292003
+leg8_mean_new=0.274360
+leg8_mean_delta=-0.017644
+non_leg_mean_old=0.096573
+non_leg_mean_new=0.078048
+non_leg_mean_delta=-0.018525
+
+[pointwise_signal]
+points=15480
+improved_ratio=0.615698
+worse_ratio=0.384302
+median_delta=-0.009747
+
+[top_regressions_by_mean]
+ball_r: base=0.193419 new=0.211552 delta=+0.018133
+hand_l: base=0.172398 new=0.183692 delta=+0.011294
+thigh_l: base=0.324601 new=0.335624 delta=+0.011023
+foot_l: base=0.330499 new=0.335614 delta=+0.005115
+RCalfTwist_02: base=0.023176 new=0.027239 delta=+0.004063
+LCalfTwist_01: base=0.044337 new=0.047301 delta=+0.002964
+head: base=0.100732 new=0.102333 delta=+0.001600
+RCalfTwist_01: base=0.023948 new=0.024303 delta=+0.000355
+R_ForeTwist_02: base=0.027718 new=0.027848 delta=+0.000129
+Bip001: base=0.000006 new=0.000007 delta=+0.000001
+
+[top_improvements_by_mean]
+thumb_01_l: base=0.305603 new=0.134768 delta=-0.170835
+foot_r: base=0.327513 new=0.267728 delta=-0.059784
+ring_01_l: base=0.098740 new=0.044891 delta=-0.053849
+thumb_01_r: base=0.072791 new=0.020798 delta=-0.051993
+thigh_r: base=0.298696 new=0.250134 delta=-0.048562
+calf_r: base=0.288574 new=0.240695 delta=-0.047878
+RUpArmTwist_r_01: base=0.198661 new=0.160213 delta=-0.038448
+middle_01_l: base=0.059044 new=0.022019 delta=-0.037025
+pinky_01_l: base=0.123950 new=0.092717 delta=-0.031233
+index_01_l: base=0.059772 new=0.029461 delta=-0.030311

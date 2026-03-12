@@ -1,11 +1,205 @@
 from __future__ import annotations
 
 import math
-from typing import Optional, Tuple, Dict
+from dataclasses import dataclass
+from typing import Callable, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from .normalizers import VectorTanhNormalizerTorch
+
+
+PoseHistParamsFn = Callable[
+    [torch.Tensor],
+    tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]],
+]
+
+
+@dataclass
+class PoseHistState:
+    enabled: bool
+    length: int
+    dim: int
+    stride: int
+    scales: Optional[torch.Tensor] = None
+    mu: Optional[torch.Tensor] = None
+    std: Optional[torch.Tensor] = None
+    buffer_norm: Optional[torch.Tensor] = None
+    buffer_raw: Optional[torch.Tensor] = None
+
+
+def pose_hist_transform_vec(
+    raw_flat: torch.Tensor,
+    scales: Optional[torch.Tensor],
+    mu: Optional[torch.Tensor],
+    std: Optional[torch.Tensor],
+) -> torch.Tensor:
+    if scales is None or raw_flat.numel() == 0:
+        return raw_flat
+    norm = VectorTanhNormalizerTorch(scales, mu, std)
+    norm = norm.to(device=raw_flat.device, dtype=raw_flat.dtype)
+    return norm(raw_flat)
+
+
+def pose_hist_inverse_vec(
+    norm_flat: torch.Tensor,
+    scales: Optional[torch.Tensor],
+    mu: Optional[torch.Tensor],
+    std: Optional[torch.Tensor],
+) -> torch.Tensor:
+    if scales is None or norm_flat.numel() == 0:
+        return norm_flat
+    norm = VectorTanhNormalizerTorch(scales, mu, std)
+    norm = norm.to(device=norm_flat.device, dtype=norm_flat.dtype)
+    return norm.inverse(norm_flat)
+
+
+def init_pose_hist_state(
+    *,
+    ref_tensor: torch.Tensor,
+    pose_hist_seq: Optional[torch.Tensor],
+    y_prev_raw: Optional[torch.Tensor],
+    rot_slice: Optional[slice],
+    pose_hist_len: int,
+    pose_hist_dim: int,
+    params_fn: PoseHistParamsFn,
+    offset: int = 0,
+    force_disable: bool = False,
+    require_rot_slice_for_fallback: bool = False,
+) -> PoseHistState:
+    pose_hist_len = int(pose_hist_len)
+    pose_hist_dim = int(pose_hist_dim)
+    if pose_hist_len <= 0 or pose_hist_dim <= 0:
+        return PoseHistState(enabled=False, length=pose_hist_len, dim=pose_hist_dim, stride=0)
+    if pose_hist_dim % pose_hist_len != 0:
+        raise ValueError("pose_hist_dim must be divisible by pose_hist_len")
+
+    state = PoseHistState(
+        enabled=not bool(force_disable),
+        length=pose_hist_len,
+        dim=pose_hist_dim,
+        stride=pose_hist_dim // pose_hist_len,
+    )
+    if not state.enabled:
+        return state
+
+    scales, mu, std = params_fn(ref_tensor)
+    if scales is None:
+        state.enabled = False
+        return state
+    state.scales = scales
+    state.mu = mu
+    state.std = std
+
+    initial_norm = None
+    if torch.is_tensor(pose_hist_seq) and pose_hist_seq.numel() > 0:
+        seq = pose_hist_seq.to(device=ref_tensor.device, dtype=ref_tensor.dtype)
+        if seq.dim() == 3:
+            idx = int(max(0, min(int(seq.shape[1]) - 1, int(offset))))
+            initial_norm = seq[:, idx]
+        else:
+            initial_norm = seq
+
+    with torch.no_grad():
+        if initial_norm is not None:
+            state.buffer_norm = initial_norm
+            state.buffer_raw = pose_hist_inverse_vec(initial_norm, scales, mu, std)
+            return state
+
+        if require_rot_slice_for_fallback and not isinstance(rot_slice, slice):
+            raise RuntimeError("pose_hist enabled but rot slice missing for fallback init")
+
+        if (not torch.is_tensor(y_prev_raw)) or (not isinstance(rot_slice, slice)):
+            state.enabled = False
+            return state
+
+        base_rot = y_prev_raw[..., rot_slice]
+        state.buffer_raw = (
+            base_rot.unsqueeze(1)
+            .repeat(1, pose_hist_len, 1)
+            .reshape(base_rot.shape[0], pose_hist_dim)
+        )
+        state.buffer_norm = pose_hist_transform_vec(
+            state.buffer_raw,
+            scales,
+            mu,
+            std,
+        )
+    return state
+
+
+def resolve_pose_hist_input(
+    *,
+    state: PoseHistState,
+    pose_hist_seq: Optional[torch.Tensor],
+    idx: int,
+) -> Optional[torch.Tensor]:
+    if state.enabled and state.buffer_norm is not None:
+        return state.buffer_norm
+    if (not torch.is_tensor(pose_hist_seq)) or pose_hist_seq.numel() == 0:
+        return None
+    if pose_hist_seq.dim() == 3:
+        step_idx = int(max(0, min(int(pose_hist_seq.shape[1]) - 1, int(idx))))
+        return pose_hist_seq[:, step_idx]
+    return pose_hist_seq
+
+
+def advance_pose_hist_state(
+    state: PoseHistState,
+    *,
+    y_next_raw: torch.Tensor,
+    rot_slice: Optional[slice],
+) -> PoseHistState:
+    if (
+        (not state.enabled)
+        or state.stride <= 0
+        or state.buffer_raw is None
+        or (not torch.is_tensor(y_next_raw))
+        or (not isinstance(rot_slice, slice))
+    ):
+        return state
+
+    return advance_pose_hist_state_with_tail(
+        state,
+        rot_tail_raw=y_next_raw[..., rot_slice],
+    )
+
+
+def advance_pose_hist_state_with_tail(
+    state: PoseHistState,
+    *,
+    rot_tail_raw: Optional[torch.Tensor],
+) -> PoseHistState:
+    if (
+        (not state.enabled)
+        or state.stride <= 0
+        or state.buffer_raw is None
+        or (not torch.is_tensor(rot_tail_raw))
+    ):
+        return state
+
+    with torch.no_grad():
+        next_buffer_raw = torch.roll(state.buffer_raw, shifts=-state.stride, dims=-1)
+        next_buffer_raw[..., -state.stride:] = rot_tail_raw
+        next_buffer_norm = pose_hist_transform_vec(
+            next_buffer_raw,
+            state.scales,
+            state.mu,
+            state.std,
+        )
+    return PoseHistState(
+        enabled=state.enabled,
+        length=state.length,
+        dim=state.dim,
+        stride=state.stride,
+        scales=state.scales,
+        mu=state.mu,
+        std=state.std,
+        buffer_norm=next_buffer_norm,
+        buffer_raw=next_buffer_raw,
+    )
 
 
 class AdaptiveHistoryModule(nn.Module):
@@ -181,4 +375,13 @@ class AdaptiveHistoryModule(nn.Module):
         return self._last_diag
 
 
-__all__ = ["AdaptiveHistoryModule"]
+__all__ = [
+    "AdaptiveHistoryModule",
+    "PoseHistState",
+    "pose_hist_transform_vec",
+    "pose_hist_inverse_vec",
+    "init_pose_hist_state",
+    "resolve_pose_hist_input",
+    "advance_pose_hist_state",
+    "advance_pose_hist_state_with_tail",
+]

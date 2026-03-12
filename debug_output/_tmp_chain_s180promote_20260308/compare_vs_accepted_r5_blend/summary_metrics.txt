@@ -1,0 +1,21 @@
+# Lambda blend summary
+old_json=debug_output/_tmp_phaseD_direct_geolocal_compare_20260305_r5/new_fullchain_pretrain/Walk_F_freerun_cycles.json
+new_json=debug_output/_tmp_lambda_from_s180_72_eval_20260308_Walk_F/Walk_F_freerun_cycles.json
+mask=cycle>=1,drop_wrap
+old_phase_reset=none/none
+new_phase_reset=none/none
+old_contacts_meas_source=pretrain_contact
+new_contacts_meas_source=model
+old_lambda_fusion_apply=True
+new_lambda_fusion_apply=True
+
+[masked_step_metrics]
+BlendGeoLocalDeg: old_mean=0.531568 new_mean=0.491534 delta=-0.040034 rel_pct=-7.531393 old_p50=0.511545 new_p50=0.469119 old_p95=0.825876 new_p95=0.736259 old_p99=0.878033 new_p99=0.807640 old_max=0.901127 new_max=0.821959 n_old=344 n_new=344
+BlendGeoLocalDegWeighted: old_mean=0.490858 new_mean=0.467904 delta=-0.022954 rel_pct=-4.676321 old_p50=0.478363 new_p50=0.442763 old_p95=0.827180 new_p95=0.808739 old_p99=0.980793 new_p99=0.866059 old_max=1.005661 new_max=0.880561 n_old=344 n_new=344
+GeoLocalDeg: old_mean=1.030833 new_mean=0.955117 delta=-0.075716 rel_pct=-7.345169 old_p50=0.990132 new_p50=0.924820 old_p95=1.523022 new_p95=1.382117 old_p99=1.676727 new_p99=1.562999 old_max=1.683177 new_max=1.570373 n_old=344 n_new=344
+GeoLocalDegWeighted: old_mean=0.944840 new_mean=0.914284 delta=-0.030556 rel_pct=-3.233975 old_p50=0.935406 new_p50=0.877666 old_p95=1.588493 new_p95=1.541862 old_p99=1.776946 new_p99=1.645161 old_max=1.810350 new_max=1.674521 n_old=344 n_new=344
+DirectGeoLocalDeg: old_mean=0.147802 new_mean=0.112947 delta=-0.034855 rel_pct=-23.582012 old_p50=0.141568 new_p50=0.108628 old_p95=0.217293 new_p95=0.179196 old_p99=0.288073 new_p99=0.199292 old_max=0.321332 new_max=0.210580 n_old=344 n_new=344
+DirectGeoLocalDegWeighted: old_mean=0.171560 new_mean=0.133180 delta=-0.038380 rel_pct=-22.371360 old_p50=0.166622 new_p50=0.128808 old_p95=0.273823 new_p95=0.206736 old_p99=0.370799 new_p99=0.243763 old_max=0.407171 new_max=0.250173 n_old=344 n_new=344
+LambdaMean: old_mean=0.973585 new_mean=0.973549 delta=-0.000036 rel_pct=-0.003722 old_p50=0.973638 new_p50=0.973612 old_p95=0.973861 new_p95=0.973918 old_p99=0.973922 new_p99=0.974033 old_max=0.973971 new_max=0.974067 n_old=344 n_new=344
+LambdaEffMean: old_mean=0.973585 new_mean=0.973549 delta=-0.000036 rel_pct=-0.003722 old_p50=0.973638 new_p50=0.973612 old_p95=0.973861 new_p95=0.973918 old_p99=0.973922 new_p99=0.974033 old_max=0.973971 new_max=0.974067 n_old=344 n_new=344
+LambdaRelMean: old_mean=1.000000 new_mean=1.000000 delta=+0.000000 rel_pct=+0.000000 old_p50=1.000000 new_p50=1.000000 old_p95=1.000000 new_p95=1.000000 old_p99=1.000000 new_p99=1.000000 old_max=1.000000 new_max=1.000000 n_old=344 n_new=344

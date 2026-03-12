@@ -472,8 +472,19 @@ set_character_motion("idle", direction=[0, 0], speed_multiplier=0.0)
 
 **任务**:
 ```bash
-# 运行统计脚本
-python train/convert_json_to_npz.py --mode=analyze_speed --data_dir=raw_data/source_json
+# convert_json_to_npz.py 当前没有 analyze_speed CLI；可直接调用脚本里的函数：
+python - <<'PY'
+from pathlib import Path
+import json
+
+from train.convert_json_to_npz import find_json_files, compute_action_speed_stats
+
+stats = compute_action_speed_stats(find_json_files("raw_data/source_json"))
+out_path = Path("raw_data/processed_data/action_speed_stats.json")
+out_path.parent.mkdir(parents=True, exist_ok=True)
+out_path.write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
+print("[OK] wrote", out_path)
+PY
 ```
 
 **产出**: `raw_data/processed_data/action_speed_stats.json`
@@ -531,7 +542,7 @@ plt.savefig('speed_distribution.png')
 **测试**:
 ```bash
 # 重新处理一个JSON文件
-python train/convert_json_to_npz.py --input=raw_data/source_json/walk_01.json --output=test_output
+python train/convert_json_to_npz.py raw_data/source_json/walk_01.json --out test_output
 
 # 检查输出
 python -c "
@@ -583,7 +594,7 @@ print('RootVel in Y:', data['y_out_features'][0, 276:278])  # 应该是合理的
 cp -r raw_data/processed_data raw_data/processed_data.backup_v1
 
 # 重新处理所有数据
-python train/convert_json_to_npz.py --batch_process --data_dir=raw_data/source_json --output_dir=raw_data/processed_data
+python train/convert_json_to_npz.py raw_data/source_json --out raw_data/processed_data
 ```
 
 **验证点**:
@@ -1451,9 +1462,20 @@ if self.is_train and np.random.rand() < 0.1:  # 10% 概率
    - [ ] 检查方向一致性 (余弦相似度 > 0.9)
 
 2. **速度统计分析** (6.2)
-   ```bash
-   python train/convert_json_to_npz.py --mode=analyze_speed
-   ```
+```bash
+python - <<'PY'
+from pathlib import Path
+import json
+
+from train.convert_json_to_npz import find_json_files, compute_action_speed_stats
+
+stats = compute_action_speed_stats(find_json_files("raw_data/source_json"))
+out_path = Path("raw_data/processed_data/action_speed_stats.json")
+out_path.parent.mkdir(parents=True, exist_ok=True)
+out_path.write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
+print("[OK] wrote", out_path)
+PY
+```
    - [ ] 绘制每个动作的速度分布图
    - [ ] 检查异常值/长尾
    - [ ] 决定使用 mean 还是 p50

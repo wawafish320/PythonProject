@@ -250,6 +250,10 @@ def _prepare_rollout_inputs(
 
 def _reset_trainer_rollout_state(trainer: Any) -> None:
     for name in (
+        "_contact_meas_ground_z",
+        "_contact_meas_ground_z_hist",
+        "_contact_meas_prev_root_pos",
+        "_contact_meas_whitebox_debug",
         "_last_step_debug_stats",
     ):
         if hasattr(trainer, name):

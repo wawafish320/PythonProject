@@ -1,0 +1,50 @@
+# Global signal summary (old vs new Stage7.2)
+old_json=debug_output/_tmp_phaseD_direct_geolocal_compare_20260305/old_lambda_whitebox/Walk_F_freerun_cycles.json
+new_json=debug_output/_tmp_phaseD_direct_geolocal_compare_20260305/new_fullchain_pretrain/Walk_F_freerun_cycles.json
+mask=cycle>=1,drop_wrap
+
+[overall]
+mean_old=0.157515
+mean_new=0.146453
+mean_delta=-0.011062
+bones_excl_root=45
+bones_regress_by_mean=18
+bones_improve_by_mean=27
+
+[region_split]
+leg8_mean_old=0.325271
+leg8_mean_new=0.310131
+leg8_mean_delta=-0.015139
+non_leg_mean_old=0.121244
+non_leg_mean_new=0.111063
+non_leg_mean_delta=-0.010181
+
+[pointwise_signal]
+points=7740
+improved_ratio=0.532300
+worse_ratio=0.467700
+median_delta=-0.001955
+
+[top_regressions_by_mean]
+lowerarm_l: base=0.377554 new=0.454037 delta=+0.076483
+thumb_01_r: base=0.067692 new=0.111629 delta=+0.043938
+pinky_01_r: base=0.026333 new=0.059596 delta=+0.033264
+ball_l: base=0.325330 new=0.354154 delta=+0.028823
+thumb_01_l: base=0.240711 new=0.266603 delta=+0.025892
+spine_02: base=0.104640 new=0.129424 delta=+0.024784
+hand_r: base=0.325786 new=0.346023 delta=+0.020237
+spine_01: base=0.112798 new=0.131467 delta=+0.018669
+neck_01: base=0.082176 new=0.095617 delta=+0.013441
+thigh_r: base=0.265242 new=0.277474 delta=+0.012232
+
+[top_improvements_by_mean]
+upperarm_l: base=0.485046 new=0.378853 delta=-0.106193
+pinky_01_l: base=0.304883 new=0.201605 delta=-0.103277
+upperarm_r: base=0.406095 new=0.305335 delta=-0.100760
+lowerarm_r: base=0.294435 new=0.201538 delta=-0.092897
+hand_l: base=0.244186 new=0.182837 delta=-0.061349
+calf_r: base=0.316798 new=0.265318 delta=-0.051480
+RUpArmTwist_r_01: base=0.211127 new=0.160200 delta=-0.050927
+foot_r: base=0.323667 new=0.278458 delta=-0.045209
+ball_r: base=0.266158 new=0.229069 delta=-0.037089
+head: base=0.143888 new=0.111702 delta=-0.032186
