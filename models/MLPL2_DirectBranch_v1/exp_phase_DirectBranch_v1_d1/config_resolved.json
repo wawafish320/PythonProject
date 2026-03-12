@@ -18,9 +18,6 @@
   "foot_contact_threshold": 2.0,
   "diag_input_stats": true,
   "freerun_debug_path": "debug_output/freerun_diag_ep002.pt",
-  "freerun_horizon": 0,
-  "freerun_weight": 0.0,
-  "freerun_grad_log": false,
   "monitor_batches": 2,
   "eval_horizon": 14,
   "eval_warmup": 0,
@@ -28,20 +25,18 @@
   "yaw_forward_offset": 0,
   "history_debug_steps": 0,
   "history_use_trend_features": true,
-  "teacher_rot_noise_deg": 0.0,
-  "teacher_rot_noise_prob": 0.0,
-  "input_step_noise_prob": 0.0,
-  "input_noise_deg_mix": [],
   "w_rot_local": 0.2,
   "w_root_vel": 0.05,
   "w_root_speed": 0.03,
   "contact_plan_enable": true,
+  "trainbase_contacts_source": "pretrain_contact",
+  "trainbase_contacts_pretrain_clamp": 1.0,
+  "trainbase_contacts_pretrain_affine_stats": "debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
   "contact_plan_hidden": 64,
   "contact_plan_dropout": 0.0,
   "contact_plan_inject": "plan_z",
   "contact_plan_inject_detach": true,
   "w_contact_plan": 1.0,
-  "w_contact_meas": 0.0,
   "freerun_stage_schedule": [
     {
       "range": [
@@ -49,10 +44,6 @@
         4
       ],
       "label": "stage1_warmup_tf1",
-      "trainer": {
-        "freerun_weight": 0.0,
-        "freerun_horizon": 0
-      },
       "params": {
         "tf_max": 1.0,
         "tf_min": 1.0,
@@ -66,10 +57,6 @@
         8
       ],
       "label": "stage2_transition_tf1_to_p05",
-      "trainer": {
-        "freerun_weight": 0.0,
-        "freerun_horizon": 0
-      },
       "params": {
         "tf_max": 1.0,
         "tf_min": 0.5,
@@ -83,10 +70,6 @@
         18
       ],
       "label": "stage3_p05",
-      "trainer": {
-        "freerun_weight": 0.0,
-        "freerun_horizon": 0
-      },
       "params": {
         "tf_max": 0.5,
         "tf_min": 0.5,
@@ -100,8 +83,6 @@
   "contact_plan_init_hidden": 128,
   "contact_phase_state_enable": true,
   "contact_phase_state_init_mode": "obs",
-  "contact_phase_state_event_kind": "none",
-  "phase_reset_source": "none",
   "direct_pose_enable": true,
   "w_direct_pose": 0.2,
   "contact_plan_time_pe_dim": 16,
@@ -134,14 +115,6 @@
   "grad_clip": 1.0,
   "patience": 20,
   "tf_warmup_epochs": 3,
-  "freerun_weight_init": null,
-  "freerun_horizon_min": 6,
-  "freerun_init_horizon": null,
-  "freerun_horizon_ramp_epochs": 5,
-  "freerun_weight_mode": "epoch_linear",
-  "freerun_weight_ramp_epochs": 5,
-  "freerun_grad_log_interval": 50,
-  "freerun_grad_ratio_alert": 0.01,
   "history_adaptive_max_frames": null,
   "history_adaptive_hidden": 256,
   "history_adaptive_heads": 2,
@@ -158,9 +131,6 @@
   "contact_phase_state_hidden": 64,
   "contact_phase_state_delta_max": 0.5,
   "contact_phase_state_delta_init": 0.07853981633974483,
-  "contact_phase_state_event_thr": 0.5,
-  "contact_phase_state_event_hyst": 0.0,
-  "contact_phase_state_event_min_interval": 0,
   "direct_pose_hidden": 256,
   "direct_pose_dropout": 0.0,
   "direct_pose_detach_plan": true,
@@ -206,5 +176,6 @@
   "teacher_eval_max_batches": null,
   "yaw_forward_axis": null,
   "eval_angvel_dir_percentile": 0.75,
-  "no_grad_conn_test": false
+  "no_grad_conn_test": false,
+  "_trainbase_contacts_source_resolved": "pretrain_contact"
 }
