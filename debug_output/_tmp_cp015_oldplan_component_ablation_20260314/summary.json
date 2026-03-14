@@ -1,0 +1,2397 @@
+{
+  "run_date": "20260314",
+  "policy": {
+    "baseline_case": "cp015_bestfree",
+    "control_stage6_case": "cp015_with_old_planstack",
+    "baseline_compare_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/compare_summary.json",
+    "stage6_plantransplant_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/summary.json",
+    "full_oldplan_downstream_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/summary.json",
+    "stage6_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+    "teacher": "/Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json",
+    "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+    "affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+    "posttrain_contacts_source": "pretrain_contact",
+    "posttrain_contacts_pretrain_clamp": "1.0",
+    "strict_eval": {
+      "contacts_meas_source": "pretrain_contact",
+      "contacts_meas_pretrain_clamp": "1.0",
+      "contacts_meas_pretrain_affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+      "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+      "rounds": 5,
+      "depth": 3,
+      "time_index_mode": "cycle",
+      "event_clock": "auto",
+      "phase_reset_source": "none"
+    },
+    "model_source_eval": {
+      "contacts_meas_source": "model",
+      "rounds": 5,
+      "depth": 3,
+      "time_index_mode": "cycle",
+      "event_clock": "auto",
+      "phase_reset_source": "none"
+    }
+  },
+  "references": {
+    "source_baseline": {
+      "name": "cp015_bestfree",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+      "stage6_exit": {
+        "all_ex_root": 0.43137680891071384,
+        "leg": 1.1671711441906452,
+        "nonleg": 0.2722861418231612,
+        "arm": 0.3280119348514316,
+        "else": 0.1405706310290674
+      }
+    },
+    "full_oldplan_stage6_control": {
+      "name": "cp015_with_old_planstack",
+      "case_type": "planstack_transplant",
+      "backbone_case": "cp015_bestfree",
+      "planstack_case": "old_bestfree",
+      "source_baseline": "cp015_bestfree",
+      "stage6_exit": {
+        "all_ex_root": 0.2955326631516289,
+        "leg": 0.7407025703794843,
+        "nonleg": 0.19927971023749796,
+        "arm": 0.2287046377238896,
+        "else": 0.12972988163329954
+      },
+      "stage6_init": {
+        "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/posttrain_log_cp015_with_old_planstack_stage6_plantransplant_20260314.json",
+        "rows": 300,
+        "head_count": 20,
+        "step1": {
+          "step": 1.0,
+          "dir_leg_base": 0.19178400933742523,
+          "dir_nonleg_base": 0.06136901304125786,
+          "leg_over_nonleg": 3.1250952204248503,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 0.6871937156212261,
+          "direct_grad_norm_out_else": 0.08460554931679411,
+          "grad_arm_over_else": 8.122324376715783
+        },
+        "head20_mean": {
+          "dir_leg_base": 0.13195244297385217,
+          "dir_nonleg_base": 0.036026413645595314,
+          "leg_over_nonleg": 3.694465728580366,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 1.1136674414452084,
+          "direct_grad_norm_out_else": 0.1538858684595619,
+          "grad_arm_over_else": 7.396490079786474
+        }
+      },
+      "delta_vs_source_baseline": {
+        "all_ex_root": -0.13584414575908493,
+        "leg": -0.4264685738111609,
+        "nonleg": -0.07300643158566322,
+        "arm": -0.099307297127542,
+        "else": -0.010840749395767846
+      },
+      "improvement_vs_source_baseline": {
+        "all_ex_root": 0.13584414575908493,
+        "leg": 0.4264685738111609,
+        "nonleg": 0.07300643158566322,
+        "arm": 0.099307297127542,
+        "else": 0.010840749395767846
+      },
+      "delta_vs_old_bestfree": {
+        "all_ex_root": -0.017746692043917878,
+        "leg": -0.13352700167803933,
+        "nonleg": 0.007286888417513765,
+        "arm": 0.011213565242795959,
+        "else": -0.001994347714971506
+      },
+      "init_delta_vs_source_baseline": {
+        "step1": {
+          "arm_over_else": NaN,
+          "dir_leg_base": -0.000128820538520813,
+          "dir_nonleg_base": 4.439055919647217e-05,
+          "direct_grad_norm_out_arm": 0.01362907738999275,
+          "direct_grad_norm_out_else": -0.0001267220529080071,
+          "grad_arm_over_else": 0.17299612972061063,
+          "leg_over_nonleg": -0.004362770646911596,
+          "step": 0.0
+        },
+        "head20_mean": {
+          "arm_over_else": NaN,
+          "dir_leg_base": -0.0019489016383886226,
+          "dir_nonleg_base": -2.563148736953874e-05,
+          "direct_grad_norm_out_arm": -0.015555386283788497,
+          "direct_grad_norm_out_else": -0.0018461981557688356,
+          "grad_arm_over_else": 0.039630212027496725,
+          "leg_over_nonleg": -0.06645598265595076
+        }
+      },
+      "gap_to_old_bestfree": {
+        "all_ex_root": -0.017746692043917878,
+        "leg": -0.13352700167803933,
+        "nonleg": 0.007286888417513765,
+        "arm": 0.011213565242795959,
+        "else": -0.001994347714971506
+      },
+      "paths": {
+        "lane_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/ckpt_last_cp015_with_old_planstack_stage6_plantransplant_20260314.pth",
+        "surgery_report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/transplant_report.json",
+        "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth"
+      },
+      "transplant_report": {
+        "key_count": 50,
+        "changed_key_count": 45,
+        "verified_all_after": true
+      }
+    },
+    "full_oldplan_downstream_control": {
+      "run_date": "20260314",
+      "stage6_source_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/summary.json",
+      "stage6_case": {
+        "name": "cp015_with_old_planstack",
+        "case_type": "planstack_transplant",
+        "backbone_case": "cp015_bestfree",
+        "planstack_case": "old_bestfree",
+        "source_baseline": "cp015_bestfree",
+        "stage6_exit": {
+          "all_ex_root": 0.2955326631516289,
+          "leg": 0.7407025703794843,
+          "nonleg": 0.19927971023749796,
+          "arm": 0.2287046377238896,
+          "else": 0.12972988163329954
+        },
+        "stage6_init": {
+          "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/posttrain_log_cp015_with_old_planstack_stage6_plantransplant_20260314.json",
+          "rows": 300,
+          "head_count": 20,
+          "step1": {
+            "step": 1.0,
+            "dir_leg_base": 0.19178400933742523,
+            "dir_nonleg_base": 0.06136901304125786,
+            "leg_over_nonleg": 3.1250952204248503,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 0.6871937156212261,
+            "direct_grad_norm_out_else": 0.08460554931679411,
+            "grad_arm_over_else": 8.122324376715783
+          },
+          "head20_mean": {
+            "dir_leg_base": 0.13195244297385217,
+            "dir_nonleg_base": 0.036026413645595314,
+            "leg_over_nonleg": 3.694465728580366,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 1.1136674414452084,
+            "direct_grad_norm_out_else": 0.1538858684595619,
+            "grad_arm_over_else": 7.396490079786474
+          }
+        },
+        "delta_vs_source_baseline": {
+          "all_ex_root": -0.13584414575908493,
+          "leg": -0.4264685738111609,
+          "nonleg": -0.07300643158566322,
+          "arm": -0.099307297127542,
+          "else": -0.010840749395767846
+        },
+        "improvement_vs_source_baseline": {
+          "all_ex_root": 0.13584414575908493,
+          "leg": 0.4264685738111609,
+          "nonleg": 0.07300643158566322,
+          "arm": 0.099307297127542,
+          "else": 0.010840749395767846
+        },
+        "delta_vs_old_bestfree": {
+          "all_ex_root": -0.017746692043917878,
+          "leg": -0.13352700167803933,
+          "nonleg": 0.007286888417513765,
+          "arm": 0.011213565242795959,
+          "else": -0.001994347714971506
+        },
+        "init_delta_vs_source_baseline": {
+          "step1": {
+            "arm_over_else": NaN,
+            "dir_leg_base": -0.000128820538520813,
+            "dir_nonleg_base": 4.439055919647217e-05,
+            "direct_grad_norm_out_arm": 0.01362907738999275,
+            "direct_grad_norm_out_else": -0.0001267220529080071,
+            "grad_arm_over_else": 0.17299612972061063,
+            "leg_over_nonleg": -0.004362770646911596,
+            "step": 0.0
+          },
+          "head20_mean": {
+            "arm_over_else": NaN,
+            "dir_leg_base": -0.0019489016383886226,
+            "dir_nonleg_base": -2.563148736953874e-05,
+            "direct_grad_norm_out_arm": -0.015555386283788497,
+            "direct_grad_norm_out_else": -0.0018461981557688356,
+            "grad_arm_over_else": 0.039630212027496725,
+            "leg_over_nonleg": -0.06645598265595076
+          }
+        },
+        "gap_to_old_bestfree": {
+          "all_ex_root": -0.017746692043917878,
+          "leg": -0.13352700167803933,
+          "nonleg": 0.007286888417513765,
+          "arm": 0.011213565242795959,
+          "else": -0.001994347714971506
+        },
+        "paths": {
+          "lane_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack",
+          "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/posttrain_stage6_init_stats.json",
+          "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/stage6_group_summary.json",
+          "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/ckpt_last_cp015_with_old_planstack_stage6_plantransplant_20260314.pth",
+          "surgery_report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/transplant_report.json",
+          "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth"
+        },
+        "transplant_report": {
+          "key_count": 50,
+          "changed_key_count": 45,
+          "verified_all_after": true
+        }
+      },
+      "policy": {
+        "teacher": "/Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json",
+        "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+        "affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+        "posttrain_contacts_source": "pretrain_contact",
+        "posttrain_contacts_pretrain_clamp": "1.0",
+        "final_eval_strict": {
+          "rounds": 5,
+          "depth": 3,
+          "time_index_mode": "cycle",
+          "event_clock": "auto",
+          "phase_reset_source": "none",
+          "contacts_meas_source": "pretrain_contact",
+          "contacts_meas_pretrain_clamp": "1.0",
+          "contacts_meas_pretrain_affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+          "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt"
+        },
+        "final_eval_model_source": {
+          "rounds": 5,
+          "depth": 3,
+          "time_index_mode": "cycle",
+          "event_clock": "auto",
+          "phase_reset_source": "none",
+          "contacts_meas_source": "model"
+        }
+      },
+      "stages": {
+        "transplant_stage6": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/ckpt_last_cp015_with_old_planstack_stage6_plantransplant_20260314.pth",
+          "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/stage6_group_summary.json"
+        },
+        "70a": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_70a_splitB2_pe32h512_20260227_fromarmchain.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70a/ckpt_last_WalkF_stage7_70a_from_cp015_oldplan_20260314.pth"
+        },
+        "70b": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_70b_phasezin_splitB2_pe32h512_20260227_fromarmchain.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70b/ckpt_last_WalkF_stage7_70b_concat_from_cp015_oldplan_20260314.pth"
+        },
+        "70a_replace_warmstart": {
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/warmstart/ckpt_last_cp015_oldplan_70a_replacecontacts_zerophase_20260314.pth",
+          "report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/warmstart/replace_zerophase_report.json"
+        },
+        "new70b_replace": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/configs/posttrain_70b_replacecontacts_from_cp015oldplan_20260314.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70b_replace/ckpt_last_WalkF_stage7_70b_replacecontacts_from_cp015_oldplan_20260314.pth"
+        },
+        "70R_promoted_s180": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/configs/posttrain_70R_from_cp015oldplan_replace_lr3e4_e1_s60_20260314.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70R/ckpt_last_WalkF_stage7_70R_from_cp015_oldplan_trunkfull_s180_20260314.pth"
+        },
+        "71": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_71_legonly_after_nonlegproj256_20260227_fromarmchain.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/71/ckpt_last_WalkF_stage7_71_from_cp015_oldplan_20260314.pth"
+        },
+        "72": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_72_legomega_after_nonlegproj256_20260227_fromarmchain.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/72/ckpt_last_WalkF_stage7_72_from_cp015_oldplan_20260314.pth"
+        },
+        "lambda_final": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_lambda_final_calib_20260227_fromarmchain_fullcompat.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/lambda/ckpt_last_WalkF_stage7_lambda_from_cp015_oldplan_20260314.pth"
+        }
+      },
+      "accepted_references": {
+        "accepted_old_baseline_r5": {
+          "source_direct_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_accepted_r5_direct/global_signal_summary.txt",
+          "source_blend_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_accepted_r5_blend/summary_metrics.txt",
+          "masked_means": {
+            "BlendGeoLocalDeg": 0.531568,
+            "BlendGeoLocalDegWeighted": 0.490858,
+            "GeoLocalDeg": 1.030833,
+            "GeoLocalDegWeighted": 0.94484,
+            "DirectGeoLocalDeg": 0.147802,
+            "DirectGeoLocalDegWeighted": 0.17156,
+            "LambdaMean": 0.973585,
+            "LambdaEffMean": 0.973585,
+            "LambdaRelMean": 1.0
+          },
+          "direct_group_summary": {
+            "all_ex_root": 0.147802,
+            "leg": 0.313692,
+            "nonleg": 0.111934
+          }
+        },
+        "accepted_final_model_source": {
+          "source_direct_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_accepted_r5_direct/global_signal_summary.txt",
+          "source_blend_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_accepted_r5_blend/summary_metrics.txt",
+          "masked_means": {
+            "BlendGeoLocalDeg": 0.491534,
+            "BlendGeoLocalDegWeighted": 0.467904,
+            "GeoLocalDeg": 0.955117,
+            "GeoLocalDegWeighted": 0.914284,
+            "DirectGeoLocalDeg": 0.112947,
+            "DirectGeoLocalDegWeighted": 0.13318,
+            "LambdaMean": 0.973549,
+            "LambdaEffMean": 0.973549,
+            "LambdaRelMean": 1.0
+          },
+          "direct_group_summary": {
+            "all_ex_root": 0.112947,
+            "leg": 0.27436,
+            "nonleg": 0.078048
+          },
+          "artifact_note": "Current accepted final compare artifact is model-source, not strict pretrain_contact."
+        },
+        "evalon_20260307_baseline": {
+          "source_direct_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_evalon_20260307_direct/global_signal_summary.txt",
+          "source_blend_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_evalon_20260307_blend/summary_metrics.txt",
+          "masked_means": {
+            "BlendGeoLocalDeg": 0.497677,
+            "BlendGeoLocalDegWeighted": 0.485475,
+            "GeoLocalDeg": 0.961235,
+            "GeoLocalDegWeighted": 0.932387,
+            "DirectGeoLocalDeg": 0.131316,
+            "DirectGeoLocalDegWeighted": 0.148235,
+            "LambdaMean": 0.972715,
+            "LambdaEffMean": 0.972715,
+            "LambdaRelMean": 1.0
+          },
+          "direct_group_summary": {
+            "all_ex_root": 0.131316,
+            "leg": 0.292003,
+            "nonleg": 0.096573
+          }
+        },
+        "accepted_chain_verdict": {
+          "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/chain_verdict.md",
+          "parsed": {
+            "stage71": {
+              "overall": {
+                "legs_main": -0.065894,
+                "arms_main": -0.103466,
+                "left_arm_main": -0.097107,
+                "right_arm_main": -0.109825
+              },
+              "A_52_59": {
+                "legs_main": -0.154649,
+                "arms_main": -0.236356
+              },
+              "B_76_80": {
+                "legs_main": -0.075964,
+                "arms_main": -0.115982
+              }
+            },
+            "stage72": {
+              "overall": {
+                "legs_main": -0.026292,
+                "arms_main": -0.103466,
+                "left_arm_main": -0.097107,
+                "right_arm_main": -0.109825
+              },
+              "A_52_59": {
+                "legs_main": -0.189506,
+                "arms_main": -0.236356
+              },
+              "B_76_80": {
+                "legs_main": -0.005523,
+                "arms_main": -0.115982
+              }
+            },
+            "lambda_direct_path": {
+              "overall": {
+                "legs_main": -0.026292,
+                "arms_main": -0.103466,
+                "left_arm_main": -0.097107,
+                "right_arm_main": -0.109825
+              },
+              "A_52_59": {
+                "legs_main": -0.189506,
+                "arms_main": -0.236356
+              },
+              "B_76_80": {
+                "legs_main": -0.005523,
+                "arms_main": -0.115982
+              }
+            },
+            "lambda_blend_summary": {
+              "BlendGeoLocalDeg": -0.020124,
+              "BlendGeoLocalDegWeighted": -0.033764,
+              "GeoLocalDeg": -0.014627,
+              "GeoLocalDegWeighted": -0.027642,
+              "DirectGeoLocalDeg": -0.032109,
+              "DirectGeoLocalDegWeighted": -0.039647,
+              "LambdaMean": 0.000702
+            }
+          }
+        },
+        "strict_reference_status": {
+          "available": false,
+          "reason": "Repo docs explicitly note the accepted chain compare artifacts are model-source; a strict pretrain_contact+affine_mix08 accepted-final eval snapshot is not archived locally."
+        }
+      },
+      "final_evals": {
+        "strict_pretrain_contact": {
+          "masked_means": {
+            "masked_steps": 344.0,
+            "BlendGeoLocalDeg": 0.11686341884697593,
+            "BlendGeoLocalDegWeighted": 0.13701452592084573,
+            "GeoLocalDeg": 0.47573024277077164,
+            "GeoLocalDegWeighted": 0.5110863064264142,
+            "DirectGeoLocalDeg": 0.11788293870902339,
+            "DirectGeoLocalDegWeighted": 0.1381669548708339,
+            "LambdaMean": 0.9461449453997057,
+            "LambdaEffMean": 0.9461449453997057,
+            "LambdaRelMean": 1.0
+          },
+          "direct_group_summary": {
+            "all_ex_root": 0.11788293883833882,
+            "leg": 0.2801937920066425,
+            "nonleg": 0.08278870031546234,
+            "arm": 0.09373125996758136,
+            "else": 0.05692446841045377
+          },
+          "window_summary": {
+            "overall": {
+              "legs_main": 0.2801937920066425,
+              "arms_main": 0.09373125996758136,
+              "left_arm_main": 0.12106793576169991,
+              "right_arm_main": 0.08694283884871357
+            },
+            "A_52_59": {
+              "legs_main": 0.33008480099670123,
+              "arms_main": 0.07851249918163515,
+              "left_arm_main": 0.10991671043383475,
+              "right_arm_main": 0.05473331669499101
+            },
+            "B_76_80": {
+              "legs_main": 0.1975132770719938,
+              "arms_main": 0.10707002464142323,
+              "left_arm_main": 0.16675652179401368,
+              "right_arm_main": 0.08396950002449254
+            },
+            "hotspots": {
+              "foot_l_ball_l_SIC12_15": 0.7432816582731903,
+              "calf_r_SIC2_4": 0.13312878366559744
+            }
+          },
+          "paths": {
+            "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/eval_pretrain_contact/Walk_F_freerun_cycles.json",
+            "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/eval_pretrain_contact_group_summary.json"
+          }
+        },
+        "model_source": {
+          "masked_means": {
+            "masked_steps": 344.0,
+            "BlendGeoLocalDeg": 0.1194091760661713,
+            "BlendGeoLocalDegWeighted": 0.140812914450328,
+            "GeoLocalDeg": 0.48286008609588754,
+            "GeoLocalDegWeighted": 0.5234064516979594,
+            "DirectGeoLocalDeg": 0.12014488221774268,
+            "DirectGeoLocalDegWeighted": 0.1413016416522306,
+            "LambdaMean": 0.9457244845323785,
+            "LambdaEffMean": 0.9457244845323785,
+            "LambdaRelMean": 1.0
+          },
+          "direct_group_summary": {
+            "all_ex_root": 0.12014488184111712,
+            "leg": 0.278087370049582,
+            "nonleg": 0.08599515466090848,
+            "arm": 0.0983616177808661,
+            "else": 0.05676533274100867
+          },
+          "window_summary": {
+            "overall": {
+              "legs_main": 0.278087370049582,
+              "arms_main": 0.0983616177808661,
+              "left_arm_main": 0.12840701079174144,
+              "right_arm_main": 0.09169135193699729
+            },
+            "A_52_59": {
+              "legs_main": 0.33186943412874825,
+              "arms_main": 0.07504738856044486,
+              "left_arm_main": 0.10880442487460742,
+              "right_arm_main": 0.05557236399060154
+            },
+            "B_76_80": {
+              "legs_main": 0.19507373776868916,
+              "arms_main": 0.10547445720898954,
+              "left_arm_main": 0.15938192047696148,
+              "right_arm_main": 0.08387113205519402
+            },
+            "hotspots": {
+              "foot_l_ball_l_SIC12_15": 0.6088193624746054,
+              "calf_r_SIC2_4": 0.13619550752143064
+            }
+          },
+          "paths": {
+            "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/eval_model_source/Walk_F_freerun_cycles.json",
+            "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/eval_model_source_group_summary.json"
+          }
+        }
+      },
+      "comparisons": {
+        "model_source_vs_accepted_final_model_source": {
+          "masked_means_delta": {
+            "DirectGeoLocalDeg": 0.007197882217742674,
+            "DirectGeoLocalDegWeighted": 0.008121641652230616,
+            "BlendGeoLocalDeg": -0.37212482393382873,
+            "BlendGeoLocalDegWeighted": -0.327091085549672,
+            "GeoLocalDeg": -0.47225691390411245,
+            "GeoLocalDegWeighted": -0.3908775483020406
+          },
+          "direct_group_delta": {
+            "all_ex_root": 0.00719788184111711,
+            "leg": 0.003727370049582013,
+            "nonleg": 0.007947154660908479
+          }
+        },
+        "model_source_vs_accepted_old_baseline_r5": {
+          "masked_means_delta": {
+            "DirectGeoLocalDeg": -0.02765711778225731,
+            "DirectGeoLocalDegWeighted": -0.030258358347769382,
+            "BlendGeoLocalDeg": -0.41215882393382874,
+            "BlendGeoLocalDegWeighted": -0.350045085549672,
+            "GeoLocalDeg": -0.5479729139041125,
+            "GeoLocalDegWeighted": -0.4214335483020406
+          },
+          "direct_group_delta": {
+            "all_ex_root": -0.027657118158882874,
+            "leg": -0.03560462995041802,
+            "nonleg": -0.02593884533909152
+          }
+        },
+        "strict_pretrain_contact_vs_accepted_old_baseline_r5": {
+          "masked_means_delta": {
+            "DirectGeoLocalDeg": -0.0299190612909766,
+            "DirectGeoLocalDegWeighted": -0.03339304512916608,
+            "BlendGeoLocalDeg": -0.4147045811530241,
+            "BlendGeoLocalDegWeighted": -0.3538434740791543,
+            "GeoLocalDeg": -0.5551027572292284,
+            "GeoLocalDegWeighted": -0.43375369357358584
+          },
+          "direct_group_delta": {
+            "all_ex_root": -0.029919061161661167,
+            "leg": -0.03349820799335751,
+            "nonleg": -0.029145299684537662
+          }
+        },
+        "model_source_vs_evalon_20260307_baseline": {
+          "masked_means_delta": {
+            "DirectGeoLocalDeg": -0.011171117782257309,
+            "DirectGeoLocalDegWeighted": -0.006933358347769397,
+            "BlendGeoLocalDeg": -0.3782678239338287,
+            "BlendGeoLocalDegWeighted": -0.344662085549672,
+            "GeoLocalDeg": -0.4783749139041124,
+            "GeoLocalDegWeighted": -0.40898054830204056
+          },
+          "direct_group_delta": {
+            "all_ex_root": -0.011171118158882873,
+            "leg": -0.013915629950418007,
+            "nonleg": -0.010577845339091521
+          }
+        }
+      },
+      "answers": {
+        "q1_advantage_penetrates_to_lambda_final": {
+          "value": true,
+          "interpretation": "Measured against the accepted old baseline r5 anchor, not against the current accepted final."
+        },
+        "q2_final_beats_current_accepted_mainline": {
+          "value": false
+        },
+        "q3_strict_eval_still_supports_advantage": {
+          "value": true,
+          "note": "Repo docs explicitly note the accepted chain compare artifacts are model-source; a strict pretrain_contact+affine_mix08 accepted-final eval snapshot is not archived locally."
+        },
+        "q4_should_switch_baseline_now": {
+          "value": false
+        },
+        "q5_should_only_do_future_simplification_on_this_chain": {
+          "value": false,
+          "note": "Only promote after it clears the current accepted final, not merely the old baseline."
+        }
+      }
+    },
+    "accepted_refs": {
+      "accepted_old_baseline_r5": {
+        "source_direct_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_accepted_r5_direct/global_signal_summary.txt",
+        "source_blend_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_accepted_r5_blend/summary_metrics.txt",
+        "masked_means": {
+          "BlendGeoLocalDeg": 0.531568,
+          "BlendGeoLocalDegWeighted": 0.490858,
+          "GeoLocalDeg": 1.030833,
+          "GeoLocalDegWeighted": 0.94484,
+          "DirectGeoLocalDeg": 0.147802,
+          "DirectGeoLocalDegWeighted": 0.17156,
+          "LambdaMean": 0.973585,
+          "LambdaEffMean": 0.973585,
+          "LambdaRelMean": 1.0
+        },
+        "direct_group_summary": {
+          "all_ex_root": 0.147802,
+          "leg": 0.313692,
+          "nonleg": 0.111934
+        }
+      },
+      "accepted_final_model_source": {
+        "source_direct_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_accepted_r5_direct/global_signal_summary.txt",
+        "source_blend_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_accepted_r5_blend/summary_metrics.txt",
+        "masked_means": {
+          "BlendGeoLocalDeg": 0.491534,
+          "BlendGeoLocalDegWeighted": 0.467904,
+          "GeoLocalDeg": 0.955117,
+          "GeoLocalDegWeighted": 0.914284,
+          "DirectGeoLocalDeg": 0.112947,
+          "DirectGeoLocalDegWeighted": 0.13318,
+          "LambdaMean": 0.973549,
+          "LambdaEffMean": 0.973549,
+          "LambdaRelMean": 1.0
+        },
+        "direct_group_summary": {
+          "all_ex_root": 0.112947,
+          "leg": 0.27436,
+          "nonleg": 0.078048
+        },
+        "artifact_note": "Current accepted final compare artifact is model-source, not strict pretrain_contact."
+      },
+      "evalon_20260307_baseline": {
+        "source_direct_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_evalon_20260307_direct/global_signal_summary.txt",
+        "source_blend_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_evalon_20260307_blend/summary_metrics.txt",
+        "masked_means": {
+          "BlendGeoLocalDeg": 0.497677,
+          "BlendGeoLocalDegWeighted": 0.485475,
+          "GeoLocalDeg": 0.961235,
+          "GeoLocalDegWeighted": 0.932387,
+          "DirectGeoLocalDeg": 0.131316,
+          "DirectGeoLocalDegWeighted": 0.148235,
+          "LambdaMean": 0.972715,
+          "LambdaEffMean": 0.972715,
+          "LambdaRelMean": 1.0
+        },
+        "direct_group_summary": {
+          "all_ex_root": 0.131316,
+          "leg": 0.292003,
+          "nonleg": 0.096573
+        }
+      },
+      "accepted_chain_verdict": {
+        "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/chain_verdict.md",
+        "parsed": {
+          "stage71": {
+            "overall": {
+              "legs_main": -0.065894,
+              "arms_main": -0.103466,
+              "left_arm_main": -0.097107,
+              "right_arm_main": -0.109825
+            },
+            "A_52_59": {
+              "legs_main": -0.154649,
+              "arms_main": -0.236356
+            },
+            "B_76_80": {
+              "legs_main": -0.075964,
+              "arms_main": -0.115982
+            }
+          },
+          "stage72": {
+            "overall": {
+              "legs_main": -0.026292,
+              "arms_main": -0.103466,
+              "left_arm_main": -0.097107,
+              "right_arm_main": -0.109825
+            },
+            "A_52_59": {
+              "legs_main": -0.189506,
+              "arms_main": -0.236356
+            },
+            "B_76_80": {
+              "legs_main": -0.005523,
+              "arms_main": -0.115982
+            }
+          },
+          "lambda_direct_path": {
+            "overall": {
+              "legs_main": -0.026292,
+              "arms_main": -0.103466,
+              "left_arm_main": -0.097107,
+              "right_arm_main": -0.109825
+            },
+            "A_52_59": {
+              "legs_main": -0.189506,
+              "arms_main": -0.236356
+            },
+            "B_76_80": {
+              "legs_main": -0.005523,
+              "arms_main": -0.115982
+            }
+          },
+          "lambda_blend_summary": {
+            "BlendGeoLocalDeg": -0.020124,
+            "BlendGeoLocalDegWeighted": -0.033764,
+            "GeoLocalDeg": -0.014627,
+            "GeoLocalDegWeighted": -0.027642,
+            "DirectGeoLocalDeg": -0.032109,
+            "DirectGeoLocalDegWeighted": -0.039647,
+            "LambdaMean": 0.000702
+          }
+        }
+      },
+      "strict_reference_status": {
+        "available": false,
+        "reason": "Repo docs explicitly note the accepted chain compare artifacts are model-source; a strict pretrain_contact+affine_mix08 accepted-final eval snapshot is not archived locally."
+      }
+    }
+  },
+  "key_groups": [
+    {
+      "name": "plan_head",
+      "label": "A. plan head rollback",
+      "prefixes": [
+        "contact_plan_head.",
+        "contact_plan_time_head."
+      ],
+      "exact_keys_requested": [],
+      "exact_keys": [],
+      "keys": [
+        "contact_plan_head.0.bias",
+        "contact_plan_head.0.weight",
+        "contact_plan_head.1.bias",
+        "contact_plan_head.1.weight",
+        "contact_plan_head.4.bias",
+        "contact_plan_head.4.weight",
+        "contact_plan_time_head.bias",
+        "contact_plan_time_head.weight"
+      ],
+      "key_count": 8,
+      "rationale": "Readout layer from plan_z to contacts_plan logits, including the additive time-PE bias head."
+    },
+    {
+      "name": "plan_init_state",
+      "label": "B. plan init-state rollback",
+      "prefixes": [
+        "contact_plan_init_head."
+      ],
+      "exact_keys_requested": [
+        "contact_plan_init_z",
+        "contact_phase_state_init"
+      ],
+      "exact_keys": [
+        "contact_plan_init_z",
+        "contact_phase_state_init"
+      ],
+      "keys": [
+        "contact_plan_init_head.0.bias",
+        "contact_plan_init_head.0.weight",
+        "contact_plan_init_head.1.bias",
+        "contact_plan_init_head.1.weight",
+        "contact_plan_init_head.4.bias",
+        "contact_plan_init_head.4.weight",
+        "contact_plan_init_z",
+        "contact_phase_state_init"
+      ],
+      "key_count": 8,
+      "rationale": "Cold-start state for plan_z / phase-state, including learnable init vectors and obs-conditioned init head."
+    },
+    {
+      "name": "planner_core",
+      "label": "C. planner-core rollback",
+      "prefixes": [
+        "contact_plan_cell.",
+        "event_clock_gate.",
+        "event_clock_corrector."
+      ],
+      "exact_keys_requested": [],
+      "exact_keys": [],
+      "keys": [
+        "contact_plan_cell.bias_hh",
+        "contact_plan_cell.bias_ih",
+        "contact_plan_cell.weight_hh",
+        "contact_plan_cell.weight_ih",
+        "event_clock_gate.confidence_head.0.bias",
+        "event_clock_gate.confidence_head.0.weight",
+        "event_clock_gate.confidence_head.2.bias",
+        "event_clock_gate.confidence_head.2.weight",
+        "event_clock_gate.confidence_head.4.bias",
+        "event_clock_gate.confidence_head.4.weight",
+        "event_clock_gate.prior_head.0.bias",
+        "event_clock_gate.prior_head.0.weight",
+        "event_clock_gate.prior_head.2.bias",
+        "event_clock_gate.prior_head.2.weight",
+        "event_clock_corrector.correction_head.0.bias",
+        "event_clock_corrector.correction_head.0.weight",
+        "event_clock_corrector.correction_head.2.bias",
+        "event_clock_corrector.correction_head.2.weight",
+        "event_clock_corrector.correction_head.4.bias",
+        "event_clock_corrector.correction_head.4.weight",
+        "event_clock_corrector.layer_norm.bias",
+        "event_clock_corrector.layer_norm.weight"
+      ],
+      "key_count": 22,
+      "rationale": "Core recurrent planner latent plus Event-Clock gate/corrector that rescales and corrects plan_z inside the loop."
+    },
+    {
+      "name": "phase_contact_input",
+      "label": "D. phase/contact input-side rollback",
+      "prefixes": [
+        "contact_plan_phase_head.",
+        "contact_phase_state_delta_head."
+      ],
+      "exact_keys_requested": [],
+      "exact_keys": [],
+      "keys": [
+        "contact_plan_phase_head.0.bias",
+        "contact_plan_phase_head.0.weight",
+        "contact_plan_phase_head.1.bias",
+        "contact_plan_phase_head.1.weight",
+        "contact_plan_phase_head.4.bias",
+        "contact_plan_phase_head.4.weight",
+        "contact_phase_state_delta_head.0.bias",
+        "contact_phase_state_delta_head.0.weight",
+        "contact_phase_state_delta_head.1.bias",
+        "contact_phase_state_delta_head.1.weight",
+        "contact_phase_state_delta_head.3.bias",
+        "contact_phase_state_delta_head.3.weight"
+      ],
+      "key_count": 12,
+      "rationale": "Phase/contact side inputs into the planner: phase residual on logits and phase-state update head driven by cond/meas/delta_meas."
+    }
+  ],
+  "stage6_screening": {
+    "selection": {
+      "ranked_names": [
+        "rollback_planner_core",
+        "rollback_plan_head",
+        "rollback_plan_init_state",
+        "rollback_phase_contact_input"
+      ],
+      "qualified_names": [
+        "rollback_planner_core"
+      ],
+      "promoted_names": [
+        "rollback_planner_core"
+      ],
+      "promote_reason": "threshold_pass",
+      "note": "Promote lanes whose Stage6 gap stays within +0.02 all_ex_root and +0.05 leg vs full oldplan control.",
+      "thresholds": {
+        "all_ex_root_max_delta_vs_control": 0.02,
+        "leg_max_delta_vs_control": 0.05
+      }
+    },
+    "lanes": [
+      {
+        "code": "E",
+        "name": "cp015_with_old_planstack",
+        "label": "E. full oldplan control",
+        "case_type": "control_reused",
+        "rollback_groups": [
+          "A. plan head rollback",
+          "B. plan init-state rollback",
+          "C. planner-core rollback",
+          "D. phase/contact input-side rollback"
+        ],
+        "rollback_group_names": [
+          "plan_head",
+          "plan_init_state",
+          "planner_core",
+          "phase_contact_input"
+        ],
+        "rollback_key_count": 50,
+        "rollback_effective_changed_key_count": 45,
+        "note": "Reused existing full old-plan transplant result as control lane; no retrain/rerun here.",
+        "stage6_exit": {
+          "all_ex_root": 0.2955326631516289,
+          "leg": 0.7407025703794843,
+          "nonleg": 0.19927971023749796,
+          "arm": 0.2287046377238896,
+          "else": 0.12972988163329954
+        },
+        "stage6_init": {
+          "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/posttrain_log_cp015_with_old_planstack_stage6_plantransplant_20260314.json",
+          "rows": 300,
+          "head_count": 20,
+          "step1": {
+            "step": 1.0,
+            "dir_leg_base": 0.19178400933742523,
+            "dir_nonleg_base": 0.06136901304125786,
+            "leg_over_nonleg": 3.1250952204248503,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 0.6871937156212261,
+            "direct_grad_norm_out_else": 0.08460554931679411,
+            "grad_arm_over_else": 8.122324376715783
+          },
+          "head20_mean": {
+            "dir_leg_base": 0.13195244297385217,
+            "dir_nonleg_base": 0.036026413645595314,
+            "leg_over_nonleg": 3.694465728580366,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 1.1136674414452084,
+            "direct_grad_norm_out_else": 0.1538858684595619,
+            "grad_arm_over_else": 7.396490079786474
+          }
+        },
+        "delta_vs_full_oldplan_control": {
+          "all_ex_root": 0.0,
+          "leg": 0.0,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "else": 0.0
+        },
+        "delta_vs_cp015_source_baseline": {
+          "all_ex_root": -0.13584414575908493,
+          "leg": -0.4264685738111609,
+          "nonleg": -0.07300643158566322,
+          "arm": -0.099307297127542,
+          "else": -0.010840749395767846
+        },
+        "improvement_vs_cp015_source_baseline": {
+          "all_ex_root": 0.13584414575908493,
+          "leg": 0.4264685738111609,
+          "nonleg": 0.07300643158566322,
+          "arm": 0.099307297127542,
+          "else": 0.010840749395767846
+        },
+        "qualifies_threshold": true,
+        "selection_status": "control_reused",
+        "paths": {
+          "lane_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack",
+          "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/posttrain_stage6_init_stats.json",
+          "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/stage6_group_summary.json",
+          "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/ckpt_last_cp015_with_old_planstack_stage6_plantransplant_20260314.pth",
+          "surgery_report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/transplant_report.json",
+          "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth"
+        },
+        "source_paths": {
+          "source_baseline_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+          "recipient_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+          "donor_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+          "control_surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth",
+          "control_transplant_report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/transplant_report.json"
+        }
+      },
+      {
+        "code": "A",
+        "name": "rollback_plan_head",
+        "label": "A. plan head rollback",
+        "case_type": "rollback",
+        "rollback_groups": [
+          "A. plan head rollback"
+        ],
+        "rollback_group_names": [
+          "plan_head"
+        ],
+        "rollback_key_count": 8,
+        "rollback_effective_changed_key_count": 8,
+        "note": "Rollback only the plan readout/time-bias heads to cp015; keep old-plan core/init/phase side.",
+        "stage6_exit": {
+          "all_ex_root": 0.3603350300575058,
+          "leg": 0.8181015595449893,
+          "nonleg": 0.2613584831412931,
+          "arm": 0.30473935001229085,
+          "else": 0.15882188871893482
+        },
+        "stage6_init": {
+          "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_head/posttrain/posttrain_log_WalkF_stage6_rollback_plan_head_20260314.json",
+          "rows": 300,
+          "head_count": 20,
+          "step1": {
+            "step": 1.0,
+            "dir_leg_base": 0.19177816808223724,
+            "dir_nonleg_base": 0.06136981397867203,
+            "leg_over_nonleg": 3.124959253565381,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 0.6861552177526024,
+            "direct_grad_norm_out_else": 0.08460631298079185,
+            "grad_arm_over_else": 8.109976591325756
+          },
+          "head20_mean": {
+            "dir_leg_base": 0.13168290853500367,
+            "dir_nonleg_base": 0.03593461401760578,
+            "leg_over_nonleg": 3.697492944280056,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 1.039733807975297,
+            "direct_grad_norm_out_else": 0.15244603472155047,
+            "grad_arm_over_else": 7.061932438366317
+          }
+        },
+        "delta_vs_full_oldplan_control": {
+          "all_ex_root": 0.06480236690587687,
+          "leg": 0.07739898916550503,
+          "nonleg": 0.062078772903795154,
+          "arm": 0.07603471228840125,
+          "else": 0.02909200708563528
+        },
+        "delta_vs_cp015_source_baseline": {
+          "all_ex_root": -0.07104177885320806,
+          "leg": -0.34906958464565585,
+          "nonleg": -0.010927658681868069,
+          "arm": -0.023272584839140742,
+          "else": 0.018251257689867434
+        },
+        "improvement_vs_cp015_source_baseline": {
+          "all_ex_root": 0.07104177885320806,
+          "leg": 0.34906958464565585,
+          "nonleg": 0.010927658681868069,
+          "arm": 0.023272584839140742,
+          "else": -0.018251257689867434
+        },
+        "init_delta_vs_full_oldplan_control": {
+          "step1": {
+            "arm_over_else": NaN,
+            "dir_leg_base": -5.841255187988281e-06,
+            "dir_nonleg_base": 8.009374141693115e-07,
+            "direct_grad_norm_out_arm": -0.0010384978686237556,
+            "direct_grad_norm_out_else": 7.63663997746522e-07,
+            "grad_arm_over_else": -0.0123477853900269,
+            "leg_over_nonleg": -0.00013596685946914988,
+            "step": 0.0
+          },
+          "head20_mean": {
+            "arm_over_else": NaN,
+            "dir_leg_base": -0.00026953443884850103,
+            "dir_nonleg_base": -9.179962798953195e-05,
+            "direct_grad_norm_out_arm": -0.07393363346991144,
+            "direct_grad_norm_out_else": -0.0014398337380114312,
+            "grad_arm_over_else": -0.3345576414201572,
+            "leg_over_nonleg": 0.00302721569969
+          }
+        },
+        "init_delta_vs_cp015_source_baseline": {
+          "step1": {
+            "arm_over_else": NaN,
+            "dir_leg_base": -0.00013466179370880127,
+            "dir_nonleg_base": 4.519149661064148e-05,
+            "direct_grad_norm_out_arm": 0.012590579521368994,
+            "direct_grad_norm_out_else": -0.00012595838891026057,
+            "grad_arm_over_else": 0.16064834433058373,
+            "leg_over_nonleg": NaN,
+            "step": 0.0
+          },
+          "head20_mean": {
+            "arm_over_else": NaN,
+            "dir_leg_base": -0.0022184360772371237,
+            "dir_nonleg_base": -0.00011743111535907069,
+            "direct_grad_norm_out_arm": -0.08948901975369994,
+            "direct_grad_norm_out_else": -0.003286031893780267,
+            "grad_arm_over_else": -0.2949274293926605,
+            "leg_over_nonleg": NaN
+          }
+        },
+        "qualifies_threshold": false,
+        "selection_status": "screened_out",
+        "paths": {
+          "lane_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_head",
+          "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_head/surgery/rollback_plan_head.pth",
+          "surgery_report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_head/rollback_report.json",
+          "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_head/posttrain/ckpt_last_WalkF_stage6_rollback_plan_head_20260314.pth",
+          "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_head/posttrain_stage6_init_stats.json",
+          "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_head/stage6_group_summary.json"
+        },
+        "source_paths": {
+          "source_baseline_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+          "recipient_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+          "donor_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+          "parent_control_surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth"
+        },
+        "rollback_report": {
+          "lane": "rollback_plan_head",
+          "lane_code": "A",
+          "lane_label": "A. plan head rollback",
+          "note": "Rollback only the plan readout/time-bias heads to cp015; keep old-plan core/init/phase side.",
+          "rollback_groups": [
+            {
+              "name": "plan_head",
+              "label": "A. plan head rollback",
+              "prefixes": [
+                "contact_plan_head.",
+                "contact_plan_time_head."
+              ],
+              "exact_keys": [],
+              "keys": [
+                "contact_plan_head.0.bias",
+                "contact_plan_head.0.weight",
+                "contact_plan_head.1.bias",
+                "contact_plan_head.1.weight",
+                "contact_plan_head.4.bias",
+                "contact_plan_head.4.weight",
+                "contact_plan_time_head.bias",
+                "contact_plan_time_head.weight"
+              ],
+              "key_count": 8,
+              "rationale": "Readout layer from plan_z to contacts_plan logits, including the additive time-PE bias head."
+            }
+          ],
+          "rollback_keys": [
+            "contact_plan_head.0.bias",
+            "contact_plan_head.0.weight",
+            "contact_plan_head.1.bias",
+            "contact_plan_head.1.weight",
+            "contact_plan_head.4.bias",
+            "contact_plan_head.4.weight",
+            "contact_plan_time_head.bias",
+            "contact_plan_time_head.weight"
+          ],
+          "rollback_key_count": 8,
+          "effective_changed_keys": [
+            "contact_plan_head.0.bias",
+            "contact_plan_head.0.weight",
+            "contact_plan_head.1.bias",
+            "contact_plan_head.1.weight",
+            "contact_plan_head.4.bias",
+            "contact_plan_head.4.weight",
+            "contact_plan_time_head.bias",
+            "contact_plan_time_head.weight"
+          ],
+          "effective_changed_key_count": 8,
+          "parent_control_case": "cp015_with_old_planstack",
+          "parent_control_stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/ckpt_last_cp015_with_old_planstack_stage6_plantransplant_20260314.pth",
+          "parent_control_surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth",
+          "control_transplant_report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/transplant_report.json",
+          "recipient_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+          "donor_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+          "source_baseline_case": "cp015_bestfree",
+          "created_at": "2026-03-14 11:58:53",
+          "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_head/surgery/rollback_plan_head.pth",
+          "verify_same_as_recipient_after_count": 8,
+          "verified_all_after": true,
+          "per_key": [
+            {
+              "key": "contact_plan_head.0.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_head.0.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_head.1.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_head.1.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_head.4.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_head.4.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_time_head.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_time_head.weight",
+              "same_as_recipient_before": false
+            }
+          ]
+        }
+      },
+      {
+        "code": "B",
+        "name": "rollback_plan_init_state",
+        "label": "B. plan init-state rollback",
+        "case_type": "rollback",
+        "rollback_groups": [
+          "B. plan init-state rollback"
+        ],
+        "rollback_group_names": [
+          "plan_init_state"
+        ],
+        "rollback_key_count": 8,
+        "rollback_effective_changed_key_count": 7,
+        "note": "Rollback only init-state parameters to cp015; keep old-plan core/head/phase side.",
+        "stage6_exit": {
+          "all_ex_root": 0.41430420267698603,
+          "leg": 1.0331332956936188,
+          "nonleg": 0.28050331770041675,
+          "arm": 0.3121037178863056,
+          "else": 0.20581146271558856
+        },
+        "stage6_init": {
+          "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_init_state/posttrain/posttrain_log_WalkF_stage6_rollback_plan_init_state_20260314.json",
+          "rows": 300,
+          "head_count": 20,
+          "step1": {
+            "step": 1.0,
+            "dir_leg_base": 0.1917756199836731,
+            "dir_nonleg_base": 0.061373643577098846,
+            "leg_over_nonleg": 3.124722744263351,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 0.6869881523553043,
+            "direct_grad_norm_out_else": 0.08458164521287236,
+            "grad_arm_over_else": 8.122189520271386
+          },
+          "head20_mean": {
+            "dir_leg_base": 0.13248853161931037,
+            "dir_nonleg_base": 0.03607565751299262,
+            "leg_over_nonleg": 3.7049187905720133,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 1.0227501174876494,
+            "direct_grad_norm_out_else": 0.1529049361160687,
+            "grad_arm_over_else": 6.962935603017435
+          }
+        },
+        "delta_vs_full_oldplan_control": {
+          "all_ex_root": 0.11877153952535713,
+          "leg": 0.2924307253141345,
+          "nonleg": 0.08122360746291879,
+          "arm": 0.08339908016241598,
+          "else": 0.07608158108228902
+        },
+        "delta_vs_cp015_source_baseline": {
+          "all_ex_root": -0.017072606233727805,
+          "leg": -0.13403784849702638,
+          "nonleg": 0.008217175877255567,
+          "arm": -0.01590821696512601,
+          "else": 0.06524083168652117
+        },
+        "improvement_vs_cp015_source_baseline": {
+          "all_ex_root": 0.017072606233727805,
+          "leg": 0.13403784849702638,
+          "nonleg": -0.008217175877255567,
+          "arm": 0.01590821696512601,
+          "else": -0.06524083168652117
+        },
+        "init_delta_vs_full_oldplan_control": {
+          "step1": {
+            "arm_over_else": NaN,
+            "dir_leg_base": -8.38935375213623e-06,
+            "dir_nonleg_base": 4.630535840988159e-06,
+            "direct_grad_norm_out_arm": -0.0002055632659218043,
+            "direct_grad_norm_out_else": -2.3904103921751352e-05,
+            "grad_arm_over_else": -0.00013485644439725775,
+            "leg_over_nonleg": -0.00037247616149915785,
+            "step": 0.0
+          },
+          "head20_mean": {
+            "arm_over_else": NaN,
+            "dir_leg_base": 0.0005360886454582048,
+            "dir_nonleg_base": 4.9243867397304186e-05,
+            "direct_grad_norm_out_arm": -0.09091732395755892,
+            "direct_grad_norm_out_else": -0.000980932343493196,
+            "grad_arm_over_else": -0.43355447676903935,
+            "leg_over_nonleg": 0.010453061991647417
+          }
+        },
+        "init_delta_vs_cp015_source_baseline": {
+          "step1": {
+            "arm_over_else": NaN,
+            "dir_leg_base": -0.00013720989227294922,
+            "dir_nonleg_base": 4.902109503746033e-05,
+            "direct_grad_norm_out_arm": 0.013423514124070945,
+            "direct_grad_norm_out_else": -0.00015062615682975844,
+            "grad_arm_over_else": 0.17286127327621337,
+            "leg_over_nonleg": NaN,
+            "step": 0.0
+          },
+          "head20_mean": {
+            "arm_over_else": NaN,
+            "dir_leg_base": -0.0014128129929304178,
+            "dir_nonleg_base": 2.3612380027765445e-05,
+            "direct_grad_norm_out_arm": -0.10647271024134741,
+            "direct_grad_norm_out_else": -0.0028271304992620316,
+            "grad_arm_over_else": -0.39392426474154263,
+            "leg_over_nonleg": NaN
+          }
+        },
+        "qualifies_threshold": false,
+        "selection_status": "screened_out",
+        "paths": {
+          "lane_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_init_state",
+          "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_init_state/surgery/rollback_plan_init_state.pth",
+          "surgery_report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_init_state/rollback_report.json",
+          "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_init_state/posttrain/ckpt_last_WalkF_stage6_rollback_plan_init_state_20260314.pth",
+          "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_init_state/posttrain_stage6_init_stats.json",
+          "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_init_state/stage6_group_summary.json"
+        },
+        "source_paths": {
+          "source_baseline_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+          "recipient_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+          "donor_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+          "parent_control_surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth"
+        },
+        "rollback_report": {
+          "lane": "rollback_plan_init_state",
+          "lane_code": "B",
+          "lane_label": "B. plan init-state rollback",
+          "note": "Rollback only init-state parameters to cp015; keep old-plan core/head/phase side.",
+          "rollback_groups": [
+            {
+              "name": "plan_init_state",
+              "label": "B. plan init-state rollback",
+              "prefixes": [
+                "contact_plan_init_head."
+              ],
+              "exact_keys": [
+                "contact_plan_init_z",
+                "contact_phase_state_init"
+              ],
+              "keys": [
+                "contact_plan_init_head.0.bias",
+                "contact_plan_init_head.0.weight",
+                "contact_plan_init_head.1.bias",
+                "contact_plan_init_head.1.weight",
+                "contact_plan_init_head.4.bias",
+                "contact_plan_init_head.4.weight",
+                "contact_plan_init_z",
+                "contact_phase_state_init"
+              ],
+              "key_count": 8,
+              "rationale": "Cold-start state for plan_z / phase-state, including learnable init vectors and obs-conditioned init head."
+            }
+          ],
+          "rollback_keys": [
+            "contact_plan_init_head.0.bias",
+            "contact_plan_init_head.0.weight",
+            "contact_plan_init_head.1.bias",
+            "contact_plan_init_head.1.weight",
+            "contact_plan_init_head.4.bias",
+            "contact_plan_init_head.4.weight",
+            "contact_plan_init_z",
+            "contact_phase_state_init"
+          ],
+          "rollback_key_count": 8,
+          "effective_changed_keys": [
+            "contact_plan_init_head.0.bias",
+            "contact_plan_init_head.0.weight",
+            "contact_plan_init_head.1.bias",
+            "contact_plan_init_head.1.weight",
+            "contact_plan_init_head.4.bias",
+            "contact_plan_init_head.4.weight",
+            "contact_plan_init_z"
+          ],
+          "effective_changed_key_count": 7,
+          "parent_control_case": "cp015_with_old_planstack",
+          "parent_control_stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/ckpt_last_cp015_with_old_planstack_stage6_plantransplant_20260314.pth",
+          "parent_control_surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth",
+          "control_transplant_report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/transplant_report.json",
+          "recipient_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+          "donor_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+          "source_baseline_case": "cp015_bestfree",
+          "created_at": "2026-03-14 12:20:54",
+          "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_init_state/surgery/rollback_plan_init_state.pth",
+          "verify_same_as_recipient_after_count": 8,
+          "verified_all_after": true,
+          "per_key": [
+            {
+              "key": "contact_plan_init_head.0.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_init_head.0.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_init_head.1.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_init_head.1.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_init_head.4.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_init_head.4.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_init_z",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_phase_state_init",
+              "same_as_recipient_before": true
+            }
+          ]
+        }
+      },
+      {
+        "code": "C",
+        "name": "rollback_planner_core",
+        "label": "C. planner-core rollback",
+        "case_type": "rollback",
+        "rollback_groups": [
+          "C. planner-core rollback"
+        ],
+        "rollback_group_names": [
+          "planner_core"
+        ],
+        "rollback_key_count": 22,
+        "rollback_effective_changed_key_count": 22,
+        "note": "Rollback planner latent core and Event-Clock corrector/gate to cp015; keep old-plan head/init/phase side.",
+        "stage6_exit": {
+          "all_ex_root": 0.3052498772873446,
+          "leg": 0.7668286018380841,
+          "nonleg": 0.2054490719790766,
+          "arm": 0.23888225408014618,
+          "else": 0.12642518701291217
+        },
+        "stage6_init": {
+          "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_planner_core/posttrain/posttrain_log_WalkF_stage6_rollback_planner_core_20260314.json",
+          "rows": 300,
+          "head_count": 20,
+          "step1": {
+            "step": 1.0,
+            "dir_leg_base": 0.19193412363529205,
+            "dir_nonleg_base": 0.061325181275606155,
+            "leg_over_nonleg": 3.1297767025376793,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 0.6730851984432321,
+            "direct_grad_norm_out_else": 0.08472699947649001,
+            "grad_arm_over_else": 7.944164228664787
+          },
+          "head20_mean": {
+            "dir_leg_base": 0.1332666829228401,
+            "dir_nonleg_base": 0.036026346031576395,
+            "leg_over_nonleg": 3.7414394990041657,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 1.2045218273192666,
+            "direct_grad_norm_out_else": 0.15374518828923797,
+            "grad_arm_over_else": 7.8796011918845394
+          }
+        },
+        "delta_vs_full_oldplan_control": {
+          "all_ex_root": 0.00971721413571569,
+          "leg": 0.02612603145859982,
+          "nonleg": 0.006169361741578644,
+          "arm": 0.01017761635625658,
+          "else": -0.0033046946203873773
+        },
+        "delta_vs_cp015_source_baseline": {
+          "all_ex_root": -0.12612693162336924,
+          "leg": -0.40034254235256106,
+          "nonleg": -0.06683706984408458,
+          "arm": -0.08912968077128541,
+          "else": -0.014145444016155223
+        },
+        "improvement_vs_cp015_source_baseline": {
+          "all_ex_root": 0.12612693162336924,
+          "leg": 0.40034254235256106,
+          "nonleg": 0.06683706984408458,
+          "arm": 0.08912968077128541,
+          "else": 0.014145444016155223
+        },
+        "init_delta_vs_full_oldplan_control": {
+          "step1": {
+            "arm_over_else": NaN,
+            "dir_leg_base": 0.0001501142978668213,
+            "dir_nonleg_base": -4.383176565170288e-05,
+            "direct_grad_norm_out_arm": -0.014108517177993996,
+            "direct_grad_norm_out_else": 0.00012145015969590445,
+            "grad_arm_over_else": -0.17816014805099556,
+            "leg_over_nonleg": 0.0046814821128289275,
+            "step": 0.0
+          },
+          "head20_mean": {
+            "arm_over_else": NaN,
+            "dir_leg_base": 0.0013142399489879386,
+            "dir_nonleg_base": -6.761401891847152e-08,
+            "direct_grad_norm_out_arm": 0.09085438587405825,
+            "direct_grad_norm_out_else": -0.00014068017032392577,
+            "grad_arm_over_else": 0.4831111120980651,
+            "leg_over_nonleg": 0.0469737704237998
+          }
+        },
+        "init_delta_vs_cp015_source_baseline": {
+          "step1": {
+            "arm_over_else": NaN,
+            "dir_leg_base": 2.12937593460083e-05,
+            "dir_nonleg_base": 5.587935447692871e-07,
+            "direct_grad_norm_out_arm": -0.00047943978800124576,
+            "direct_grad_norm_out_else": -5.271893212102641e-06,
+            "grad_arm_over_else": -0.005164018330384934,
+            "leg_over_nonleg": NaN,
+            "step": 0.0
+          },
+          "head20_mean": {
+            "arm_over_else": NaN,
+            "dir_leg_base": -0.000634661689400684,
+            "dir_nonleg_base": -2.5699101388457213e-05,
+            "direct_grad_norm_out_arm": 0.07529899959026976,
+            "direct_grad_norm_out_else": -0.0019868783260927614,
+            "grad_arm_over_else": 0.5227413241255618,
+            "leg_over_nonleg": NaN
+          }
+        },
+        "qualifies_threshold": true,
+        "selection_status": "promoted",
+        "paths": {
+          "lane_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_planner_core",
+          "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_planner_core/surgery/rollback_planner_core.pth",
+          "surgery_report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_planner_core/rollback_report.json",
+          "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_planner_core/posttrain/ckpt_last_WalkF_stage6_rollback_planner_core_20260314.pth",
+          "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_planner_core/posttrain_stage6_init_stats.json",
+          "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_planner_core/stage6_group_summary.json"
+        },
+        "source_paths": {
+          "source_baseline_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+          "recipient_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+          "donor_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+          "parent_control_surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth"
+        },
+        "rollback_report": {
+          "lane": "rollback_planner_core",
+          "lane_code": "C",
+          "lane_label": "C. planner-core rollback",
+          "note": "Rollback planner latent core and Event-Clock corrector/gate to cp015; keep old-plan head/init/phase side.",
+          "rollback_groups": [
+            {
+              "name": "planner_core",
+              "label": "C. planner-core rollback",
+              "prefixes": [
+                "contact_plan_cell.",
+                "event_clock_gate.",
+                "event_clock_corrector."
+              ],
+              "exact_keys": [],
+              "keys": [
+                "contact_plan_cell.bias_hh",
+                "contact_plan_cell.bias_ih",
+                "contact_plan_cell.weight_hh",
+                "contact_plan_cell.weight_ih",
+                "event_clock_gate.confidence_head.0.bias",
+                "event_clock_gate.confidence_head.0.weight",
+                "event_clock_gate.confidence_head.2.bias",
+                "event_clock_gate.confidence_head.2.weight",
+                "event_clock_gate.confidence_head.4.bias",
+                "event_clock_gate.confidence_head.4.weight",
+                "event_clock_gate.prior_head.0.bias",
+                "event_clock_gate.prior_head.0.weight",
+                "event_clock_gate.prior_head.2.bias",
+                "event_clock_gate.prior_head.2.weight",
+                "event_clock_corrector.correction_head.0.bias",
+                "event_clock_corrector.correction_head.0.weight",
+                "event_clock_corrector.correction_head.2.bias",
+                "event_clock_corrector.correction_head.2.weight",
+                "event_clock_corrector.correction_head.4.bias",
+                "event_clock_corrector.correction_head.4.weight",
+                "event_clock_corrector.layer_norm.bias",
+                "event_clock_corrector.layer_norm.weight"
+              ],
+              "key_count": 22,
+              "rationale": "Core recurrent planner latent plus Event-Clock gate/corrector that rescales and corrects plan_z inside the loop."
+            }
+          ],
+          "rollback_keys": [
+            "contact_plan_cell.bias_hh",
+            "contact_plan_cell.bias_ih",
+            "contact_plan_cell.weight_hh",
+            "contact_plan_cell.weight_ih",
+            "event_clock_gate.confidence_head.0.bias",
+            "event_clock_gate.confidence_head.0.weight",
+            "event_clock_gate.confidence_head.2.bias",
+            "event_clock_gate.confidence_head.2.weight",
+            "event_clock_gate.confidence_head.4.bias",
+            "event_clock_gate.confidence_head.4.weight",
+            "event_clock_gate.prior_head.0.bias",
+            "event_clock_gate.prior_head.0.weight",
+            "event_clock_gate.prior_head.2.bias",
+            "event_clock_gate.prior_head.2.weight",
+            "event_clock_corrector.correction_head.0.bias",
+            "event_clock_corrector.correction_head.0.weight",
+            "event_clock_corrector.correction_head.2.bias",
+            "event_clock_corrector.correction_head.2.weight",
+            "event_clock_corrector.correction_head.4.bias",
+            "event_clock_corrector.correction_head.4.weight",
+            "event_clock_corrector.layer_norm.bias",
+            "event_clock_corrector.layer_norm.weight"
+          ],
+          "rollback_key_count": 22,
+          "effective_changed_keys": [
+            "contact_plan_cell.bias_hh",
+            "contact_plan_cell.bias_ih",
+            "contact_plan_cell.weight_hh",
+            "contact_plan_cell.weight_ih",
+            "event_clock_gate.confidence_head.0.bias",
+            "event_clock_gate.confidence_head.0.weight",
+            "event_clock_gate.confidence_head.2.bias",
+            "event_clock_gate.confidence_head.2.weight",
+            "event_clock_gate.confidence_head.4.bias",
+            "event_clock_gate.confidence_head.4.weight",
+            "event_clock_gate.prior_head.0.bias",
+            "event_clock_gate.prior_head.0.weight",
+            "event_clock_gate.prior_head.2.bias",
+            "event_clock_gate.prior_head.2.weight",
+            "event_clock_corrector.correction_head.0.bias",
+            "event_clock_corrector.correction_head.0.weight",
+            "event_clock_corrector.correction_head.2.bias",
+            "event_clock_corrector.correction_head.2.weight",
+            "event_clock_corrector.correction_head.4.bias",
+            "event_clock_corrector.correction_head.4.weight",
+            "event_clock_corrector.layer_norm.bias",
+            "event_clock_corrector.layer_norm.weight"
+          ],
+          "effective_changed_key_count": 22,
+          "parent_control_case": "cp015_with_old_planstack",
+          "parent_control_stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/ckpt_last_cp015_with_old_planstack_stage6_plantransplant_20260314.pth",
+          "parent_control_surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth",
+          "control_transplant_report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/transplant_report.json",
+          "recipient_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+          "donor_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+          "source_baseline_case": "cp015_bestfree",
+          "created_at": "2026-03-14 12:42:28",
+          "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_planner_core/surgery/rollback_planner_core.pth",
+          "verify_same_as_recipient_after_count": 22,
+          "verified_all_after": true,
+          "per_key": [
+            {
+              "key": "contact_plan_cell.bias_hh",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_cell.bias_ih",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_cell.weight_hh",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_cell.weight_ih",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_gate.confidence_head.0.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_gate.confidence_head.0.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_gate.confidence_head.2.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_gate.confidence_head.2.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_gate.confidence_head.4.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_gate.confidence_head.4.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_gate.prior_head.0.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_gate.prior_head.0.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_gate.prior_head.2.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_gate.prior_head.2.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_corrector.correction_head.0.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_corrector.correction_head.0.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_corrector.correction_head.2.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_corrector.correction_head.2.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_corrector.correction_head.4.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_corrector.correction_head.4.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_corrector.layer_norm.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "event_clock_corrector.layer_norm.weight",
+              "same_as_recipient_before": false
+            }
+          ]
+        },
+        "selection_note": "Within Stage6 threshold vs full oldplan control; promoted to downstream chain."
+      },
+      {
+        "code": "D",
+        "name": "rollback_phase_contact_input",
+        "label": "D. phase/contact input-side rollback",
+        "case_type": "rollback",
+        "rollback_groups": [
+          "D. phase/contact input-side rollback"
+        ],
+        "rollback_group_names": [
+          "phase_contact_input"
+        ],
+        "rollback_key_count": 12,
+        "rollback_effective_changed_key_count": 8,
+        "note": "Rollback phase/contact-side input modules to cp015; keep old-plan core/head/init intact.",
+        "stage6_exit": {
+          "all_ex_root": 0.41436104351218744,
+          "leg": 1.1415425008420053,
+          "nonleg": 0.2571326203057403,
+          "arm": 0.2970394090816327,
+          "else": 0.16280748319908547
+        },
+        "stage6_init": {
+          "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_phase_contact_input/posttrain/posttrain_log_WalkF_stage6_rollback_phase_contact_input_20260314.json",
+          "rows": 300,
+          "head_count": 20,
+          "step1": {
+            "step": 1.0,
+            "dir_leg_base": 0.19177785515785217,
+            "dir_nonleg_base": 0.061373867094516754,
+            "leg_over_nonleg": 3.124747783327897,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 0.6874121588163276,
+            "direct_grad_norm_out_else": 0.08459187787696748,
+            "grad_arm_over_else": 8.126219396809192
+          },
+          "head20_mean": {
+            "dir_leg_base": 0.13203790970146656,
+            "dir_nonleg_base": 0.03599054953083396,
+            "leg_over_nonleg": 3.702659625712424,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 1.0662856328510864,
+            "direct_grad_norm_out_else": 0.15282705478159384,
+            "grad_arm_over_else": 7.216138248449935
+          }
+        },
+        "delta_vs_full_oldplan_control": {
+          "all_ex_root": 0.11882838036055854,
+          "leg": 0.400839930462521,
+          "nonleg": 0.057852910068242336,
+          "arm": 0.06833477135774307,
+          "else": 0.03307760156578593
+        },
+        "delta_vs_cp015_source_baseline": {
+          "all_ex_root": -0.017015765398526395,
+          "leg": -0.0256286433486399,
+          "nonleg": -0.015153521517420887,
+          "arm": -0.03097252576979892,
+          "else": 0.022236852170018084
+        },
+        "improvement_vs_cp015_source_baseline": {
+          "all_ex_root": 0.017015765398526395,
+          "leg": 0.0256286433486399,
+          "nonleg": 0.015153521517420887,
+          "arm": 0.03097252576979892,
+          "else": -0.022236852170018084
+        },
+        "init_delta_vs_full_oldplan_control": {
+          "step1": {
+            "arm_over_else": NaN,
+            "dir_leg_base": -6.154179573059082e-06,
+            "dir_nonleg_base": 4.854053258895874e-06,
+            "direct_grad_norm_out_arm": 0.0002184431951014476,
+            "direct_grad_norm_out_else": -1.367143982662633e-05,
+            "grad_arm_over_else": 0.0038950200934095847,
+            "leg_over_nonleg": -0.00034743709695339575,
+            "step": 0.0
+          },
+          "head20_mean": {
+            "arm_over_else": NaN,
+            "dir_leg_base": 8.546672761439167e-05,
+            "dir_nonleg_base": -3.58641147613567e-05,
+            "direct_grad_norm_out_arm": -0.047381808594122,
+            "direct_grad_norm_out_else": -0.0010588136779680624,
+            "grad_arm_over_else": -0.1803518313365391,
+            "leg_over_nonleg": 0.00819389713205787
+          }
+        },
+        "init_delta_vs_cp015_source_baseline": {
+          "step1": {
+            "arm_over_else": NaN,
+            "dir_leg_base": -0.00013497471809387207,
+            "dir_nonleg_base": 4.924461245536804e-05,
+            "direct_grad_norm_out_arm": 0.013847520585094197,
+            "direct_grad_norm_out_else": -0.00014039349273463342,
+            "grad_arm_over_else": 0.1768911498140202,
+            "leg_over_nonleg": NaN,
+            "step": 0.0
+          },
+          "head20_mean": {
+            "arm_over_else": NaN,
+            "dir_leg_base": -0.001863434910774231,
+            "dir_nonleg_base": -6.149560213089544e-05,
+            "direct_grad_norm_out_arm": -0.0629371948779105,
+            "direct_grad_norm_out_else": -0.002905011833736898,
+            "grad_arm_over_else": -0.14072161930904237,
+            "leg_over_nonleg": NaN
+          }
+        },
+        "qualifies_threshold": false,
+        "selection_status": "screened_out",
+        "paths": {
+          "lane_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_phase_contact_input",
+          "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_phase_contact_input/surgery/rollback_phase_contact_input.pth",
+          "surgery_report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_phase_contact_input/rollback_report.json",
+          "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_phase_contact_input/posttrain/ckpt_last_WalkF_stage6_rollback_phase_contact_input_20260314.pth",
+          "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_phase_contact_input/posttrain_stage6_init_stats.json",
+          "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_phase_contact_input/stage6_group_summary.json"
+        },
+        "source_paths": {
+          "source_baseline_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+          "recipient_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+          "donor_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+          "parent_control_surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth"
+        },
+        "rollback_report": {
+          "lane": "rollback_phase_contact_input",
+          "lane_code": "D",
+          "lane_label": "D. phase/contact input-side rollback",
+          "note": "Rollback phase/contact-side input modules to cp015; keep old-plan core/head/init intact.",
+          "rollback_groups": [
+            {
+              "name": "phase_contact_input",
+              "label": "D. phase/contact input-side rollback",
+              "prefixes": [
+                "contact_plan_phase_head.",
+                "contact_phase_state_delta_head."
+              ],
+              "exact_keys": [],
+              "keys": [
+                "contact_plan_phase_head.0.bias",
+                "contact_plan_phase_head.0.weight",
+                "contact_plan_phase_head.1.bias",
+                "contact_plan_phase_head.1.weight",
+                "contact_plan_phase_head.4.bias",
+                "contact_plan_phase_head.4.weight",
+                "contact_phase_state_delta_head.0.bias",
+                "contact_phase_state_delta_head.0.weight",
+                "contact_phase_state_delta_head.1.bias",
+                "contact_phase_state_delta_head.1.weight",
+                "contact_phase_state_delta_head.3.bias",
+                "contact_phase_state_delta_head.3.weight"
+              ],
+              "key_count": 12,
+              "rationale": "Phase/contact side inputs into the planner: phase residual on logits and phase-state update head driven by cond/meas/delta_meas."
+            }
+          ],
+          "rollback_keys": [
+            "contact_plan_phase_head.0.bias",
+            "contact_plan_phase_head.0.weight",
+            "contact_plan_phase_head.1.bias",
+            "contact_plan_phase_head.1.weight",
+            "contact_plan_phase_head.4.bias",
+            "contact_plan_phase_head.4.weight",
+            "contact_phase_state_delta_head.0.bias",
+            "contact_phase_state_delta_head.0.weight",
+            "contact_phase_state_delta_head.1.bias",
+            "contact_phase_state_delta_head.1.weight",
+            "contact_phase_state_delta_head.3.bias",
+            "contact_phase_state_delta_head.3.weight"
+          ],
+          "rollback_key_count": 12,
+          "effective_changed_keys": [
+            "contact_plan_phase_head.0.bias",
+            "contact_plan_phase_head.0.weight",
+            "contact_plan_phase_head.1.bias",
+            "contact_plan_phase_head.1.weight",
+            "contact_plan_phase_head.4.bias",
+            "contact_plan_phase_head.4.weight",
+            "contact_phase_state_delta_head.1.bias",
+            "contact_phase_state_delta_head.1.weight"
+          ],
+          "effective_changed_key_count": 8,
+          "parent_control_case": "cp015_with_old_planstack",
+          "parent_control_stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/ckpt_last_cp015_with_old_planstack_stage6_plantransplant_20260314.pth",
+          "parent_control_surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth",
+          "control_transplant_report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/transplant_report.json",
+          "recipient_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+          "donor_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+          "source_baseline_case": "cp015_bestfree",
+          "created_at": "2026-03-14 13:02:31",
+          "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_phase_contact_input/surgery/rollback_phase_contact_input.pth",
+          "verify_same_as_recipient_after_count": 12,
+          "verified_all_after": true,
+          "per_key": [
+            {
+              "key": "contact_plan_phase_head.0.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_phase_head.0.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_phase_head.1.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_phase_head.1.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_phase_head.4.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_plan_phase_head.4.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_phase_state_delta_head.0.bias",
+              "same_as_recipient_before": true
+            },
+            {
+              "key": "contact_phase_state_delta_head.0.weight",
+              "same_as_recipient_before": true
+            },
+            {
+              "key": "contact_phase_state_delta_head.1.bias",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_phase_state_delta_head.1.weight",
+              "same_as_recipient_before": false
+            },
+            {
+              "key": "contact_phase_state_delta_head.3.bias",
+              "same_as_recipient_before": true
+            },
+            {
+              "key": "contact_phase_state_delta_head.3.weight",
+              "same_as_recipient_before": true
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "downstream": {
+    "control_reused": {
+      "summary_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/summary.json",
+      "stage_paths": {
+        "transplant_stage6": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/ckpt_last_cp015_with_old_planstack_stage6_plantransplant_20260314.pth",
+          "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/stage6_group_summary.json"
+        },
+        "70a": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_70a_splitB2_pe32h512_20260227_fromarmchain.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70a/ckpt_last_WalkF_stage7_70a_from_cp015_oldplan_20260314.pth"
+        },
+        "70b": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_70b_phasezin_splitB2_pe32h512_20260227_fromarmchain.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70b/ckpt_last_WalkF_stage7_70b_concat_from_cp015_oldplan_20260314.pth"
+        },
+        "70a_replace_warmstart": {
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/warmstart/ckpt_last_cp015_oldplan_70a_replacecontacts_zerophase_20260314.pth",
+          "report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/warmstart/replace_zerophase_report.json"
+        },
+        "new70b_replace": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/configs/posttrain_70b_replacecontacts_from_cp015oldplan_20260314.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70b_replace/ckpt_last_WalkF_stage7_70b_replacecontacts_from_cp015_oldplan_20260314.pth"
+        },
+        "70R_promoted_s180": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/configs/posttrain_70R_from_cp015oldplan_replace_lr3e4_e1_s60_20260314.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70R/ckpt_last_WalkF_stage7_70R_from_cp015_oldplan_trunkfull_s180_20260314.pth"
+        },
+        "71": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_71_legonly_after_nonlegproj256_20260227_fromarmchain.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/71/ckpt_last_WalkF_stage7_71_from_cp015_oldplan_20260314.pth"
+        },
+        "72": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_72_legomega_after_nonlegproj256_20260227_fromarmchain.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/72/ckpt_last_WalkF_stage7_72_from_cp015_oldplan_20260314.pth"
+        },
+        "lambda_final": {
+          "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_lambda_final_calib_20260227_fromarmchain_fullcompat.json",
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/lambda/ckpt_last_WalkF_stage7_lambda_from_cp015_oldplan_20260314.pth"
+        }
+      },
+      "final_evals": {
+        "strict_pretrain_contact": {
+          "masked_means": {
+            "masked_steps": 344.0,
+            "BlendGeoLocalDeg": 0.11686341884697593,
+            "BlendGeoLocalDegWeighted": 0.13701452592084573,
+            "GeoLocalDeg": 0.47573024277077164,
+            "GeoLocalDegWeighted": 0.5110863064264142,
+            "DirectGeoLocalDeg": 0.11788293870902339,
+            "DirectGeoLocalDegWeighted": 0.1381669548708339,
+            "LambdaMean": 0.9461449453997057,
+            "LambdaEffMean": 0.9461449453997057,
+            "LambdaRelMean": 1.0
+          },
+          "direct_group_summary": {
+            "all_ex_root": 0.11788293883833882,
+            "leg": 0.2801937920066425,
+            "nonleg": 0.08278870031546234,
+            "arm": 0.09373125996758136,
+            "else": 0.05692446841045377
+          },
+          "window_summary": {
+            "overall": {
+              "legs_main": 0.2801937920066425,
+              "arms_main": 0.09373125996758136,
+              "left_arm_main": 0.12106793576169991,
+              "right_arm_main": 0.08694283884871357
+            },
+            "A_52_59": {
+              "legs_main": 0.33008480099670123,
+              "arms_main": 0.07851249918163515,
+              "left_arm_main": 0.10991671043383475,
+              "right_arm_main": 0.05473331669499101
+            },
+            "B_76_80": {
+              "legs_main": 0.1975132770719938,
+              "arms_main": 0.10707002464142323,
+              "left_arm_main": 0.16675652179401368,
+              "right_arm_main": 0.08396950002449254
+            },
+            "hotspots": {
+              "foot_l_ball_l_SIC12_15": 0.7432816582731903,
+              "calf_r_SIC2_4": 0.13312878366559744
+            }
+          },
+          "paths": {
+            "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/eval_pretrain_contact/Walk_F_freerun_cycles.json",
+            "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/eval_pretrain_contact_group_summary.json"
+          }
+        },
+        "model_source": {
+          "masked_means": {
+            "masked_steps": 344.0,
+            "BlendGeoLocalDeg": 0.1194091760661713,
+            "BlendGeoLocalDegWeighted": 0.140812914450328,
+            "GeoLocalDeg": 0.48286008609588754,
+            "GeoLocalDegWeighted": 0.5234064516979594,
+            "DirectGeoLocalDeg": 0.12014488221774268,
+            "DirectGeoLocalDegWeighted": 0.1413016416522306,
+            "LambdaMean": 0.9457244845323785,
+            "LambdaEffMean": 0.9457244845323785,
+            "LambdaRelMean": 1.0
+          },
+          "direct_group_summary": {
+            "all_ex_root": 0.12014488184111712,
+            "leg": 0.278087370049582,
+            "nonleg": 0.08599515466090848,
+            "arm": 0.0983616177808661,
+            "else": 0.05676533274100867
+          },
+          "window_summary": {
+            "overall": {
+              "legs_main": 0.278087370049582,
+              "arms_main": 0.0983616177808661,
+              "left_arm_main": 0.12840701079174144,
+              "right_arm_main": 0.09169135193699729
+            },
+            "A_52_59": {
+              "legs_main": 0.33186943412874825,
+              "arms_main": 0.07504738856044486,
+              "left_arm_main": 0.10880442487460742,
+              "right_arm_main": 0.05557236399060154
+            },
+            "B_76_80": {
+              "legs_main": 0.19507373776868916,
+              "arms_main": 0.10547445720898954,
+              "left_arm_main": 0.15938192047696148,
+              "right_arm_main": 0.08387113205519402
+            },
+            "hotspots": {
+              "foot_l_ball_l_SIC12_15": 0.6088193624746054,
+              "calf_r_SIC2_4": 0.13619550752143064
+            }
+          },
+          "paths": {
+            "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/eval_model_source/Walk_F_freerun_cycles.json",
+            "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/eval_model_source_group_summary.json"
+          }
+        }
+      }
+    },
+    "promoted_lanes": [
+      {
+        "name": "rollback_planner_core",
+        "label": "C. planner-core rollback",
+        "selection_status": "promoted",
+        "selection_note": "Within Stage6 threshold vs full oldplan control; promoted to downstream chain.",
+        "stage6_exit": {
+          "all_ex_root": 0.3052498772873446,
+          "leg": 0.7668286018380841,
+          "nonleg": 0.2054490719790766,
+          "arm": 0.23888225408014618,
+          "else": 0.12642518701291217
+        },
+        "stage_paths": {
+          "transplant_stage6": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_planner_core/posttrain/ckpt_last_WalkF_stage6_rollback_planner_core_20260314.pth",
+          "70a": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/70a/ckpt_last_WalkF_stage7_70a_from_rollback_planner_core_20260314.pth",
+          "70b": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/70b/ckpt_last_WalkF_stage7_70b_from_rollback_planner_core_20260314.pth",
+          "new70b_replace": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/70b_replace/ckpt_last_WalkF_stage7_70b_replace_from_rollback_planner_core_20260314.pth",
+          "70R": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/70R/ckpt_last_WalkF_stage7_70R_from_rollback_planner_core_20260314.pth",
+          "71": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/71/ckpt_last_WalkF_stage7_71_from_rollback_planner_core_20260314.pth",
+          "72": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/72/ckpt_last_WalkF_stage7_72_from_rollback_planner_core_20260314.pth",
+          "lambda_final": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/lambda/ckpt_last_WalkF_stage7_lambda_from_rollback_planner_core_20260314.pth",
+          "warmstart": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/warmstart/ckpt_last_rollback_planner_core_replace_zerophase_20260314.pth"
+        },
+        "config_paths": {
+          "70a": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_70a_splitB2_pe32h512_20260227_fromarmchain.json",
+          "70b": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_70b_phasezin_splitB2_pe32h512_20260227_fromarmchain.json",
+          "new70b_replace": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/configs/rollback_planner_core_70b_replace.json",
+          "70R": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/configs/rollback_planner_core_70R.json",
+          "71": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_71_legonly_after_nonlegproj256_20260227_fromarmchain.json",
+          "72": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_72_legomega_after_nonlegproj256_20260227_fromarmchain.json",
+          "lambda_final": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_lambda_final_calib_20260227_fromarmchain_fullcompat.json"
+        },
+        "final_evals": {
+          "strict_pretrain_contact": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 0.1127758052330031,
+              "BlendGeoLocalDegWeighted": 0.13357104025347982,
+              "GeoLocalDeg": 0.45710328424912555,
+              "GeoLocalDegWeighted": 0.4878274132605902,
+              "DirectGeoLocalDeg": 0.11486173444969017,
+              "DirectGeoLocalDegWeighted": 0.13596743843409903,
+              "LambdaMean": 0.9443400403441384,
+              "LambdaEffMean": 0.9443400403441384,
+              "LambdaRelMean": 1.0
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.11486173434402457,
+              "leg": 0.2860847713444707,
+              "nonleg": 0.07784053715473893,
+              "arm": 0.08870802149073478,
+              "else": 0.05215375599693054
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.2860847713444707,
+                "arms_main": 0.08870802149073478,
+                "left_arm_main": 0.11428981494289248,
+                "right_arm_main": 0.08760514228545567
+              },
+              "A_52_59": {
+                "legs_main": 0.3461906453012489,
+                "arms_main": 0.06712860897820204,
+                "left_arm_main": 0.0814944128473548,
+                "right_arm_main": 0.07086229915471955
+              },
+              "B_76_80": {
+                "legs_main": 0.1937797355640214,
+                "arms_main": 0.07471657430007606,
+                "left_arm_main": 0.088628771655365,
+                "right_arm_main": 0.06432004882695361
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.5988517235964537,
+                "calf_r_SIC2_4": 0.1641282563408216
+              }
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/eval_pretrain_contact/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/eval_pretrain_contact_group_summary.json"
+            }
+          },
+          "model_source": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 0.11326333206840032,
+              "BlendGeoLocalDegWeighted": 0.13377794874615448,
+              "GeoLocalDeg": 0.46203711672231207,
+              "GeoLocalDegWeighted": 0.49904738669825155,
+              "DirectGeoLocalDeg": 0.1146350743812184,
+              "DirectGeoLocalDegWeighted": 0.13499455249240233,
+              "LambdaMean": 0.9443987290873084,
+              "LambdaEffMean": 0.9443987290873084,
+              "LambdaRelMean": 1.0
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.1146350740611139,
+              "leg": 0.2963108945694457,
+              "nonleg": 0.07535381557282593,
+              "arm": 0.08606487631944143,
+              "else": 0.050036762899007485
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.2963108945694457,
+                "arms_main": 0.08606487631944143,
+                "left_arm_main": 0.10970577585478346,
+                "right_arm_main": 0.08543089805109226
+              },
+              "A_52_59": {
+                "legs_main": 0.4131552811450092,
+                "arms_main": 0.06510596262546642,
+                "left_arm_main": 0.08153698547337423,
+                "right_arm_main": 0.06535316081539753
+              },
+              "B_76_80": {
+                "legs_main": 0.20535352809820323,
+                "arms_main": 0.07788658407092813,
+                "left_arm_main": 0.09203489983790658,
+                "right_arm_main": 0.06681758520167527
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.6039605140686035,
+                "calf_r_SIC2_4": 0.1712657722334067
+              }
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/eval_model_source/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/eval_model_source_group_summary.json"
+            }
+          }
+        },
+        "comparisons": {
+          "model_source_vs_full_oldplan_control": {
+            "masked_means_delta": {
+              "DirectGeoLocalDeg": -0.005509807836524286,
+              "DirectGeoLocalDegWeighted": -0.0063070891598282774,
+              "BlendGeoLocalDeg": -0.006145843997770975,
+              "BlendGeoLocalDegWeighted": -0.007034965704173529,
+              "GeoLocalDeg": -0.020822969373575473,
+              "GeoLocalDegWeighted": -0.024359064999707858
+            },
+            "direct_group_delta": {
+              "all_ex_root": -0.00550980778000322,
+              "leg": 0.0182235245198637,
+              "nonleg": -0.010641339088082555
+            }
+          },
+          "strict_pretrain_contact_vs_full_oldplan_control": {
+            "masked_means_delta": {
+              "DirectGeoLocalDeg": -0.003021204259333221,
+              "DirectGeoLocalDegWeighted": -0.002199516436734883,
+              "BlendGeoLocalDeg": -0.004087613613972835,
+              "BlendGeoLocalDegWeighted": -0.0034434856673659087,
+              "GeoLocalDeg": -0.018626958521646086,
+              "GeoLocalDegWeighted": -0.02325889316582397
+            },
+            "direct_group_delta": {
+              "all_ex_root": -0.0030212044943142558,
+              "leg": 0.005890979337828173,
+              "nonleg": -0.004948163160723412
+            }
+          },
+          "model_source_vs_accepted_final_model_source": {
+            "masked_means_delta": {
+              "DirectGeoLocalDeg": 0.001688074381218388,
+              "DirectGeoLocalDegWeighted": 0.0018145524924023382,
+              "BlendGeoLocalDeg": -0.3782706679315997,
+              "BlendGeoLocalDegWeighted": -0.33412605125384554,
+              "GeoLocalDeg": -0.4930798832776879,
+              "GeoLocalDegWeighted": -0.41523661330174844
+            },
+            "direct_group_delta": {
+              "all_ex_root": 0.0016880740611138895,
+              "leg": 0.02195089456944571,
+              "nonleg": -0.002694184427174076
+            }
+          },
+          "model_source_vs_accepted_old_baseline_r5": {
+            "masked_means_delta": {
+              "DirectGeoLocalDeg": -0.033166925618781595,
+              "DirectGeoLocalDegWeighted": -0.03656544750759766,
+              "BlendGeoLocalDeg": -0.4183046679315997,
+              "BlendGeoLocalDegWeighted": -0.35708005125384557,
+              "GeoLocalDeg": -0.568795883277688,
+              "GeoLocalDegWeighted": -0.44579261330174846
+            },
+            "direct_group_delta": {
+              "all_ex_root": -0.033166925938886094,
+              "leg": -0.017381105430554322,
+              "nonleg": -0.036580184427174076
+            }
+          },
+          "strict_pretrain_contact_vs_accepted_old_baseline_r5": {
+            "masked_means_delta": {
+              "DirectGeoLocalDeg": -0.03294026555030982,
+              "DirectGeoLocalDegWeighted": -0.03559256156590096,
+              "BlendGeoLocalDeg": -0.4187921947669969,
+              "BlendGeoLocalDegWeighted": -0.3572869597465202,
+              "GeoLocalDeg": -0.5737297157508745,
+              "GeoLocalDegWeighted": -0.4570125867394098
+            },
+            "direct_group_delta": {
+              "all_ex_root": -0.03294026565597542,
+              "leg": -0.027607228655529337,
+              "nonleg": -0.034093462845261074
+            }
+          }
+        },
+        "consistency": {
+          "strict_vs_model_both_beat_old_baseline": true,
+          "strict_vs_model_both_beat_full_oldplan_control": true,
+          "strict_model_control_sign_match": true
+        }
+      }
+    ]
+  },
+  "answers": {
+    "q1_most_critical_group": {
+      "lane": "rollback_phase_contact_input",
+      "label": "D. phase/contact input-side rollback",
+      "delta_vs_control": {
+        "all_ex_root": 0.11882838036055854,
+        "leg": 0.400839930462521,
+        "nonleg": 0.057852910068242336,
+        "arm": 0.06833477135774307,
+        "else": 0.03307760156578593
+      },
+      "interpretation": "Largest rollback damage vs full oldplan control at Stage6 is treated as the most critical group."
+    },
+    "q2_has_smaller_stage6_safe_version": {
+      "value": true,
+      "best_stage6_lane": "rollback_planner_core",
+      "selection_reason": "threshold_pass"
+    },
+    "q3_smaller_version_penetrates_to_lambda_final": {
+      "value": true,
+      "lane": "rollback_planner_core",
+      "note": "Measured against the accepted old-baseline r5 anchor, same as the previous round carry claim."
+    },
+    "q4_smaller_version_beats_full_oldplan_chain": {
+      "value": false,
+      "lane": "rollback_planner_core",
+      "note": "Overall direct/all_ex_root improves vs full oldplan control, but leg regresses, so treat this as a mixed tradeoff rather than a clean win."
+    },
+    "q5_smaller_version_beats_current_accepted_final": {
+      "value": false,
+      "lane": "rollback_planner_core"
+    },
+    "q6_can_propose_new_cleaner_challenger": {
+      "value": true,
+      "lane": "rollback_planner_core",
+      "note": "Cleaner challenger/control lane only; baseline switch still requires clearing the current accepted final."
+    },
+    "q7_should_pause_further_simplification": {
+      "value": false,
+      "note": "If no Stage6-safe simplification survives, the next step should be direct planner mechanism validation."
+    }
+  }
+}

@@ -1,0 +1,3468 @@
+{
+  "run_date": "20260314",
+  "policy": {
+    "compare_contract": "model_source",
+    "strict_eval_added": false,
+    "reason_strict_not_needed": "current conclusion already stabilizes under model-source replay snapshots; no contact-source dependency was needed",
+    "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+    "affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+    "posttrain_contacts_source": "pretrain_contact",
+    "posttrain_contacts_pretrain_clamp": "1.0",
+    "snapshot_steps": [
+      0,
+      5,
+      10,
+      20,
+      40,
+      60,
+      120,
+      180
+    ]
+  },
+  "references": {
+    "source_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_newflow_chain_20260314/summary.json",
+    "lowlr_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/summary.json",
+    "downstream_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_to72lambda_20260314/summary.json",
+    "current_71_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_newflow_chain_20260314/71/ckpt_last_WalkF_stage7_71_from_oldd1_newflow_20260314.pth",
+    "candidate_71_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr3e4/ckpt_last_WalkF_stage7_71_lr3e4_from_candidate70R_20260314.pth",
+    "current_72_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_newflow_chain_20260314/72/posttrain_log_WalkF_stage7_72_from_oldd1_newflow_20260314.json",
+    "candidate_72_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_to72lambda_20260314/72/posttrain_log_WalkF_stage7_72_from_lowlr71_20260314.json"
+  },
+  "reference_metrics": {
+    "current_71": {
+      "DirectGeoLocalDeg": 0.11191065632196706,
+      "all_ex_root": 0.11191065641286034,
+      "leg": 0.29547294187220763,
+      "nonleg": 0.07222151361083931,
+      "arm": 0.08266488065130256,
+      "legs_main": 0.29547294187220763,
+      "arms_main": 0.08266488065130256,
+      "foot_l_ball_l_SIC12_15": 0.5992717912886292,
+      "calf_r_SIC2_4": 0.4409123050669829
+    },
+    "candidate_71": {
+      "DirectGeoLocalDeg": 0.10706447615006635,
+      "all_ex_root": 0.10706447656007607,
+      "leg": 0.21504441272715435,
+      "nonleg": 0.08371746333476185,
+      "arm": 0.09184891825772104,
+      "legs_main": 0.21504441272715435,
+      "arms_main": 0.09184891825772104,
+      "foot_l_ball_l_SIC12_15": 0.4294491719920188,
+      "calf_r_SIC2_4": 0.09960248321294785
+    },
+    "current_72": {
+      "DirectGeoLocalDeg": 0.1120735654109266,
+      "all_ex_root": 0.11207356540107699,
+      "leg": 0.2963893049309263,
+      "nonleg": 0.07222151361083931,
+      "arm": 0.08266488065130256,
+      "legs_main": 0.2963893049309263,
+      "arms_main": 0.08266488065130256,
+      "foot_l_ball_l_SIC12_15": 0.8126629516482353,
+      "calf_r_SIC2_4": 0.2888800936440627
+    },
+    "candidate_72": {
+      "DirectGeoLocalDeg": 0.12193614097182141,
+      "all_ex_root": 0.12193614071876013,
+      "leg": 0.2986975236197522,
+      "nonleg": 0.08371746333476185,
+      "arm": 0.09184891825772104,
+      "legs_main": 0.2986975236197522,
+      "arms_main": 0.09184891825772104,
+      "foot_l_ball_l_SIC12_15": 0.5864377534016967,
+      "calf_r_SIC2_4": 0.1912315289179484
+    }
+  },
+  "loss_curves": {
+    "current": {
+      "num_steps": 180,
+      "observed_omega_keys": [],
+      "observed_leg_align_keys": [
+        "leg_align_anchor_frac",
+        "leg_align_anchor_loss",
+        "leg_align_anchor_weight",
+        "leg_align_anchor_weighted",
+        "leg_align_distal_frac",
+        "leg_align_distal_loss",
+        "leg_align_frac",
+        "leg_align_joint_frac_ball_l",
+        "leg_align_joint_frac_ball_r",
+        "leg_align_joint_frac_calf_l",
+        "leg_align_joint_frac_calf_r",
+        "leg_align_joint_frac_foot_l",
+        "leg_align_joint_frac_foot_r",
+        "leg_align_joint_frac_thigh_l",
+        "leg_align_joint_frac_thigh_r",
+        "leg_align_joint_loss_ball_l",
+        "leg_align_joint_loss_ball_r",
+        "leg_align_joint_loss_calf_l",
+        "leg_align_joint_loss_calf_r",
+        "leg_align_joint_loss_foot_l",
+        "leg_align_joint_loss_foot_r",
+        "leg_align_joint_loss_thigh_l",
+        "leg_align_joint_loss_thigh_r",
+        "leg_align_loss",
+        "leg_align_proximal_frac",
+        "leg_align_proximal_loss",
+        "leg_align_weight",
+        "leg_align_weighted"
+      ],
+      "series": {
+        "total": {
+          "windows": {
+            "start20": 2.263405078649521,
+            "mid20": 1.9249363005161286,
+            "late20": 1.983918273448944
+          },
+          "epoch_means": {
+            "epoch1": 2.1044471859931946,
+            "epoch2": 1.9238545795281727,
+            "epoch3": 2.0018068412939707
+          },
+          "peak_first20": {
+            "step": 5.0,
+            "value": 3.1138687133789062
+          }
+        },
+        "dir_geo": {
+          "windows": {
+            "start20": 2.261341023445129,
+            "mid20": 1.9238776683807373,
+            "late20": 1.9828593194484712
+          },
+          "epoch_means": {
+            "epoch1": 2.1027358690897624,
+            "epoch2": 1.9227376937866212,
+            "epoch3": 2.000762577851613
+          },
+          "peak_first20": {
+            "step": 5.0,
+            "value": 3.1088461875915527
+          }
+        },
+        "leg_align_weighted": {
+          "windows": {
+            "start20": 0.0020640306000132115,
+            "mid20": 0.001058614903013222,
+            "late20": 0.0010589466633973642
+          },
+          "epoch_means": {
+            "epoch1": 0.0017113055083124587,
+            "epoch2": 0.0011168773441265027,
+            "epoch3": 0.0010442730844564116
+          },
+          "peak_first20": {
+            "step": 5.0,
+            "value": 0.005022426601499319
+          }
+        },
+        "leg_align_loss": {
+          "windows": {
+            "start20": 0.00010320152923668502,
+            "mid20": 5.293074473229353e-05,
+            "late20": 5.294733300615917e-05
+          },
+          "epoch_means": {
+            "epoch1": 8.55652749426857e-05,
+            "epoch2": 5.584386705474268e-05,
+            "epoch3": 5.221365430164345e-05
+          },
+          "peak_first20": {
+            "step": 5.0,
+            "value": 0.00025112132425419986
+          }
+        },
+        "leg_align_distal_loss": {
+          "windows": {
+            "start20": 4.9186819160240704e-05,
+            "mid20": 2.457636987855949e-05,
+            "late20": 2.4583337562944507e-05
+          },
+          "epoch_means": {
+            "epoch1": 3.888102919518133e-05,
+            "epoch2": 2.4776757557750293e-05,
+            "epoch3": 2.544111753195466e-05
+          },
+          "peak_first20": {
+            "step": 17.0,
+            "value": 0.00011770016863010824
+          }
+        },
+        "leg_align_proximal_loss": {
+          "windows": {
+            "start20": 5.5572121345903726e-05,
+            "mid20": 2.9133837915651384e-05,
+            "late20": 2.9205433747847565e-05
+          },
+          "epoch_means": {
+            "epoch1": 4.813587532529103e-05,
+            "epoch2": 3.193908490478255e-05,
+            "epoch3": 2.7641282531476464e-05
+          },
+          "peak_first20": {
+            "step": 5.0,
+            "value": 0.00017791197751648724
+          }
+        },
+        "dir_group_norm_leg": {
+          "windows": {
+            "start20": 1.1927567452192307,
+            "mid20": 0.9249861985445023,
+            "late20": 0.9950497925281525
+          },
+          "epoch_means": {
+            "epoch1": 1.0747346331675847,
+            "epoch2": 0.9149367262919744,
+            "epoch3": 1.0038029670715332
+          },
+          "peak_first20": {
+            "step": 5.0,
+            "value": 1.9397706985473633
+          }
+        },
+        "dir_leg_base": {
+          "windows": {
+            "start20": 0.005205113941337913,
+            "mid20": 0.0038648358196951447,
+            "late20": 0.0038675594958476724
+          },
+          "epoch_means": {
+            "epoch1": 0.004870200584021708,
+            "epoch2": 0.003949276939965785,
+            "epoch3": 0.0038158279028721155
+          },
+          "peak_first20": {
+            "step": 5.0,
+            "value": 0.007984582334756851
+          }
+        },
+        "dir_nonleg_base": {
+          "windows": {
+            "start20": 0.0012416946643497794,
+            "mid20": 0.001232722436543554,
+            "late20": 0.0012256711488589644
+          },
+          "epoch_means": {
+            "epoch1": 0.0012266421283129603,
+            "epoch2": 0.0012431055365595967,
+            "epoch3": 0.0012359444381824384
+          },
+          "peak_first20": {
+            "step": 8.0,
+            "value": 0.001337680034339428
+          }
+        },
+        "boundary_dir_geo": {
+          "windows": {
+            "start20": 0.007635547406971454,
+            "mid20": 0.007841886719688773,
+            "late20": 0.008130814833566546
+          },
+          "epoch_means": {
+            "epoch1": 0.007661921569767098,
+            "epoch2": 0.0078123392459626,
+            "epoch3": 0.007832656187626222
+          },
+          "peak_first20": {
+            "step": 3.0,
+            "value": 0.008045596070587635
+          }
+        }
+      }
+    },
+    "candidate": {
+      "num_steps": 180,
+      "observed_omega_keys": [],
+      "observed_leg_align_keys": [
+        "leg_align_anchor_frac",
+        "leg_align_anchor_loss",
+        "leg_align_anchor_weight",
+        "leg_align_anchor_weighted",
+        "leg_align_distal_frac",
+        "leg_align_distal_loss",
+        "leg_align_frac",
+        "leg_align_joint_frac_ball_l",
+        "leg_align_joint_frac_ball_r",
+        "leg_align_joint_frac_calf_l",
+        "leg_align_joint_frac_calf_r",
+        "leg_align_joint_frac_foot_l",
+        "leg_align_joint_frac_foot_r",
+        "leg_align_joint_frac_thigh_l",
+        "leg_align_joint_frac_thigh_r",
+        "leg_align_joint_loss_ball_l",
+        "leg_align_joint_loss_ball_r",
+        "leg_align_joint_loss_calf_l",
+        "leg_align_joint_loss_calf_r",
+        "leg_align_joint_loss_foot_l",
+        "leg_align_joint_loss_foot_r",
+        "leg_align_joint_loss_thigh_l",
+        "leg_align_joint_loss_thigh_r",
+        "leg_align_loss",
+        "leg_align_proximal_frac",
+        "leg_align_proximal_loss",
+        "leg_align_weight",
+        "leg_align_weighted"
+      ],
+      "series": {
+        "total": {
+          "windows": {
+            "start20": 2.739257609844208,
+            "mid20": 1.8739304304122926,
+            "late20": 2.0035128772258757
+          },
+          "epoch_means": {
+            "epoch1": 2.27664364973704,
+            "epoch2": 1.8966875771681468,
+            "epoch3": 2.0219174047311146
+          },
+          "peak_first20": {
+            "step": 5.0,
+            "value": 4.478547096252441
+          }
+        },
+        "dir_geo": {
+          "windows": {
+            "start20": 2.7348235845565796,
+            "mid20": 1.8724712669849395,
+            "late20": 2.0018828988075255
+          },
+          "epoch_means": {
+            "epoch1": 2.2731510043144225,
+            "epoch2": 1.8951491594314576,
+            "epoch3": 2.020419802268346
+          },
+          "peak_first20": {
+            "step": 5.0,
+            "value": 4.466985702514648
+          }
+        },
+        "leg_align_weighted": {
+          "windows": {
+            "start20": 0.004434047604445368,
+            "mid20": 0.0014591788989491762,
+            "late20": 0.0016299715905915945
+          },
+          "epoch_means": {
+            "epoch1": 0.0034926578557739657,
+            "epoch2": 0.001538422353526888,
+            "epoch3": 0.0014975983348752683
+          },
+          "peak_first20": {
+            "step": 5.0,
+            "value": 0.011561363935470581
+          }
+        },
+        "leg_align_loss": {
+          "windows": {
+            "start20": 0.0002217023793491535,
+            "mid20": 7.295894520211731e-05,
+            "late20": 8.1498579311301e-05
+          },
+          "epoch_means": {
+            "epoch1": 0.00017463289168517804,
+            "epoch2": 7.692111748838215e-05,
+            "epoch3": 7.487991697416874e-05
+          },
+          "peak_first20": {
+            "step": 5.0,
+            "value": 0.000578068196773529
+          }
+        },
+        "leg_align_distal_loss": {
+          "windows": {
+            "start20": 8.863078437570948e-05,
+            "mid20": 3.4483218041714284e-05,
+            "late20": 3.754358585865703e-05
+          },
+          "epoch_means": {
+            "epoch1": 7.492326712963405e-05,
+            "epoch2": 3.642428287093935e-05,
+            "epoch3": 3.382031348640642e-05
+          },
+          "peak_first20": {
+            "step": 12.0,
+            "value": 0.0002371725713601336
+          }
+        },
+        "leg_align_proximal_loss": {
+          "windows": {
+            "start20": 0.00013589328764282982,
+            "mid20": 3.891412443408626e-05,
+            "late20": 4.52390830105287e-05
+          },
+          "epoch_means": {
+            "epoch1": 0.00010113956332133967,
+            "epoch2": 4.094676545112937e-05,
+            "epoch3": 4.23095871762295e-05
+          },
+          "peak_first20": {
+            "step": 5.0,
+            "value": 0.00042531624785624444
+          }
+        },
+        "dir_group_norm_leg": {
+          "windows": {
+            "start20": 1.706216213107109,
+            "mid20": 0.8872243672609329,
+            "late20": 1.0066543966531754
+          },
+          "epoch_means": {
+            "epoch1": 1.2657386521498362,
+            "epoch2": 0.8911724199851354,
+            "epoch3": 1.0233110676209132
+          },
+          "peak_first20": {
+            "step": 5.0,
+            "value": 3.3931825160980225
+          }
+        },
+        "dir_leg_base": {
+          "windows": {
+            "start20": 0.007214333361480385,
+            "mid20": 0.004584190435707569,
+            "late20": 0.004719374771229923
+          },
+          "epoch_means": {
+            "epoch1": 0.006565039422518263,
+            "epoch2": 0.004626397726436456,
+            "epoch3": 0.004547252928993354
+          },
+          "peak_first20": {
+            "step": 5.0,
+            "value": 0.011926490813493729
+          }
+        },
+        "dir_nonleg_base": {
+          "windows": {
+            "start20": 0.0012719864083919675,
+            "mid20": 0.0012385297450236976,
+            "late20": 0.0012341890134848655
+          },
+          "epoch_means": {
+            "epoch1": 0.00125058331565621,
+            "epoch2": 0.001254254022690778,
+            "epoch3": 0.0012426078727003187
+          },
+          "peak_first20": {
+            "step": 4.0,
+            "value": 0.0014460952952504158
+          }
+        },
+        "boundary_dir_geo": {
+          "windows": {
+            "start20": 0.008372608339414,
+            "mid20": 0.008250710833817721,
+            "late20": 0.008766789454966784
+          },
+          "epoch_means": {
+            "epoch1": 0.008494965980450313,
+            "epoch2": 0.008338692768787345,
+            "epoch3": 0.008608489188676079
+          },
+          "peak_first20": {
+            "step": 20.0,
+            "value": 0.009321996010839939
+          }
+        }
+      }
+    },
+    "candidate_minus_current": {
+      "boundary_dir_geo": {
+        "windows": {
+          "start20": 0.0007370609324425462,
+          "mid20": 0.00040882411412894795,
+          "late20": 0.0006359746214002378
+        },
+        "epoch_means": {
+          "epoch1": 0.0008330444106832155,
+          "epoch2": 0.0005263535228247447,
+          "epoch3": 0.0007758330010498565
+        },
+        "peak_first20": {
+          "step_delta": 17.0,
+          "value_delta": 0.001276399940252304
+        }
+      },
+      "dir_geo": {
+        "windows": {
+          "start20": 0.4734825611114504,
+          "mid20": -0.051406401395797774,
+          "late20": 0.0190235793590543
+        },
+        "epoch_means": {
+          "epoch1": 0.17041513522466012,
+          "epoch2": -0.02758853435516362,
+          "epoch3": 0.019657224416732788
+        },
+        "peak_first20": {
+          "step_delta": 0.0,
+          "value_delta": 1.3581395149230957
+        }
+      },
+      "dir_group_norm_leg": {
+        "windows": {
+          "start20": 0.5134594678878783,
+          "mid20": -0.03776183128356936,
+          "late20": 0.011604604125022844
+        },
+        "epoch_means": {
+          "epoch1": 0.1910040189822515,
+          "epoch2": -0.02376430630683901,
+          "epoch3": 0.019508100549380014
+        },
+        "peak_first20": {
+          "step_delta": 0.0,
+          "value_delta": 1.4534118175506592
+        }
+      },
+      "dir_leg_base": {
+        "windows": {
+          "start20": 0.0020092194201424725,
+          "mid20": 0.0007193546160124244,
+          "late20": 0.0008518152753822505
+        },
+        "epoch_means": {
+          "epoch1": 0.0016948388384965558,
+          "epoch2": 0.0006771207864706714,
+          "epoch3": 0.0007314250261212388
+        },
+        "peak_first20": {
+          "step_delta": 0.0,
+          "value_delta": 0.0039419084787368774
+        }
+      },
+      "dir_nonleg_base": {
+        "windows": {
+          "start20": 3.0291744042188103e-05,
+          "mid20": 5.8073084801435904e-06,
+          "late20": 8.517864625901027e-06
+        },
+        "epoch_means": {
+          "epoch1": 2.3941187343249617e-05,
+          "epoch2": 1.114848613118142e-05,
+          "epoch3": 6.663434517880295e-06
+        },
+        "peak_first20": {
+          "step_delta": -4.0,
+          "value_delta": 0.00010841526091098785
+        }
+      },
+      "leg_align_distal_loss": {
+        "windows": {
+          "start20": 3.944396521546878e-05,
+          "mid20": 9.906848163154794e-06,
+          "late20": 1.296024829571252e-05
+        },
+        "epoch_means": {
+          "epoch1": 3.604223793445272e-05,
+          "epoch2": 1.1647525313189055e-05,
+          "epoch3": 8.37919595445176e-06
+        },
+        "peak_first20": {
+          "step_delta": -5.0,
+          "value_delta": 0.00011947240273002535
+        }
+      },
+      "leg_align_loss": {
+        "windows": {
+          "start20": 0.00011850085011246846,
+          "mid20": 2.0028200469823784e-05,
+          "late20": 2.8551246305141828e-05
+        },
+        "epoch_means": {
+          "epoch1": 8.906761674249234e-05,
+          "epoch2": 2.1077250433639465e-05,
+          "epoch3": 2.2666262672525295e-05
+        },
+        "peak_first20": {
+          "step_delta": 0.0,
+          "value_delta": 0.0003269468725193292
+        }
+      },
+      "leg_align_proximal_loss": {
+        "windows": {
+          "start20": 8.03211662969261e-05,
+          "mid20": 9.780286518434874e-06,
+          "late20": 1.6033649262681135e-05
+        },
+        "epoch_means": {
+          "epoch1": 5.300368799604864e-05,
+          "epoch2": 9.007680546346819e-06,
+          "epoch3": 1.4668304644753034e-05
+        },
+        "peak_first20": {
+          "step_delta": 0.0,
+          "value_delta": 0.0002474042703397572
+        }
+      },
+      "leg_align_weighted": {
+        "windows": {
+          "start20": 0.0023700170044321563,
+          "mid20": 0.0004005639959359542,
+          "late20": 0.0005710249271942303
+        },
+        "epoch_means": {
+          "epoch1": 0.001781352347461507,
+          "epoch2": 0.00042154500940038515,
+          "epoch3": 0.00045332525041885674
+        },
+        "peak_first20": {
+          "step_delta": 0.0,
+          "value_delta": 0.006538937333971262
+        }
+      },
+      "total": {
+        "windows": {
+          "start20": 0.47585253119468707,
+          "mid20": -0.05100587010383606,
+          "late20": 0.019594603776931674
+        },
+        "epoch_means": {
+          "epoch1": 0.17219646374384556,
+          "epoch2": -0.027167002360025894,
+          "epoch3": 0.020110563437143902
+        },
+        "peak_first20": {
+          "step_delta": 0.0,
+          "value_delta": 1.3646783828735352
+        }
+      }
+    },
+    "plot_path": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/72_loss_curve_compare.png",
+    "summary_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/72_loss_curve_summary.json",
+    "summary_md": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/72_loss_curve_summary.md"
+  },
+  "replay": {
+    "current": {
+      "snapshots": {
+        "s000": {
+          "step": 0,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/current/ckpt_step_000000_WalkF_stage7_72_current_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.11191065632196706,
+              "DirectGeoLocalDegWeighted": 0.1290073149599308,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.11191065641286034,
+              "leg": 0.29547294187220763,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "else": 0.04753719151519886
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.29547294187220763,
+                "arms_main": 0.08266488065130256,
+                "left_arm_main": 0.10915616009521942,
+                "right_arm_main": 0.08030111667993613
+              },
+              "A_52_59": {
+                "legs_main": 0.4253831942623947,
+                "arms_main": 0.07121839742351838,
+                "left_arm_main": 0.09967851682611378,
+                "right_arm_main": 0.05727500207689849
+              },
+              "B_76_80": {
+                "legs_main": 0.25504510874161496,
+                "arms_main": 0.09059350668187038,
+                "left_arm_main": 0.13928188802674413,
+                "right_arm_main": 0.08473783650171957
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.5992717912886292,
+                "calf_r_SIC2_4": 0.4409123050669829
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.11191065632196706,
+              "all_ex_root": 0.11191065641286034,
+              "leg": 0.29547294187220763,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "legs_main": 0.29547294187220763,
+              "arms_main": 0.08266488065130256,
+              "foot_l_ball_l_SIC12_15": 0.5992717912886292,
+              "calf_r_SIC2_4": 0.4409123050669829
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s000/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s000_group_summary.json"
+            }
+          }
+        },
+        "s005": {
+          "step": 5,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/current/ckpt_step_000005_WalkF_stage7_72_current_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.12962096484464614,
+              "DirectGeoLocalDegWeighted": 0.1497252317968496,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.12962096464967512,
+              "leg": 0.39509342570429085,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "else": 0.04753719151519886
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.39509342570429085,
+                "arms_main": 0.08266488065130256,
+                "left_arm_main": 0.10915616009521942,
+                "right_arm_main": 0.08030111667993613
+              },
+              "A_52_59": {
+                "legs_main": 0.437328358166269,
+                "arms_main": 0.07121839742351838,
+                "left_arm_main": 0.09967851682611378,
+                "right_arm_main": 0.05727500207689849
+              },
+              "B_76_80": {
+                "legs_main": 0.30071403555339205,
+                "arms_main": 0.09059350668187038,
+                "left_arm_main": 0.13928188802674413,
+                "right_arm_main": 0.08473783650171957
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 1.3979346826672554,
+                "calf_r_SIC2_4": 0.4636664154628913
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.12962096484464614,
+              "all_ex_root": 0.12962096464967512,
+              "leg": 0.39509342570429085,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "legs_main": 0.39509342570429085,
+              "arms_main": 0.08266488065130256,
+              "foot_l_ball_l_SIC12_15": 1.3979346826672554,
+              "calf_r_SIC2_4": 0.4636664154628913
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s005/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s005_group_summary.json"
+            }
+          }
+        },
+        "s010": {
+          "step": 10,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/current/ckpt_step_000010_WalkF_stage7_72_current_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.12812633779939525,
+              "DirectGeoLocalDegWeighted": 0.14351448743755735,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.12812633798802323,
+              "leg": 0.3866861507324989,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "else": 0.04753719151519886
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.3866861507324989,
+                "arms_main": 0.08266488065130256,
+                "left_arm_main": 0.10915616009521942,
+                "right_arm_main": 0.08030111667993613
+              },
+              "A_52_59": {
+                "legs_main": 0.6597969199647196,
+                "arms_main": 0.07121839742351838,
+                "left_arm_main": 0.09967851682611378,
+                "right_arm_main": 0.05727500207689849
+              },
+              "B_76_80": {
+                "legs_main": 0.27878043171949685,
+                "arms_main": 0.09059350668187038,
+                "left_arm_main": 0.13928188802674413,
+                "right_arm_main": 0.08473783650171957
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.8278154679574072,
+                "calf_r_SIC2_4": 0.3571103767802318
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.12812633779939525,
+              "all_ex_root": 0.12812633798802323,
+              "leg": 0.3866861507324989,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "legs_main": 0.3866861507324989,
+              "arms_main": 0.08266488065130256,
+              "foot_l_ball_l_SIC12_15": 0.8278154679574072,
+              "calf_r_SIC2_4": 0.3571103767802318
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s010/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s010_group_summary.json"
+            }
+          }
+        },
+        "s020": {
+          "step": 20,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/current/ckpt_step_000020_WalkF_stage7_72_current_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.11437136682053638,
+              "DirectGeoLocalDegWeighted": 0.13258597651106674,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.11437136609727444,
+              "leg": 0.30931443384703694,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "else": 0.04753719151519886
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.30931443384703694,
+                "arms_main": 0.08266488065130256,
+                "left_arm_main": 0.10915616009521942,
+                "right_arm_main": 0.08030111667993613
+              },
+              "A_52_59": {
+                "legs_main": 0.39427540652104653,
+                "arms_main": 0.07121839742351838,
+                "left_arm_main": 0.09967851682611378,
+                "right_arm_main": 0.05727500207689849
+              },
+              "B_76_80": {
+                "legs_main": 0.2805495835375041,
+                "arms_main": 0.09059350668187038,
+                "left_arm_main": 0.13928188802674413,
+                "right_arm_main": 0.08473783650171957
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.7094085542485118,
+                "calf_r_SIC2_4": 0.30596858945985633
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.11437136682053638,
+              "all_ex_root": 0.11437136609727444,
+              "leg": 0.30931443384703694,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "legs_main": 0.30931443384703694,
+              "arms_main": 0.08266488065130256,
+              "foot_l_ball_l_SIC12_15": 0.7094085542485118,
+              "calf_r_SIC2_4": 0.30596858945985633
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s020/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s020_group_summary.json"
+            }
+          }
+        },
+        "s040": {
+          "step": 40,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/current/ckpt_step_000040_WalkF_stage7_72_current_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.11623425777395104,
+              "DirectGeoLocalDegWeighted": 0.13294132899622932,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.11623425729976374,
+              "leg": 0.31979319686103924,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "else": 0.04753719151519886
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.31979319686103924,
+                "arms_main": 0.08266488065130256,
+                "left_arm_main": 0.10915616009521942,
+                "right_arm_main": 0.08030111667993613
+              },
+              "A_52_59": {
+                "legs_main": 0.5068390074593481,
+                "arms_main": 0.07121839742351838,
+                "left_arm_main": 0.09967851682611378,
+                "right_arm_main": 0.05727500207689849
+              },
+              "B_76_80": {
+                "legs_main": 0.264902645163238,
+                "arms_main": 0.09059350668187038,
+                "left_arm_main": 0.13928188802674413,
+                "right_arm_main": 0.08473783650171957
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.56810258096084,
+                "calf_r_SIC2_4": 0.2945647928863764
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.11623425777395104,
+              "all_ex_root": 0.11623425729976374,
+              "leg": 0.31979319686103924,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "legs_main": 0.31979319686103924,
+              "arms_main": 0.08266488065130256,
+              "foot_l_ball_l_SIC12_15": 0.56810258096084,
+              "calf_r_SIC2_4": 0.2945647928863764
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s040/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s040_group_summary.json"
+            }
+          }
+        },
+        "s060": {
+          "step": 60,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/current/ckpt_step_000060_WalkF_stage7_72_current_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.12059606146067381,
+              "DirectGeoLocalDegWeighted": 0.13940536607663298,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.12059606066193744,
+              "leg": 0.3443283407732663,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "else": 0.04753719151519886
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.3443283407732663,
+                "arms_main": 0.08266488065130256,
+                "left_arm_main": 0.10915616009521942,
+                "right_arm_main": 0.08030111667993613
+              },
+              "A_52_59": {
+                "legs_main": 0.43665620597312227,
+                "arms_main": 0.07121839742351838,
+                "left_arm_main": 0.09967851682611378,
+                "right_arm_main": 0.05727500207689849
+              },
+              "B_76_80": {
+                "legs_main": 0.2802179918158799,
+                "arms_main": 0.09059350668187038,
+                "left_arm_main": 0.13928188802674413,
+                "right_arm_main": 0.08473783650171957
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.902401627972722,
+                "calf_r_SIC2_4": 0.2641041756918033
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.12059606146067381,
+              "all_ex_root": 0.12059606066193744,
+              "leg": 0.3443283407732663,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "legs_main": 0.3443283407732663,
+              "arms_main": 0.08266488065130256,
+              "foot_l_ball_l_SIC12_15": 0.902401627972722,
+              "calf_r_SIC2_4": 0.2641041756918033
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s060/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s060_group_summary.json"
+            }
+          }
+        },
+        "s120": {
+          "step": 120,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/current/ckpt_step_000120_WalkF_stage7_72_current_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.10634351353875773,
+              "DirectGeoLocalDegWeighted": 0.1220556405741115,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.10634351390540792,
+              "leg": 0.2641577652677877,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "else": 0.04753719151519886
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.2641577652677877,
+                "arms_main": 0.08266488065130256,
+                "left_arm_main": 0.10915616009521942,
+                "right_arm_main": 0.08030111667993613
+              },
+              "A_52_59": {
+                "legs_main": 0.283939139553695,
+                "arms_main": 0.07121839742351838,
+                "left_arm_main": 0.09967851682611378,
+                "right_arm_main": 0.05727500207689849
+              },
+              "B_76_80": {
+                "legs_main": 0.21692343560280278,
+                "arms_main": 0.09059350668187038,
+                "left_arm_main": 0.13928188802674413,
+                "right_arm_main": 0.08473783650171957
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.4801814763341099,
+                "calf_r_SIC2_4": 0.29074379429221153
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.10634351353875773,
+              "all_ex_root": 0.10634351390540792,
+              "leg": 0.2641577652677877,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "legs_main": 0.2641577652677877,
+              "arms_main": 0.08266488065130256,
+              "foot_l_ball_l_SIC12_15": 0.4801814763341099,
+              "calf_r_SIC2_4": 0.29074379429221153
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s120/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s120_group_summary.json"
+            }
+          }
+        },
+        "s180": {
+          "step": 180,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/current/ckpt_step_000180_WalkF_stage7_72_current_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.1120735654109266,
+              "DirectGeoLocalDegWeighted": 0.12909417488980432,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.11207356540107699,
+              "leg": 0.2963893049309263,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "else": 0.04753719151519886
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.2963893049309263,
+                "arms_main": 0.08266488065130256,
+                "left_arm_main": 0.10915616009521942,
+                "right_arm_main": 0.08030111667993613
+              },
+              "A_52_59": {
+                "legs_main": 0.427245539118303,
+                "arms_main": 0.07121839742351838,
+                "left_arm_main": 0.09967851682611378,
+                "right_arm_main": 0.05727500207689849
+              },
+              "B_76_80": {
+                "legs_main": 0.22578722634352744,
+                "arms_main": 0.09059350668187038,
+                "left_arm_main": 0.13928188802674413,
+                "right_arm_main": 0.08473783650171957
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.8126629516482353,
+                "calf_r_SIC2_4": 0.2888800936440627
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.1120735654109266,
+              "all_ex_root": 0.11207356540107699,
+              "leg": 0.2963893049309263,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "legs_main": 0.2963893049309263,
+              "arms_main": 0.08266488065130256,
+              "foot_l_ball_l_SIC12_15": 0.8126629516482353,
+              "calf_r_SIC2_4": 0.2888800936440627
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s180/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/current/s180_group_summary.json"
+            }
+          }
+        }
+      },
+      "replay_vs_reference_final_delta": {
+        "DirectGeoLocalDeg": 0.0,
+        "all_ex_root": 0.0,
+        "leg": 0.0,
+        "nonleg": 0.0,
+        "arm": 0.0,
+        "legs_main": 0.0,
+        "arms_main": 0.0,
+        "foot_l_ball_l_SIC12_15": 0.0,
+        "calf_r_SIC2_4": 0.0
+      },
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/configs/posttrain_72_current_snapshots_20260314.json",
+      "run_name": "WalkF_stage7_72_current_snapshots_20260314",
+      "last_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/current/ckpt_last_WalkF_stage7_72_current_snapshots_20260314.pth"
+    },
+    "candidate": {
+      "snapshots": {
+        "s000": {
+          "step": 0,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/candidate/ckpt_step_000000_WalkF_stage7_72_candidate_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.10706447615006635,
+              "DirectGeoLocalDegWeighted": 0.12317775711850372,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.10706447656007607,
+              "leg": 0.21504441272715435,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.21504441272715435,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.2375363229366485,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.13965534384333295,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.4294491719920188,
+                "calf_r_SIC2_4": 0.09960248321294785
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.10706447615006635,
+              "all_ex_root": 0.10706447656007607,
+              "leg": 0.21504441272715435,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.21504441272715435,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.4294491719920188,
+              "calf_r_SIC2_4": 0.09960248321294785
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s000/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s000_group_summary.json"
+            }
+          }
+        },
+        "s005": {
+          "step": 5,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/candidate/ckpt_step_000005_WalkF_stage7_72_candidate_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.15122825793142236,
+              "DirectGeoLocalDegWeighted": 0.17885530709700528,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.1512282581303654,
+              "leg": 0.4634656840600317,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.4634656840600317,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.5383060393796768,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.31242934218607843,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 1.1557902861386538,
+                "calf_r_SIC2_4": 0.24655679489175478
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.15122825793142236,
+              "all_ex_root": 0.1512282581303654,
+              "leg": 0.4634656840600317,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.4634656840600317,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 1.1557902861386538,
+              "calf_r_SIC2_4": 0.24655679489175478
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s005/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s005_group_summary.json"
+            }
+          }
+        },
+        "s010": {
+          "step": 10,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/candidate/ckpt_step_000010_WalkF_stage7_72_candidate_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.15209010204430237,
+              "DirectGeoLocalDegWeighted": 0.17589798664977385,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.15209010132064646,
+              "leg": 0.4683135520053627,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.4683135520053627,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.5515582301595714,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.2569700132356957,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 1.8092441745102406,
+                "calf_r_SIC2_4": 0.3137364437182744
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.15209010204430237,
+              "all_ex_root": 0.15209010132064646,
+              "leg": 0.4683135520053627,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.4683135520053627,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 1.8092441745102406,
+              "calf_r_SIC2_4": 0.3137364437182744
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s010/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s010_group_summary.json"
+            }
+          }
+        },
+        "s020": {
+          "step": 20,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/candidate/ckpt_step_000020_WalkF_stage7_72_candidate_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.13196041992713892,
+              "DirectGeoLocalDegWeighted": 0.15193255148221588,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.1319604195703567,
+              "leg": 0.35508409215998293,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.35508409215998293,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.3876548403641209,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.17796926964074372,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 1.407481909263879,
+                "calf_r_SIC2_4": 0.13662503411372504
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.13196041992713892,
+              "all_ex_root": 0.1319604195703567,
+              "leg": 0.35508409215998293,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.35508409215998293,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 1.407481909263879,
+              "calf_r_SIC2_4": 0.13662503411372504
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s020/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s020_group_summary.json"
+            }
+          }
+        },
+        "s040": {
+          "step": 40,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/candidate/ckpt_step_000040_WalkF_stage7_72_candidate_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.14424138072185044,
+              "DirectGeoLocalDegWeighted": 0.1711162984977628,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.144241380390818,
+              "leg": 0.4241644967750776,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.4241644967750776,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.6118132935080212,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.19954814061056822,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.7762202452868223,
+                "calf_r_SIC2_4": 0.11353588476777077
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.14424138072185044,
+              "all_ex_root": 0.144241380390818,
+              "leg": 0.4241644967750776,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.4241644967750776,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.7762202452868223,
+              "calf_r_SIC2_4": 0.11353588476777077
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s040/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s040_group_summary.json"
+            }
+          }
+        },
+        "s060": {
+          "step": 60,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/candidate/ckpt_step_000060_WalkF_stage7_72_candidate_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.14078754249440376,
+              "DirectGeoLocalDegWeighted": 0.16105190842130848,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.1407875425315686,
+              "leg": 0.40473665881679977,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.40473665881679977,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.6313559116242686,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.24317183243110777,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 1.128361749695614,
+                "calf_r_SIC2_4": 0.2861768640577793
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.14078754249440376,
+              "all_ex_root": 0.1407875425315686,
+              "leg": 0.40473665881679977,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.40473665881679977,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 1.128361749695614,
+              "calf_r_SIC2_4": 0.2861768640577793
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s060/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s060_group_summary.json"
+            }
+          }
+        },
+        "s120": {
+          "step": 120,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/candidate/ckpt_step_000120_WalkF_stage7_72_candidate_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.12145818315099838,
+              "DirectGeoLocalDegWeighted": 0.13908172734514918,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.12145818367271567,
+              "leg": 0.29600901523575207,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.29600901523575207,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.3634199467196595,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.17154890384990723,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.5214120522141457,
+                "calf_r_SIC2_4": 0.19964110106229782
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.12145818315099838,
+              "all_ex_root": 0.12145818367271567,
+              "leg": 0.29600901523575207,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.29600901523575207,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.5214120522141457,
+              "calf_r_SIC2_4": 0.19964110106229782
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s120/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s120_group_summary.json"
+            }
+          }
+        },
+        "s180": {
+          "step": 180,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/candidate/ckpt_step_000180_WalkF_stage7_72_candidate_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.12193614097182141,
+              "DirectGeoLocalDegWeighted": 0.13934311511124983,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.12193614071876013,
+              "leg": 0.2986975236197522,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.2986975236197522,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.3065043650312873,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.17783199273981154,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.5864377534016967,
+                "calf_r_SIC2_4": 0.1912315289179484
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.12193614097182141,
+              "all_ex_root": 0.12193614071876013,
+              "leg": 0.2986975236197522,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.2986975236197522,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.5864377534016967,
+              "calf_r_SIC2_4": 0.1912315289179484
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s180/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/eval_model/candidate/s180_group_summary.json"
+            }
+          }
+        }
+      },
+      "replay_vs_reference_final_delta": {
+        "DirectGeoLocalDeg": 0.0,
+        "all_ex_root": 0.0,
+        "leg": 0.0,
+        "nonleg": 0.0,
+        "arm": 0.0,
+        "legs_main": 0.0,
+        "arms_main": 0.0,
+        "foot_l_ball_l_SIC12_15": 0.0,
+        "calf_r_SIC2_4": 0.0
+      },
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/configs/posttrain_72_candidate_snapshots_20260314.json",
+      "run_name": "WalkF_stage7_72_candidate_snapshots_20260314",
+      "last_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_72_loss_curve_attribution_20260314/candidate/ckpt_last_WalkF_stage7_72_candidate_snapshots_20260314.pth"
+    },
+    "candidate_minus_current_by_snapshot": {
+      "s000": {
+        "DirectGeoLocalDeg": -0.0048461801719007075,
+        "all_ex_root": -0.004846179852784266,
+        "leg": -0.08042852914505327,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "legs_main": -0.08042852914505327,
+        "arms_main": 0.009184037606418477,
+        "foot_l_ball_l_SIC12_15": -0.16982261929661036,
+        "calf_r_SIC2_4": -0.3413098218540351
+      },
+      "s005": {
+        "DirectGeoLocalDeg": 0.021607293086776225,
+        "all_ex_root": 0.021607293480690265,
+        "leg": 0.06837225835574084,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "legs_main": 0.06837225835574084,
+        "arms_main": 0.009184037606418477,
+        "foot_l_ball_l_SIC12_15": -0.24214439652860165,
+        "calf_r_SIC2_4": -0.2171096205711365
+      },
+      "s010": {
+        "DirectGeoLocalDeg": 0.02396376424490712,
+        "all_ex_root": 0.023963763332623234,
+        "leg": 0.08162740127286378,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "legs_main": 0.08162740127286378,
+        "arms_main": 0.009184037606418477,
+        "foot_l_ball_l_SIC12_15": 0.9814287065528333,
+        "calf_r_SIC2_4": -0.04337393306195736
+      },
+      "s020": {
+        "DirectGeoLocalDeg": 0.01758905310660254,
+        "all_ex_root": 0.01758905347308226,
+        "leg": 0.04576965831294599,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "legs_main": 0.04576965831294599,
+        "arms_main": 0.009184037606418477,
+        "foot_l_ball_l_SIC12_15": 0.6980733550153673,
+        "calf_r_SIC2_4": -0.1693435553461313
+      },
+      "s040": {
+        "DirectGeoLocalDeg": 0.028007122947899407,
+        "all_ex_root": 0.028007123091054256,
+        "leg": 0.10437129991403837,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "legs_main": 0.10437129991403837,
+        "arms_main": 0.009184037606418477,
+        "foot_l_ball_l_SIC12_15": 0.20811766432598233,
+        "calf_r_SIC2_4": -0.1810289081186056
+      },
+      "s060": {
+        "DirectGeoLocalDeg": 0.020191481033729947,
+        "all_ex_root": 0.02019148186963117,
+        "leg": 0.06040831804353347,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "legs_main": 0.06040831804353347,
+        "arms_main": 0.009184037606418477,
+        "foot_l_ball_l_SIC12_15": 0.22596012172289193,
+        "calf_r_SIC2_4": 0.022072688365976034
+      },
+      "s120": {
+        "DirectGeoLocalDeg": 0.015114669612240644,
+        "all_ex_root": 0.015114669767307756,
+        "leg": 0.031851249967964346,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "legs_main": 0.031851249967964346,
+        "arms_main": 0.009184037606418477,
+        "foot_l_ball_l_SIC12_15": 0.04123057588003576,
+        "calf_r_SIC2_4": -0.09110269322991371
+      },
+      "s180": {
+        "DirectGeoLocalDeg": 0.009862575560894815,
+        "all_ex_root": 0.009862575317683142,
+        "leg": 0.0023082186888259137,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "legs_main": 0.0023082186888259137,
+        "arms_main": 0.009184037606418477,
+        "foot_l_ball_l_SIC12_15": -0.22622519824653864,
+        "calf_r_SIC2_4": -0.0976485647261143
+      }
+    },
+    "candidate_best_snapshot_all_ex_root_any": {
+      "tag": "s000",
+      "metrics": {
+        "DirectGeoLocalDeg": 0.10706447615006635,
+        "all_ex_root": 0.10706447656007607,
+        "leg": 0.21504441272715435,
+        "nonleg": 0.08371746333476185,
+        "arm": 0.09184891825772104,
+        "legs_main": 0.21504441272715435,
+        "arms_main": 0.09184891825772104,
+        "foot_l_ball_l_SIC12_15": 0.4294491719920188,
+        "calf_r_SIC2_4": 0.09960248321294785
+      }
+    },
+    "candidate_best_snapshot_leg_any": {
+      "tag": "s000",
+      "metrics": {
+        "DirectGeoLocalDeg": 0.10706447615006635,
+        "all_ex_root": 0.10706447656007607,
+        "leg": 0.21504441272715435,
+        "nonleg": 0.08371746333476185,
+        "arm": 0.09184891825772104,
+        "legs_main": 0.21504441272715435,
+        "arms_main": 0.09184891825772104,
+        "foot_l_ball_l_SIC12_15": 0.4294491719920188,
+        "calf_r_SIC2_4": 0.09960248321294785
+      }
+    },
+    "candidate_best_snapshot_all_ex_root_after_start": {
+      "tag": "s120",
+      "metrics": {
+        "DirectGeoLocalDeg": 0.12145818315099838,
+        "all_ex_root": 0.12145818367271567,
+        "leg": 0.29600901523575207,
+        "nonleg": 0.08371746333476185,
+        "arm": 0.09184891825772104,
+        "legs_main": 0.29600901523575207,
+        "arms_main": 0.09184891825772104,
+        "foot_l_ball_l_SIC12_15": 0.5214120522141457,
+        "calf_r_SIC2_4": 0.19964110106229782
+      }
+    },
+    "candidate_best_snapshot_leg_after_start": {
+      "tag": "s120",
+      "metrics": {
+        "DirectGeoLocalDeg": 0.12145818315099838,
+        "all_ex_root": 0.12145818367271567,
+        "leg": 0.29600901523575207,
+        "nonleg": 0.08371746333476185,
+        "arm": 0.09184891825772104,
+        "legs_main": 0.29600901523575207,
+        "arms_main": 0.09184891825772104,
+        "foot_l_ball_l_SIC12_15": 0.5214120522141457,
+        "calf_r_SIC2_4": 0.19964110106229782
+      }
+    }
+  },
+  "stage72_gain_decomposition": {
+    "DirectGeoLocalDeg": {
+      "inherited": -0.0048461801719007075,
+      "current_stage72_gain": 0.00016290908895953693,
+      "candidate_stage72_gain": 0.01487166482175506,
+      "stage72_gain_gap": 0.014708755732795523,
+      "final_gap": 0.009862575560894815
+    },
+    "all_ex_root": {
+      "inherited": -0.004846179852784266,
+      "current_stage72_gain": 0.00016290898821665067,
+      "candidate_stage72_gain": 0.014871664158684059,
+      "stage72_gain_gap": 0.014708755170467408,
+      "final_gap": 0.009862575317683142
+    },
+    "leg": {
+      "inherited": -0.08042852914505327,
+      "current_stage72_gain": 0.0009163630587186722,
+      "candidate_stage72_gain": 0.08365311089259786,
+      "stage72_gain_gap": 0.08273674783387919,
+      "final_gap": 0.0023082186888259137
+    },
+    "nonleg": {
+      "inherited": 0.011495949723922538,
+      "current_stage72_gain": 0.0,
+      "candidate_stage72_gain": 0.0,
+      "stage72_gain_gap": 0.0,
+      "final_gap": 0.011495949723922538
+    },
+    "arm": {
+      "inherited": 0.009184037606418477,
+      "current_stage72_gain": 0.0,
+      "candidate_stage72_gain": 0.0,
+      "stage72_gain_gap": 0.0,
+      "final_gap": 0.009184037606418477
+    },
+    "legs_main": {
+      "inherited": -0.08042852914505327,
+      "current_stage72_gain": 0.0009163630587186722,
+      "candidate_stage72_gain": 0.08365311089259786,
+      "stage72_gain_gap": 0.08273674783387919,
+      "final_gap": 0.0023082186888259137
+    },
+    "arms_main": {
+      "inherited": 0.009184037606418477,
+      "current_stage72_gain": 0.0,
+      "candidate_stage72_gain": 0.0,
+      "stage72_gain_gap": 0.0,
+      "final_gap": 0.009184037606418477
+    },
+    "foot_l_ball_l_SIC12_15": {
+      "inherited": -0.16982261929661036,
+      "current_stage72_gain": 0.21339116035960615,
+      "candidate_stage72_gain": 0.15698858140967786,
+      "stage72_gain_gap": -0.056402578949928284,
+      "final_gap": -0.22622519824653864
+    },
+    "calf_r_SIC2_4": {
+      "inherited": -0.3413098218540351,
+      "current_stage72_gain": -0.15203221142292023,
+      "candidate_stage72_gain": 0.09162904570500055,
+      "stage72_gain_gap": 0.24366125712792078,
+      "final_gap": -0.0976485647261143
+    }
+  },
+  "final_joint_attribution": {
+    "candidate72_vs_current72_leg_joints": {
+      "best": [
+        {
+          "joint": "thigh_l",
+          "delta": -0.052373608216903234,
+          "ref": 0.34093562916441017,
+          "cur": 0.28856202094750694
+        },
+        {
+          "joint": "calf_r",
+          "delta": -0.032569405722951666,
+          "ref": 0.25913959545581494,
+          "cur": 0.22657018973286328
+        },
+        {
+          "joint": "thigh_r",
+          "delta": -0.02753320433264378,
+          "ref": 0.2828149169813408,
+          "cur": 0.25528171264869703
+        },
+        {
+          "joint": "foot_r",
+          "delta": -0.02179722088324121,
+          "ref": 0.3055254018345718,
+          "cur": 0.28372818095133057
+        },
+        {
+          "joint": "foot_l",
+          "delta": 0.0027221351060582877,
+          "ref": 0.40927344705736224,
+          "cur": 0.4119955821634205
+        },
+        {
+          "joint": "ball_r",
+          "delta": 0.020094701197258258,
+          "ref": 0.24284163208375142,
+          "cur": 0.2629363332810097
+        },
+        {
+          "joint": "ball_l",
+          "delta": 0.05639329942777144,
+          "ref": 0.2489644987616948,
+          "cur": 0.30535779818946623
+        },
+        {
+          "joint": "calf_l",
+          "delta": 0.07352905293525908,
+          "ref": 0.28161931810846424,
+          "cur": 0.3551483710437233
+        }
+      ],
+      "worst": [
+        {
+          "joint": "calf_l",
+          "delta": 0.07352905293525908,
+          "ref": 0.28161931810846424,
+          "cur": 0.3551483710437233
+        },
+        {
+          "joint": "ball_l",
+          "delta": 0.05639329942777144,
+          "ref": 0.2489644987616948,
+          "cur": 0.30535779818946623
+        },
+        {
+          "joint": "ball_r",
+          "delta": 0.020094701197258258,
+          "ref": 0.24284163208375142,
+          "cur": 0.2629363332810097
+        },
+        {
+          "joint": "foot_l",
+          "delta": 0.0027221351060582877,
+          "ref": 0.40927344705736224,
+          "cur": 0.4119955821634205
+        },
+        {
+          "joint": "foot_r",
+          "delta": -0.02179722088324121,
+          "ref": 0.3055254018345718,
+          "cur": 0.28372818095133057
+        },
+        {
+          "joint": "thigh_r",
+          "delta": -0.02753320433264378,
+          "ref": 0.2828149169813408,
+          "cur": 0.25528171264869703
+        },
+        {
+          "joint": "calf_r",
+          "delta": -0.032569405722951666,
+          "ref": 0.25913959545581494,
+          "cur": 0.22657018973286328
+        },
+        {
+          "joint": "thigh_l",
+          "delta": -0.052373608216903234,
+          "ref": 0.34093562916441017,
+          "cur": 0.28856202094750694
+        }
+      ]
+    },
+    "candidate72_vs_current72_leg_sic": {
+      "best": [
+        {
+          "sic": 54,
+          "delta": -0.34584975871257484,
+          "ref": 0.6461559375748038,
+          "cur": 0.300306178862229
+        },
+        {
+          "sic": 53,
+          "delta": -0.2596080143703148,
+          "ref": 0.5231668408960104,
+          "cur": 0.2635588265256956
+        },
+        {
+          "sic": 55,
+          "delta": -0.253473611548543,
+          "ref": 0.6223196941427886,
+          "cur": 0.36884608259424567
+        },
+        {
+          "sic": 80,
+          "delta": -0.21229173720348626,
+          "ref": 0.3655897576827556,
+          "cur": 0.15329802047926933
+        },
+        {
+          "sic": 10,
+          "delta": -0.21210879180580378,
+          "ref": 0.5932197677902877,
+          "cur": 0.38111097598448396
+        },
+        {
+          "sic": 7,
+          "delta": -0.1906861521420069,
+          "ref": 0.4057180811651051,
+          "cur": 0.2150319290230982
+        },
+        {
+          "sic": 84,
+          "delta": -0.17114203178789467,
+          "ref": 0.35987032344564795,
+          "cur": 0.1887282916577533
+        },
+        {
+          "sic": 39,
+          "delta": -0.16839503217488527,
+          "ref": 0.5266489295754582,
+          "cur": 0.3582538974005729
+        },
+        {
+          "sic": 6,
+          "delta": -0.14553571736905724,
+          "ref": 0.4135948149487376,
+          "cur": 0.2680590975796804
+        },
+        {
+          "sic": 5,
+          "delta": -0.14443877921439707,
+          "ref": 0.39132769382558763,
+          "cur": 0.24688891461119056
+        },
+        {
+          "sic": 57,
+          "delta": -0.14420931180939078,
+          "ref": 0.340631359256804,
+          "cur": 0.1964220474474132
+        },
+        {
+          "sic": 61,
+          "delta": -0.14380354003515095,
+          "ref": 0.35555251222103834,
+          "cur": 0.2117489721858874
+        },
+        {
+          "sic": 60,
+          "delta": -0.11523690412286669,
+          "ref": 0.3876368091441691,
+          "cur": 0.2723999050213024
+        },
+        {
+          "sic": 32,
+          "delta": -0.11368029599543661,
+          "ref": 0.44819900137372315,
+          "cur": 0.33451870537828654
+        },
+        {
+          "sic": 12,
+          "delta": -0.10701033112127334,
+          "ref": 0.6326748919673264,
+          "cur": 0.5256645608460531
+        },
+        {
+          "sic": 41,
+          "delta": -0.10509556892793626,
+          "ref": 0.25965432939119637,
+          "cur": 0.15455876046326011
+        }
+      ],
+      "worst": [
+        {
+          "sic": 45,
+          "delta": 0.28810582181904465,
+          "ref": 0.20898855780251324,
+          "cur": 0.4970943796215579
+        },
+        {
+          "sic": 48,
+          "delta": 0.27328926930204034,
+          "ref": 0.27201090240851045,
+          "cur": 0.5453001717105508
+        },
+        {
+          "sic": 37,
+          "delta": 0.2143214859534055,
+          "ref": 0.2927672651130706,
+          "cur": 0.5070887510664761
+        },
+        {
+          "sic": 47,
+          "delta": 0.20510956319049,
+          "ref": 0.32879639184102416,
+          "cur": 0.5339059550315142
+        },
+        {
+          "sic": 46,
+          "delta": 0.1875885878689587,
+          "ref": 0.3805295918136835,
+          "cur": 0.5681181796826422
+        },
+        {
+          "sic": 36,
+          "delta": 0.18662203685380518,
+          "ref": 0.24083625967614353,
+          "cur": 0.4274582965299487
+        },
+        {
+          "sic": 35,
+          "delta": 0.1746505832998082,
+          "ref": 0.157383035402745,
+          "cur": 0.3320336187025532
+        },
+        {
+          "sic": 21,
+          "delta": 0.1707331940997392,
+          "ref": 0.19271552958525717,
+          "cur": 0.36344872368499637
+        },
+        {
+          "sic": 43,
+          "delta": 0.139228229643777,
+          "ref": 0.24367630272172391,
+          "cur": 0.3829045323655009
+        },
+        {
+          "sic": 3,
+          "delta": 0.13685065193567425,
+          "ref": 0.19123268383555114,
+          "cur": 0.3280833357712254
+        },
+        {
+          "sic": 44,
+          "delta": 0.13286213751416653,
+          "ref": 0.2204156656516716,
+          "cur": 0.3532778031658381
+        },
+        {
+          "sic": 22,
+          "delta": 0.10259760776534677,
+          "ref": 0.18462746345903724,
+          "cur": 0.287225071224384
+        },
+        {
+          "sic": 51,
+          "delta": 0.10057298676110804,
+          "ref": 0.400639254366979,
+          "cur": 0.501212241128087
+        },
+        {
+          "sic": 71,
+          "delta": 0.09364831470884383,
+          "ref": 0.15301550086587667,
+          "cur": 0.2466638155747205
+        },
+        {
+          "sic": 85,
+          "delta": 0.09093050321098417,
+          "ref": 0.29306464351247996,
+          "cur": 0.38399514672346413
+        },
+        {
+          "sic": 49,
+          "delta": 0.0876585403457284,
+          "ref": 0.45455706492066383,
+          "cur": 0.5422156052663922
+        }
+      ]
+    },
+    "candidate72_vs_current72_joint_sic": {
+      "foot_l": {
+        "best": [
+          {
+            "sic": 15,
+            "delta": -0.9968355372548103,
+            "ref": 1.2700042128562927,
+            "cur": 0.2731686756014824
+          },
+          {
+            "sic": 12,
+            "delta": -0.7703664004802704,
+            "ref": 1.4367855787277222,
+            "cur": 0.6664191782474518
+          },
+          {
+            "sic": 13,
+            "delta": -0.5956228524446487,
+            "ref": 1.2692031264305115,
+            "cur": 0.6735802739858627
+          },
+          {
+            "sic": 10,
+            "delta": -0.5931227058172226,
+            "ref": 1.3259083926677704,
+            "cur": 0.7327856868505478
+          },
+          {
+            "sic": 16,
+            "delta": -0.38648329116404057,
+            "ref": 0.4693463444709778,
+            "cur": 0.08286305330693722
+          },
+          {
+            "sic": 32,
+            "delta": -0.3580266609787941,
+            "ref": 0.7393424957990646,
+            "cur": 0.38131583482027054
+          },
+          {
+            "sic": 9,
+            "delta": -0.3160608299076557,
+            "ref": 0.545792281627655,
+            "cur": 0.2297314517199993
+          },
+          {
+            "sic": 6,
+            "delta": -0.29566969349980354,
+            "ref": 0.5191663801670074,
+            "cur": 0.2234966866672039
+          },
+          {
+            "sic": 33,
+            "delta": -0.2901906967163086,
+            "ref": 0.5560935288667679,
+            "cur": 0.2659028321504593
+          },
+          {
+            "sic": 48,
+            "delta": -0.2633049003779888,
+            "ref": 0.4034523740410805,
+            "cur": 0.14014747366309166
+          }
+        ],
+        "worst": [
+          {
+            "sic": 35,
+            "delta": 0.6812199056148529,
+            "ref": 0.49781569838523865,
+            "cur": 1.1790356040000916
+          },
+          {
+            "sic": 49,
+            "delta": 0.5994277335703373,
+            "ref": 0.2190229408442974,
+            "cur": 0.8184506744146347
+          },
+          {
+            "sic": 36,
+            "delta": 0.519642636179924,
+            "ref": 0.8861381262540817,
+            "cur": 1.4057807624340057
+          },
+          {
+            "sic": 37,
+            "delta": 0.4302753359079361,
+            "ref": 1.005366101861,
+            "cur": 1.4356414377689362
+          },
+          {
+            "sic": 38,
+            "delta": 0.4292161762714386,
+            "ref": 1.0509839951992035,
+            "cur": 1.480200171470642
+          },
+          {
+            "sic": 43,
+            "delta": 0.386611245572567,
+            "ref": 0.30811550468206406,
+            "cur": 0.694726750254631
+          },
+          {
+            "sic": 44,
+            "delta": 0.35804595425724983,
+            "ref": 0.18547632917761803,
+            "cur": 0.5435222834348679
+          },
+          {
+            "sic": 50,
+            "delta": 0.3356601521372795,
+            "ref": 0.4263741001486778,
+            "cur": 0.7620342522859573
+          },
+          {
+            "sic": 46,
+            "delta": 0.2746403440833092,
+            "ref": 0.5123182460665703,
+            "cur": 0.7869585901498795
+          },
+          {
+            "sic": 26,
+            "delta": 0.24154149554669857,
+            "ref": 0.11762415803968906,
+            "cur": 0.35916565358638763
+          }
+        ]
+      },
+      "ball_l": {
+        "best": [
+          {
+            "sic": 5,
+            "delta": -0.7088304031640291,
+            "ref": 0.8612532764673233,
+            "cur": 0.15242287330329418
+          },
+          {
+            "sic": 85,
+            "delta": -0.43165495432913303,
+            "ref": 0.5175944492220879,
+            "cur": 0.08593949489295483
+          },
+          {
+            "sic": 49,
+            "delta": -0.3957567624747753,
+            "ref": 0.6003063023090363,
+            "cur": 0.20454953983426094
+          },
+          {
+            "sic": 45,
+            "delta": -0.2491013864055276,
+            "ref": 0.3074057400226593,
+            "cur": 0.05830435361713171
+          },
+          {
+            "sic": 41,
+            "delta": -0.2362850196659565,
+            "ref": 0.4213876724243164,
+            "cur": 0.1851026527583599
+          },
+          {
+            "sic": 7,
+            "delta": -0.2355097271502018,
+            "ref": 0.47653474658727646,
+            "cur": 0.24102501943707466
+          },
+          {
+            "sic": 33,
+            "delta": -0.17643798980861902,
+            "ref": 0.2303605005145073,
+            "cur": 0.05392251070588827
+          },
+          {
+            "sic": 34,
+            "delta": -0.17528400011360645,
+            "ref": 0.24001958593726158,
+            "cur": 0.06473558582365513
+          },
+          {
+            "sic": 25,
+            "delta": -0.17012780718505383,
+            "ref": 0.3055160939693451,
+            "cur": 0.13538828678429127
+          },
+          {
+            "sic": 57,
+            "delta": -0.13701263070106506,
+            "ref": 0.21424837410449982,
+            "cur": 0.07723574340343475
+          }
+        ],
+        "worst": [
+          {
+            "sic": 8,
+            "delta": 1.3319808281958103,
+            "ref": 0.1566561423242092,
+            "cur": 1.4886369705200195
+          },
+          {
+            "sic": 11,
+            "delta": 0.6533442586660385,
+            "ref": 0.18675535917282104,
+            "cur": 0.8400996178388596
+          },
+          {
+            "sic": 15,
+            "delta": 0.586047075688839,
+            "ref": 0.29737866669893265,
+            "cur": 0.8834257423877716
+          },
+          {
+            "sic": 6,
+            "delta": 0.4798537455499172,
+            "ref": 0.14348310604691505,
+            "cur": 0.6233368515968323
+          },
+          {
+            "sic": 48,
+            "delta": 0.47256460040807724,
+            "ref": 0.3693079277873039,
+            "cur": 0.8418725281953812
+          },
+          {
+            "sic": 46,
+            "delta": 0.40494751930236816,
+            "ref": 0.6763389110565186,
+            "cur": 1.0812864303588867
+          },
+          {
+            "sic": 10,
+            "delta": 0.3896770179271698,
+            "ref": 0.4407292604446411,
+            "cur": 0.8304062783718109
+          },
+          {
+            "sic": 40,
+            "delta": 0.3452909588813782,
+            "ref": 0.5487515181303024,
+            "cur": 0.8940424770116806
+          },
+          {
+            "sic": 43,
+            "delta": 0.280155211687088,
+            "ref": 0.20771052688360214,
+            "cur": 0.48786573857069016
+          },
+          {
+            "sic": 50,
+            "delta": 0.2776433303952217,
+            "ref": 0.19242265820503235,
+            "cur": 0.47006598860025406
+          }
+        ]
+      },
+      "calf_r": {
+        "best": [
+          {
+            "sic": 55,
+            "delta": -0.9668871276080608,
+            "ref": 1.1013835668563843,
+            "cur": 0.13449643924832344
+          },
+          {
+            "sic": 60,
+            "delta": -0.7485759444534779,
+            "ref": 0.9848550260066986,
+            "cur": 0.23627908155322075
+          },
+          {
+            "sic": 61,
+            "delta": -0.727588789537549,
+            "ref": 0.8239413946866989,
+            "cur": 0.0963526051491499
+          },
+          {
+            "sic": 54,
+            "delta": -0.6442838255316019,
+            "ref": 0.7635242342948914,
+            "cur": 0.11924040876328945
+          },
+          {
+            "sic": 53,
+            "delta": -0.5688985092565417,
+            "ref": 0.7015907168388367,
+            "cur": 0.13269220758229494
+          },
+          {
+            "sic": 80,
+            "delta": -0.43018293008208275,
+            "ref": 0.5382915139198303,
+            "cur": 0.10810858383774757
+          },
+          {
+            "sic": 79,
+            "delta": -0.3806714378297329,
+            "ref": 0.5670076608657837,
+            "cur": 0.1863362230360508
+          },
+          {
+            "sic": 1,
+            "delta": -0.3314791712909937,
+            "ref": 0.3782361224293709,
+            "cur": 0.04675695113837719
+          },
+          {
+            "sic": 66,
+            "delta": -0.3142786845564842,
+            "ref": 0.8057338744401932,
+            "cur": 0.49145518988370895
+          },
+          {
+            "sic": 39,
+            "delta": -0.30053368024528027,
+            "ref": 0.3790827542543411,
+            "cur": 0.07854907400906086
+          }
+        ],
+        "worst": [
+          {
+            "sic": 51,
+            "delta": 0.8004826810210943,
+            "ref": 0.11269118823111057,
+            "cur": 0.9131738692522049
+          },
+          {
+            "sic": 85,
+            "delta": 0.4535759910941124,
+            "ref": 0.18472331017255783,
+            "cur": 0.6382993012666702
+          },
+          {
+            "sic": 50,
+            "delta": 0.4339289478957653,
+            "ref": 0.09915712848305702,
+            "cur": 0.5330860763788223
+          },
+          {
+            "sic": 73,
+            "delta": 0.3897479213774204,
+            "ref": 0.11528044566512108,
+            "cur": 0.5050283670425415
+          },
+          {
+            "sic": 62,
+            "delta": 0.3763146121054888,
+            "ref": 0.10944983176887035,
+            "cur": 0.48576444387435913
+          },
+          {
+            "sic": 64,
+            "delta": 0.22441277652978897,
+            "ref": 0.5487945303320885,
+            "cur": 0.7732073068618774
+          },
+          {
+            "sic": 52,
+            "delta": 0.21492266282439232,
+            "ref": 0.3027675338089466,
+            "cur": 0.5176901966333389
+          },
+          {
+            "sic": 30,
+            "delta": 0.20827114395797253,
+            "ref": 0.11639092303812504,
+            "cur": 0.32466206699609756
+          },
+          {
+            "sic": 71,
+            "delta": 0.20794699434190989,
+            "ref": 0.06363877188414335,
+            "cur": 0.27158576622605324
+          },
+          {
+            "sic": 14,
+            "delta": 0.20255832746624947,
+            "ref": 0.21250401809811592,
+            "cur": 0.4150623455643654
+          }
+        ]
+      },
+      "calf_l": {
+        "best": [
+          {
+            "sic": 10,
+            "delta": -0.6927554607391357,
+            "ref": 0.8924139738082886,
+            "cur": 0.19965851306915283
+          },
+          {
+            "sic": 28,
+            "delta": -0.614408116787672,
+            "ref": 0.8009078502655029,
+            "cur": 0.1864997334778309
+          },
+          {
+            "sic": 32,
+            "delta": -0.4095626100897789,
+            "ref": 0.8107524663209915,
+            "cur": 0.4011898562312126
+          },
+          {
+            "sic": 23,
+            "delta": -0.3335940074175596,
+            "ref": 0.42791377007961273,
+            "cur": 0.09431976266205311
+          },
+          {
+            "sic": 6,
+            "delta": -0.33174651116132736,
+            "ref": 0.8210040777921677,
+            "cur": 0.4892575666308403
+          },
+          {
+            "sic": 52,
+            "delta": -0.27711531333625317,
+            "ref": 0.38960375636816025,
+            "cur": 0.11248844303190708
+          },
+          {
+            "sic": 53,
+            "delta": -0.27681660279631615,
+            "ref": 0.5158781409263611,
+            "cur": 0.23906153813004494
+          },
+          {
+            "sic": 57,
+            "delta": -0.275729825720191,
+            "ref": 0.3501039370894432,
+            "cur": 0.0743741113692522
+          },
+          {
+            "sic": 29,
+            "delta": -0.2697521224617958,
+            "ref": 0.5997938066720963,
+            "cur": 0.33004168421030045
+          },
+          {
+            "sic": 11,
+            "delta": -0.2672484442591667,
+            "ref": 0.7614752501249313,
+            "cur": 0.4942268058657646
+          }
+        ],
+        "worst": [
+          {
+            "sic": 13,
+            "delta": 0.9376359544694424,
+            "ref": 0.08213131502270699,
+            "cur": 1.0197672694921494
+          },
+          {
+            "sic": 21,
+            "delta": 0.776475764811039,
+            "ref": 0.09818320721387863,
+            "cur": 0.8746589720249176
+          },
+          {
+            "sic": 15,
+            "delta": 0.5870707025751472,
+            "ref": 0.09355749282985926,
+            "cur": 0.6806281954050064
+          },
+          {
+            "sic": 12,
+            "delta": 0.52915158867836,
+            "ref": 0.8622348010540009,
+            "cur": 1.3913863897323608
+          },
+          {
+            "sic": 63,
+            "delta": 0.5278462897986174,
+            "ref": 0.07783049531280994,
+            "cur": 0.6056767851114273
+          },
+          {
+            "sic": 14,
+            "delta": 0.48982635885477066,
+            "ref": 0.3604617491364479,
+            "cur": 0.8502881079912186
+          },
+          {
+            "sic": 45,
+            "delta": 0.41455839201807976,
+            "ref": 0.17091568186879158,
+            "cur": 0.5854740738868713
+          },
+          {
+            "sic": 46,
+            "delta": 0.399842344224453,
+            "ref": 0.24382374435663223,
+            "cur": 0.6436660885810852
+          },
+          {
+            "sic": 24,
+            "delta": 0.3912530094385147,
+            "ref": 0.1499263346195221,
+            "cur": 0.5411793440580368
+          },
+          {
+            "sic": 85,
+            "delta": 0.38243575394153595,
+            "ref": 0.39395861327648163,
+            "cur": 0.7763943672180176
+          }
+        ]
+      },
+      "ball_r": {
+        "best": [
+          {
+            "sic": 54,
+            "delta": -0.6722856797277927,
+            "ref": 0.8863699734210968,
+            "cur": 0.21408429369330406
+          },
+          {
+            "sic": 53,
+            "delta": -0.5953235179185867,
+            "ref": 0.7995295077562332,
+            "cur": 0.20420598983764648
+          },
+          {
+            "sic": 51,
+            "delta": -0.33360762894153595,
+            "ref": 1.1562542170286179,
+            "cur": 0.8226465880870819
+          },
+          {
+            "sic": 41,
+            "delta": -0.2649245113134384,
+            "ref": 0.29825785011053085,
+            "cur": 0.03333333879709244
+          },
+          {
+            "sic": 11,
+            "delta": -0.22198879346251488,
+            "ref": 0.3004729077219963,
+            "cur": 0.07848411425948143
+          },
+          {
+            "sic": 12,
+            "delta": -0.20071996375918388,
+            "ref": 0.38817183673381805,
+            "cur": 0.18745187297463417
+          },
+          {
+            "sic": 43,
+            "delta": -0.17047393321990967,
+            "ref": 0.3217585012316704,
+            "cur": 0.1512845680117607
+          },
+          {
+            "sic": 42,
+            "delta": -0.16316282842308283,
+            "ref": 0.20096077024936676,
+            "cur": 0.03779794182628393
+          },
+          {
+            "sic": 13,
+            "delta": -0.15611125156283379,
+            "ref": 0.3008500635623932,
+            "cur": 0.1447388119995594
+          },
+          {
+            "sic": 10,
+            "delta": -0.15571387112140656,
+            "ref": 0.3481796532869339,
+            "cur": 0.19246578216552734
+          }
+        ],
+        "worst": [
+          {
+            "sic": 48,
+            "delta": 0.8862869553267956,
+            "ref": 0.3913418836891651,
+            "cur": 1.2776288390159607
+          },
+          {
+            "sic": 45,
+            "delta": 0.8067680560052395,
+            "ref": 0.17203358188271523,
+            "cur": 0.9788016378879547
+          },
+          {
+            "sic": 49,
+            "delta": 0.6180683821439743,
+            "ref": 1.0291368216276169,
+            "cur": 1.6472052037715912
+          },
+          {
+            "sic": 47,
+            "delta": 0.34970058500766754,
+            "ref": 0.6775875091552734,
+            "cur": 1.027288094162941
+          },
+          {
+            "sic": 46,
+            "delta": 0.34761662781238556,
+            "ref": 0.3968995213508606,
+            "cur": 0.7445161491632462
+          },
+          {
+            "sic": 38,
+            "delta": 0.26663100719451904,
+            "ref": 0.28509971499443054,
+            "cur": 0.5517307221889496
+          },
+          {
+            "sic": 85,
+            "delta": 0.24620332662016153,
+            "ref": 0.05781433638185263,
+            "cur": 0.30401766300201416
+          },
+          {
+            "sic": 40,
+            "delta": 0.22846215590834618,
+            "ref": 0.07199989631772041,
+            "cur": 0.3004620522260666
+          },
+          {
+            "sic": 59,
+            "delta": 0.22754190862178802,
+            "ref": 0.11129286140203476,
+            "cur": 0.3388347700238228
+          },
+          {
+            "sic": 35,
+            "delta": 0.18243674747645855,
+            "ref": 0.1038952711969614,
+            "cur": 0.28633201867341995
+          }
+        ]
+      }
+    },
+    "candidate72_vs_candidate71_leg_joints": {
+      "best": [
+        {
+          "joint": "ball_l",
+          "delta": 0.03875069102803025,
+          "ref": 0.266607107161436,
+          "cur": 0.30535779818946623
+        },
+        {
+          "joint": "calf_r",
+          "delta": 0.0499310670758944,
+          "ref": 0.17663912265696888,
+          "cur": 0.22657018973286328
+        },
+        {
+          "joint": "foot_r",
+          "delta": 0.059448045775900765,
+          "ref": 0.2242801351754298,
+          "cur": 0.28372818095133057
+        },
+        {
+          "joint": "thigh_l",
+          "delta": 0.064383199871626,
+          "ref": 0.22417882107588094,
+          "cur": 0.28856202094750694
+        },
+        {
+          "joint": "thigh_r",
+          "delta": 0.07225047421186817,
+          "ref": 0.18303123843682886,
+          "cur": 0.25528171264869703
+        },
+        {
+          "joint": "ball_r",
+          "delta": 0.10325916678655545,
+          "ref": 0.15967716649445424,
+          "cur": 0.2629363332810097
+        },
+        {
+          "joint": "calf_l",
+          "delta": 0.12655557957166522,
+          "ref": 0.2285927914720581,
+          "cur": 0.3551483710437233
+        },
+        {
+          "joint": "foot_l",
+          "delta": 0.15464666281924255,
+          "ref": 0.257348919344178,
+          "cur": 0.4119955821634205
+        }
+      ],
+      "worst": [
+        {
+          "joint": "foot_l",
+          "delta": 0.15464666281924255,
+          "ref": 0.257348919344178,
+          "cur": 0.4119955821634205
+        },
+        {
+          "joint": "calf_l",
+          "delta": 0.12655557957166522,
+          "ref": 0.2285927914720581,
+          "cur": 0.3551483710437233
+        },
+        {
+          "joint": "ball_r",
+          "delta": 0.10325916678655545,
+          "ref": 0.15967716649445424,
+          "cur": 0.2629363332810097
+        },
+        {
+          "joint": "thigh_r",
+          "delta": 0.07225047421186817,
+          "ref": 0.18303123843682886,
+          "cur": 0.25528171264869703
+        },
+        {
+          "joint": "thigh_l",
+          "delta": 0.064383199871626,
+          "ref": 0.22417882107588094,
+          "cur": 0.28856202094750694
+        },
+        {
+          "joint": "foot_r",
+          "delta": 0.059448045775900765,
+          "ref": 0.2242801351754298,
+          "cur": 0.28372818095133057
+        },
+        {
+          "joint": "calf_r",
+          "delta": 0.0499310670758944,
+          "ref": 0.17663912265696888,
+          "cur": 0.22657018973286328
+        },
+        {
+          "joint": "ball_l",
+          "delta": 0.03875069102803025,
+          "ref": 0.266607107161436,
+          "cur": 0.30535779818946623
+        }
+      ]
+    },
+    "candidate72_vs_candidate71_leg_sic": {
+      "best": [
+        {
+          "sic": 2,
+          "delta": -0.13538646837696433,
+          "ref": 0.36169906763825566,
+          "cur": 0.22631259926129133
+        },
+        {
+          "sic": 53,
+          "delta": -0.11648890667129308,
+          "ref": 0.3800477331969887,
+          "cur": 0.2635588265256956
+        },
+        {
+          "sic": 1,
+          "delta": -0.08090195967815816,
+          "ref": 0.33264854410663247,
+          "cur": 0.2517465844284743
+        },
+        {
+          "sic": 23,
+          "delta": -0.07568461110349745,
+          "ref": 0.26467759732622653,
+          "cur": 0.1889929862227291
+        },
+        {
+          "sic": 84,
+          "delta": -0.0668324442813173,
+          "ref": 0.2555607359390706,
+          "cur": 0.1887282916577533
+        },
+        {
+          "sic": 7,
+          "delta": -0.06464027083711699,
+          "ref": 0.2796721998602152,
+          "cur": 0.2150319290230982
+        },
+        {
+          "sic": 6,
+          "delta": -0.06255587248597294,
+          "ref": 0.3306149700656533,
+          "cur": 0.2680590975796804
+        },
+        {
+          "sic": 72,
+          "delta": -0.033671237935777754,
+          "ref": 0.18172084778780118,
+          "cur": 0.14804960985202342
+        },
+        {
+          "sic": 60,
+          "delta": -0.025385843124240637,
+          "ref": 0.29778574814554304,
+          "cur": 0.2723999050213024
+        },
+        {
+          "sic": 81,
+          "delta": -0.023902005879790522,
+          "ref": 0.17715961970679928,
+          "cur": 0.15325761382700875
+        },
+        {
+          "sic": 27,
+          "delta": -0.01945561310276389,
+          "ref": 0.1492011760128662,
+          "cur": 0.1297455629101023
+        },
+        {
+          "sic": 32,
+          "delta": -0.0185538922669366,
+          "ref": 0.35307259764522314,
+          "cur": 0.33451870537828654
+        },
+        {
+          "sic": 57,
+          "delta": -0.012769689317792654,
+          "ref": 0.20919173676520586,
+          "cur": 0.1964220474474132
+        },
+        {
+          "sic": 33,
+          "delta": -0.01242688758065924,
+          "ref": 0.17285089462529868,
+          "cur": 0.16042400704463944
+        },
+        {
+          "sic": 82,
+          "delta": -0.007009719265624881,
+          "ref": 0.18873263546265662,
+          "cur": 0.18172291619703174
+        },
+        {
+          "sic": 41,
+          "delta": -0.0035634726227726787,
+          "ref": 0.1581222330860328,
+          "cur": 0.15455876046326011
+        }
+      ],
+      "worst": [
+        {
+          "sic": 50,
+          "delta": 0.41402466560248286,
+          "ref": 0.16876840020995587,
+          "cur": 0.5827930658124387
+        },
+        {
+          "sic": 48,
+          "delta": 0.3556789003778249,
+          "ref": 0.18962127133272588,
+          "cur": 0.5453001717105508
+        },
+        {
+          "sic": 38,
+          "delta": 0.35248250095173717,
+          "ref": 0.1360099227167666,
+          "cur": 0.48849242366850376
+        },
+        {
+          "sic": 37,
+          "delta": 0.34130293445196,
+          "ref": 0.16578581661451608,
+          "cur": 0.5070887510664761
+        },
+        {
+          "sic": 46,
+          "delta": 0.28996237739920616,
+          "ref": 0.27815580228343606,
+          "cur": 0.5681181796826422
+        },
+        {
+          "sic": 47,
+          "delta": 0.2849145152140409,
+          "ref": 0.2489914398174733,
+          "cur": 0.5339059550315142
+        },
+        {
+          "sic": 49,
+          "delta": 0.28056720830500126,
+          "ref": 0.26164839696139097,
+          "cur": 0.5422156052663922
+        },
+        {
+          "sic": 39,
+          "delta": 0.2623004977358505,
+          "ref": 0.09595339966472238,
+          "cur": 0.3582538974005729
+        },
+        {
+          "sic": 45,
+          "delta": 0.2599575496278703,
+          "ref": 0.23713682999368757,
+          "cur": 0.4970943796215579
+        },
+        {
+          "sic": 36,
+          "delta": 0.25986883242148906,
+          "ref": 0.16758946410845965,
+          "cur": 0.4274582965299487
+        },
+        {
+          "sic": 14,
+          "delta": 0.22003736719489098,
+          "ref": 0.1591801973991096,
+          "cur": 0.3792175645940006
+        },
+        {
+          "sic": 35,
+          "delta": 0.21759796037804335,
+          "ref": 0.11443565832450986,
+          "cur": 0.3320336187025532
+        },
+        {
+          "sic": 4,
+          "delta": 0.20820212457329035,
+          "ref": 0.24086555326357484,
+          "cur": 0.4490676778368652
+        },
+        {
+          "sic": 51,
+          "delta": 0.195410791086033,
+          "ref": 0.30580145004205406,
+          "cur": 0.501212241128087
+        },
+        {
+          "sic": 10,
+          "delta": 0.19273215369321406,
+          "ref": 0.1883788222912699,
+          "cur": 0.38111097598448396
+        },
+        {
+          "sic": 62,
+          "delta": 0.18917028201394714,
+          "ref": 0.07009214334539138,
+          "cur": 0.2592624253593385
+        }
+      ]
+    },
+    "current72_vs_current71_leg_joints": {
+      "best": [
+        {
+          "joint": "thigh_l",
+          "delta": -0.0298930433535472,
+          "ref": 0.37082867251795737,
+          "cur": 0.34093562916441017
+        },
+        {
+          "joint": "calf_r",
+          "delta": -0.028857739483883482,
+          "ref": 0.2879973349396984,
+          "cur": 0.25913959545581494
+        },
+        {
+          "joint": "ball_l",
+          "delta": -0.027399655182434368,
+          "ref": 0.27636415394412917,
+          "cur": 0.2489644987616948
+        },
+        {
+          "joint": "foot_l",
+          "delta": 0.0005647969583786328,
+          "ref": 0.4087086500989836,
+          "cur": 0.40927344705736224
+        },
+        {
+          "joint": "calf_l",
+          "delta": 0.006971283845581822,
+          "ref": 0.2746480342628824,
+          "cur": 0.28161931810846424
+        },
+        {
+          "joint": "foot_r",
+          "delta": 0.014215882645573386,
+          "ref": 0.2913095191889984,
+          "cur": 0.3055254018345718
+        },
+        {
+          "joint": "ball_r",
+          "delta": 0.02854162459207568,
+          "ref": 0.21430000749167574,
+          "cur": 0.24284163208375142
+        },
+        {
+          "joint": "thigh_r",
+          "delta": 0.04318775444800507,
+          "ref": 0.23962716253333574,
+          "cur": 0.2828149169813408
+        }
+      ],
+      "worst": [
+        {
+          "joint": "thigh_r",
+          "delta": 0.04318775444800507,
+          "ref": 0.23962716253333574,
+          "cur": 0.2828149169813408
+        },
+        {
+          "joint": "ball_r",
+          "delta": 0.02854162459207568,
+          "ref": 0.21430000749167574,
+          "cur": 0.24284163208375142
+        },
+        {
+          "joint": "foot_r",
+          "delta": 0.014215882645573386,
+          "ref": 0.2913095191889984,
+          "cur": 0.3055254018345718
+        },
+        {
+          "joint": "calf_l",
+          "delta": 0.006971283845581822,
+          "ref": 0.2746480342628824,
+          "cur": 0.28161931810846424
+        },
+        {
+          "joint": "foot_l",
+          "delta": 0.0005647969583786328,
+          "ref": 0.4087086500989836,
+          "cur": 0.40927344705736224
+        },
+        {
+          "joint": "ball_l",
+          "delta": -0.027399655182434368,
+          "ref": 0.27636415394412917,
+          "cur": 0.2489644987616948
+        },
+        {
+          "joint": "calf_r",
+          "delta": -0.028857739483883482,
+          "ref": 0.2879973349396984,
+          "cur": 0.25913959545581494
+        },
+        {
+          "joint": "thigh_l",
+          "delta": -0.0298930433535472,
+          "ref": 0.37082867251795737,
+          "cur": 0.34093562916441017
+        }
+      ]
+    },
+    "current72_vs_current71_leg_sic": {
+      "best": [
+        {
+          "sic": 52,
+          "delta": -0.3527318090200424,
+          "ref": 0.6714784791693091,
+          "cur": 0.3187466701492667
+        },
+        {
+          "sic": 2,
+          "delta": -0.2385281139286235,
+          "ref": 0.4285316551104188,
+          "cur": 0.1900035411817953
+        },
+        {
+          "sic": 1,
+          "delta": -0.21055517229251564,
+          "ref": 0.41475943103432655,
+          "cur": 0.20420425874181092
+        },
+        {
+          "sic": 45,
+          "delta": -0.16381059167906642,
+          "ref": 0.37279914948157966,
+          "cur": 0.20898855780251324
+        },
+        {
+          "sic": 41,
+          "delta": -0.1436853730410803,
+          "ref": 0.4033397024322767,
+          "cur": 0.25965432939119637
+        },
+        {
+          "sic": 35,
+          "delta": -0.13094044895842671,
+          "ref": 0.2883234843611717,
+          "cur": 0.157383035402745
+        },
+        {
+          "sic": 80,
+          "delta": -0.1283253930741921,
+          "ref": 0.4939151507569477,
+          "cur": 0.3655897576827556
+        },
+        {
+          "sic": 48,
+          "delta": -0.10986459895502776,
+          "ref": 0.3818755013635382,
+          "cur": 0.27201090240851045
+        },
+        {
+          "sic": 31,
+          "delta": -0.10961163602769375,
+          "ref": 0.27283258992247283,
+          "cur": 0.16322095389477909
+        },
+        {
+          "sic": 3,
+          "delta": -0.1073286896571517,
+          "ref": 0.29856137349270284,
+          "cur": 0.19123268383555114
+        },
+        {
+          "sic": 57,
+          "delta": -0.09203473757952452,
+          "ref": 0.4326660968363285,
+          "cur": 0.340631359256804
+        },
+        {
+          "sic": 36,
+          "delta": -0.06991988734807819,
+          "ref": 0.3107561470242217,
+          "cur": 0.24083625967614353
+        },
+        {
+          "sic": 8,
+          "delta": -0.06933016376569867,
+          "ref": 0.4920358774252236,
+          "cur": 0.4227057136595249
+        },
+        {
+          "sic": 81,
+          "delta": -0.06890758778899908,
+          "ref": 0.3002424092264846,
+          "cur": 0.23133482143748552
+        },
+        {
+          "sic": 75,
+          "delta": -0.05684686570020858,
+          "ref": 0.2053017708240077,
+          "cur": 0.1484549051237991
+        },
+        {
+          "sic": 72,
+          "delta": -0.051857664715498686,
+          "ref": 0.21485970716457814,
+          "cur": 0.16300204244907945
+        }
+      ],
+      "worst": [
+        {
+          "sic": 10,
+          "delta": 0.2918284432962537,
+          "ref": 0.30139132449403405,
+          "cur": 0.5932197677902877
+        },
+        {
+          "sic": 54,
+          "delta": 0.27227251324802637,
+          "ref": 0.37388342432677746,
+          "cur": 0.6461559375748038
+        },
+        {
+          "sic": 55,
+          "delta": 0.238259413279593,
+          "ref": 0.38406028086319566,
+          "cur": 0.6223196941427886
+        },
+        {
+          "sic": 12,
+          "delta": 0.23421107151079923,
+          "ref": 0.3984638204565272,
+          "cur": 0.6326748919673264
+        },
+        {
+          "sic": 50,
+          "delta": 0.16951865935698152,
+          "ref": 0.3333375551737845,
+          "cur": 0.502856214530766
+        },
+        {
+          "sic": 13,
+          "delta": 0.15500377991702408,
+          "ref": 0.28012998041231185,
+          "cur": 0.43513376032933593
+        },
+        {
+          "sic": 32,
+          "delta": 0.15178134269081056,
+          "ref": 0.2964176586829126,
+          "cur": 0.44819900137372315
+        },
+        {
+          "sic": 11,
+          "delta": 0.1507280576042831,
+          "ref": 0.28981460351496935,
+          "cur": 0.44054266111925244
+        },
+        {
+          "sic": 16,
+          "delta": 0.12827922747237608,
+          "ref": 0.18278507475042716,
+          "cur": 0.31106430222280324
+        },
+        {
+          "sic": 18,
+          "delta": 0.1228604888310656,
+          "ref": 0.1555055632488802,
+          "cur": 0.2783660520799458
+        },
+        {
+          "sic": 9,
+          "delta": 0.10172924608923495,
+          "ref": 0.2922042210120708,
+          "cur": 0.3939334671013057
+        },
+        {
+          "sic": 27,
+          "delta": 0.08781859715236351,
+          "ref": 0.08578592591220513,
+          "cur": 0.17360452306456864
+        },
+        {
+          "sic": 5,
+          "delta": 0.06583939050324261,
+          "ref": 0.325488303322345,
+          "cur": 0.39132769382558763
+        },
+        {
+          "sic": 61,
+          "delta": 0.060555710922926664,
+          "ref": 0.2949968012981117,
+          "cur": 0.35555251222103834
+        },
+        {
+          "sic": 15,
+          "delta": 0.055201330804266036,
+          "ref": 0.3211068152450025,
+          "cur": 0.37630814604926854
+        },
+        {
+          "sic": 39,
+          "delta": 0.05381895857863128,
+          "ref": 0.4728299709968269,
+          "cur": 0.5266489295754582
+        }
+      ]
+    }
+  },
+  "answers": {
+    "q1_earliest_regression_snapshot": "s005",
+    "q1_earliest_regression_delta": {
+      "DirectGeoLocalDeg": 0.021607293086776225,
+      "all_ex_root": 0.021607293480690265,
+      "leg": 0.06837225835574084,
+      "nonleg": 0.011495949723922538,
+      "arm": 0.009184037606418477,
+      "legs_main": 0.06837225835574084,
+      "arms_main": 0.009184037606418477,
+      "foot_l_ball_l_SIC12_15": -0.24214439652860165,
+      "calf_r_SIC2_4": -0.2171096205711365
+    },
+    "q2_hotspot_paradox": "candidate72 keeps `foot_l/ball_l@SIC12-15` and `calf_r@SIC2-4` better than current72, but 72 also introduces broader regressions on `calf_l`, `ball_l`, `ball_r`, and late mid-cycle windows; those averaged losses outweigh the local hotspot wins",
+    "q3_loss_curve_interpretation": "early overshoot is primary; candidate72 start20 spikes on total/dir_geo/dir_group_norm_leg/leg_align, then mid20 loss looks normal again while freerun aggregate is already worse, which supports early over-step plus some objective mismatch rather than pure late overfit",
+    "q4_best_next_step": "lower_lr_72_or_gentler_72",
+    "q5_one_sentence": "candidate71(lr=3e-4) wins because it ends 71 at a cleaner leg state, but unchanged 72 immediately over-updates that cleaner start, giving back broad leg average quality even while preserving a few hotspot gains."
+  },
+  "artifacts": {
+    "loss_curve_plot": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/72_loss_curve_compare.png",
+    "loss_curve_summary_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/72_loss_curve_summary.json",
+    "loss_curve_summary_md": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/72_loss_curve_summary.md",
+    "summary_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/summary.json",
+    "summary_md": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_loss_curve_attribution_20260314/summary.md"
+  }
+}

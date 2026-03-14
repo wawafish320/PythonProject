@@ -1,0 +1,51 @@
+{
+  "run_date": "20260314",
+  "root": "/Users/xingzhaorui/PycharmProjects/PythonProject",
+  "baseline_compare_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/compare_summary.json",
+  "stage6_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+  "teacher": "/Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json",
+  "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+  "affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+  "baseline_cases": [
+    {
+      "name": "old_bestfree",
+      "backbone_case": "old_bestfree",
+      "planstack_case": "old_bestfree",
+      "run_name": "old_bestfree_stage6_plantransplant_20260314"
+    },
+    {
+      "name": "cp015_bestfree",
+      "backbone_case": "cp015_bestfree",
+      "planstack_case": "cp015_bestfree",
+      "run_name": "cp015_bestfree_stage6_plantransplant_20260314"
+    }
+  ],
+  "transplant_cases": [
+    {
+      "name": "cp015_with_old_planstack",
+      "backbone_case": "cp015_bestfree",
+      "planstack_case": "old_bestfree",
+      "run_name": "cp015_with_old_planstack_stage6_plantransplant_20260314"
+    },
+    {
+      "name": "old_with_cp015_planstack",
+      "backbone_case": "old_bestfree",
+      "planstack_case": "cp015_bestfree",
+      "run_name": "old_with_cp015_planstack_stage6_plantransplant_20260314"
+    }
+  ],
+  "plan_prefixes": [
+    "contact_plan_cell.",
+    "contact_plan_head.",
+    "contact_plan_time_head.",
+    "contact_plan_phase_head.",
+    "contact_plan_init_head.",
+    "contact_phase_state_delta_head.",
+    "event_clock_gate.",
+    "event_clock_corrector."
+  ],
+  "plan_exact_keys": [
+    "contact_plan_init_z",
+    "contact_phase_state_init"
+  ]
+}

@@ -1,0 +1,638 @@
+
+$ /Users/xingzhaorui/miniconda3/envs/train/bin/python -m train.training_MPL --config_json /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/configs/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313.json
+[ARPG-PATCH] 参数准备完毕，即将进入训练入口: train_entry()
+[config_json] Loaded defaults from /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/configs/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313.json (140 keys)
+[Spec] Loaded norm_template: raw_data/processed_data/norm_template.json
+[Spec] Loaded pretrain_template: models/pretrain_template.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[IndexOpt] stride=1 min_speed=0.0 -> windows=89
+[Export][Dims] Dx=419, Dy=278, Dc=7 | L=3, H=512, K=16
+[MPL] Attached MotionEncoder bundle: models/motion_encoder_equiv_stageA.pt
+[MPL] trainbase_contacts_source: requested=pretrain_contact, resolved=pretrain_contact
+[LossWeights] w_rot_ortho=0.001 w_rot_local=0.2 rot_local_tail_weight=0.0 rot_local_tail_k=0 rot_local_tail_scope=all rot_local_tail_select=batch rot_local_tail_ema_beta=0.9 adaptive_bone_weights=True
+[Dt] dt_traj=0.016667s | dt_bone=0.016667s (dataset fps=60.0)
+[LR-DBG:init] arg_lr=1.00e-03 opt_pg0=1.00e-03
+[Config] saved resolved config to /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313/config_resolved.json
+[GeoLoss] TRAIN denorm(Y.rot6d) applied on flat D.
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[GradConn] ok: window=8 grad_hits=115.
+[LR-DBG:fit-epoch001-start] pg0=1.00e-03
+[StageSched][ep 001] stage=1-4 stage1_warmup_tf1 | opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Smoke] contact_plan_bce=0.7248914241790771
+[LR-DBG:after-opt-step] pg0=1.00e-03
+[Train][ep 001] loss=0.7777
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep001.json
+[ValTeacher@ep 001] loss=0.684959 | GeoDeg=1.038° | GeoLocalDeg=0.566° | AngVelMAE=0.03113 rad/s | AngMagRel=0.040
+[StageSched][ep 002] stage=1-4 stage1_warmup_tf1 | opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 002] loss=0.6669
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep002.json
+[ValTeacher@ep 002] loss=0.646244 | GeoDeg=0.673° | GeoLocalDeg=0.435° | AngVelMAE=0.01538 rad/s | AngMagRel=0.019
+[StageSched][ep 003] stage=1-4 stage1_warmup_tf1 | opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 003] loss=0.6142
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep003.json
+[ValTeacher@ep 003] loss=0.558256 | GeoDeg=0.443° | GeoLocalDeg=0.256° | AngVelMAE=0.01135 rad/s | AngMagRel=0.014
+[StageSched][ep 004] stage=1-4 stage1_warmup_tf1 | opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 004] loss=0.5443
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep004.json
+[ValTeacher@ep 004] loss=0.576098 | GeoDeg=0.351° | GeoLocalDeg=0.196° | AngVelMAE=0.00889 rad/s | AngMagRel=0.012
+[StageSched][ep 005] stage=5-8 stage2_transition_tf1_to_p05 | opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 005] loss=0.5807
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep005.json
+[ValTeacher@ep 005] loss=0.534691 | GeoDeg=0.316° | GeoLocalDeg=0.151° | AngVelMAE=0.00848 rad/s | AngMagRel=0.011
+[StageSched][ep 006] stage=5-8 stage2_transition_tf1_to_p05 | opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 006] loss=0.5401
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep006_b00.pt :: root_vel 0.173 | |Δ| 0.266
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep006_b01.pt :: root_vel 0.176 | |Δ| 0.264
+[ValFree@ep 006] GeoDeg=4.927° | RootVelMAE=0.34313 | AngVelMAE=0.56815 rad/s | AngMagRel=0.596 | LimbGeoDeg=6.980° | LimbGeoLocalDeg=6.978°
+[Gap@ep 006] teach_loss=0.519358 | GeoDeg=4.927° | AngVelMAE=0.56815 | LimbGeoDeg=6.980° | LimbGeoLocalDeg=6.978°
+[StageSched][ep 007] stage=5-8 stage2_transition_tf1_to_p05 | opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 007] loss=0.5241
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep007_b00.pt :: root_vel 0.169 | |Δ| 0.291
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep007_b01.pt :: root_vel 0.164 | |Δ| 0.291
+[ValFree@ep 007] GeoDeg=5.178° | RootVelMAE=0.34795 | AngVelMAE=0.58860 rad/s | AngMagRel=0.617 | LimbGeoDeg=7.272° | LimbGeoLocalDeg=7.280°
+[Gap@ep 007] teach_loss=0.500946 | GeoDeg=5.178° | AngVelMAE=0.58860 | LimbGeoDeg=7.272° | LimbGeoLocalDeg=7.280°
+[StageSched][ep 008] stage=5-8 stage2_transition_tf1_to_p05 | opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 008] loss=0.5142
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep008_b00.pt :: root_vel 0.162 | |Δ| 0.329
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep008_b01.pt :: root_vel 0.151 | |Δ| 0.332
+[ValFree@ep 008] GeoDeg=4.838° | RootVelMAE=0.30722 | AngVelMAE=0.54754 rad/s | AngMagRel=0.575 | LimbGeoDeg=6.849° | LimbGeoLocalDeg=6.850°
+[Gap@ep 008] teach_loss=0.446684 | GeoDeg=4.838° | AngVelMAE=0.54754 | LimbGeoDeg=6.849° | LimbGeoLocalDeg=6.850°
+[StageSched][ep 009] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 009] loss=0.4628
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep009_b00.pt :: root_vel 0.158 | |Δ| 0.339
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep009_b01.pt :: root_vel 0.165 | |Δ| 0.339
+[ValFree@ep 009] GeoDeg=4.595° | RootVelMAE=0.30819 | AngVelMAE=0.52609 rad/s | AngMagRel=0.571 | LimbGeoDeg=6.487° | LimbGeoLocalDeg=6.491°
+[Gap@ep 009] teach_loss=0.422336 | GeoDeg=4.595° | AngVelMAE=0.52609 | LimbGeoDeg=6.487° | LimbGeoLocalDeg=6.491°
+[StageSched][ep 010] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 010] loss=0.4310
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep010_b00.pt :: root_vel 0.157 | |Δ| 0.354
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep010_b01.pt :: root_vel 0.175 | |Δ| 0.352
+[ValFree@ep 010] GeoDeg=4.885° | RootVelMAE=0.33297 | AngVelMAE=0.55565 rad/s | AngMagRel=0.599 | LimbGeoDeg=6.796° | LimbGeoLocalDeg=6.798°
+[Gap@ep 010] teach_loss=0.418723 | GeoDeg=4.885° | AngVelMAE=0.55565 | LimbGeoDeg=6.796° | LimbGeoLocalDeg=6.798°
+[StageSched][ep 011] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 011] loss=0.4118
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep011_b00.pt :: root_vel 0.172 | |Δ| 0.359
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep011_b01.pt :: root_vel 0.137 | |Δ| 0.366
+[ValFree@ep 011] GeoDeg=4.531° | RootVelMAE=0.28904 | AngVelMAE=0.50781 rad/s | AngMagRel=0.567 | LimbGeoDeg=6.401° | LimbGeoLocalDeg=6.399°
+[Gap@ep 011] teach_loss=0.383162 | GeoDeg=4.531° | AngVelMAE=0.50781 | LimbGeoDeg=6.401° | LimbGeoLocalDeg=6.399°
+[StageSched][ep 012] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 012] loss=0.3941
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep012_b00.pt :: root_vel 0.166 | |Δ| 0.366
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep012_b01.pt :: root_vel 0.168 | |Δ| 0.365
+[ValFree@ep 012] GeoDeg=4.554° | RootVelMAE=0.32491 | AngVelMAE=0.52510 rad/s | AngMagRel=0.564 | LimbGeoDeg=6.455° | LimbGeoLocalDeg=6.456°
+[Gap@ep 012] teach_loss=0.382392 | GeoDeg=4.554° | AngVelMAE=0.52510 | LimbGeoDeg=6.455° | LimbGeoLocalDeg=6.456°
+[StageSched][ep 013] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 013] loss=0.3766
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep013_b00.pt :: root_vel 0.153 | |Δ| 0.375
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep013_b01.pt :: root_vel 0.170 | |Δ| 0.367
+[ValFree@ep 013] GeoDeg=4.837° | RootVelMAE=0.32421 | AngVelMAE=0.54719 rad/s | AngMagRel=0.595 | LimbGeoDeg=6.833° | LimbGeoLocalDeg=6.832°
+[Gap@ep 013] teach_loss=0.367221 | GeoDeg=4.837° | AngVelMAE=0.54719 | LimbGeoDeg=6.833° | LimbGeoLocalDeg=6.832°
+[StageSched][ep 014] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 014] loss=0.3759
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep014_b00.pt :: root_vel 0.159 | |Δ| 0.373
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep014_b01.pt :: root_vel 0.153 | |Δ| 0.375
+[ValFree@ep 014] GeoDeg=4.597° | RootVelMAE=0.29618 | AngVelMAE=0.52681 rad/s | AngMagRel=0.581 | LimbGeoDeg=6.629° | LimbGeoLocalDeg=6.627°
+[Gap@ep 014] teach_loss=0.372304 | GeoDeg=4.597° | AngVelMAE=0.52681 | LimbGeoDeg=6.629° | LimbGeoLocalDeg=6.627°
+[StageSched][ep 015] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 015] loss=0.3793
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep015_b00.pt :: root_vel 0.145 | |Δ| 0.384
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep015_b01.pt :: root_vel 0.158 | |Δ| 0.383
+[ValFree@ep 015] GeoDeg=4.428° | RootVelMAE=0.27782 | AngVelMAE=0.50869 rad/s | AngMagRel=0.568 | LimbGeoDeg=6.508° | LimbGeoLocalDeg=6.506°
+[Gap@ep 015] teach_loss=0.375475 | GeoDeg=4.428° | AngVelMAE=0.50869 | LimbGeoDeg=6.508° | LimbGeoLocalDeg=6.506°
+[StageSched][ep 016] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 016] loss=0.3850
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep016_b00.pt :: root_vel 0.159 | |Δ| 0.386
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep016_b01.pt :: root_vel 0.153 | |Δ| 0.383
+[ValFree@ep 016] GeoDeg=4.342° | RootVelMAE=0.29225 | AngVelMAE=0.50724 rad/s | AngMagRel=0.567 | LimbGeoDeg=6.384° | LimbGeoLocalDeg=6.388°
+[Gap@ep 016] teach_loss=0.381154 | GeoDeg=4.342° | AngVelMAE=0.50724 | LimbGeoDeg=6.384° | LimbGeoLocalDeg=6.388°
+[StageSched][ep 017] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 017] loss=0.3810
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep017_b00.pt :: root_vel 0.163 | |Δ| 0.387
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep017_b01.pt :: root_vel 0.168 | |Δ| 0.385
+[ValFree@ep 017] GeoDeg=4.318° | RootVelMAE=0.31032 | AngVelMAE=0.51498 rad/s | AngMagRel=0.577 | LimbGeoDeg=6.402° | LimbGeoLocalDeg=6.405°
+[Gap@ep 017] teach_loss=0.383309 | GeoDeg=4.318° | AngVelMAE=0.51498 | LimbGeoDeg=6.402° | LimbGeoLocalDeg=6.405°
+[StageSched][ep 018] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 018] loss=0.3751
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep018_b00.pt :: root_vel 0.154 | |Δ| 0.396
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep018_b01.pt :: root_vel 0.157 | |Δ| 0.390
+[ValFree@ep 018] GeoDeg=4.454° | RootVelMAE=0.29293 | AngVelMAE=0.51574 rad/s | AngMagRel=0.590 | LimbGeoDeg=6.483° | LimbGeoLocalDeg=6.486°
+[Gap@ep 018] teach_loss=0.362697 | GeoDeg=4.454° | AngVelMAE=0.51574 | LimbGeoDeg=6.483° | LimbGeoLocalDeg=6.486°
+[BestTeacher] ckpt=/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313/ckpt_best_teacher_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313.pth GeoLocalDeg=0.153052°
+[BestFree] ckpt=/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313.pth GeoDriftSlope=0.580212 deg/step
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep018_b00.pt :: root_vel 0.158 | |Δ| 0.389
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_ep018_b01.pt :: root_vel 0.151 | |Δ| 0.391
+[ValFree@last] GeoDeg=4.109 RootVelMAE=0.28369 AngVelMAE=0.48339 rad/s
+[Export][ENTER] preparing to export ONNX...
+[Export][ProbeDims] Dx=419 Dy=278 Dc=7
+[Export][Sanity] input dims check OK
+[Export][BatchShapes] {'motion': (16, 60, 419), 'gt_motion': (16, 60, 278), 'clip_id': (16,), 'start': (16,), 'clip_len': (16,), 'cond_in': (16, 60, 7), 'cond_tgt': (16, 60, 7), 'cond_tgt_raw': (16, 60, 7), 'contacts': (16, 60, 2), 'ttc_td': (16, 60, 2), 'ttc_td_valid': (16, 60, 2), 'ttc_td_events': (16, 60, 2), 'angvel': (16, 60, 138), 'angvel_raw': (16, 60, 138), 'pose_hist': (16, 60, 828)}
+[torch.onnx] Obtain model graph for `_StatelessWrapper([...]` with `torch.export.export(..., strict=False)`...
+[torch.onnx] Obtain model graph for `_StatelessWrapper([...]` with `torch.export.export(..., strict=False)`... ✅
+[torch.onnx] Run decomposition...
+[torch.onnx] Run decomposition... ✅
+[torch.onnx] Translate the graph into ONNX...
+[torch.onnx] Translate the graph into ONNX... ✅
+Applied 1 of general pattern rewrite rules.
+Applied 5 of general pattern rewrite rules.
+[Export][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313_step_stateful_nophase.onnx | Dx=419 Dy=278 Dc=7 C=2 A=138 P=828 Hp=64 Hz=4
+[exit_code] 0
+
+$ /Users/xingzhaorui/miniconda3/envs/train/bin/python -m train.training_MPL --config_json /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/configs/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313.json
+[ARPG-PATCH] 参数准备完毕，即将进入训练入口: train_entry()
+[config_json] Loaded defaults from /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/configs/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313.json (140 keys)
+[Spec] Loaded norm_template: raw_data/processed_data/norm_template.json
+[Spec] Loaded pretrain_template: models/pretrain_template.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[IndexOpt] stride=1 min_speed=0.0 -> windows=89
+[Export][Dims] Dx=419, Dy=278, Dc=7 | L=3, H=512, K=16
+[MPL] Attached MotionEncoder bundle: models/motion_encoder_equiv_stageA.pt
+[MPL] trainbase_contacts_source: requested=pretrain_contact, resolved=pretrain_contact
+[LossWeights] w_rot_ortho=0.001 w_rot_local=0.2 rot_local_tail_weight=0.0 rot_local_tail_k=0 rot_local_tail_scope=all rot_local_tail_select=batch rot_local_tail_ema_beta=0.9 adaptive_bone_weights=True
+[Dt] dt_traj=0.016667s | dt_bone=0.016667s (dataset fps=60.0)
+[LR-DBG:init] arg_lr=1.00e-03 opt_pg0=1.00e-03
+[Config] saved resolved config to /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313/config_resolved.json
+[GeoLoss] TRAIN denorm(Y.rot6d) applied on flat D.
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[GradConn] ok: window=8 grad_hits=115.
+[LR-DBG:fit-epoch001-start] pg0=1.00e-03
+[StageSched][ep 001] stage=1-4 stage1_warmup_tf1 | opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Smoke] contact_plan_bce=0.7345947027206421
+[LR-DBG:after-opt-step] pg0=1.00e-03
+[Train][ep 001] loss=0.7764
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep001.json
+[ValTeacher@ep 001] loss=0.703343 | GeoDeg=0.968° | GeoLocalDeg=0.817° | AngVelMAE=0.03332 rad/s | AngMagRel=0.044
+[StageSched][ep 002] stage=1-4 stage1_warmup_tf1 | opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 002] loss=0.6863
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep002.json
+[ValTeacher@ep 002] loss=0.665153 | GeoDeg=0.614° | GeoLocalDeg=0.333° | AngVelMAE=0.01549 rad/s | AngMagRel=0.019
+[StageSched][ep 003] stage=1-4 stage1_warmup_tf1 | opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 003] loss=0.6494
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep003.json
+[ValTeacher@ep 003] loss=0.619760 | GeoDeg=0.454° | GeoLocalDeg=0.228° | AngVelMAE=0.01008 rad/s | AngMagRel=0.013
+[StageSched][ep 004] stage=1-4 stage1_warmup_tf1 | opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 004] loss=0.6055
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep004.json
+[ValTeacher@ep 004] loss=0.631429 | GeoDeg=0.340° | GeoLocalDeg=0.225° | AngVelMAE=0.00772 rad/s | AngMagRel=0.009
+[StageSched][ep 005] stage=5-8 stage2_transition_tf1_to_p05 | opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 005] loss=0.6179
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep005.json
+[ValTeacher@ep 005] loss=0.596082 | GeoDeg=0.295° | GeoLocalDeg=0.147° | AngVelMAE=0.00716 rad/s | AngMagRel=0.009
+[StageSched][ep 006] stage=5-8 stage2_transition_tf1_to_p05 | opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 006] loss=0.5704
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep006_b00.pt :: root_vel 0.164 | |Δ| 0.213
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep006_b01.pt :: root_vel 0.157 | |Δ| 0.214
+[ValFree@ep 006] GeoDeg=4.627° | RootVelMAE=0.31384 | AngVelMAE=0.53653 rad/s | AngMagRel=0.636 | LimbGeoDeg=7.213° | LimbGeoLocalDeg=7.209°
+[Gap@ep 006] teach_loss=0.564339 | GeoDeg=4.627° | AngVelMAE=0.53653 | LimbGeoDeg=7.213° | LimbGeoLocalDeg=7.209°
+[StageSched][ep 007] stage=5-8 stage2_transition_tf1_to_p05 | opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 007] loss=0.5465
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep007_b00.pt :: root_vel 0.158 | |Δ| 0.241
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep007_b01.pt :: root_vel 0.172 | |Δ| 0.241
+[ValFree@ep 007] GeoDeg=4.690° | RootVelMAE=0.33814 | AngVelMAE=0.54532 rad/s | AngMagRel=0.635 | LimbGeoDeg=7.181° | LimbGeoLocalDeg=7.179°
+[Gap@ep 007] teach_loss=0.527149 | GeoDeg=4.690° | AngVelMAE=0.54532 | LimbGeoDeg=7.181° | LimbGeoLocalDeg=7.179°
+[StageSched][ep 008] stage=5-8 stage2_transition_tf1_to_p05 | opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 008] loss=0.5146
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep008_b00.pt :: root_vel 0.155 | |Δ| 0.278
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep008_b01.pt :: root_vel 0.176 | |Δ| 0.281
+[ValFree@ep 008] GeoDeg=4.940° | RootVelMAE=0.32584 | AngVelMAE=0.57298 rad/s | AngMagRel=0.694 | LimbGeoDeg=7.275° | LimbGeoLocalDeg=7.274°
+[Gap@ep 008] teach_loss=0.500163 | GeoDeg=4.940° | AngVelMAE=0.57298 | LimbGeoDeg=7.275° | LimbGeoLocalDeg=7.274°
+[StageSched][ep 009] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 009] loss=0.5060
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep009_b00.pt :: root_vel 0.176 | |Δ| 0.301
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep009_b01.pt :: root_vel 0.158 | |Δ| 0.299
+[ValFree@ep 009] GeoDeg=4.897° | RootVelMAE=0.32518 | AngVelMAE=0.55388 rad/s | AngMagRel=0.644 | LimbGeoDeg=7.214° | LimbGeoLocalDeg=7.210°
+[Gap@ep 009] teach_loss=0.488176 | GeoDeg=4.897° | AngVelMAE=0.55388 | LimbGeoDeg=7.214° | LimbGeoLocalDeg=7.210°
+[StageSched][ep 010] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 010] loss=0.4906
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep010_b00.pt :: root_vel 0.161 | |Δ| 0.316
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep010_b01.pt :: root_vel 0.170 | |Δ| 0.313
+[ValFree@ep 010] GeoDeg=4.844° | RootVelMAE=0.32511 | AngVelMAE=0.55153 rad/s | AngMagRel=0.618 | LimbGeoDeg=6.940° | LimbGeoLocalDeg=6.938°
+[Gap@ep 010] teach_loss=0.469342 | GeoDeg=4.844° | AngVelMAE=0.55153 | LimbGeoDeg=6.940° | LimbGeoLocalDeg=6.938°
+[StageSched][ep 011] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 011] loss=0.4827
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep011_b00.pt :: root_vel 0.160 | |Δ| 0.335
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep011_b01.pt :: root_vel 0.171 | |Δ| 0.334
+[ValFree@ep 011] GeoDeg=5.144° | RootVelMAE=0.34600 | AngVelMAE=0.58052 rad/s | AngMagRel=0.675 | LimbGeoDeg=7.304° | LimbGeoLocalDeg=7.304°
+[Gap@ep 011] teach_loss=0.444604 | GeoDeg=5.144° | AngVelMAE=0.58052 | LimbGeoDeg=7.304° | LimbGeoLocalDeg=7.304°
+[StageSched][ep 012] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 012] loss=0.4619
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep012_b00.pt :: root_vel 0.158 | |Δ| 0.341
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep012_b01.pt :: root_vel 0.159 | |Δ| 0.341
+[ValFree@ep 012] GeoDeg=4.892° | RootVelMAE=0.32428 | AngVelMAE=0.55582 rad/s | AngMagRel=0.645 | LimbGeoDeg=6.910° | LimbGeoLocalDeg=6.909°
+[Gap@ep 012] teach_loss=0.429285 | GeoDeg=4.892° | AngVelMAE=0.55582 | LimbGeoDeg=6.910° | LimbGeoLocalDeg=6.909°
+[StageSched][ep 013] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 013] loss=0.4515
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep013_b00.pt :: root_vel 0.174 | |Δ| 0.344
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep013_b01.pt :: root_vel 0.161 | |Δ| 0.344
+[ValFree@ep 013] GeoDeg=4.828° | RootVelMAE=0.31806 | AngVelMAE=0.53896 rad/s | AngMagRel=0.639 | LimbGeoDeg=6.809° | LimbGeoLocalDeg=6.804°
+[Gap@ep 013] teach_loss=0.419183 | GeoDeg=4.828° | AngVelMAE=0.53896 | LimbGeoDeg=6.809° | LimbGeoLocalDeg=6.804°
+[StageSched][ep 014] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 014] loss=0.4282
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep014_b00.pt :: root_vel 0.170 | |Δ| 0.352
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep014_b01.pt :: root_vel 0.173 | |Δ| 0.356
+[ValFree@ep 014] GeoDeg=4.778° | RootVelMAE=0.34621 | AngVelMAE=0.55276 rad/s | AngMagRel=0.649 | LimbGeoDeg=6.824° | LimbGeoLocalDeg=6.821°
+[Gap@ep 014] teach_loss=0.410265 | GeoDeg=4.778° | AngVelMAE=0.55276 | LimbGeoDeg=6.824° | LimbGeoLocalDeg=6.821°
+[StageSched][ep 015] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 015] loss=0.4282
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep015_b00.pt :: root_vel 0.166 | |Δ| 0.354
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep015_b01.pt :: root_vel 0.158 | |Δ| 0.355
+[ValFree@ep 015] GeoDeg=5.083° | RootVelMAE=0.32470 | AngVelMAE=0.58046 rad/s | AngMagRel=0.687 | LimbGeoDeg=7.118° | LimbGeoLocalDeg=7.115°
+[Gap@ep 015] teach_loss=0.398667 | GeoDeg=5.083° | AngVelMAE=0.58046 | LimbGeoDeg=7.118° | LimbGeoLocalDeg=7.115°
+[StageSched][ep 016] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 016] loss=0.4116
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep016_b00.pt :: root_vel 0.164 | |Δ| 0.356
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep016_b01.pt :: root_vel 0.162 | |Δ| 0.352
+[ValFree@ep 016] GeoDeg=4.620° | RootVelMAE=0.30583 | AngVelMAE=0.51809 rad/s | AngMagRel=0.620 | LimbGeoDeg=6.725° | LimbGeoLocalDeg=6.721°
+[Gap@ep 016] teach_loss=0.387746 | GeoDeg=4.620° | AngVelMAE=0.51809 | LimbGeoDeg=6.725° | LimbGeoLocalDeg=6.721°
+[StageSched][ep 017] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 017] loss=0.3971
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep017_b00.pt :: root_vel 0.154 | |Δ| 0.360
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep017_b01.pt :: root_vel 0.157 | |Δ| 0.360
+[ValFree@ep 017] GeoDeg=4.946° | RootVelMAE=0.30964 | AngVelMAE=0.56210 rad/s | AngMagRel=0.674 | LimbGeoDeg=7.154° | LimbGeoLocalDeg=7.147°
+[Gap@ep 017] teach_loss=0.380311 | GeoDeg=4.946° | AngVelMAE=0.56210 | LimbGeoDeg=7.154° | LimbGeoLocalDeg=7.147°
+[StageSched][ep 018] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 018] loss=0.3833
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep018_b00.pt :: root_vel 0.169 | |Δ| 0.367
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep018_b01.pt :: root_vel 0.162 | |Δ| 0.361
+[ValFree@ep 018] GeoDeg=4.935° | RootVelMAE=0.33745 | AngVelMAE=0.56685 rad/s | AngMagRel=0.642 | LimbGeoDeg=7.038° | LimbGeoLocalDeg=7.035°
+[Gap@ep 018] teach_loss=0.373148 | GeoDeg=4.935° | AngVelMAE=0.56685 | LimbGeoDeg=7.038° | LimbGeoLocalDeg=7.035°
+[BestTeacher] ckpt=/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313/ckpt_best_teacher_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313.pth GeoLocalDeg=0.105342°
+[BestFree] ckpt=/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313.pth GeoDriftSlope=0.607373 deg/step
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep018_b00.pt :: root_vel 0.166 | |Δ| 0.364
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_ep018_b01.pt :: root_vel 0.161 | |Δ| 0.365
+[ValFree@last] GeoDeg=5.072 RootVelMAE=0.33226 AngVelMAE=0.55792 rad/s
+[Export][ENTER] preparing to export ONNX...
+[Export][ProbeDims] Dx=419 Dy=278 Dc=7
+[Export][Sanity] input dims check OK
+[Export][BatchShapes] {'motion': (16, 60, 419), 'gt_motion': (16, 60, 278), 'clip_id': (16,), 'start': (16,), 'clip_len': (16,), 'cond_in': (16, 60, 7), 'cond_tgt': (16, 60, 7), 'cond_tgt_raw': (16, 60, 7), 'contacts': (16, 60, 2), 'ttc_td': (16, 60, 2), 'ttc_td_valid': (16, 60, 2), 'ttc_td_events': (16, 60, 2), 'angvel': (16, 60, 138), 'angvel_raw': (16, 60, 138), 'pose_hist': (16, 60, 828)}
+[torch.onnx] Obtain model graph for `_StatelessWrapper([...]` with `torch.export.export(..., strict=False)`...
+[torch.onnx] Obtain model graph for `_StatelessWrapper([...]` with `torch.export.export(..., strict=False)`... ✅
+[torch.onnx] Run decomposition...
+[torch.onnx] Run decomposition... ✅
+[torch.onnx] Translate the graph into ONNX...
+[torch.onnx] Translate the graph into ONNX... ✅
+Applied 1 of general pattern rewrite rules.
+Applied 5 of general pattern rewrite rules.
+[Export][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313_step_stateful_nophase.onnx | Dx=419 Dy=278 Dc=7 C=2 A=138 P=828 Hp=64 Hz=4
+[exit_code] 0
+
+$ /Users/xingzhaorui/miniconda3/envs/train/bin/python -m train.training_MPL --config_json /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/configs/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313.json
+[ARPG-PATCH] 参数准备完毕，即将进入训练入口: train_entry()
+[config_json] Loaded defaults from /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/configs/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313.json (140 keys)
+[Spec] Loaded norm_template: raw_data/processed_data/norm_template.json
+[Spec] Loaded pretrain_template: models/pretrain_template.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[IndexOpt] stride=1 min_speed=0.0 -> windows=89
+[Export][Dims] Dx=419, Dy=278, Dc=7 | L=3, H=512, K=16
+[MPL] Attached MotionEncoder bundle: models/motion_encoder_equiv_stageA.pt
+[MPL] trainbase_contacts_source: requested=pretrain_contact, resolved=pretrain_contact
+[LossWeights] w_rot_ortho=0.001 w_rot_local=0.2 rot_local_tail_weight=0.0 rot_local_tail_k=3 rot_local_tail_scope=keybones rot_local_tail_select=ema rot_local_tail_ema_beta=0.9 adaptive_bone_weights=True
+[Dt] dt_traj=0.016667s | dt_bone=0.016667s (dataset fps=60.0)
+[LR-DBG:init] arg_lr=1.00e-03 opt_pg0=1.00e-03
+[Config] saved resolved config to /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313/config_resolved.json
+[GeoLoss] TRAIN denorm(Y.rot6d) applied on flat D.
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[GradConn] ok: window=8 grad_hits=115.
+[LR-DBG:fit-epoch001-start] pg0=1.00e-03
+[StageSched][ep 001] stage=1-4 stage1_warmup_tf1 | loss.w_contact_plan=0.2, opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Smoke] contact_plan_bce=0.6953743696212769
+[LR-DBG:after-opt-step] pg0=1.00e-03
+[Train][ep 001] loss=0.2043
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep001.json
+[ValTeacher@ep 001] loss=0.160460 | GeoDeg=0.949° | GeoLocalDeg=0.707° | AngVelMAE=0.04472 rad/s | AngMagRel=0.064
+[StageSched][ep 002] stage=1-4 stage1_warmup_tf1 | loss.w_contact_plan=0.2, opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 002] loss=0.1479
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep002.json
+[ValTeacher@ep 002] loss=0.135117 | GeoDeg=0.559° | GeoLocalDeg=0.390° | AngVelMAE=0.02240 rad/s | AngMagRel=0.031
+[StageSched][ep 003] stage=1-4 stage1_warmup_tf1 | loss.w_contact_plan=0.2, opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 003] loss=0.1270
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep003.json
+[ValTeacher@ep 003] loss=0.114919 | GeoDeg=0.446° | GeoLocalDeg=0.281° | AngVelMAE=0.01588 rad/s | AngMagRel=0.022
+[StageSched][ep 004] stage=1-4 stage1_warmup_tf1 | loss.w_contact_plan=0.2, opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 004] loss=0.1177
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep004.json
+[ValTeacher@ep 004] loss=0.115595 | GeoDeg=0.337° | GeoLocalDeg=0.182° | AngVelMAE=0.01269 rad/s | AngMagRel=0.017
+[StageSched][ep 005] stage=5-8 stage2_transition_tf1_to_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.1, loss.w_contact_plan=0.15, loss.w_rot_local=0.22, opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 005] loss=0.0871
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep005.json
+[ValTeacher@ep 005] loss=0.084234 | GeoDeg=0.316° | GeoLocalDeg=0.172° | AngVelMAE=0.01125 rad/s | AngMagRel=0.015
+[StageSched][ep 006] stage=5-8 stage2_transition_tf1_to_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.1, loss.w_contact_plan=0.15, loss.w_rot_local=0.22, opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 006] loss=0.0841
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep006_b00.pt :: root_vel 0.149 | |Δ| 0.151
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep006_b01.pt :: root_vel 0.162 | |Δ| 0.148
+[ValFree@ep 006] GeoDeg=4.103° | RootVelMAE=0.29449 | AngVelMAE=0.48357 rad/s | AngMagRel=0.571 | LimbGeoDeg=6.711° | LimbGeoLocalDeg=6.698°
+[Gap@ep 006] teach_loss=0.075143 | GeoDeg=4.103° | AngVelMAE=0.48357 | LimbGeoDeg=6.711° | LimbGeoLocalDeg=6.698°
+[StageSched][ep 007] stage=5-8 stage2_transition_tf1_to_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.1, loss.w_contact_plan=0.15, loss.w_rot_local=0.22, opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 007] loss=0.0798
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep007_b00.pt :: root_vel 0.168 | |Δ| 0.138
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep007_b01.pt :: root_vel 0.152 | |Δ| 0.142
+[ValFree@ep 007] GeoDeg=4.482° | RootVelMAE=0.31268 | AngVelMAE=0.53812 rad/s | AngMagRel=0.717 | LimbGeoDeg=7.023° | LimbGeoLocalDeg=7.023°
+[Gap@ep 007] teach_loss=0.070846 | GeoDeg=4.482° | AngVelMAE=0.53812 | LimbGeoDeg=7.023° | LimbGeoLocalDeg=7.023°
+[StageSched][ep 008] stage=5-8 stage2_transition_tf1_to_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.1, loss.w_contact_plan=0.15, loss.w_rot_local=0.22, opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 008] loss=0.0815
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep008_b00.pt :: root_vel 0.149 | |Δ| 0.152
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep008_b01.pt :: root_vel 0.169 | |Δ| 0.147
+[ValFree@ep 008] GeoDeg=4.179° | RootVelMAE=0.30365 | AngVelMAE=0.51666 rad/s | AngMagRel=0.660 | LimbGeoDeg=7.033° | LimbGeoLocalDeg=7.024°
+[Gap@ep 008] teach_loss=0.062840 | GeoDeg=4.179° | AngVelMAE=0.51666 | LimbGeoDeg=7.033° | LimbGeoLocalDeg=7.024°
+[StageSched][ep 009] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 009] loss=0.0591
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep009_b00.pt :: root_vel 0.157 | |Δ| 0.152
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep009_b01.pt :: root_vel 0.156 | |Δ| 0.153
+[ValFree@ep 009] GeoDeg=4.367° | RootVelMAE=0.30838 | AngVelMAE=0.52674 rad/s | AngMagRel=0.687 | LimbGeoDeg=7.248° | LimbGeoLocalDeg=7.237°
+[Gap@ep 009] teach_loss=0.043295 | GeoDeg=4.367° | AngVelMAE=0.52674 | LimbGeoDeg=7.248° | LimbGeoLocalDeg=7.237°
+[StageSched][ep 010] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 010] loss=0.0574
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep010_b00.pt :: root_vel 0.161 | |Δ| 0.156
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep010_b01.pt :: root_vel 0.165 | |Δ| 0.158
+[ValFree@ep 010] GeoDeg=4.208° | RootVelMAE=0.31423 | AngVelMAE=0.49395 rad/s | AngMagRel=0.662 | LimbGeoDeg=6.764° | LimbGeoLocalDeg=6.750°
+[Gap@ep 010] teach_loss=0.041768 | GeoDeg=4.208° | AngVelMAE=0.49395 | LimbGeoDeg=6.764° | LimbGeoLocalDeg=6.750°
+[StageSched][ep 011] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 011] loss=0.0554
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep011_b00.pt :: root_vel 0.172 | |Δ| 0.173
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep011_b01.pt :: root_vel 0.160 | |Δ| 0.172
+[ValFree@ep 011] GeoDeg=4.289° | RootVelMAE=0.32123 | AngVelMAE=0.51300 rad/s | AngMagRel=0.641 | LimbGeoDeg=6.873° | LimbGeoLocalDeg=6.859°
+[Gap@ep 011] teach_loss=0.040850 | GeoDeg=4.289° | AngVelMAE=0.51300 | LimbGeoDeg=6.873° | LimbGeoLocalDeg=6.859°
+[StageSched][ep 012] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 012] loss=0.0541
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep012_b00.pt :: root_vel 0.158 | |Δ| 0.186
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep012_b01.pt :: root_vel 0.158 | |Δ| 0.188
+[ValFree@ep 012] GeoDeg=4.233° | RootVelMAE=0.29442 | AngVelMAE=0.49407 rad/s | AngMagRel=0.608 | LimbGeoDeg=6.825° | LimbGeoLocalDeg=6.815°
+[Gap@ep 012] teach_loss=0.039534 | GeoDeg=4.233° | AngVelMAE=0.49407 | LimbGeoDeg=6.825° | LimbGeoLocalDeg=6.815°
+[StageSched][ep 013] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 013] loss=0.0525
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep013_b00.pt :: root_vel 0.144 | |Δ| 0.204
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep013_b01.pt :: root_vel 0.164 | |Δ| 0.203
+[ValFree@ep 013] GeoDeg=4.104° | RootVelMAE=0.29239 | AngVelMAE=0.48126 rad/s | AngMagRel=0.586 | LimbGeoDeg=6.609° | LimbGeoLocalDeg=6.601°
+[Gap@ep 013] teach_loss=0.038524 | GeoDeg=4.104° | AngVelMAE=0.48126 | LimbGeoDeg=6.609° | LimbGeoLocalDeg=6.601°
+[StageSched][ep 014] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 014] loss=0.0528
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep014_b00.pt :: root_vel 0.175 | |Δ| 0.230
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep014_b01.pt :: root_vel 0.153 | |Δ| 0.219
+[ValFree@ep 014] GeoDeg=4.263° | RootVelMAE=0.30854 | AngVelMAE=0.51817 rad/s | AngMagRel=0.603 | LimbGeoDeg=6.988° | LimbGeoLocalDeg=6.978°
+[Gap@ep 014] teach_loss=0.037890 | GeoDeg=4.263° | AngVelMAE=0.51817 | LimbGeoDeg=6.988° | LimbGeoLocalDeg=6.978°
+[StageSched][ep 015] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 015] loss=0.0507
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep015_b00.pt :: root_vel 0.148 | |Δ| 0.232
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep015_b01.pt :: root_vel 0.161 | |Δ| 0.237
+[ValFree@ep 015] GeoDeg=4.335° | RootVelMAE=0.28500 | AngVelMAE=0.52085 rad/s | AngMagRel=0.623 | LimbGeoDeg=6.872° | LimbGeoLocalDeg=6.862°
+[Gap@ep 015] teach_loss=0.037705 | GeoDeg=4.335° | AngVelMAE=0.52085 | LimbGeoDeg=6.872° | LimbGeoLocalDeg=6.862°
+[StageSched][ep 016] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 016] loss=0.0485
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep016_b00.pt :: root_vel 0.158 | |Δ| 0.252
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep016_b01.pt :: root_vel 0.164 | |Δ| 0.254
+[ValFree@ep 016] GeoDeg=4.621° | RootVelMAE=0.31380 | AngVelMAE=0.53308 rad/s | AngMagRel=0.616 | LimbGeoDeg=7.159° | LimbGeoLocalDeg=7.150°
+[Gap@ep 016] teach_loss=0.036641 | GeoDeg=4.621° | AngVelMAE=0.53308 | LimbGeoDeg=7.159° | LimbGeoLocalDeg=7.150°
+[StageSched][ep 017] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 017] loss=0.0495
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep017_b00.pt :: root_vel 0.168 | |Δ| 0.278
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep017_b01.pt :: root_vel 0.161 | |Δ| 0.273
+[ValFree@ep 017] GeoDeg=4.534° | RootVelMAE=0.32116 | AngVelMAE=0.51246 rad/s | AngMagRel=0.557 | LimbGeoDeg=6.768° | LimbGeoLocalDeg=6.758°
+[Gap@ep 017] teach_loss=0.036378 | GeoDeg=4.534° | AngVelMAE=0.51246 | LimbGeoDeg=6.768° | LimbGeoLocalDeg=6.758°
+[StageSched][ep 018] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 018] loss=0.0475
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep018_b00.pt :: root_vel 0.169 | |Δ| 0.293
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep018_b01.pt :: root_vel 0.159 | |Δ| 0.282
+[ValFree@ep 018] GeoDeg=4.544° | RootVelMAE=0.32250 | AngVelMAE=0.51384 rad/s | AngMagRel=0.554 | LimbGeoDeg=6.803° | LimbGeoLocalDeg=6.795°
+[Gap@ep 018] teach_loss=0.035795 | GeoDeg=4.544° | AngVelMAE=0.51384 | LimbGeoDeg=6.803° | LimbGeoLocalDeg=6.795°
+[BestTeacher] ckpt=/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313/ckpt_best_teacher_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313.pth GeoLocalDeg=0.137438°
+[BestFree] ckpt=/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313.pth GeoDriftSlope=0.532399 deg/step
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep018_b00.pt :: root_vel 0.149 | |Δ| 0.278
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_ep018_b01.pt :: root_vel 0.168 | |Δ| 0.290
+[ValFree@last] GeoDeg=4.372 RootVelMAE=0.30453 AngVelMAE=0.49609 rad/s
+[Export][ENTER] preparing to export ONNX...
+[Export][ProbeDims] Dx=419 Dy=278 Dc=7
+[Export][Sanity] input dims check OK
+[Export][BatchShapes] {'motion': (16, 60, 419), 'gt_motion': (16, 60, 278), 'clip_id': (16,), 'start': (16,), 'clip_len': (16,), 'cond_in': (16, 60, 7), 'cond_tgt': (16, 60, 7), 'cond_tgt_raw': (16, 60, 7), 'contacts': (16, 60, 2), 'ttc_td': (16, 60, 2), 'ttc_td_valid': (16, 60, 2), 'ttc_td_events': (16, 60, 2), 'angvel': (16, 60, 138), 'angvel_raw': (16, 60, 138), 'pose_hist': (16, 60, 828)}
+[torch.onnx] Obtain model graph for `_StatelessWrapper([...]` with `torch.export.export(..., strict=False)`...
+[torch.onnx] Obtain model graph for `_StatelessWrapper([...]` with `torch.export.export(..., strict=False)`... ✅
+[torch.onnx] Run decomposition...
+[torch.onnx] Run decomposition... ✅
+[torch.onnx] Translate the graph into ONNX...
+[torch.onnx] Translate the graph into ONNX... ✅
+Applied 1 of general pattern rewrite rules.
+Applied 5 of general pattern rewrite rules.
+[Export][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313_step_stateful_nophase.onnx | Dx=419 Dy=278 Dc=7 C=2 A=138 P=828 Hp=64 Hz=4
+[exit_code] 0
+
+$ /Users/xingzhaorui/miniconda3/envs/train/bin/python -m train.training_MPL --config_json /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/configs/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313.json
+[ARPG-PATCH] 参数准备完毕，即将进入训练入口: train_entry()
+[config_json] Loaded defaults from /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/configs/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313.json (140 keys)
+[Spec] Loaded norm_template: raw_data/processed_data/norm_template.json
+[Spec] Loaded pretrain_template: models/pretrain_template.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[IndexOpt] stride=1 min_speed=0.0 -> windows=89
+[Export][Dims] Dx=419, Dy=278, Dc=7 | L=3, H=512, K=16
+[MPL] Attached MotionEncoder bundle: models/motion_encoder_equiv_stageA.pt
+[MPL] trainbase_contacts_source: requested=pretrain_contact, resolved=pretrain_contact
+[LossWeights] w_rot_ortho=0.001 w_rot_local=0.2 rot_local_tail_weight=0.0 rot_local_tail_k=3 rot_local_tail_scope=keybones rot_local_tail_select=ema rot_local_tail_ema_beta=0.9 adaptive_bone_weights=True
+[Dt] dt_traj=0.016667s | dt_bone=0.016667s (dataset fps=60.0)
+[LR-DBG:init] arg_lr=1.00e-03 opt_pg0=1.00e-03
+[Config] saved resolved config to /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313/config_resolved.json
+[GeoLoss] TRAIN denorm(Y.rot6d) applied on flat D.
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[GradConn] ok: window=8 grad_hits=115.
+[LR-DBG:fit-epoch001-start] pg0=1.00e-03
+[StageSched][ep 001] stage=1-4 stage1_warmup_tf1 | loss.w_contact_plan=0.2, opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Smoke] contact_plan_bce=0.7068044543266296
+[LR-DBG:after-opt-step] pg0=1.00e-03
+[Train][ep 001] loss=0.2194
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep001.json
+[ValTeacher@ep 001] loss=0.154098 | GeoDeg=1.063° | GeoLocalDeg=0.616° | AngVelMAE=0.04145 rad/s | AngMagRel=0.056
+[StageSched][ep 002] stage=1-4 stage1_warmup_tf1 | loss.w_contact_plan=0.2, opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 002] loss=0.1412
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep002.json
+[ValTeacher@ep 002] loss=0.127472 | GeoDeg=0.412° | GeoLocalDeg=0.348° | AngVelMAE=0.01736 rad/s | AngMagRel=0.023
+[StageSched][ep 003] stage=1-4 stage1_warmup_tf1 | loss.w_contact_plan=0.2, opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 003] loss=0.1303
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep003.json
+[ValTeacher@ep 003] loss=0.118566 | GeoDeg=0.235° | GeoLocalDeg=0.151° | AngVelMAE=0.00937 rad/s | AngMagRel=0.013
+[StageSched][ep 004] stage=1-4 stage1_warmup_tf1 | loss.w_contact_plan=0.2, opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 004] loss=0.1151
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep004.json
+[ValTeacher@ep 004] loss=0.118999 | GeoDeg=0.229° | GeoLocalDeg=0.120° | AngVelMAE=0.00654 rad/s | AngMagRel=0.008
+[StageSched][ep 005] stage=5-8 stage2_transition_tf1_to_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.1, loss.w_contact_plan=0.15, loss.w_rot_local=0.22, opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 005] loss=0.0925
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep005.json
+[ValTeacher@ep 005] loss=0.085343 | GeoDeg=0.137° | GeoLocalDeg=0.085° | AngVelMAE=0.00476 rad/s | AngMagRel=0.006
+[StageSched][ep 006] stage=5-8 stage2_transition_tf1_to_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.1, loss.w_contact_plan=0.15, loss.w_rot_local=0.22, opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 006] loss=0.0837
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep006_b00.pt :: root_vel 0.162 | |Δ| 0.075
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep006_b01.pt :: root_vel 0.171 | |Δ| 0.076
+[ValFree@ep 006] GeoDeg=3.525° | RootVelMAE=0.31370 | AngVelMAE=0.47332 rad/s | AngMagRel=0.752 | LimbGeoDeg=6.381° | LimbGeoLocalDeg=6.381°
+[Gap@ep 006] teach_loss=0.076538 | GeoDeg=3.525° | AngVelMAE=0.47332 | LimbGeoDeg=6.381° | LimbGeoLocalDeg=6.381°
+[StageSched][ep 007] stage=5-8 stage2_transition_tf1_to_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.1, loss.w_contact_plan=0.15, loss.w_rot_local=0.22, opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 007] loss=0.0809
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep007_b00.pt :: root_vel 0.174 | |Δ| 0.093
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep007_b01.pt :: root_vel 0.167 | |Δ| 0.091
+[ValFree@ep 007] GeoDeg=4.040° | RootVelMAE=0.33404 | AngVelMAE=0.50747 rad/s | AngMagRel=0.761 | LimbGeoDeg=7.033° | LimbGeoLocalDeg=7.034°
+[Gap@ep 007] teach_loss=0.078389 | GeoDeg=4.040° | AngVelMAE=0.50747 | LimbGeoDeg=7.033° | LimbGeoLocalDeg=7.034°
+[StageSched][ep 008] stage=5-8 stage2_transition_tf1_to_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.1, loss.w_contact_plan=0.15, loss.w_rot_local=0.22, opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 008] loss=0.0872
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep008_b00.pt :: root_vel 0.157 | |Δ| 0.101
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep008_b01.pt :: root_vel 0.173 | |Δ| 0.100
+[ValFree@ep 008] GeoDeg=3.979° | RootVelMAE=0.30790 | AngVelMAE=0.52382 rad/s | AngMagRel=0.822 | LimbGeoDeg=6.909° | LimbGeoLocalDeg=6.910°
+[Gap@ep 008] teach_loss=0.069376 | GeoDeg=3.979° | AngVelMAE=0.52382 | LimbGeoDeg=6.909° | LimbGeoLocalDeg=6.910°
+[StageSched][ep 009] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 009] loss=0.0647
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep009_b00.pt :: root_vel 0.160 | |Δ| 0.102
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep009_b01.pt :: root_vel 0.172 | |Δ| 0.101
+[ValFree@ep 009] GeoDeg=3.916° | RootVelMAE=0.32529 | AngVelMAE=0.50140 rad/s | AngMagRel=0.799 | LimbGeoDeg=6.706° | LimbGeoLocalDeg=6.708°
+[Gap@ep 009] teach_loss=0.048753 | GeoDeg=3.916° | AngVelMAE=0.50140 | LimbGeoDeg=6.706° | LimbGeoLocalDeg=6.708°
+[StageSched][ep 010] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 010] loss=0.0639
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep010_b00.pt :: root_vel 0.150 | |Δ| 0.105
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep010_b01.pt :: root_vel 0.163 | |Δ| 0.104
+[ValFree@ep 010] GeoDeg=3.586° | RootVelMAE=0.28838 | AngVelMAE=0.47519 rad/s | AngMagRel=0.731 | LimbGeoDeg=6.453° | LimbGeoLocalDeg=6.451°
+[Gap@ep 010] teach_loss=0.047379 | GeoDeg=3.586° | AngVelMAE=0.47519 | LimbGeoDeg=6.453° | LimbGeoLocalDeg=6.451°
+[StageSched][ep 011] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 011] loss=0.0619
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep011_b00.pt :: root_vel 0.156 | |Δ| 0.115
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep011_b01.pt :: root_vel 0.161 | |Δ| 0.115
+[ValFree@ep 011] GeoDeg=4.001° | RootVelMAE=0.30159 | AngVelMAE=0.51822 rad/s | AngMagRel=0.787 | LimbGeoDeg=6.969° | LimbGeoLocalDeg=6.969°
+[Gap@ep 011] teach_loss=0.046581 | GeoDeg=4.001° | AngVelMAE=0.51822 | LimbGeoDeg=6.969° | LimbGeoLocalDeg=6.969°
+[StageSched][ep 012] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 012] loss=0.0603
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep012_b00.pt :: root_vel 0.155 | |Δ| 0.119
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep012_b01.pt :: root_vel 0.157 | |Δ| 0.120
+[ValFree@ep 012] GeoDeg=3.706° | RootVelMAE=0.29538 | AngVelMAE=0.48613 rad/s | AngMagRel=0.716 | LimbGeoDeg=6.548° | LimbGeoLocalDeg=6.546°
+[Gap@ep 012] teach_loss=0.046150 | GeoDeg=3.706° | AngVelMAE=0.48613 | LimbGeoDeg=6.548° | LimbGeoLocalDeg=6.546°
+[StageSched][ep 013] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 013] loss=0.0602
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep013_b00.pt :: root_vel 0.170 | |Δ| 0.125
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep013_b01.pt :: root_vel 0.163 | |Δ| 0.125
+[ValFree@ep 013] GeoDeg=4.003° | RootVelMAE=0.31747 | AngVelMAE=0.51749 rad/s | AngMagRel=0.766 | LimbGeoDeg=6.691° | LimbGeoLocalDeg=6.688°
+[Gap@ep 013] teach_loss=0.047316 | GeoDeg=4.003° | AngVelMAE=0.51749 | LimbGeoDeg=6.691° | LimbGeoLocalDeg=6.688°
+[StageSched][ep 014] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 014] loss=0.0597
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep014_b00.pt :: root_vel 0.158 | |Δ| 0.137
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep014_b01.pt :: root_vel 0.149 | |Δ| 0.136
+[ValFree@ep 014] GeoDeg=3.977° | RootVelMAE=0.29375 | AngVelMAE=0.50660 rad/s | AngMagRel=0.757 | LimbGeoDeg=6.844° | LimbGeoLocalDeg=6.842°
+[Gap@ep 014] teach_loss=0.046185 | GeoDeg=3.977° | AngVelMAE=0.50660 | LimbGeoDeg=6.844° | LimbGeoLocalDeg=6.842°
+[StageSched][ep 015] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 015] loss=0.0593
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep015_b00.pt :: root_vel 0.153 | |Δ| 0.144
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep015_b01.pt :: root_vel 0.170 | |Δ| 0.145
+[ValFree@ep 015] GeoDeg=4.153° | RootVelMAE=0.32277 | AngVelMAE=0.54161 rad/s | AngMagRel=0.788 | LimbGeoDeg=7.037° | LimbGeoLocalDeg=7.035°
+[Gap@ep 015] teach_loss=0.045369 | GeoDeg=4.153° | AngVelMAE=0.54161 | LimbGeoDeg=7.037° | LimbGeoLocalDeg=7.035°
+[StageSched][ep 016] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 016] loss=0.0589
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep016_b00.pt :: root_vel 0.165 | |Δ| 0.157
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep016_b01.pt :: root_vel 0.183 | |Δ| 0.158
+[ValFree@ep 016] GeoDeg=4.551° | RootVelMAE=0.35467 | AngVelMAE=0.56294 rad/s | AngMagRel=0.787 | LimbGeoDeg=7.269° | LimbGeoLocalDeg=7.268°
+[Gap@ep 016] teach_loss=0.044719 | GeoDeg=4.551° | AngVelMAE=0.56294 | LimbGeoDeg=7.269° | LimbGeoLocalDeg=7.268°
+[StageSched][ep 017] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 017] loss=0.0583
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep017_b00.pt :: root_vel 0.142 | |Δ| 0.163
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep017_b01.pt :: root_vel 0.171 | |Δ| 0.165
+[ValFree@ep 017] GeoDeg=3.957° | RootVelMAE=0.31180 | AngVelMAE=0.50046 rad/s | AngMagRel=0.701 | LimbGeoDeg=6.583° | LimbGeoLocalDeg=6.582°
+[Gap@ep 017] teach_loss=0.044298 | GeoDeg=3.957° | AngVelMAE=0.50046 | LimbGeoDeg=6.583° | LimbGeoLocalDeg=6.582°
+[StageSched][ep 018] stage=9-18 stage3_p05 | loss.rot_local_tail_k=3, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 018] loss=0.0575
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep018_b00.pt :: root_vel 0.159 | |Δ| 0.173
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep018_b01.pt :: root_vel 0.161 | |Δ| 0.172
+[ValFree@ep 018] GeoDeg=4.034° | RootVelMAE=0.31965 | AngVelMAE=0.49487 rad/s | AngMagRel=0.696 | LimbGeoDeg=6.542° | LimbGeoLocalDeg=6.541°
+[Gap@ep 018] teach_loss=0.044392 | GeoDeg=4.034° | AngVelMAE=0.49487 | LimbGeoDeg=6.542° | LimbGeoLocalDeg=6.541°
+[BestTeacher] ckpt=/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313/ckpt_best_teacher_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313.pth GeoLocalDeg=0.067067°
+[BestFree] ckpt=/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313.pth GeoDriftSlope=0.481834 deg/step
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep018_b00.pt :: root_vel 0.154 | |Δ| 0.174
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_ep018_b01.pt :: root_vel 0.186 | |Δ| 0.173
+[ValFree@last] GeoDeg=4.065 RootVelMAE=0.33531 AngVelMAE=0.50204 rad/s
+[Export][ENTER] preparing to export ONNX...
+[Export][ProbeDims] Dx=419 Dy=278 Dc=7
+[Export][Sanity] input dims check OK
+[Export][BatchShapes] {'motion': (16, 60, 419), 'gt_motion': (16, 60, 278), 'clip_id': (16,), 'start': (16,), 'clip_len': (16,), 'cond_in': (16, 60, 7), 'cond_tgt': (16, 60, 7), 'cond_tgt_raw': (16, 60, 7), 'contacts': (16, 60, 2), 'ttc_td': (16, 60, 2), 'ttc_td_valid': (16, 60, 2), 'ttc_td_events': (16, 60, 2), 'angvel': (16, 60, 138), 'angvel_raw': (16, 60, 138), 'pose_hist': (16, 60, 828)}
+[torch.onnx] Obtain model graph for `_StatelessWrapper([...]` with `torch.export.export(..., strict=False)`...
+[torch.onnx] Obtain model graph for `_StatelessWrapper([...]` with `torch.export.export(..., strict=False)`... ✅
+[torch.onnx] Run decomposition...
+[torch.onnx] Run decomposition... ✅
+[torch.onnx] Translate the graph into ONNX...
+[torch.onnx] Translate the graph into ONNX... ✅
+Applied 1 of general pattern rewrite rules.
+Applied 5 of general pattern rewrite rules.
+[Export][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313_step_stateful_nophase.onnx | Dx=419 Dy=278 Dc=7 C=2 A=138 P=828 Hp=64 Hz=4
+[exit_code] 0
+
+$ /Users/xingzhaorui/miniconda3/envs/train/bin/python /Users/xingzhaorui/PycharmProjects/PythonProject/tools/run_stage6_probe_selector.py --run-tag 20260313_hiddenfeat --run-name-stem stage6_cmp_hiddenfeat --stage6-config /Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json --out-root /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results --model-out-root /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313 --candidate old_hidden_gradon=/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313.pth|hiddenfeat_old|best_free --candidate old_hidden_gradoff=/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313.pth|hiddenfeat_old|best_free --candidate cp015_hidden_gradon=/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313.pth|hiddenfeat_cp015|best_free --candidate cp015_hidden_gradoff=/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313.pth|hiddenfeat_cp015|best_free
+[lane 1/4] old_hidden_gradon -> /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313.pth
+[cmd] /Users/xingzhaorui/miniconda3/envs/train/bin/python -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313.pth --rounds 5 --depth 3 --time-index-mode cycle --phase_reset_source none --contacts_meas_source pretrain_contact --contacts_meas_pretrain_clamp 1.0 --contacts_meas_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json --encoder-bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt --export_joint_direct_geolocal_series --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/basetrain_freerun --force
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[FreeRun][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[FreeRun][WARN] dropping unsupported EventMotionModel kwargs: direct_pose_hinge_axis, direct_pose_hinge_base_feat, direct_pose_hinge_bones, direct_pose_hinge_clean, direct_pose_hinge_enable, direct_pose_hinge_eps_dropout, direct_pose_hinge_eps_hidden, direct_pose_hinge_eps_max_deg, direct_pose_hinge_eps_max_scale, direct_pose_hinge_eps_source, direct_pose_hinge_feat_source, direct_pose_hinge_gate_mode, ... (+4)
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/basetrain_freerun/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+[cmd] /Users/xingzhaorui/miniconda3/envs/train/bin/python /Users/xingzhaorui/PycharmProjects/PythonProject/tools/phasea_group_summary.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/basetrain_freerun/Walk_F_freerun_cycles.json --cycle_gte 1 --drop_wrap --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/basetrain_group_summary.json
+/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/basetrain_group_summary.json
+[cmd] /Users/xingzhaorui/miniconda3/envs/train/bin/python -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json --ckpt_in /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313.pth --out_dir /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313/old_hidden_gradon --run_name old_hidden_gradon_stage6_cmp_hiddenfeat_20260313_hiddenfeat --posttrain_contacts_source pretrain_contact --posttrain_contacts_pretrain_clamp 1.0 --encoder_bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt --posttrain_contacts_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[posttrain][INFO] dropped 10 direct_pose_* tensors from checkpoint (reinit/override).
+[LR-DBG:init] arg_lr=1.00e-03 opt_pg0=1.00e-03
+[posttrain] mode=train_direct_pose
+[posttrain] trainable=20 params: direct_pose_head.0.weight, direct_pose_head.0.bias, direct_pose_head.3.weight, direct_pose_head.3.bias, direct_pose_out_leg.weight, direct_pose_out_leg.bias, direct_pose_out_arm.weight, direct_pose_out_arm.bias ...
+[posttrain][e1 i0/60] total=2.000000 dir=2.000000 blend=0.501861 inc=0.501861 λ=0.000±0.000 gnorm(L/N)=1.000/1.000 raw=1.000/1.000 ema=0.192/0.061 hit=0/0 g(trunk/leg/non)=1.044e+00/9.143e-01/6.695e-01 legω=4.963e+00 gr=0.732 grω=0.135 !grad_ratio_low_omega
+[posttrain][e1 i20/60] total=1.420762 dir=1.420762 blend=0.502550 inc=0.502550 λ=0.000±0.000 gnorm(L/N)=0.683/0.738 raw=0.683/0.738 ema=0.149/0.043 hit=0/0 g(trunk/leg/non)=1.188e+00/1.282e+00/1.321e+00 legω=2.707e+00 gr=1.031 grω=0.488
+[posttrain][e1 i40/60] total=1.227505 dir=1.227505 blend=0.501812 inc=0.501812 λ=0.000±0.000 gnorm(L/N)=0.686/0.542 raw=0.686/0.542 ema=0.099/0.028 hit=0/0 g(trunk/leg/non)=2.026e+00/2.040e+00/2.151e+00 legω=3.567e+00 gr=1.055 grω=0.603
+[posttrain][epoch 1] avg_total=1.224268 ok_steps=60 skipped=0
+[posttrain][e2 i0/60] total=1.039052 dir=1.039052 blend=0.488886 inc=0.488886 λ=0.000±0.000 gnorm(L/N)=0.552/0.488 raw=0.552/0.488 ema=0.064/0.017 hit=0/0 g(trunk/leg/non)=2.926e+00/2.438e+00/2.199e+00 legω=6.490e+00 gr=0.902 grω=0.339 !grad_ratio_low_omega
+[posttrain][e2 i20/60] total=1.116791 dir=1.116791 blend=0.509995 inc=0.509995 λ=0.000±0.000 gnorm(L/N)=0.588/0.529 raw=0.588/0.529 ema=0.042/0.011 hit=0/0 g(trunk/leg/non)=4.813e+00/4.236e+00/6.090e+00 legω=9.327e+00 gr=1.438 grω=0.653
+[posttrain][e2 i40/60] total=1.711066 dir=1.711066 blend=0.471758 inc=0.471758 λ=0.000±0.000 gnorm(L/N)=0.715/0.996 raw=0.715/0.996 ema=0.031/0.008 hit=0/0 g(trunk/leg/non)=1.005e+01/6.756e+00/1.142e+01 legω=1.107e+01 gr=1.691 grω=1.032
+[posttrain][epoch 2] avg_total=1.384769 ok_steps=60 skipped=0
+[posttrain][e3 i0/60] total=1.442694 dir=1.442694 blend=0.480776 inc=0.480776 λ=0.000±0.000 gnorm(L/N)=0.746/0.696 raw=0.746/0.696 ema=0.026/0.007 hit=0/0 g(trunk/leg/non)=6.145e+00/6.242e+00/7.367e+00 legω=1.457e+01 gr=1.180 grω=0.506
+[posttrain][e3 i20/60] total=1.436985 dir=1.436985 blend=0.472740 inc=0.472740 λ=0.000±0.000 gnorm(L/N)=0.750/0.687 raw=0.750/0.687 ema=0.022/0.006 hit=0/0 g(trunk/leg/non)=1.008e+01/8.499e+00/8.823e+00 legω=1.487e+01 gr=1.038 grω=0.593
+[posttrain][e3 i40/60] total=1.988268 dir=1.988268 blend=0.496845 inc=0.496845 λ=0.000±0.000 gnorm(L/N)=0.937/1.051 raw=0.937/1.051 ema=0.019/0.005 hit=0/0 g(trunk/leg/non)=1.089e+01/7.206e+00/1.192e+01 legω=1.906e+01 gr=1.654 grω=0.625
+[posttrain][epoch 3] avg_total=1.742568 ok_steps=60 skipped=0
+[posttrain][e4 i0/60] total=1.968921 dir=1.968921 blend=0.512753 inc=0.512753 λ=0.000±0.000 gnorm(L/N)=0.942/1.027 raw=0.942/1.027 ema=0.018/0.005 hit=0/0 g(trunk/leg/non)=1.331e+01/9.177e+00/1.685e+01 legω=2.643e+01 gr=1.836 grω=0.638
+[posttrain][e4 i20/60] total=1.660566 dir=1.660566 blend=0.474156 inc=0.474156 λ=0.000±0.000 gnorm(L/N)=0.801/0.859 raw=0.801/0.859 ema=0.017/0.005 hit=0/0 g(trunk/leg/non)=8.763e+00/8.313e+00/1.296e+01 legω=1.500e+01 gr=1.559 grω=0.864
+[posttrain][e4 i40/60] total=1.920892 dir=1.920892 blend=0.483830 inc=0.483830 λ=0.000±0.000 gnorm(L/N)=1.013/0.907 raw=1.013/0.907 ema=0.018/0.005 hit=0/0 g(trunk/leg/non)=8.454e+00/9.401e+00/1.275e+01 legω=1.441e+01 gr=1.356 grω=0.885
+[posttrain][epoch 4] avg_total=2.037117 ok_steps=60 skipped=0
+[posttrain][e5 i0/60] total=1.386355 dir=1.386355 blend=0.529950 inc=0.529950 λ=0.000±0.000 gnorm(L/N)=0.739/0.647 raw=0.739/0.647 ema=0.018/0.005 hit=0/0 g(trunk/leg/non)=7.080e+00/5.729e+00/8.811e+00 legω=1.347e+01 gr=1.538 grω=0.654
+[posttrain][e5 i20/60] total=1.772005 dir=1.772005 blend=0.527980 inc=0.527980 λ=0.000±0.000 gnorm(L/N)=0.841/0.931 raw=0.841/0.931 ema=0.015/0.004 hit=0/0 g(trunk/leg/non)=1.016e+01/1.065e+01/1.667e+01 legω=1.948e+01 gr=1.566 grω=0.856
+[posttrain][e5 i40/60] total=1.649071 dir=1.649071 blend=0.504167 inc=0.504167 λ=0.000±0.000 gnorm(L/N)=0.817/0.832 raw=0.817/0.832 ema=0.015/0.005 hit=0/0 g(trunk/leg/non)=1.708e+01/8.713e+00/1.547e+01 legω=1.747e+01 gr=1.776 grω=0.886
+[posttrain][epoch 5] avg_total=1.881965 ok_steps=60 skipped=0
+[posttrain][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313/old_hidden_gradon/ckpt_last_old_hidden_gradon_stage6_cmp_hiddenfeat_20260313_hiddenfeat.pth
+[cmd] /Users/xingzhaorui/miniconda3/envs/train/bin/python -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313/old_hidden_gradon/ckpt_last_old_hidden_gradon_stage6_cmp_hiddenfeat_20260313_hiddenfeat.pth --rounds 5 --depth 3 --time-index-mode cycle --phase_reset_source none --contacts_meas_source pretrain_contact --contacts_meas_pretrain_clamp 1.0 --contacts_meas_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json --encoder-bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt --export_joint_direct_geolocal_series --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/stage6_freerun --force
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[FreeRun][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[FreeRun][WARN] dropping unsupported EventMotionModel kwargs: direct_pose_hinge_axis, direct_pose_hinge_base_feat, direct_pose_hinge_bones, direct_pose_hinge_clean, direct_pose_hinge_enable, direct_pose_hinge_eps_dropout, direct_pose_hinge_eps_hidden, direct_pose_hinge_eps_max_deg, direct_pose_hinge_eps_max_scale, direct_pose_hinge_eps_source, direct_pose_hinge_feat_source, direct_pose_hinge_gate_mode, ... (+4)
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/stage6_freerun/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+[cmd] /Users/xingzhaorui/miniconda3/envs/train/bin/python /Users/xingzhaorui/PycharmProjects/PythonProject/tools/phasea_group_summary.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/stage6_freerun/Walk_F_freerun_cycles.json --cycle_gte 1 --drop_wrap --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/stage6_group_summary.json
+/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/stage6_group_summary.json
+[lane 2/4] old_hidden_gradoff -> /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313.pth
+[cmd] /Users/xingzhaorui/miniconda3/envs/train/bin/python -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313.pth --rounds 5 --depth 3 --time-index-mode cycle --phase_reset_source none --contacts_meas_source pretrain_contact --contacts_meas_pretrain_clamp 1.0 --contacts_meas_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json --encoder-bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt --export_joint_direct_geolocal_series --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradoff/basetrain_freerun --force
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[FreeRun][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[FreeRun][WARN] dropping unsupported EventMotionModel kwargs: direct_pose_hinge_axis, direct_pose_hinge_base_feat, direct_pose_hinge_bones, direct_pose_hinge_clean, direct_pose_hinge_enable, direct_pose_hinge_eps_dropout, direct_pose_hinge_eps_hidden, direct_pose_hinge_eps_max_deg, direct_pose_hinge_eps_max_scale, direct_pose_hinge_eps_source, direct_pose_hinge_feat_source, direct_pose_hinge_gate_mode, ... (+4)
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradoff/basetrain_freerun/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+[cmd] /Users/xingzhaorui/miniconda3/envs/train/bin/python /Users/xingzhaorui/PycharmProjects/PythonProject/tools/phasea_group_summary.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradoff/basetrain_freerun/Walk_F_freerun_cycles.json --cycle_gte 1 --drop_wrap --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradoff/basetrain_group_summary.json
+/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradoff/basetrain_group_summary.json
+[cmd] /Users/xingzhaorui/miniconda3/envs/train/bin/python -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json --ckpt_in /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313.pth --out_dir /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313/old_hidden_gradoff --run_name old_hidden_gradoff_stage6_cmp_hiddenfeat_20260313_hiddenfeat --posttrain_contacts_source pretrain_contact --posttrain_contacts_pretrain_clamp 1.0 --encoder_bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt --posttrain_contacts_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json

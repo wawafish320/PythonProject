@@ -1,0 +1,110 @@
+{
+  "run_date": "2026-03-14",
+  "experiment": "cp015 single-variable restore w_contact_plan to old schedule/weight",
+  "paths": {
+    "generated_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_restore_wcontact_20260314/configs/exp_phase_DirectBranch_v1_d1_cp015_tailk3_restorewcontact_20260314.json",
+    "train_run": "models/__tmp_cp015_restore_wcontact_20260314/exp_phase_DirectBranch_v1_d1_cp015_tailk3_restorewcontact_20260314",
+    "stage6_run": "models/__tmp_cp015_restore_wcontact_stage6_20260314/cp015_restorewcontact"
+  },
+  "baselines": {
+    "old_bestfree": {
+      "basetrain_group": {
+        "all_ex_root": 6.431959098065124,
+        "leg": 10.517242296837097,
+        "nonleg": 5.5486546226549684,
+        "arm": 7.022836314472235,
+        "else": 2.0642251692687013
+      },
+      "stage6_group": {
+        "all_ex_root": 0.3132793551955468,
+        "leg": 0.8742295720575236,
+        "nonleg": 0.1919928218199842,
+        "arm": 0.21749107248109364,
+        "else": 0.13172422934827105
+      },
+      "plan_stats": {
+        "plan_bce": 0.611715633223218,
+        "plan_mae": 0.3629154929527685,
+        "plan_logit_abs_mean": 0.37286634314372097,
+        "plan_prob_delta_abs_mean": 0.00932275766707718,
+        "stance_acc_thr0.7": 0.8033333333333333,
+        "n_steps": 344
+      }
+    },
+    "cp015_bestfree": {
+      "basetrain_group": {
+        "all_ex_root": 5.647743532250623,
+        "leg": 10.826995120318823,
+        "nonleg": 4.527905351046688,
+        "arm": 5.622656480011559,
+        "else": 1.9403117734933566
+      },
+      "stage6_group": {
+        "all_ex_root": 0.43137680891071384,
+        "leg": 1.1671711441906452,
+        "nonleg": 0.2722861418231612,
+        "arm": 0.3280119348514316,
+        "else": 0.1405706310290674
+      },
+      "plan_stats": {
+        "plan_bce": 0.8778546212257304,
+        "plan_mae": 0.39088259823666854,
+        "plan_logit_abs_mean": 1.566154455549495,
+        "plan_prob_delta_abs_mean": 0.0037166134457025167,
+        "stance_acc_thr0.7": 0.5066666666666667,
+        "n_steps": 344
+      }
+    },
+    "cp015_with_old_planstack": {
+      "stage6_group": {
+        "all_ex_root": 0.2955326631516289,
+        "leg": 0.7407025703794843,
+        "nonleg": 0.19927971023749796,
+        "arm": 0.2287046377238896,
+        "else": 0.12972988163329954
+      },
+      "plan_stats": {
+        "plan_bce": 0.6115864034945215,
+        "plan_mae": 0.3628395607937882,
+        "plan_logit_abs_mean": 0.36952548051458717,
+        "plan_prob_delta_abs_mean": 0.008810470516063033,
+        "stance_acc_thr0.7": 0.8,
+        "n_steps": 344
+      }
+    }
+  },
+  "restore_run": {
+    "best_free": {
+      "basetrain_group": {
+        "all_ex_root": 6.732179099250845,
+        "leg": 10.475876420909582,
+        "nonleg": 5.92273102970301,
+        "arm": 7.551304225916236,
+        "else": 2.0733762022899316
+      },
+      "stage6_group": {
+        "all_ex_root": 0.33105435392048405,
+        "leg": 0.880223496684393,
+        "nonleg": 0.2123150798093686,
+        "arm": 0.22821950386659604,
+        "else": 0.1747228047650127
+      },
+      "plan_stats": {
+        "plan_bce": 0.6340936977906572,
+        "plan_mae": 0.3771462116590048,
+        "plan_logit_abs_mean": 0.3824094833026445,
+        "plan_prob_delta_abs_mean": 0.005077267005909289,
+        "stance_acc_thr0.7": 0.79,
+        "n_steps": 344
+      }
+    },
+    "best_teacher_plan_stats_only": {
+      "plan_bce": 0.8894845559580642,
+      "plan_mae": 0.39504673252426875,
+      "plan_logit_abs_mean": 1.5219969390864418,
+      "plan_prob_delta_abs_mean": 0.034238959768510074,
+      "stance_acc_thr0.7": 0.5133333333333333,
+      "n_steps": 344
+    }
+  }
+}

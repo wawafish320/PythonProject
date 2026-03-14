@@ -1,0 +1,19 @@
+{
+  "stage6_case": "cp015_with_old_planstack",
+  "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/ckpt_last_cp015_with_old_planstack_stage6_plantransplant_20260314.pth",
+  "stage_ckpts": {
+    "70a": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70a/ckpt_last_WalkF_stage7_70a_from_cp015_oldplan_20260314.pth",
+    "70b": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70b/ckpt_last_WalkF_stage7_70b_concat_from_cp015_oldplan_20260314.pth",
+    "warmstart": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/warmstart/ckpt_last_cp015_oldplan_70a_replacecontacts_zerophase_20260314.pth",
+    "70b_replace": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70b_replace/ckpt_last_WalkF_stage7_70b_replacecontacts_from_cp015_oldplan_20260314.pth",
+    "70R": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70R/ckpt_last_WalkF_stage7_70R_from_cp015_oldplan_trunkfull_s180_20260314.pth",
+    "71": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/71/ckpt_last_WalkF_stage7_71_from_cp015_oldplan_20260314.pth",
+    "72": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/72/ckpt_last_WalkF_stage7_72_from_cp015_oldplan_20260314.pth",
+    "lambda": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/lambda/ckpt_last_WalkF_stage7_lambda_from_cp015_oldplan_20260314.pth"
+  },
+  "evals": {
+    "strict_pretrain_contact": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/eval_pretrain_contact/Walk_F_freerun_cycles.json",
+    "model_source": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/eval_model_source/Walk_F_freerun_cycles.json"
+  },
+  "completed_at": "2026-03-14 11:35:23"
+}

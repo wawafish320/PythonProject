@@ -1,0 +1,7 @@
+{
+  "lane": "rollback_plan_init_state",
+  "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_init_state/surgery/rollback_plan_init_state.pth",
+  "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_init_state/posttrain/ckpt_last_WalkF_stage6_rollback_plan_init_state_20260314.pth",
+  "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_plan_init_state/stage6_group_summary.json",
+  "completed_at": "2026-03-14 15:11:58"
+}

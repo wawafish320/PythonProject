@@ -1,0 +1,24 @@
+{
+  "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_directposeoff_stage6_20260313/cp015_dpoff_bestfree/posttrain_log_cp015_dpoff_bestfree_stage6_cmp_directposeoff_20260313_directposeoff.json",
+  "rows": 300,
+  "head_count": 20,
+  "step1": {
+    "dir_leg_base": 0.19117237627506256,
+    "dir_nonleg_base": 0.06116291880607605,
+    "leg_over_nonleg": 3.1256254607664524,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 0.6414508497411386,
+    "direct_grad_norm_out_else": 0.08109707040227401,
+    "grad_arm_over_else": 7.90966734752914,
+    "step": 1.0
+  },
+  "head20_mean": {
+    "dir_leg_base": 0.13529093451797963,
+    "dir_nonleg_base": 0.03655894910916686,
+    "leg_over_nonleg": 3.741007165498131,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 1.1520355875379,
+    "direct_grad_norm_out_else": 0.15576114232215615,
+    "grad_arm_over_else": 7.421860629670715
+  }
+}

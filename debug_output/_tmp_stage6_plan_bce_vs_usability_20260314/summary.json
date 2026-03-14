@@ -1,0 +1,121 @@
+{
+  "run_date": "2026-03-14",
+  "policy": {
+    "teacher": "validate/teacher_batches/Walk_F_teacher.json",
+    "mask_primary": "cycle>=1 && !wrap_boundary_step",
+    "note": "BCE computed from ContactPlanLogitsPerC vs ContactGTPerC in stage6 freerun JSON with --log_contacts."
+  },
+  "models": {
+    "old_bestfree": {
+      "contacts_plan_vs_gt": {
+        "all": {
+          "n_steps": 434,
+          "plan_bce": 0.6253023655627987,
+          "plan_mae": 0.3695375173966706,
+          "plan_mse": 0.14681924576866692,
+          "plan_logit_abs_mean": 0.37374270497070206,
+          "plan_logit_mean": -0.15348258069051163,
+          "plan_prob_mean": 0.4631565318610262,
+          "plan_prob_delta_abs_mean": 0.009480409788755017,
+          "plan_logit_delta_abs_mean": 0.03999455580724442,
+          "stance_acc_thr0.7": 0.7783641160949868,
+          "stance_acc_n": 379
+        },
+        "cycle_gte1_dropwrap": {
+          "n_steps": 344,
+          "plan_bce": 0.611715633223218,
+          "plan_mae": 0.3629154929527685,
+          "plan_mse": 0.14034808625392872,
+          "plan_logit_abs_mean": 0.37286634314372097,
+          "plan_logit_mean": -0.1573155600101102,
+          "plan_prob_mean": 0.462298693568554,
+          "plan_prob_delta_abs_mean": 0.00932275766707718,
+          "plan_logit_delta_abs_mean": 0.0388768044715807,
+          "stance_acc_thr0.7": 0.8033333333333333,
+          "stance_acc_n": 300
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root_mean": 0.3132793551955468,
+        "leg_mean": 0.8742295720575236,
+        "nonleg_mean": 0.1919928218199842,
+        "arm_mean": 0.21749107248109364,
+        "else_mean": 0.13172422934827105
+      }
+    },
+    "cp015_bestfree": {
+      "contacts_plan_vs_gt": {
+        "all": {
+          "n_steps": 434,
+          "plan_bce": 0.8847223627868744,
+          "plan_mae": 0.3922597872042137,
+          "plan_mse": 0.25579598854365193,
+          "plan_logit_abs_mean": 1.5614830923657264,
+          "plan_logit_mean": -0.18870798927573015,
+          "plan_prob_mean": 0.47298259916393437,
+          "plan_prob_delta_abs_mean": 0.0043375264793014965,
+          "plan_logit_delta_abs_mean": 0.02958217972145345,
+          "stance_acc_thr0.7": 0.5118733509234829,
+          "stance_acc_n": 379
+        },
+        "cycle_gte1_dropwrap": {
+          "n_steps": 344,
+          "plan_bce": 0.8778546212257304,
+          "plan_mae": 0.39088259823666854,
+          "plan_mse": 0.25436282134435606,
+          "plan_logit_abs_mean": 1.566154455549495,
+          "plan_logit_mean": -0.19306490778229957,
+          "plan_prob_mean": 0.47217028348728324,
+          "plan_prob_delta_abs_mean": 0.0037166134457025167,
+          "plan_logit_delta_abs_mean": 0.025986135701048827,
+          "stance_acc_thr0.7": 0.5066666666666667,
+          "stance_acc_n": 300
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root_mean": 0.43137680891071384,
+        "leg_mean": 1.1671711441906452,
+        "nonleg_mean": 0.2722861418231612,
+        "arm_mean": 0.3280119348514316,
+        "else_mean": 0.1405706310290674
+      }
+    }
+  },
+  "delta_cp015_minus_old": {
+    "contacts_plan_vs_gt": {
+      "all": {
+        "n_steps": 0,
+        "plan_bce": 0.2594199972240757,
+        "plan_mae": 0.02272226980754305,
+        "plan_mse": 0.10897674277498501,
+        "plan_logit_abs_mean": 1.1877403873950243,
+        "plan_logit_mean": -0.035225408585218526,
+        "plan_prob_mean": 0.009826067302908192,
+        "plan_prob_delta_abs_mean": -0.00514288330945352,
+        "plan_logit_delta_abs_mean": -0.010412376085790969,
+        "stance_acc_thr0.7": -0.26649076517150394,
+        "stance_acc_n": 0
+      },
+      "cycle_gte1_dropwrap": {
+        "n_steps": 0,
+        "plan_bce": 0.26613898800251246,
+        "plan_mae": 0.027967105283900062,
+        "plan_mse": 0.11401473509042734,
+        "plan_logit_abs_mean": 1.1932881124057741,
+        "plan_logit_mean": -0.035749347772189355,
+        "plan_prob_mean": 0.009871589918729218,
+        "plan_prob_delta_abs_mean": -0.005606144221374662,
+        "plan_logit_delta_abs_mean": -0.012890668770531872,
+        "stance_acc_thr0.7": -0.29666666666666663,
+        "stance_acc_n": 0
+      }
+    },
+    "stage6_exit": {
+      "all_ex_root_mean": 0.11809745371516706,
+      "leg_mean": 0.29294157213312155,
+      "nonleg_mean": 0.08029332000317699,
+      "arm_mean": 0.11052086237033795,
+      "else_mean": 0.00884640168079634
+    }
+  }
+}

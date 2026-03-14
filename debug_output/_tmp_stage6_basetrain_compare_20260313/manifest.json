@@ -1,0 +1,40 @@
+{
+  "run_date": "20260313",
+  "root": "/Users/xingzhaorui/PycharmProjects/PythonProject",
+  "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+  "teacher": "/Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json",
+  "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+  "affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+  "lanes": [
+    {
+      "name": "old_bestfree",
+      "family": "main_old",
+      "selector": "best_free",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth"
+    },
+    {
+      "name": "cp015_bestfree",
+      "family": "main_cp015_tailk3",
+      "selector": "best_free",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth"
+    },
+    {
+      "name": "geofix_bestteacher",
+      "family": "geofix_r3",
+      "selector": "best_teacher",
+      "ckpt": "/tmp/MLPL2_DirectBranch_v1_geofix_r3/exp_phase_DirectBranch_v1_d1_geofix_r3/ckpt_best_teacher_exp_phase_DirectBranch_v1_d1_geofix_r3.pth"
+    },
+    {
+      "name": "geofix_bestfree",
+      "family": "geofix_r3",
+      "selector": "best_free",
+      "ckpt": "/tmp/MLPL2_DirectBranch_v1_geofix_r3/exp_phase_DirectBranch_v1_d1_geofix_r3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_geofix_r3.pth"
+    },
+    {
+      "name": "geofix_last",
+      "family": "geofix_r3",
+      "selector": "last",
+      "ckpt": "/tmp/MLPL2_DirectBranch_v1_geofix_r3/exp_phase_DirectBranch_v1_d1_geofix_r3/ckpt_last_exp_phase_DirectBranch_v1_d1_geofix_r3.pth"
+    }
+  ]
+}

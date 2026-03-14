@@ -1,0 +1,24 @@
+{
+  "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_phase_contact_input/posttrain/posttrain_log_WalkF_stage6_rollback_phase_contact_input_20260314.json",
+  "rows": 300,
+  "head_count": 20,
+  "step1": {
+    "step": 1.0,
+    "dir_leg_base": 0.19177785515785217,
+    "dir_nonleg_base": 0.061373867094516754,
+    "leg_over_nonleg": 3.124747783327897,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 0.6874121588163276,
+    "direct_grad_norm_out_else": 0.08459187787696748,
+    "grad_arm_over_else": 8.126219396809192
+  },
+  "head20_mean": {
+    "dir_leg_base": 0.13203790970146656,
+    "dir_nonleg_base": 0.03599054953083396,
+    "leg_over_nonleg": 3.702659625712424,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 1.0662856328510864,
+    "direct_grad_norm_out_else": 0.15282705478159384,
+    "grad_arm_over_else": 7.216138248449935
+  }
+}

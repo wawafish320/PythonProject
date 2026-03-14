@@ -1,0 +1,47 @@
+{
+  "run_date": "20260313",
+  "conclusion": "current basetrain direct_pose branch is already detached from shared backbone and contact plan under the mainline d1/cp015 configs",
+  "evidence": {
+    "code_refs": [
+      "train/models.py:594",
+      "train/models.py:611",
+      "train/models.py:805",
+      "train/models.py:814",
+      "train/models.py:3482",
+      "train/models.py:3584"
+    ],
+    "notes": [
+      "direct_pose_detach_plan defaults to true and current resolved configs keep it true",
+      "direct_pose_feat_source defaults to cond when absent from config_resolved",
+      "with feat_source=cond and detached contacts_plan, direct loss should only update direct_pose_head parameters"
+    ]
+  },
+  "probes": [
+    {
+      "lane": "old_bestfree",
+      "config": "models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/config_resolved.json",
+      "direct_pose_enable": true,
+      "direct_pose_detach_plan": true,
+      "direct_pose_feat_source": "cond",
+      "direct_only_loss": 1.353678584098816,
+      "grad_norms": {
+        "direct_pose_head": 0.15747836421472602,
+        "shared_encoder": 0.0,
+        "contact_plan": 0.0
+      }
+    },
+    {
+      "lane": "cp015_bestfree",
+      "config": "models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/config_resolved.json",
+      "direct_pose_enable": true,
+      "direct_pose_detach_plan": true,
+      "direct_pose_feat_source": "cond",
+      "direct_only_loss": 1.8271044492721558,
+      "grad_norms": {
+        "direct_pose_head": 0.21981960796859304,
+        "shared_encoder": 0.0,
+        "contact_plan": 0.0
+      }
+    }
+  ]
+}

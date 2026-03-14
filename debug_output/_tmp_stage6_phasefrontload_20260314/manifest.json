@@ -1,0 +1,32 @@
+{
+  "run_date": "20260314",
+  "root": "/Users/xingzhaorui/PycharmProjects/PythonProject",
+  "base_stage6_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+  "baseline_compare_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/compare_summary.json",
+  "plantransplant_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/summary.json",
+  "teacher": "/Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json",
+  "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+  "affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+  "cases": [
+    {
+      "name": "cp015_stage6_phasezin_frontload",
+      "baseline_case": "cp015_bestfree",
+      "run_name": "cp015_stage6_phasezin_frontload_20260314",
+      "semantic_overrides": {
+        "direct_pose_use_phase_z": true,
+        "direct_pose_phase_z_mode": "concat"
+      },
+      "note": "Stage6 frontloads historical 70b concat semantics while keeping Stage6 reinit/train budget unchanged."
+    },
+    {
+      "name": "cp015_stage6_replacecontacts_frontload",
+      "baseline_case": "cp015_bestfree",
+      "run_name": "cp015_stage6_replacecontacts_frontload_20260314",
+      "semantic_overrides": {
+        "direct_pose_use_phase_z": true,
+        "direct_pose_phase_z_mode": "replace_contacts"
+      },
+      "note": "Stage6 frontloads historical 70c replace_contacts semantics while keeping Stage6 reinit/train budget unchanged."
+    }
+  ]
+}

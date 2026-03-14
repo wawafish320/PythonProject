@@ -1,0 +1,79 @@
+{
+  "kind": "pretrain_contact_affine",
+  "space": "logit",
+  "fitted_at_utc": "2026-03-04T13:13:46.679822+00:00",
+  "eps": 0.0001,
+  "round_gte": 1,
+  "require_source_prefix": "pretrain_contact",
+  "target": "mix",
+  "mix_alpha": 0.8,
+  "num_files_total": 5,
+  "num_files_used": 5,
+  "num_steps_used": 735,
+  "num_steps_skipped": 370,
+  "scale": [
+    -0.3092521721753229,
+    -0.23294964694598622
+  ],
+  "bias": [
+    -0.29577533600800754,
+    0.008170148146790906
+  ],
+  "metrics": {
+    "contact_err_abs_mean_before": 0.12609670772725243,
+    "contact_err_abs_mean_after": 0.06344215158774638,
+    "contact_err_abs_mean_delta": -0.06265455613950605
+  },
+  "per_channel": [
+    {
+      "channel": 0,
+      "n": 735,
+      "scale": -0.3092521721753229,
+      "bias": -0.29577533600800754,
+      "contact_err_abs_mean_before": 0.11772052281966186,
+      "contact_err_abs_mean_after": 0.0661239198174114
+    },
+    {
+      "channel": 1,
+      "n": 735,
+      "scale": -0.23294964694598622,
+      "bias": 0.008170148146790906,
+      "contact_err_abs_mean_before": 0.134472892634843,
+      "contact_err_abs_mean_after": 0.060760383358081343
+    }
+  ],
+  "inputs": [
+    "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/pretrain_clamp1_fit_source/Walk_F_freerun_cycles.json",
+    "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/pretrain_clamp1_fit_source/Walk_L_To_L_freerun_cycles.json",
+    "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/pretrain_clamp1_fit_source/Walk_L_To_R_freerun_cycles.json",
+    "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/pretrain_clamp1_fit_source/Walk_R_To_L_freerun_cycles.json",
+    "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/pretrain_clamp1_fit_source/Walk_R_To_R_freerun_cycles.json"
+  ],
+  "files_used": [
+    {
+      "json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/pretrain_clamp1_fit_source/Walk_F_freerun_cycles.json",
+      "used_steps": 173,
+      "cycle_len": 87
+    },
+    {
+      "json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/pretrain_clamp1_fit_source/Walk_L_To_L_freerun_cycles.json",
+      "used_steps": 107,
+      "cycle_len": 54
+    },
+    {
+      "json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/pretrain_clamp1_fit_source/Walk_L_To_R_freerun_cycles.json",
+      "used_steps": 99,
+      "cycle_len": 50
+    },
+    {
+      "json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/pretrain_clamp1_fit_source/Walk_R_To_L_freerun_cycles.json",
+      "used_steps": 171,
+      "cycle_len": 86
+    },
+    {
+      "json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/pretrain_clamp1_fit_source/Walk_R_To_R_freerun_cycles.json",
+      "used_steps": 185,
+      "cycle_len": 93
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+
+$ /Users/xingzhaorui/miniconda3/envs/train/bin/python -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /tmp/MLPL2_DirectBranch_v1_geofix_r3/exp_phase_DirectBranch_v1_d1_geofix_r3/ckpt_last_exp_phase_DirectBranch_v1_d1_geofix_r3.pth --rounds 5 --depth 3 --time-index-mode cycle --phase_reset_source none --contacts_meas_source pretrain_contact --contacts_meas_pretrain_clamp 1.0 --contacts_meas_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json --encoder-bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt --export_joint_direct_geolocal_series --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/basetrain_freerun --force
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[FreeRun][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[FreeRun][WARN] dropping unsupported EventMotionModel kwargs: direct_pose_hinge_axis, direct_pose_hinge_base_feat, direct_pose_hinge_bones, direct_pose_hinge_clean, direct_pose_hinge_enable, direct_pose_hinge_eps_dropout, direct_pose_hinge_eps_hidden, direct_pose_hinge_eps_max_deg, direct_pose_hinge_eps_max_scale, direct_pose_hinge_eps_source, direct_pose_hinge_feat_source, direct_pose_hinge_gate_mode, ... (+4)
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/basetrain_freerun/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+[exit_code] 0
+
+$ /Users/xingzhaorui/miniconda3/envs/train/bin/python /Users/xingzhaorui/PycharmProjects/PythonProject/tools/phasea_group_summary.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/basetrain_freerun/Walk_F_freerun_cycles.json --cycle_gte 1 --drop_wrap --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/basetrain_group_summary.json
+/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/basetrain_group_summary.json
+[exit_code] 0
+
+$ /Users/xingzhaorui/miniconda3/envs/train/bin/python -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json --ckpt_in /tmp/MLPL2_DirectBranch_v1_geofix_r3/exp_phase_DirectBranch_v1_d1_geofix_r3/ckpt_last_exp_phase_DirectBranch_v1_d1_geofix_r3.pth --out_dir /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/geofix_last --run_name geofix_last_stage6_cmp_20260313 --posttrain_contacts_source pretrain_contact --posttrain_contacts_pretrain_clamp 1.0 --encoder_bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt --posttrain_contacts_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[posttrain][INFO] dropped 10 direct_pose_* tensors from checkpoint (reinit/override).
+[LR-DBG:init] arg_lr=1.00e-03 opt_pg0=1.00e-03
+[posttrain] mode=train_direct_pose
+[posttrain] trainable=20 params: direct_pose_head.0.weight, direct_pose_head.0.bias, direct_pose_head.3.weight, direct_pose_head.3.bias, direct_pose_out_leg.weight, direct_pose_out_leg.bias, direct_pose_out_arm.weight, direct_pose_out_arm.bias ...
+[posttrain][e1 i0/60] total=2.000000 dir=2.000000 blend=0.374366 inc=0.374366 λ=0.000±0.000 gnorm(L/N)=1.000/1.000 raw=1.000/1.000 ema=0.192/0.061 hit=0/0 g(trunk/leg/non)=1.094e+00/9.245e-01/6.924e-01 legω=4.968e+00 gr=0.749 grω=0.139 !grad_ratio_low_omega
+[posttrain][e1 i20/60] total=1.412929 dir=1.412929 blend=0.376700 inc=0.376700 λ=0.000±0.000 gnorm(L/N)=0.696/0.717 raw=0.696/0.717 ema=0.147/0.043 hit=0/0 g(trunk/leg/non)=1.788e+00/1.930e+00/1.340e+00 legω=3.513e+00 gr=0.694 grω=0.381
+[posttrain][e1 i40/60] total=1.279955 dir=1.279955 blend=0.381260 inc=0.381260 λ=0.000±0.000 gnorm(L/N)=0.730/0.550 raw=0.730/0.550 ema=0.095/0.027 hit=0/0 g(trunk/leg/non)=2.164e+00/2.000e+00/1.489e+00 legω=3.684e+00 gr=0.744 grω=0.404
+[posttrain][epoch 1] avg_total=1.193354 ok_steps=60 skipped=0
+[posttrain][e2 i0/60] total=0.959296 dir=0.959296 blend=0.374588 inc=0.374588 λ=0.000±0.000 gnorm(L/N)=0.499/0.461 raw=0.499/0.461 ema=0.061/0.017 hit=0/0 g(trunk/leg/non)=2.506e+00/3.109e+00/2.359e+00 legω=6.418e+00 gr=0.759 grω=0.368
+[posttrain][e2 i20/60] total=1.064001 dir=1.064001 blend=0.380097 inc=0.380097 λ=0.000±0.000 gnorm(L/N)=0.452/0.612 raw=0.452/0.612 ema=0.039/0.011 hit=0/0 g(trunk/leg/non)=4.554e+00/2.863e+00/7.009e+00 legω=7.110e+00 gr=2.449 grω=0.986
+[posttrain][e2 i40/60] total=1.320182 dir=1.320182 blend=0.367563 inc=0.367563 λ=0.000±0.000 gnorm(L/N)=0.610/0.710 raw=0.610/0.710 ema=0.030/0.008 hit=0/0 g(trunk/leg/non)=4.674e+00/3.490e+00/4.704e+00 legω=7.642e+00 gr=1.348 grω=0.616
+[posttrain][epoch 2] avg_total=1.406874 ok_steps=60 skipped=0
+[posttrain][e3 i0/60] total=1.816356 dir=1.816356 blend=0.372267 inc=0.372267 λ=0.000±0.000 gnorm(L/N)=0.888/0.928 raw=0.888/0.928 ema=0.026/0.007 hit=0/0 g(trunk/leg/non)=1.356e+01/8.164e+00/1.207e+01 legω=1.627e+01 gr=1.478 grω=0.741
+[posttrain][e3 i20/60] total=1.374143 dir=1.374143 blend=0.364588 inc=0.364588 λ=0.000±0.000 gnorm(L/N)=0.725/0.649 raw=0.725/0.649 ema=0.022/0.006 hit=0/0 g(trunk/leg/non)=8.162e+00/9.122e+00/9.409e+00 legω=1.237e+01 gr=1.031 grω=0.761
+[posttrain][e3 i40/60] total=1.902741 dir=1.902741 blend=0.378081 inc=0.378081 λ=0.000±0.000 gnorm(L/N)=0.910/0.993 raw=0.910/0.993 ema=0.019/0.005 hit=0/0 g(trunk/leg/non)=1.872e+01/9.225e+00/8.943e+00 legω=1.843e+01 gr=0.969 grω=0.485
+[posttrain][epoch 3] avg_total=1.772577 ok_steps=60 skipped=0
+[posttrain][e4 i0/60] total=1.937108 dir=1.937108 blend=0.383655 inc=0.383655 λ=0.000±0.000 gnorm(L/N)=1.093/0.844 raw=1.093/0.844 ema=0.017/0.005 hit=0/0 g(trunk/leg/non)=9.885e+00/1.282e+01/1.466e+01 legω=3.007e+01 gr=1.144 grω=0.487
+[posttrain][e4 i20/60] total=1.543047 dir=1.543047 blend=0.364908 inc=0.364908 λ=0.000±0.000 gnorm(L/N)=0.780/0.763 raw=0.780/0.763 ema=0.016/0.004 hit=0/0 g(trunk/leg/non)=1.001e+01/9.384e+00/1.593e+01 legω=1.643e+01 gr=1.697 grω=0.969
+[posttrain][e4 i40/60] total=1.948652 dir=1.948652 blend=0.366755 inc=0.366755 λ=0.000±0.000 gnorm(L/N)=0.990/0.959 raw=0.990/0.959 ema=0.015/0.004 hit=0/0 g(trunk/leg/non)=9.746e+00/1.133e+01/1.369e+01 legω=1.780e+01 gr=1.208 grω=0.769
+[posttrain][epoch 4] avg_total=1.959170 ok_steps=60 skipped=0
+[posttrain][e5 i0/60] total=2.228513 dir=2.228513 blend=0.383371 inc=0.383371 λ=0.000±0.000 gnorm(L/N)=1.071/1.157 raw=1.071/1.157 ema=0.017/0.004 hit=0/0 g(trunk/leg/non)=1.311e+01/9.809e+00/1.213e+01 legω=2.081e+01 gr=1.236 grω=0.583
+[posttrain][e5 i20/60] total=2.034335 dir=2.034335 blend=0.383094 inc=0.383094 λ=0.000±0.000 gnorm(L/N)=1.071/0.964 raw=1.071/0.964 ema=0.016/0.004 hit=0/0 g(trunk/leg/non)=1.066e+01/8.874e+00/8.968e+00 legω=1.839e+01 gr=1.011 grω=0.488
+[posttrain][e5 i40/60] total=1.889409 dir=1.889409 blend=0.380020 inc=0.380020 λ=0.000±0.000 gnorm(L/N)=0.876/1.013 raw=0.876/1.013 ema=0.016/0.004 hit=0/0 g(trunk/leg/non)=1.496e+01/9.245e+00/1.038e+01 legω=1.696e+01 gr=1.123 grω=0.612
+[posttrain][epoch 5] avg_total=1.937044 ok_steps=60 skipped=0
+[posttrain][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/geofix_last/ckpt_last_geofix_last_stage6_cmp_20260313.pth
+[exit_code] 0
+
+$ /Users/xingzhaorui/miniconda3/envs/train/bin/python -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/geofix_last/ckpt_last_geofix_last_stage6_cmp_20260313.pth --rounds 5 --depth 3 --time-index-mode cycle --phase_reset_source none --contacts_meas_source pretrain_contact --contacts_meas_pretrain_clamp 1.0 --contacts_meas_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json --encoder-bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt --export_joint_direct_geolocal_series --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/stage6_freerun --force
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[FreeRun][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[FreeRun][WARN] dropping unsupported EventMotionModel kwargs: direct_pose_hinge_axis, direct_pose_hinge_base_feat, direct_pose_hinge_bones, direct_pose_hinge_clean, direct_pose_hinge_enable, direct_pose_hinge_eps_dropout, direct_pose_hinge_eps_hidden, direct_pose_hinge_eps_max_deg, direct_pose_hinge_eps_max_scale, direct_pose_hinge_eps_source, direct_pose_hinge_feat_source, direct_pose_hinge_gate_mode, ... (+4)
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/stage6_freerun/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+[exit_code] 0
+
+$ /Users/xingzhaorui/miniconda3/envs/train/bin/python /Users/xingzhaorui/PycharmProjects/PythonProject/tools/phasea_group_summary.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/stage6_freerun/Walk_F_freerun_cycles.json --cycle_gte 1 --drop_wrap --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/stage6_group_summary.json
+/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/stage6_group_summary.json
+[exit_code] 0

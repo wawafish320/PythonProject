@@ -1,0 +1,24 @@
+{
+  "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/geofix_last/posttrain_log_geofix_last_stage6_cmp_20260313.json",
+  "rows": 300,
+  "head_count": 20,
+  "step1": {
+    "dir_leg_base": 0.1917564421892166,
+    "dir_nonleg_base": 0.061401061713695526,
+    "leg_over_nonleg": 3.1230150886209396,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 0.6872130575453849,
+    "direct_grad_norm_out_else": 0.08450823100928787,
+    "grad_arm_over_else": 8.131906789882477,
+    "step": 1.0
+  },
+  "head20_mean": {
+    "dir_leg_base": 0.1303407609462738,
+    "dir_nonleg_base": 0.035891553945839406,
+    "leg_over_nonleg": 3.6682208641184544,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 1.080760160980935,
+    "direct_grad_norm_out_else": 0.15548483676272734,
+    "grad_arm_over_else": 7.222805362145751
+  }
+}

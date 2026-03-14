@@ -1,0 +1,8 @@
+{
+  "completed_at": "2026-03-14 20:16:30",
+  "stage70a_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_newflow_chain_20260314/70a/ckpt_last_WalkF_stage7_70a_from_oldd1_newflow_20260314.pth",
+  "warmstart_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_skip70b_lowdrift_20260314/warmstart/ckpt_last_oldd1_skip70b_zerophase_20260314.pth",
+  "candidate_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_skip70b_lowdrift_20260314/configs/posttrain_70b_replace_lowdrift_from_oldd1_20260314.json",
+  "candidate_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_skip70b_lowdrift_20260314/70b_replace_lowdrift/ckpt_last_WalkF_stage7_70b_replace_lowdrift_from_oldd1_20260314.pth",
+  "candidate_eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_skip70b_lowdrift_20260314/eval_model_source/Walk_F_freerun_cycles.json"
+}

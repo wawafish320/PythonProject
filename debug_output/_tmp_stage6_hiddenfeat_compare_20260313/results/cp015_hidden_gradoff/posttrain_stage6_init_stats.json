@@ -1,0 +1,24 @@
+{
+  "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313/cp015_hidden_gradoff/posttrain_log_cp015_hidden_gradoff_stage6_cmp_hiddenfeat_20260313_hiddenfeat_cp015_gradoff.json",
+  "rows": 300,
+  "head_count": 20,
+  "step1": {
+    "dir_leg_base": 0.1913795918226242,
+    "dir_nonleg_base": 0.061318542808294296,
+    "leg_over_nonleg": 3.1210720780001497,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 0.6737693429268722,
+    "direct_grad_norm_out_else": 0.08310432993627445,
+    "grad_arm_over_else": 8.107511888291835,
+    "step": 1.0
+  },
+  "head20_mean": {
+    "dir_leg_base": 0.13549109362065792,
+    "dir_nonleg_base": 0.03644199352711439,
+    "leg_over_nonleg": 3.772051707232893,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 1.0288663965679865,
+    "direct_grad_norm_out_else": 0.15168322993732744,
+    "grad_arm_over_else": 7.0729368304963245
+  }
+}

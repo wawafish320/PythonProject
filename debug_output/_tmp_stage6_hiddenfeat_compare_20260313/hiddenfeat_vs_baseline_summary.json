@@ -1,0 +1,540 @@
+{
+  "run_date": "20260313",
+  "paths": {
+    "grad_probe_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_gradprobe_20260313/hiddenfeat_backbone_grad_probe.json",
+    "baseline_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/compare_summary.json",
+    "directposeoff_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_directposeoff_compare_20260313/directposeoff_vs_baseline_summary.json",
+    "selector_summary_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/selector_summary.json",
+    "stage6_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json"
+  },
+  "gradient_probe": {
+    "overall_pass": true,
+    "path": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_gradprobe_20260313/hiddenfeat_backbone_grad_probe.json",
+    "results": [
+      {
+        "name": "old_hidden_gradon",
+        "family": "old",
+        "detach_feat": false,
+        "direct_pose_head": 3.6485836505889893,
+        "shared_encoder": 0.18844830989837646,
+        "contact_plan": 0.0,
+        "pass": true
+      },
+      {
+        "name": "old_hidden_gradoff",
+        "family": "old",
+        "detach_feat": true,
+        "direct_pose_head": 7.750208854675293,
+        "shared_encoder": 0.0,
+        "contact_plan": 0.0,
+        "pass": true
+      },
+      {
+        "name": "cp015_hidden_gradon",
+        "family": "cp015",
+        "detach_feat": false,
+        "direct_pose_head": 3.9517300128936768,
+        "shared_encoder": 0.2659827768802643,
+        "contact_plan": 0.0,
+        "pass": true
+      },
+      {
+        "name": "cp015_hidden_gradoff",
+        "family": "cp015",
+        "detach_feat": true,
+        "direct_pose_head": 3.7478959560394287,
+        "shared_encoder": 0.0,
+        "contact_plan": 0.0,
+        "pass": true
+      }
+    ]
+  },
+  "answers": {
+    "no_op": "no",
+    "q1_basetrain": "mixed",
+    "q1_stage6": "mixed",
+    "q2_stage6_detach_feat": "worse"
+  },
+  "family_verdicts": {
+    "old": {
+      "best_stage6": {
+        "name": "old_bestfree",
+        "variant": "baseline(cond)"
+      },
+      "best_basetrain": {
+        "name": "old_hidden_gradoff",
+        "variant": "hidden+gradoff"
+      },
+      "gradon_vs_baseline": {
+        "basetrain": {
+          "all_ex_root": 2.09114352132982,
+          "leg": 4.667246302219208,
+          "nonleg": 1.5341483254618442
+        },
+        "stage6_exit": {
+          "all_ex_root": 0.0350368485258597,
+          "leg": -0.03353888397768334,
+          "nonleg": 0.04986403393203123
+        }
+      },
+      "gradoff_vs_baseline": {
+        "basetrain": {
+          "all_ex_root": -2.36951035439417,
+          "leg": -0.31666664972692793,
+          "nonleg": -2.813368452700601
+        },
+        "stage6_exit": {
+          "all_ex_root": 0.0842953295326162,
+          "leg": 0.19360431173862358,
+          "nonleg": 0.06066095500158761
+        }
+      },
+      "gradoff_vs_gradon": {
+        "basetrain": {
+          "all_ex_root": -4.46065387572399,
+          "leg": -4.983912951946136,
+          "nonleg": -4.347516778162445
+        },
+        "stage6_exit": {
+          "all_ex_root": 0.049258481006756505,
+          "leg": 0.22714319571630692,
+          "nonleg": 0.010796921069556376
+        }
+      }
+    },
+    "cp015": {
+      "best_stage6": {
+        "name": "cp015_dpoff_bestfree",
+        "variant": "direct_pose=false"
+      },
+      "best_basetrain": {
+        "name": "cp015_hidden_gradon",
+        "variant": "hidden+gradon"
+      },
+      "gradon_vs_baseline": {
+        "basetrain": {
+          "all_ex_root": -1.7529759570077337,
+          "leg": -1.1069924827085718,
+          "nonleg": -1.892648059558904
+        },
+        "stage6_exit": {
+          "all_ex_root": -0.09533875658467966,
+          "leg": -0.40354582748706136,
+          "nonleg": -0.02869938990308371
+        }
+      },
+      "gradoff_vs_baseline": {
+        "basetrain": {
+          "all_ex_root": 0.807462347399782,
+          "leg": 0.6669561874884895,
+          "nonleg": 0.8378420576508718
+        },
+        "stage6_exit": {
+          "all_ex_root": -0.07809094137305672,
+          "leg": -0.22214760600323902,
+          "nonleg": -0.0469435544259903
+        }
+      },
+      "gradoff_vs_gradon": {
+        "basetrain": {
+          "all_ex_root": 2.5604383044075156,
+          "leg": 1.7739486701970613,
+          "nonleg": 2.7304901172097757
+        },
+        "stage6_exit": {
+          "all_ex_root": 0.01724781521162294,
+          "leg": 0.18139822148382234,
+          "nonleg": -0.018244164522906586
+        }
+      }
+    }
+  },
+  "table_rows": [
+    {
+      "name": "cp015_bestfree",
+      "family": "cp015",
+      "variant": "baseline(cond)",
+      "source": "baseline",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+      "basetrain": {
+        "all_ex_root": 5.647743532250623,
+        "leg": 10.826995120318823,
+        "nonleg": 4.527905351046688
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.43137680891071384,
+        "leg": 1.1671711441906452,
+        "nonleg": 0.2722861418231612
+      },
+      "paths": {
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/cp015_bestfree/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/cp015_bestfree/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/cp015_bestfree/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/cp015_bestfree/ckpt_last_cp015_bestfree_stage6_cmp_20260313.pth"
+      },
+      "contact_plan_at_ckpt": {
+        "selector": "best_free",
+        "epoch": 12,
+        "run_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3",
+        "train_metrics_path": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/metrics/train_ep012.json",
+        "contact_plan_bce": 0.3648195445537567,
+        "contact_plan_mse": 0.02286471426486969,
+        "contact_plan_weighted": 0.036481954902410504
+      },
+      "stage6_delta_from_init": {
+        "all_ex_root": -5.21636672333991,
+        "leg": -9.659823976128179,
+        "nonleg": -4.255619209223527
+      },
+      "delta_vs_baseline": {
+        "basetrain": {
+          "all_ex_root": 0.0,
+          "leg": 0.0,
+          "nonleg": 0.0
+        },
+        "stage6_exit": {
+          "all_ex_root": 0.0,
+          "leg": 0.0,
+          "nonleg": 0.0
+        }
+      }
+    },
+    {
+      "name": "cp015_dpoff_bestfree",
+      "family": "cp015",
+      "variant": "direct_pose=false",
+      "source": "directposeoff",
+      "ckpt": "models/__tmp_stage6_directposeoff_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_directposeoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3_directposeoff_20260313.pth",
+      "basetrain": {
+        "all_ex_root": 40.97296663875289,
+        "leg": 57.42612574444434,
+        "nonleg": 37.415526832116896
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.32537328272935456,
+        "leg": 0.7780090133452431,
+        "nonleg": 0.22750609773132463
+      },
+      "paths": {},
+      "contact_plan_at_ckpt": {
+        "selector": "best_free",
+        "epoch": 12,
+        "run_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_directposeoff_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_directposeoff_20260313",
+        "train_metrics_path": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_directposeoff_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_directposeoff_20260313/metrics/train_ep012.json",
+        "contact_plan_bce": 0.39085878133773805,
+        "contact_plan_mse": 0.03249962478876114,
+        "contact_plan_weighted": 0.039085878431797026
+      },
+      "stage6_delta_from_init": {
+        "all_ex_root": -40.647593356023535,
+        "leg": -56.6481167310991,
+        "nonleg": -37.188020734385574
+      },
+      "delta_vs_baseline": {
+        "basetrain": {
+          "all_ex_root": 35.325223106502264,
+          "leg": 46.59913062412552,
+          "nonleg": 32.887621481070205
+        },
+        "stage6_exit": {
+          "all_ex_root": -0.10600352618135928,
+          "leg": -0.3891621308454021,
+          "nonleg": -0.04478004409183656
+        }
+      }
+    },
+    {
+      "name": "cp015_hidden_gradon",
+      "family": "cp015",
+      "variant": "hidden+gradon",
+      "source": "hiddenfeat",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313.pth",
+      "basetrain": {
+        "all_ex_root": 3.8947675752428896,
+        "leg": 9.720002637610252,
+        "nonleg": 2.6352572914877843
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.3360380523260342,
+        "leg": 0.7636253167035838,
+        "nonleg": 0.24358675192007748
+      },
+      "paths": {
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradon/lane.log",
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradon/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradon/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradon/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313/cp015_hidden_gradon/ckpt_last_cp015_hidden_gradon_stage6_cmp_hiddenfeat_20260313_hiddenfeat_cp015_gradon.pth"
+      },
+      "contact_plan_at_ckpt": {
+        "selector": "best_free",
+        "epoch": 13,
+        "run_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313",
+        "train_metrics_path": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313/metrics/train_ep013.json",
+        "contact_plan_bce": 0.35747472643852235,
+        "contact_plan_mse": 0.019825884886085988,
+        "contact_plan_weighted": 0.035747472941875455
+      },
+      "stage6_delta_from_init": {
+        "all_ex_root": -3.5587295229168556,
+        "leg": -8.956377320906668,
+        "nonleg": -2.391670539567707
+      },
+      "delta_vs_baseline": {
+        "basetrain": {
+          "all_ex_root": -1.7529759570077337,
+          "leg": -1.1069924827085718,
+          "nonleg": -1.892648059558904
+        },
+        "stage6_exit": {
+          "all_ex_root": -0.09533875658467966,
+          "leg": -0.40354582748706136,
+          "nonleg": -0.02869938990308371
+        }
+      }
+    },
+    {
+      "name": "cp015_hidden_gradoff",
+      "family": "cp015",
+      "variant": "hidden+gradoff",
+      "source": "hiddenfeat",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313.pth",
+      "basetrain": {
+        "all_ex_root": 6.455205879650405,
+        "leg": 11.493951307807313,
+        "nonleg": 5.36574740869756
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.3532858675376571,
+        "leg": 0.9450235381874061,
+        "nonleg": 0.2253425873971709
+      },
+      "paths": {
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradoff/lane.log",
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradoff/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradoff/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradoff/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313/cp015_hidden_gradoff/ckpt_last_cp015_hidden_gradoff_stage6_cmp_hiddenfeat_20260313_hiddenfeat_cp015_gradoff.pth"
+      },
+      "contact_plan_at_ckpt": {
+        "selector": "best_free",
+        "epoch": 6,
+        "run_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313",
+        "train_metrics_path": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313/metrics/train_ep006.json",
+        "contact_plan_bce": 0.45124444365501404,
+        "contact_plan_mse": 0.054434146732091904,
+        "contact_plan_weighted": 0.06768666878342629
+      },
+      "stage6_delta_from_init": {
+        "all_ex_root": -6.101920012112748,
+        "leg": -10.548927769619906,
+        "nonleg": -5.140404821300389
+      },
+      "delta_vs_baseline": {
+        "basetrain": {
+          "all_ex_root": 0.807462347399782,
+          "leg": 0.6669561874884895,
+          "nonleg": 0.8378420576508718
+        },
+        "stage6_exit": {
+          "all_ex_root": -0.07809094137305672,
+          "leg": -0.22214760600323902,
+          "nonleg": -0.0469435544259903
+        }
+      }
+    },
+    {
+      "name": "old_bestfree",
+      "family": "old",
+      "variant": "baseline(cond)",
+      "source": "baseline",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+      "basetrain": {
+        "all_ex_root": 6.431959098065124,
+        "leg": 10.517242296837097,
+        "nonleg": 5.5486546226549684
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.3132793551955468,
+        "leg": 0.8742295720575236,
+        "nonleg": 0.1919928218199842
+      },
+      "paths": {
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/old_bestfree/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/old_bestfree/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/old_bestfree/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/old_bestfree/ckpt_last_old_bestfree_stage6_cmp_20260313.pth"
+      },
+      "contact_plan_at_ckpt": {
+        "selector": "best_free",
+        "epoch": 10,
+        "run_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1",
+        "train_metrics_path": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/metrics/train_ep010.json",
+        "contact_plan_bce": 0.47454901337623595,
+        "contact_plan_mse": 0.06480113044381142,
+        "contact_plan_weighted": 0.47454901337623595
+      },
+      "stage6_delta_from_init": {
+        "all_ex_root": -6.118679742869578,
+        "leg": -9.643012724779574,
+        "nonleg": -5.356661800834984
+      },
+      "delta_vs_baseline": {
+        "basetrain": {
+          "all_ex_root": 0.0,
+          "leg": 0.0,
+          "nonleg": 0.0
+        },
+        "stage6_exit": {
+          "all_ex_root": 0.0,
+          "leg": 0.0,
+          "nonleg": 0.0
+        }
+      }
+    },
+    {
+      "name": "old_dpoff_bestfree",
+      "family": "old",
+      "variant": "direct_pose=false",
+      "source": "directposeoff",
+      "ckpt": "models/__tmp_stage6_directposeoff_compare_20260313/exp_phase_DirectBranch_v1_d1_directposeoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_directposeoff_20260313.pth",
+      "basetrain": {
+        "all_ex_root": 69.57140189573985,
+        "leg": 77.84958166120097,
+        "nonleg": 67.78152518969421
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.3753584747160029,
+        "leg": 0.8436897755918623,
+        "nonleg": 0.27409765290500626
+      },
+      "paths": {},
+      "contact_plan_at_ckpt": {
+        "selector": "best_free",
+        "epoch": 7,
+        "run_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_directposeoff_compare_20260313/exp_phase_DirectBranch_v1_d1_directposeoff_20260313",
+        "train_metrics_path": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_directposeoff_compare_20260313/exp_phase_DirectBranch_v1_d1_directposeoff_20260313/metrics/train_ep007.json",
+        "contact_plan_bce": 0.47119967341423036,
+        "contact_plan_mse": 0.06407957151532173,
+        "contact_plan_weighted": 0.47119967341423036
+      },
+      "stage6_delta_from_init": {
+        "all_ex_root": -69.19604342102384,
+        "leg": -77.0058918856091,
+        "nonleg": -67.5074275367892
+      },
+      "delta_vs_baseline": {
+        "basetrain": {
+          "all_ex_root": 63.13944279767473,
+          "leg": 67.33233936436388,
+          "nonleg": 62.23287056703924
+        },
+        "stage6_exit": {
+          "all_ex_root": 0.06207911952045614,
+          "leg": -0.030539796465661295,
+          "nonleg": 0.08210483108502206
+        }
+      }
+    },
+    {
+      "name": "old_hidden_gradon",
+      "family": "old",
+      "variant": "hidden+gradon",
+      "source": "hiddenfeat",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313.pth",
+      "basetrain": {
+        "all_ex_root": 8.523102619394944,
+        "leg": 15.184488599056305,
+        "nonleg": 7.082802948116813
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.3483162037214065,
+        "leg": 0.8406906880798403,
+        "nonleg": 0.24185685575201543
+      },
+      "paths": {
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/lane.log",
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313/old_hidden_gradon/ckpt_last_old_hidden_gradon_stage6_cmp_hiddenfeat_20260313_hiddenfeat.pth"
+      },
+      "contact_plan_at_ckpt": {
+        "selector": "best_free",
+        "epoch": 11,
+        "run_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313",
+        "train_metrics_path": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313/metrics/train_ep011.json",
+        "contact_plan_bce": 0.39820420145988467,
+        "contact_plan_mse": 0.03334309160709381,
+        "contact_plan_weighted": 0.39820420145988467
+      },
+      "stage6_delta_from_init": {
+        "all_ex_root": -8.174786415673537,
+        "leg": -14.343797910976464,
+        "nonleg": -6.840946092364797
+      },
+      "delta_vs_baseline": {
+        "basetrain": {
+          "all_ex_root": 2.09114352132982,
+          "leg": 4.667246302219208,
+          "nonleg": 1.5341483254618442
+        },
+        "stage6_exit": {
+          "all_ex_root": 0.0350368485258597,
+          "leg": -0.03353888397768334,
+          "nonleg": 0.04986403393203123
+        }
+      }
+    },
+    {
+      "name": "old_hidden_gradoff",
+      "family": "old",
+      "variant": "hidden+gradoff",
+      "source": "hiddenfeat",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313.pth",
+      "basetrain": {
+        "all_ex_root": 4.062448743670954,
+        "leg": 10.200575647110169,
+        "nonleg": 2.7352861699543674
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.397574684728163,
+        "leg": 1.0678338837961472,
+        "nonleg": 0.2526537768215718
+      },
+      "paths": {
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradoff/lane.log",
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradoff/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradoff/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradoff/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313/old_hidden_gradoff/ckpt_last_old_hidden_gradoff_stage6_cmp_hiddenfeat_20260313_hiddenfeat_old_gradoff.pth"
+      },
+      "contact_plan_at_ckpt": {
+        "selector": "best_free",
+        "epoch": 16,
+        "run_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313",
+        "train_metrics_path": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313/metrics/train_ep016.json",
+        "contact_plan_bce": 0.3952715456485748,
+        "contact_plan_mse": 0.03162971436977387,
+        "contact_plan_weighted": 0.3952715456485748
+      },
+      "stage6_delta_from_init": {
+        "all_ex_root": -3.664874058942791,
+        "leg": -9.132741763314021,
+        "nonleg": -2.4826323931327954
+      },
+      "delta_vs_baseline": {
+        "basetrain": {
+          "all_ex_root": -2.36951035439417,
+          "leg": -0.31666664972692793,
+          "nonleg": -2.813368452700601
+        },
+        "stage6_exit": {
+          "all_ex_root": 0.0842953295326162,
+          "leg": 0.19360431173862358,
+          "nonleg": 0.06066095500158761
+        }
+      }
+    }
+  ]
+}

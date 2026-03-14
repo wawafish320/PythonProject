@@ -1,0 +1,411 @@
+{
+  "bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+  "norm_spec": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/pretrain_template.json",
+  "device": "cpu",
+  "clips": [
+    {
+      "clip": "Walk_F",
+      "npz_path": "/Users/xingzhaorui/PycharmProjects/PythonProject/raw_data/processed_data/Walk_F.npz",
+      "source_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/raw_data/Walk_F.json",
+      "steps": 86,
+      "joint_count": 46,
+      "columns": [
+        "X",
+        "Z"
+      ]
+    }
+  ],
+  "bundle_meta": {
+    "input_dim": 968,
+    "pose_dim": 276,
+    "ang_dim": 138,
+    "period_dim": 32,
+    "bidirectional": false,
+    "hidden_dim": 256,
+    "z_dim": 32,
+    "mlp_layers": 3,
+    "mlp_dropout": 0.1,
+    "amp_share_encoder": false,
+    "amp_linear_equiv": true,
+    "rotvec_semantics": "standard_axis_angle_v1",
+    "angvel_semantics": "standard_axis_angle_times_fps_v1",
+    "rotvec_asset_kind": "motion_encoder_bundle",
+    "rotvec_semantics_source": "debug_repo_migration_20260310",
+    "geometry_contract": {
+      "so3_log_map": "axis_times_angle_rad",
+      "angvel_vec_from_delta_R": "axis_times_angle_rad_per_second",
+      "angvel_vec_from_R_seq": "axis_times_angle_rad_per_second"
+    },
+    "angvel_normalization_invariant": true,
+    "migration_note": "2026-03-10 standard rotvec semantics; bundle kept because normalized angvel inputs remain invariant after doubling tanh_scales_angvel."
+  },
+  "root_idx": 0,
+  "root_bone": "pelvis",
+  "overall_mean_deg_ex_root": 6.59598877473832,
+  "top_pairs": [
+    {
+      "sic": 38,
+      "bone": "pinky_01_l",
+      "mean_deg": 44.43778610229492,
+      "p50_deg": 44.43778610229492,
+      "p90_deg": 44.43778610229492,
+      "count": 1
+    },
+    {
+      "sic": 39,
+      "bone": "pinky_01_l",
+      "mean_deg": 44.299522399902344,
+      "p50_deg": 44.299522399902344,
+      "p90_deg": 44.299522399902344,
+      "count": 1
+    },
+    {
+      "sic": 36,
+      "bone": "pinky_01_l",
+      "mean_deg": 44.26973342895508,
+      "p50_deg": 44.26973342895508,
+      "p90_deg": 44.26973342895508,
+      "count": 1
+    },
+    {
+      "sic": 35,
+      "bone": "pinky_01_l",
+      "mean_deg": 44.21586990356445,
+      "p50_deg": 44.21586990356445,
+      "p90_deg": 44.21586990356445,
+      "count": 1
+    },
+    {
+      "sic": 31,
+      "bone": "pinky_01_l",
+      "mean_deg": 44.15933609008789,
+      "p50_deg": 44.15933609008789,
+      "p90_deg": 44.15933609008789,
+      "count": 1
+    },
+    {
+      "sic": 37,
+      "bone": "pinky_01_l",
+      "mean_deg": 44.04327392578125,
+      "p50_deg": 44.04327392578125,
+      "p90_deg": 44.04327392578125,
+      "count": 1
+    },
+    {
+      "sic": 34,
+      "bone": "pinky_01_l",
+      "mean_deg": 43.971923828125,
+      "p50_deg": 43.971923828125,
+      "p90_deg": 43.971923828125,
+      "count": 1
+    },
+    {
+      "sic": 33,
+      "bone": "pinky_01_l",
+      "mean_deg": 43.97147750854492,
+      "p50_deg": 43.97147750854492,
+      "p90_deg": 43.97147750854492,
+      "count": 1
+    },
+    {
+      "sic": 32,
+      "bone": "pinky_01_l",
+      "mean_deg": 43.92758560180664,
+      "p50_deg": 43.92758560180664,
+      "p90_deg": 43.92758560180664,
+      "count": 1
+    },
+    {
+      "sic": 29,
+      "bone": "pinky_01_l",
+      "mean_deg": 43.92507553100586,
+      "p50_deg": 43.92507553100586,
+      "p90_deg": 43.92507553100586,
+      "count": 1
+    },
+    {
+      "sic": 40,
+      "bone": "pinky_01_l",
+      "mean_deg": 43.8049201965332,
+      "p50_deg": 43.8049201965332,
+      "p90_deg": 43.8049201965332,
+      "count": 1
+    },
+    {
+      "sic": 27,
+      "bone": "pinky_01_l",
+      "mean_deg": 43.72089767456055,
+      "p50_deg": 43.72089767456055,
+      "p90_deg": 43.72089767456055,
+      "count": 1
+    },
+    {
+      "sic": 28,
+      "bone": "pinky_01_l",
+      "mean_deg": 43.701133728027344,
+      "p50_deg": 43.701133728027344,
+      "p90_deg": 43.701133728027344,
+      "count": 1
+    },
+    {
+      "sic": 30,
+      "bone": "pinky_01_l",
+      "mean_deg": 43.472904205322266,
+      "p50_deg": 43.472904205322266,
+      "p90_deg": 43.472904205322266,
+      "count": 1
+    },
+    {
+      "sic": 26,
+      "bone": "pinky_01_l",
+      "mean_deg": 43.40524673461914,
+      "p50_deg": 43.40524673461914,
+      "p90_deg": 43.40524673461914,
+      "count": 1
+    },
+    {
+      "sic": 25,
+      "bone": "pinky_01_l",
+      "mean_deg": 43.27638244628906,
+      "p50_deg": 43.27638244628906,
+      "p90_deg": 43.27638244628906,
+      "count": 1
+    },
+    {
+      "sic": 41,
+      "bone": "pinky_01_l",
+      "mean_deg": 43.21573257446289,
+      "p50_deg": 43.21573257446289,
+      "p90_deg": 43.21573257446289,
+      "count": 1
+    },
+    {
+      "sic": 24,
+      "bone": "pinky_01_l",
+      "mean_deg": 43.19390106201172,
+      "p50_deg": 43.19390106201172,
+      "p90_deg": 43.19390106201172,
+      "count": 1
+    },
+    {
+      "sic": 23,
+      "bone": "pinky_01_l",
+      "mean_deg": 42.992183685302734,
+      "p50_deg": 42.992183685302734,
+      "p90_deg": 42.992183685302734,
+      "count": 1
+    },
+    {
+      "sic": 22,
+      "bone": "pinky_01_l",
+      "mean_deg": 42.577640533447266,
+      "p50_deg": 42.577640533447266,
+      "p90_deg": 42.577640533447266,
+      "count": 1
+    }
+  ],
+  "per_bone_mean_top20": [
+    {
+      "bone": "pinky_01_l",
+      "mean_deg": 40.09699697272722,
+      "count": 86
+    },
+    {
+      "bone": "thumb_01_l",
+      "mean_deg": 19.579548658326615,
+      "count": 86
+    },
+    {
+      "bone": "calf_l",
+      "mean_deg": 17.115931094732396,
+      "count": 86
+    },
+    {
+      "bone": "calf_r",
+      "mean_deg": 13.923419764222102,
+      "count": 86
+    },
+    {
+      "bone": "thigh_l",
+      "mean_deg": 13.832272379897361,
+      "count": 86
+    },
+    {
+      "bone": "upperarm_l",
+      "mean_deg": 12.821105330489402,
+      "count": 86
+    },
+    {
+      "bone": "hand_r",
+      "mean_deg": 12.607348264649858,
+      "count": 86
+    },
+    {
+      "bone": "upperarm_r",
+      "mean_deg": 12.523427968801455,
+      "count": 86
+    },
+    {
+      "bone": "RUpArmTwist_r_01",
+      "mean_deg": 12.226294850194177,
+      "count": 86
+    },
+    {
+      "bone": "lowerarm_l",
+      "mean_deg": 11.005639669680319,
+      "count": 86
+    },
+    {
+      "bone": "thigh_r",
+      "mean_deg": 10.240180741908938,
+      "count": 86
+    },
+    {
+      "bone": "foot_l",
+      "mean_deg": 8.7123322653216,
+      "count": 86
+    },
+    {
+      "bone": "thumb_01_r",
+      "mean_deg": 7.689150516376939,
+      "count": 86
+    },
+    {
+      "bone": "foot_r",
+      "mean_deg": 7.617346563658049,
+      "count": 86
+    },
+    {
+      "bone": "ring_01_l",
+      "mean_deg": 6.953154952027077,
+      "count": 86
+    },
+    {
+      "bone": "RUpArmTwist_l_01",
+      "mean_deg": 6.882025300070297,
+      "count": 86
+    },
+    {
+      "bone": "spine_01",
+      "mean_deg": 6.412541816400927,
+      "count": 86
+    },
+    {
+      "bone": "RUpArmTwist_r_02",
+      "mean_deg": 6.295777004818584,
+      "count": 86
+    },
+    {
+      "bone": "lowerarm_r",
+      "mean_deg": 6.1814474253806955,
+      "count": 86
+    },
+    {
+      "bone": "pinky_01_r",
+      "mean_deg": 5.985775165779646,
+      "count": 86
+    }
+  ],
+  "per_sic_mean_top20": [
+    {
+      "sic": 80,
+      "mean_deg_ex_root": 7.18680296420801,
+      "count": 45
+    },
+    {
+      "sic": 81,
+      "mean_deg_ex_root": 7.164613304660285,
+      "count": 45
+    },
+    {
+      "sic": 79,
+      "mean_deg_ex_root": 7.154409331215415,
+      "count": 45
+    },
+    {
+      "sic": 78,
+      "mean_deg_ex_root": 7.113447188805311,
+      "count": 45
+    },
+    {
+      "sic": 82,
+      "mean_deg_ex_root": 7.10641458411,
+      "count": 45
+    },
+    {
+      "sic": 83,
+      "mean_deg_ex_root": 7.055164302179474,
+      "count": 45
+    },
+    {
+      "sic": 77,
+      "mean_deg_ex_root": 7.054562652249079,
+      "count": 45
+    },
+    {
+      "sic": 0,
+      "mean_deg_ex_root": 7.016877197005341,
+      "count": 45
+    },
+    {
+      "sic": 84,
+      "mean_deg_ex_root": 7.009985022394966,
+      "count": 45
+    },
+    {
+      "sic": 85,
+      "mean_deg_ex_root": 7.006178575375273,
+      "count": 45
+    },
+    {
+      "sic": 76,
+      "mean_deg_ex_root": 6.963146605236338,
+      "count": 45
+    },
+    {
+      "sic": 1,
+      "mean_deg_ex_root": 6.89495994658344,
+      "count": 45
+    },
+    {
+      "sic": 37,
+      "mean_deg_ex_root": 6.8901389344778785,
+      "count": 45
+    },
+    {
+      "sic": 36,
+      "mean_deg_ex_root": 6.880702968942812,
+      "count": 45
+    },
+    {
+      "sic": 75,
+      "mean_deg_ex_root": 6.847918278783894,
+      "count": 45
+    },
+    {
+      "sic": 35,
+      "mean_deg_ex_root": 6.846834654700306,
+      "count": 45
+    },
+    {
+      "sic": 13,
+      "mean_deg_ex_root": 6.834753726037291,
+      "count": 45
+    },
+    {
+      "sic": 38,
+      "mean_deg_ex_root": 6.823808526501244,
+      "count": 45
+    },
+    {
+      "sic": 12,
+      "mean_deg_ex_root": 6.8182595134860495,
+      "count": 45
+    },
+    {
+      "sic": 34,
+      "mean_deg_ex_root": 6.808125582429241,
+      "count": 45
+    }
+  ]
+}

@@ -1,0 +1,256 @@
+{
+  "run_tag": "20260313_noreinit",
+  "policy": {
+    "stage6_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_noreinit_compare_20260313/stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227_noreinit.json",
+    "teacher": "/Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json",
+    "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+    "affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+    "score_formula": "1.000*all_ex_root + 1.500*leg + 0.500*nonleg"
+  },
+  "recommended": {
+    "name": "old_bestfree",
+    "score": 1.7206201241918242
+  },
+  "ranking": [
+    {
+      "rank": 1,
+      "row": {
+        "name": "old_bestfree",
+        "family": "main_old",
+        "selector": "best_free",
+        "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+        "score": {
+          "weights": {
+            "all_ex_root": 1.0,
+            "leg": 1.5,
+            "nonleg": 0.5
+          },
+          "stage6_exit": {
+            "all_ex_root_mean": 0.3132793551955468,
+            "leg_mean": 0.8742295720575236,
+            "nonleg_mean": 0.1919928218199842
+          },
+          "value": 1.7206201241918242
+        },
+        "basetrain": null,
+        "stage6_init": {
+          "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_noreinit_compare_20260313/old_bestfree/posttrain_log_old_bestfree_stage6_noreinit_20260313_noreinit.json",
+          "rows": 300,
+          "head_count": 20,
+          "step1": {
+            "dir_leg_base": 0.19168874621391296,
+            "dir_nonleg_base": 0.061304062604904175,
+            "leg_over_nonleg": 3.126852252016628,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 0.6715153574383924,
+            "direct_grad_norm_out_else": 0.08367805563648194,
+            "grad_arm_over_else": 8.024987582833191,
+            "step": 1.0
+          },
+          "head20_mean": {
+            "dir_leg_base": 0.13607504814863206,
+            "dir_nonleg_base": 0.0364359543658793,
+            "leg_over_nonleg": 3.785067819247004,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 1.0607068800849615,
+            "direct_grad_norm_out_else": 0.15332370620920882,
+            "grad_arm_over_else": 7.169632094444822
+          }
+        },
+        "stage6_exit": {
+          "all_ex_root_mean": 0.3132793551955468,
+          "leg_mean": 0.8742295720575236,
+          "nonleg_mean": 0.1919928218199842,
+          "arm_mean": 0.21749107248109364,
+          "else_mean": 0.13172422934827105
+        },
+        "paths": {
+          "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_noreinit_compare_20260313/results/old_bestfree/lane.log",
+          "basetrain_group_summary": null,
+          "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_noreinit_compare_20260313/results/old_bestfree/posttrain_stage6_init_stats.json",
+          "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_noreinit_compare_20260313/results/old_bestfree/stage6_group_summary.json",
+          "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_noreinit_compare_20260313/old_bestfree/ckpt_last_old_bestfree_stage6_noreinit_20260313_noreinit.pth"
+        }
+      }
+    },
+    {
+      "rank": 2,
+      "row": {
+        "name": "cp015_bestfree",
+        "family": "main_cp015_tailk3",
+        "selector": "best_free",
+        "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+        "score": {
+          "weights": {
+            "all_ex_root": 1.0,
+            "leg": 1.5,
+            "nonleg": 0.5
+          },
+          "stage6_exit": {
+            "all_ex_root_mean": 0.43137680891071384,
+            "leg_mean": 1.1671711441906452,
+            "nonleg_mean": 0.2722861418231612
+          },
+          "value": 2.3182765961082623
+        },
+        "basetrain": null,
+        "stage6_init": {
+          "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_noreinit_compare_20260313/cp015_bestfree/posttrain_log_cp015_bestfree_stage6_noreinit_20260313_noreinit.json",
+          "rows": 300,
+          "head_count": 20,
+          "step1": {
+            "dir_leg_base": 0.19191282987594604,
+            "dir_nonleg_base": 0.061324622482061386,
+            "leg_over_nonleg": 3.129457991071762,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 0.6735646382312334,
+            "direct_grad_norm_out_else": 0.08473227136970211,
+            "grad_arm_over_else": 7.949328246995172,
+            "step": 1.0
+          },
+          "head20_mean": {
+            "dir_leg_base": 0.1339013446122408,
+            "dir_nonleg_base": 0.03605204513296485,
+            "leg_over_nonleg": 3.7609217112363167,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 1.1292228277289968,
+            "direct_grad_norm_out_else": 0.15573206661533073,
+            "grad_arm_over_else": 7.356859867758978
+          }
+        },
+        "stage6_exit": {
+          "all_ex_root_mean": 0.43137680891071384,
+          "leg_mean": 1.1671711441906452,
+          "nonleg_mean": 0.2722861418231612,
+          "arm_mean": 0.3280119348514316,
+          "else_mean": 0.1405706310290674
+        },
+        "paths": {
+          "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_noreinit_compare_20260313/results/cp015_bestfree/lane.log",
+          "basetrain_group_summary": null,
+          "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_noreinit_compare_20260313/results/cp015_bestfree/posttrain_stage6_init_stats.json",
+          "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_noreinit_compare_20260313/results/cp015_bestfree/stage6_group_summary.json",
+          "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_noreinit_compare_20260313/cp015_bestfree/ckpt_last_cp015_bestfree_stage6_noreinit_20260313_noreinit.pth"
+        }
+      }
+    }
+  ],
+  "rows": [
+    {
+      "name": "old_bestfree",
+      "family": "main_old",
+      "selector": "best_free",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+      "score": {
+        "weights": {
+          "all_ex_root": 1.0,
+          "leg": 1.5,
+          "nonleg": 0.5
+        },
+        "stage6_exit": {
+          "all_ex_root_mean": 0.3132793551955468,
+          "leg_mean": 0.8742295720575236,
+          "nonleg_mean": 0.1919928218199842
+        },
+        "value": 1.7206201241918242
+      },
+      "basetrain": null,
+      "stage6_init": {
+        "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_noreinit_compare_20260313/old_bestfree/posttrain_log_old_bestfree_stage6_noreinit_20260313_noreinit.json",
+        "rows": 300,
+        "head_count": 20,
+        "step1": {
+          "dir_leg_base": 0.19168874621391296,
+          "dir_nonleg_base": 0.061304062604904175,
+          "leg_over_nonleg": 3.126852252016628,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 0.6715153574383924,
+          "direct_grad_norm_out_else": 0.08367805563648194,
+          "grad_arm_over_else": 8.024987582833191,
+          "step": 1.0
+        },
+        "head20_mean": {
+          "dir_leg_base": 0.13607504814863206,
+          "dir_nonleg_base": 0.0364359543658793,
+          "leg_over_nonleg": 3.785067819247004,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 1.0607068800849615,
+          "direct_grad_norm_out_else": 0.15332370620920882,
+          "grad_arm_over_else": 7.169632094444822
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root_mean": 0.3132793551955468,
+        "leg_mean": 0.8742295720575236,
+        "nonleg_mean": 0.1919928218199842,
+        "arm_mean": 0.21749107248109364,
+        "else_mean": 0.13172422934827105
+      },
+      "paths": {
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_noreinit_compare_20260313/results/old_bestfree/lane.log",
+        "basetrain_group_summary": null,
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_noreinit_compare_20260313/results/old_bestfree/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_noreinit_compare_20260313/results/old_bestfree/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_noreinit_compare_20260313/old_bestfree/ckpt_last_old_bestfree_stage6_noreinit_20260313_noreinit.pth"
+      }
+    },
+    {
+      "name": "cp015_bestfree",
+      "family": "main_cp015_tailk3",
+      "selector": "best_free",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+      "score": {
+        "weights": {
+          "all_ex_root": 1.0,
+          "leg": 1.5,
+          "nonleg": 0.5
+        },
+        "stage6_exit": {
+          "all_ex_root_mean": 0.43137680891071384,
+          "leg_mean": 1.1671711441906452,
+          "nonleg_mean": 0.2722861418231612
+        },
+        "value": 2.3182765961082623
+      },
+      "basetrain": null,
+      "stage6_init": {
+        "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_noreinit_compare_20260313/cp015_bestfree/posttrain_log_cp015_bestfree_stage6_noreinit_20260313_noreinit.json",
+        "rows": 300,
+        "head_count": 20,
+        "step1": {
+          "dir_leg_base": 0.19191282987594604,
+          "dir_nonleg_base": 0.061324622482061386,
+          "leg_over_nonleg": 3.129457991071762,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 0.6735646382312334,
+          "direct_grad_norm_out_else": 0.08473227136970211,
+          "grad_arm_over_else": 7.949328246995172,
+          "step": 1.0
+        },
+        "head20_mean": {
+          "dir_leg_base": 0.1339013446122408,
+          "dir_nonleg_base": 0.03605204513296485,
+          "leg_over_nonleg": 3.7609217112363167,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 1.1292228277289968,
+          "direct_grad_norm_out_else": 0.15573206661533073,
+          "grad_arm_over_else": 7.356859867758978
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root_mean": 0.43137680891071384,
+        "leg_mean": 1.1671711441906452,
+        "nonleg_mean": 0.2722861418231612,
+        "arm_mean": 0.3280119348514316,
+        "else_mean": 0.1405706310290674
+      },
+      "paths": {
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_noreinit_compare_20260313/results/cp015_bestfree/lane.log",
+        "basetrain_group_summary": null,
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_noreinit_compare_20260313/results/cp015_bestfree/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_noreinit_compare_20260313/results/cp015_bestfree/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_noreinit_compare_20260313/cp015_bestfree/ckpt_last_cp015_bestfree_stage6_noreinit_20260313_noreinit.pth"
+      }
+    }
+  ]
+}

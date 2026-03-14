@@ -1,0 +1,24 @@
+{
+  "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/posttrain_log_cp015_with_old_planstack_stage6_plantransplant_20260314.json",
+  "rows": 300,
+  "head_count": 20,
+  "step1": {
+    "step": 1.0,
+    "dir_leg_base": 0.19178400933742523,
+    "dir_nonleg_base": 0.06136901304125786,
+    "leg_over_nonleg": 3.1250952204248503,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 0.6871937156212261,
+    "direct_grad_norm_out_else": 0.08460554931679411,
+    "grad_arm_over_else": 8.122324376715783
+  },
+  "head20_mean": {
+    "dir_leg_base": 0.13195244297385217,
+    "dir_nonleg_base": 0.036026413645595314,
+    "leg_over_nonleg": 3.694465728580366,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 1.1136674414452084,
+    "direct_grad_norm_out_else": 0.1538858684595619,
+    "grad_arm_over_else": 7.396490079786474
+  }
+}

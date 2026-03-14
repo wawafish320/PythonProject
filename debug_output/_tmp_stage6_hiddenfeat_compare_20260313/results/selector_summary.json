@@ -1,0 +1,170 @@
+{
+  "run_tag": "20260313_hiddenfeat_per_lane",
+  "policy": {
+    "source": "per_lane_stage6_outputs",
+    "stage6_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+    "reinit": true,
+    "note": "Aggregated directly from finished per-lane outputs; no combined selector rerun."
+  },
+  "recommended": "cp015_hidden_gradon",
+  "ranking": [
+    {
+      "name": "cp015_hidden_gradon",
+      "family": "cp015",
+      "variant": "hidden+gradon",
+      "stage6_exit": {
+        "all_ex_root": 0.3360380523260342,
+        "leg": 0.7636253167035838,
+        "nonleg": 0.24358675192007748
+      },
+      "basetrain": {
+        "all_ex_root": 3.8947675752428896,
+        "leg": 9.720002637610252,
+        "nonleg": 2.6352572914877843
+      }
+    },
+    {
+      "name": "old_hidden_gradon",
+      "family": "old",
+      "variant": "hidden+gradon",
+      "stage6_exit": {
+        "all_ex_root": 0.3483162037214065,
+        "leg": 0.8406906880798403,
+        "nonleg": 0.24185685575201543
+      },
+      "basetrain": {
+        "all_ex_root": 8.523102619394944,
+        "leg": 15.184488599056305,
+        "nonleg": 7.082802948116813
+      }
+    },
+    {
+      "name": "cp015_hidden_gradoff",
+      "family": "cp015",
+      "variant": "hidden+gradoff",
+      "stage6_exit": {
+        "all_ex_root": 0.3532858675376571,
+        "leg": 0.9450235381874061,
+        "nonleg": 0.2253425873971709
+      },
+      "basetrain": {
+        "all_ex_root": 6.455205879650405,
+        "leg": 11.493951307807313,
+        "nonleg": 5.36574740869756
+      }
+    },
+    {
+      "name": "old_hidden_gradoff",
+      "family": "old",
+      "variant": "hidden+gradoff",
+      "stage6_exit": {
+        "all_ex_root": 0.397574684728163,
+        "leg": 1.0678338837961472,
+        "nonleg": 0.2526537768215718
+      },
+      "basetrain": {
+        "all_ex_root": 4.062448743670954,
+        "leg": 10.200575647110169,
+        "nonleg": 2.7352861699543674
+      }
+    }
+  ],
+  "rows": [
+    {
+      "name": "old_hidden_gradon",
+      "family": "old",
+      "variant": "hidden+gradon",
+      "source": "hiddenfeat",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_hidden_gradon_20260313.pth",
+      "basetrain": {
+        "all_ex_root": 8.523102619394944,
+        "leg": 15.184488599056305,
+        "nonleg": 7.082802948116813
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.3483162037214065,
+        "leg": 0.8406906880798403,
+        "nonleg": 0.24185685575201543
+      },
+      "paths": {
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/lane.log",
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradon/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313/old_hidden_gradon/ckpt_last_old_hidden_gradon_stage6_cmp_hiddenfeat_20260313_hiddenfeat.pth"
+      }
+    },
+    {
+      "name": "old_hidden_gradoff",
+      "family": "old",
+      "variant": "hidden+gradoff",
+      "source": "hiddenfeat",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_hidden_gradoff_20260313.pth",
+      "basetrain": {
+        "all_ex_root": 4.062448743670954,
+        "leg": 10.200575647110169,
+        "nonleg": 2.7352861699543674
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.397574684728163,
+        "leg": 1.0678338837961472,
+        "nonleg": 0.2526537768215718
+      },
+      "paths": {
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradoff/lane.log",
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradoff/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradoff/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/old_hidden_gradoff/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313/old_hidden_gradoff/ckpt_last_old_hidden_gradoff_stage6_cmp_hiddenfeat_20260313_hiddenfeat_old_gradoff.pth"
+      }
+    },
+    {
+      "name": "cp015_hidden_gradon",
+      "family": "cp015",
+      "variant": "hidden+gradon",
+      "source": "hiddenfeat",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradon_20260313.pth",
+      "basetrain": {
+        "all_ex_root": 3.8947675752428896,
+        "leg": 9.720002637610252,
+        "nonleg": 2.6352572914877843
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.3360380523260342,
+        "leg": 0.7636253167035838,
+        "nonleg": 0.24358675192007748
+      },
+      "paths": {
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradon/lane.log",
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradon/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradon/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradon/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313/cp015_hidden_gradon/ckpt_last_cp015_hidden_gradon_stage6_cmp_hiddenfeat_20260313_hiddenfeat_cp015_gradon.pth"
+      }
+    },
+    {
+      "name": "cp015_hidden_gradoff",
+      "family": "cp015",
+      "variant": "hidden+gradoff",
+      "source": "hiddenfeat",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3_hidden_gradoff_20260313.pth",
+      "basetrain": {
+        "all_ex_root": 6.455205879650405,
+        "leg": 11.493951307807313,
+        "nonleg": 5.36574740869756
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.3532858675376571,
+        "leg": 0.9450235381874061,
+        "nonleg": 0.2253425873971709
+      },
+      "paths": {
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradoff/lane.log",
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradoff/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradoff/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradoff/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313/cp015_hidden_gradoff/ckpt_last_cp015_hidden_gradoff_stage6_cmp_hiddenfeat_20260313_hiddenfeat_cp015_gradoff.pth"
+      }
+    }
+  ]
+}

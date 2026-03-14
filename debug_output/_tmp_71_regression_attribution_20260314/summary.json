@@ -1,0 +1,2247 @@
+{
+  "run_date": "20260314",
+  "policy": {
+    "compare_contract": "model_source",
+    "strict_eval_added": false,
+    "reason_strict_not_needed": "direct-path conclusion is already stable under model-source snapshots and does not hinge on contacts meas source",
+    "note": "raw 70b is diagnostic-only; active comparison is current 70R -> 71 vs candidate lowdrift 70R -> 71",
+    "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+    "affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+    "posttrain_contacts_source": "pretrain_contact",
+    "posttrain_contacts_pretrain_clamp": "1.0",
+    "snapshot_steps": [
+      0,
+      20,
+      60,
+      120,
+      180
+    ]
+  },
+  "references": {
+    "source_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_newflow_chain_20260314/summary.json",
+    "candidate_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_skip70b_lowdrift_to71_20260314/summary.json",
+    "current_70R_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_newflow_chain_20260314/70R/ckpt_last_WalkF_stage7_70R_from_oldd1_newflow_s180_20260314.pth",
+    "candidate_70R_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_skip70b_lowdrift_to71_20260314/70R/ckpt_last_WalkF_stage7_70R_from_oldd1_lowdrift_replace_20260314.pth"
+  },
+  "reference_metrics": {
+    "current_70R": {
+      "DirectGeoLocalDeg": 0.15823527791559003,
+      "all_ex_root": 0.15823527759728495,
+      "leg": 0.556048936034596,
+      "nonleg": 0.07222151361083931,
+      "arm": 0.08266488065130256,
+      "legs_main": 0.556048936034596,
+      "arms_main": 0.08266488065130256,
+      "foot_l_ball_l_SIC12_15": 1.1184829957783222,
+      "calf_r_SIC2_4": 0.6138490301867326
+    },
+    "candidate_70R": {
+      "DirectGeoLocalDeg": 0.13092551713939324,
+      "all_ex_root": 0.1309255167171086,
+      "leg": 0.3492627636104623,
+      "nonleg": 0.08371746333476185,
+      "arm": 0.09184891825772104,
+      "legs_main": 0.3492627636104623,
+      "arms_main": 0.09184891825772104,
+      "foot_l_ball_l_SIC12_15": 0.8600953875575215,
+      "calf_r_SIC2_4": 0.39301881318291026
+    },
+    "current_71": {
+      "DirectGeoLocalDeg": 0.11191065632196706,
+      "all_ex_root": 0.11191065641286034,
+      "leg": 0.29547294187220763,
+      "nonleg": 0.07222151361083931,
+      "arm": 0.08266488065130256,
+      "legs_main": 0.29547294187220763,
+      "arms_main": 0.08266488065130256,
+      "foot_l_ball_l_SIC12_15": 0.5992717912886292,
+      "calf_r_SIC2_4": 0.4409123050669829
+    },
+    "candidate_71": {
+      "DirectGeoLocalDeg": 0.1277874807805516,
+      "all_ex_root": 0.12778748058921752,
+      "leg": 0.331611310391075,
+      "nonleg": 0.08371746333476185,
+      "arm": 0.09184891825772104,
+      "legs_main": 0.331611310391075,
+      "arms_main": 0.09184891825772104,
+      "foot_l_ball_l_SIC12_15": 0.5405750844511203,
+      "calf_r_SIC2_4": 0.2956436884899934
+    }
+  },
+  "replay": {
+    "current": {
+      "snapshots": {
+        "s000": {
+          "step": 0,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_regression_attribution_20260314/current/ckpt_step_000000_WalkF_stage7_71_current_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.15823527791559003,
+              "DirectGeoLocalDegWeighted": 0.18808107472263103,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.15823527759728495,
+              "leg": 0.556048936034596,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "else": 0.04753719151519886
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.556048936034596,
+                "arms_main": 0.08266488065130256,
+                "left_arm_main": 0.10915616009521942,
+                "right_arm_main": 0.08030111667993613
+              },
+              "A_52_59": {
+                "legs_main": 1.0194085305556655,
+                "arms_main": 0.07121839742351838,
+                "left_arm_main": 0.09967851682611378,
+                "right_arm_main": 0.05727500207689849
+              },
+              "B_76_80": {
+                "legs_main": 0.4423606975004077,
+                "arms_main": 0.09059350668187038,
+                "left_arm_main": 0.13928188802674413,
+                "right_arm_main": 0.08473783650171957
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 1.1184829957783222,
+                "calf_r_SIC2_4": 0.6138490301867326
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.15823527791559003,
+              "all_ex_root": 0.15823527759728495,
+              "leg": 0.556048936034596,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "legs_main": 0.556048936034596,
+              "arms_main": 0.08266488065130256,
+              "foot_l_ball_l_SIC12_15": 1.1184829957783222,
+              "calf_r_SIC2_4": 0.6138490301867326
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/current/s000/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/current/s000_group_summary.json"
+            }
+          }
+        },
+        "s020": {
+          "step": 20,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_regression_attribution_20260314/current/ckpt_step_000020_WalkF_stage7_71_current_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.12229471491259891,
+              "DirectGeoLocalDegWeighted": 0.14252652957775566,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.12229471477273716,
+              "leg": 0.3538832701465147,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "else": 0.04753719151519886
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.3538832701465147,
+                "arms_main": 0.08266488065130256,
+                "left_arm_main": 0.10915616009521942,
+                "right_arm_main": 0.08030111667993613
+              },
+              "A_52_59": {
+                "legs_main": 0.40516403149376856,
+                "arms_main": 0.07121839742351838,
+                "left_arm_main": 0.09967851682611378,
+                "right_arm_main": 0.05727500207689849
+              },
+              "B_76_80": {
+                "legs_main": 0.4205891859717667,
+                "arms_main": 0.09059350668187038,
+                "left_arm_main": 0.13928188802674413,
+                "right_arm_main": 0.08473783650171957
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.4735059493687004,
+                "calf_r_SIC2_4": 0.4086132726321618
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.12229471491259891,
+              "all_ex_root": 0.12229471477273716,
+              "leg": 0.3538832701465147,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "legs_main": 0.3538832701465147,
+              "arms_main": 0.08266488065130256,
+              "foot_l_ball_l_SIC12_15": 0.4735059493687004,
+              "calf_r_SIC2_4": 0.4086132726321618
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/current/s020/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/current/s020_group_summary.json"
+            }
+          }
+        },
+        "s060": {
+          "step": 60,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_regression_attribution_20260314/current/ckpt_step_000060_WalkF_stage7_71_current_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.12493191540327876,
+              "DirectGeoLocalDegWeighted": 0.14361660909124238,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.12493191497264944,
+              "leg": 0.3687175212710213,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "else": 0.04753719151519886
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.3687175212710213,
+                "arms_main": 0.08266488065130256,
+                "left_arm_main": 0.10915616009521942,
+                "right_arm_main": 0.08030111667993613
+              },
+              "A_52_59": {
+                "legs_main": 0.4835295412049163,
+                "arms_main": 0.07121839742351838,
+                "left_arm_main": 0.09967851682611378,
+                "right_arm_main": 0.05727500207689849
+              },
+              "B_76_80": {
+                "legs_main": 0.40363189729396254,
+                "arms_main": 0.09059350668187038,
+                "left_arm_main": 0.13928188802674413,
+                "right_arm_main": 0.08473783650171957
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.9522483439650387,
+                "calf_r_SIC2_4": 0.3203817705313365
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.12493191540327876,
+              "all_ex_root": 0.12493191497264944,
+              "leg": 0.3687175212710213,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "legs_main": 0.3687175212710213,
+              "arms_main": 0.08266488065130256,
+              "foot_l_ball_l_SIC12_15": 0.9522483439650387,
+              "calf_r_SIC2_4": 0.3203817705313365
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/current/s060/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/current/s060_group_summary.json"
+            }
+          }
+        },
+        "s120": {
+          "step": 120,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_regression_attribution_20260314/current/ckpt_step_000120_WalkF_stage7_71_current_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.11226891537825036,
+              "DirectGeoLocalDegWeighted": 0.12866819095472956,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.11226891499376603,
+              "leg": 0.2974881463898021,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "else": 0.04753719151519886
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.2974881463898021,
+                "arms_main": 0.08266488065130256,
+                "left_arm_main": 0.10915616009521942,
+                "right_arm_main": 0.08030111667993613
+              },
+              "A_52_59": {
+                "legs_main": 0.31043832140858285,
+                "arms_main": 0.07121839742351838,
+                "left_arm_main": 0.09967851682611378,
+                "right_arm_main": 0.05727500207689849
+              },
+              "B_76_80": {
+                "legs_main": 0.29599093485157935,
+                "arms_main": 0.09059350668187038,
+                "left_arm_main": 0.13928188802674413,
+                "right_arm_main": 0.08473783650171957
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.43342721299268305,
+                "calf_r_SIC2_4": 0.5355324608584245
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.11226891537825036,
+              "all_ex_root": 0.11226891499376603,
+              "leg": 0.2974881463898021,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "legs_main": 0.2974881463898021,
+              "arms_main": 0.08266488065130256,
+              "foot_l_ball_l_SIC12_15": 0.43342721299268305,
+              "calf_r_SIC2_4": 0.5355324608584245
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/current/s120/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/current/s120_group_summary.json"
+            }
+          }
+        },
+        "s180": {
+          "step": 180,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_regression_attribution_20260314/current/ckpt_step_000180_WalkF_stage7_71_current_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.11191065632196706,
+              "DirectGeoLocalDegWeighted": 0.1290073149599308,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.11191065641286034,
+              "leg": 0.29547294187220763,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "else": 0.04753719151519886
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.29547294187220763,
+                "arms_main": 0.08266488065130256,
+                "left_arm_main": 0.10915616009521942,
+                "right_arm_main": 0.08030111667993613
+              },
+              "A_52_59": {
+                "legs_main": 0.4253831942623947,
+                "arms_main": 0.07121839742351838,
+                "left_arm_main": 0.09967851682611378,
+                "right_arm_main": 0.05727500207689849
+              },
+              "B_76_80": {
+                "legs_main": 0.25504510874161496,
+                "arms_main": 0.09059350668187038,
+                "left_arm_main": 0.13928188802674413,
+                "right_arm_main": 0.08473783650171957
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.5992717912886292,
+                "calf_r_SIC2_4": 0.4409123050669829
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.11191065632196706,
+              "all_ex_root": 0.11191065641286034,
+              "leg": 0.29547294187220763,
+              "nonleg": 0.07222151361083931,
+              "arm": 0.08266488065130256,
+              "legs_main": 0.29547294187220763,
+              "arms_main": 0.08266488065130256,
+              "foot_l_ball_l_SIC12_15": 0.5992717912886292,
+              "calf_r_SIC2_4": 0.4409123050669829
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/current/s180/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/current/s180_group_summary.json"
+            }
+          }
+        }
+      },
+      "replay_vs_reference_final_delta": {
+        "DirectGeoLocalDeg": 0.0,
+        "all_ex_root": 0.0,
+        "leg": 0.0,
+        "nonleg": 0.0,
+        "arm": 0.0,
+        "legs_main": 0.0,
+        "arms_main": 0.0,
+        "foot_l_ball_l_SIC12_15": 0.0,
+        "calf_r_SIC2_4": 0.0
+      },
+      "all_snapshot_vs_reference_final_delta": {
+        "s000": {
+          "DirectGeoLocalDeg": 0.04632462159362297,
+          "all_ex_root": 0.04632462118442461,
+          "leg": 0.2605759941623884,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": 0.2605759941623884,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": 0.519211204489693,
+          "calf_r_SIC2_4": 0.17293672511974972
+        },
+        "s020": {
+          "DirectGeoLocalDeg": 0.01038405859063185,
+          "all_ex_root": 0.010384058359876824,
+          "leg": 0.05841032827430709,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": 0.05841032827430709,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": -0.1257658419199288,
+          "calf_r_SIC2_4": -0.03229903243482113
+        },
+        "s060": {
+          "DirectGeoLocalDeg": 0.0130212590813117,
+          "all_ex_root": 0.013021258559789098,
+          "leg": 0.07324457939881368,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": 0.07324457939881368,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": 0.3529765526764095,
+          "calf_r_SIC2_4": -0.12053053453564644
+        },
+        "s120": {
+          "DirectGeoLocalDeg": 0.00035825905628329713,
+          "all_ex_root": 0.00035825858090568485,
+          "leg": 0.00201520451759446,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": 0.00201520451759446,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": -0.16584457829594612,
+          "calf_r_SIC2_4": 0.09462015579144162
+        },
+        "s180": {
+          "DirectGeoLocalDeg": 0.0,
+          "all_ex_root": 0.0,
+          "leg": 0.0,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": 0.0,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": 0.0,
+          "calf_r_SIC2_4": 0.0
+        }
+      },
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/configs/posttrain_71_current_snapshots_20260314.json",
+      "run_name": "WalkF_stage7_71_current_snapshots_20260314",
+      "last_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_regression_attribution_20260314/current/ckpt_last_WalkF_stage7_71_current_snapshots_20260314.pth"
+    },
+    "candidate": {
+      "snapshots": {
+        "s000": {
+          "step": 0,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_regression_attribution_20260314/candidate/ckpt_step_000000_WalkF_stage7_71_candidate_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.13092551713939324,
+              "DirectGeoLocalDegWeighted": 0.15562674058817846,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.1309255167171086,
+              "leg": 0.3492627636104623,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.3492627636104623,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.5226275748573244,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.28358400067081674,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.8600953875575215,
+                "calf_r_SIC2_4": 0.39301881318291026
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.13092551713939324,
+              "all_ex_root": 0.1309255167171086,
+              "leg": 0.3492627636104623,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.3492627636104623,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.8600953875575215,
+              "calf_r_SIC2_4": 0.39301881318291026
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/candidate/s000/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/candidate/s000_group_summary.json"
+            }
+          }
+        },
+        "s020": {
+          "step": 20,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_regression_attribution_20260314/candidate/ckpt_step_000020_WalkF_stage7_71_candidate_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.13569751009345055,
+              "DirectGeoLocalDegWeighted": 0.15492101568122243,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.13569750995036717,
+              "leg": 0.3761052255475417,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.3761052255475417,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.48224606199073605,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.16144434410380198,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.783756603486836,
+                "calf_r_SIC2_4": 0.4282097890973091
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.13569751009345055,
+              "all_ex_root": 0.13569750995036717,
+              "leg": 0.3761052255475417,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.3761052255475417,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.783756603486836,
+              "calf_r_SIC2_4": 0.4282097890973091
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/candidate/s020/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/candidate/s020_group_summary.json"
+            }
+          }
+        },
+        "s060": {
+          "step": 60,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_regression_attribution_20260314/candidate/ckpt_step_000060_WalkF_stage7_71_candidate_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.13453657455135917,
+              "DirectGeoLocalDegWeighted": 0.1574413664855583,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.13453657448191525,
+              "leg": 0.36957496353749963,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.36957496353749963,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.44240187166724354,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.37605381798930465,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.7229850688017905,
+                "calf_r_SIC2_4": 0.1983694595595201
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.13453657455135917,
+              "all_ex_root": 0.13453657448191525,
+              "leg": 0.36957496353749963,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.36957496353749963,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.7229850688017905,
+              "calf_r_SIC2_4": 0.1983694595595201
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/candidate/s060/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/candidate/s060_group_summary.json"
+            }
+          }
+        },
+        "s120": {
+          "step": 120,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_regression_attribution_20260314/candidate/ckpt_step_000120_WalkF_stage7_71_candidate_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.12630868098850168,
+              "DirectGeoLocalDegWeighted": 0.1461462630175574,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.12630868116539498,
+              "leg": 0.32329306363207316,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.32329306363207316,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.3295176690153312,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.2720999483251944,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.5362328439950943,
+                "calf_r_SIC2_4": 0.13636084956427416
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.12630868098850168,
+              "all_ex_root": 0.12630868116539498,
+              "leg": 0.32329306363207316,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.32329306363207316,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.5362328439950943,
+              "calf_r_SIC2_4": 0.13636084956427416
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/candidate/s120/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/candidate/s120_group_summary.json"
+            }
+          }
+        },
+        "s180": {
+          "step": 180,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_regression_attribution_20260314/candidate/ckpt_step_000180_WalkF_stage7_71_candidate_snapshots_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.1277874807805516,
+              "DirectGeoLocalDegWeighted": 0.14738908433896858,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.12778748058921752,
+              "leg": 0.331611310391075,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.331611310391075,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.35506428945518564,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.16948254012968392,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.5405750844511203,
+                "calf_r_SIC2_4": 0.2956436884899934
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.1277874807805516,
+              "all_ex_root": 0.12778748058921752,
+              "leg": 0.331611310391075,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.331611310391075,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.5405750844511203,
+              "calf_r_SIC2_4": 0.2956436884899934
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/candidate/s180/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/eval_model/candidate/s180_group_summary.json"
+            }
+          }
+        }
+      },
+      "replay_vs_reference_final_delta": {
+        "DirectGeoLocalDeg": 0.0,
+        "all_ex_root": 0.0,
+        "leg": 0.0,
+        "nonleg": 0.0,
+        "arm": 0.0,
+        "legs_main": 0.0,
+        "arms_main": 0.0,
+        "foot_l_ball_l_SIC12_15": 0.0,
+        "calf_r_SIC2_4": 0.0
+      },
+      "all_snapshot_vs_reference_final_delta": {
+        "s000": {
+          "DirectGeoLocalDeg": 0.003138036358841634,
+          "all_ex_root": 0.0031380361278910696,
+          "leg": 0.017651453219387325,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": 0.017651453219387325,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": 0.3195203031064011,
+          "calf_r_SIC2_4": 0.09737512469291687
+        },
+        "s020": {
+          "DirectGeoLocalDeg": 0.007910029312898942,
+          "all_ex_root": 0.00791002936114965,
+          "leg": 0.04449391515646672,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": 0.04449391515646672,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": 0.2431815190357156,
+          "calf_r_SIC2_4": 0.13256610060731572
+        },
+        "s060": {
+          "DirectGeoLocalDeg": 0.006749093770807568,
+          "all_ex_root": 0.006749093892697733,
+          "leg": 0.037963653146424636,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": 0.037963653146424636,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": 0.18240998435067013,
+          "calf_r_SIC2_4": -0.0972742289304733
+        },
+        "s120": {
+          "DirectGeoLocalDeg": -0.0014787997920499285,
+          "all_ex_root": -0.0014787994238225355,
+          "leg": -0.008318246759001835,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": -0.008318246759001835,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": -0.0043422404560260475,
+          "calf_r_SIC2_4": -0.15928283892571923
+        },
+        "s180": {
+          "DirectGeoLocalDeg": 0.0,
+          "all_ex_root": 0.0,
+          "leg": 0.0,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": 0.0,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": 0.0,
+          "calf_r_SIC2_4": 0.0
+        }
+      },
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/configs/posttrain_71_candidate_snapshots_20260314.json",
+      "run_name": "WalkF_stage7_71_candidate_snapshots_20260314",
+      "last_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_regression_attribution_20260314/candidate/ckpt_last_WalkF_stage7_71_candidate_snapshots_20260314.pth"
+    },
+    "candidate_minus_current_by_snapshot": {
+      "s000": {
+        "DirectGeoLocalDeg": -0.02730976077619679,
+        "all_ex_root": -0.027309760880176365,
+        "leg": -0.20678617242413372,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "legs_main": -0.20678617242413372,
+        "arms_main": 0.009184037606418477,
+        "foot_l_ball_l_SIC12_15": -0.25838760822080076,
+        "calf_r_SIC2_4": -0.22083021700382238
+      },
+      "s020": {
+        "DirectGeoLocalDeg": 0.013402795180851634,
+        "all_ex_root": 0.013402795177630003,
+        "leg": 0.022221955401027005,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "legs_main": 0.022221955401027005,
+        "arms_main": 0.009184037606418477,
+        "foot_l_ball_l_SIC12_15": 0.31025065411813557,
+        "calf_r_SIC2_4": 0.019596516465147318
+      },
+      "s060": {
+        "DirectGeoLocalDeg": 0.00960465914808041,
+        "all_ex_root": 0.009604659509265812,
+        "leg": 0.0008574422664783254,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "legs_main": 0.0008574422664783254,
+        "arms_main": 0.009184037606418477,
+        "foot_l_ball_l_SIC12_15": -0.22926327516324818,
+        "calf_r_SIC2_4": -0.12201231097181639
+      },
+      "s120": {
+        "DirectGeoLocalDeg": 0.014039765610251317,
+        "all_ex_root": 0.014039766171628956,
+        "leg": 0.025804917242271075,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "legs_main": 0.025804917242271075,
+        "arms_main": 0.009184037606418477,
+        "foot_l_ball_l_SIC12_15": 0.10280563100241125,
+        "calf_r_SIC2_4": -0.39917161129415035
+      },
+      "s180": {
+        "DirectGeoLocalDeg": 0.015876824458584543,
+        "all_ex_root": 0.015876824176357177,
+        "leg": 0.03613836851886737,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "legs_main": 0.03613836851886737,
+        "arms_main": 0.009184037606418477,
+        "foot_l_ball_l_SIC12_15": -0.05869670683750883,
+        "calf_r_SIC2_4": -0.14526861657698953
+      }
+    }
+  },
+  "reference_gain_decomposition": {
+    "DirectGeoLocalDeg": {
+      "inherited": -0.02730976077619679,
+      "current_stage71_gain": -0.04632462159362297,
+      "candidate_stage71_gain": -0.003138036358841634,
+      "stage71_gain_gap": 0.04318658523478133,
+      "final_gap": 0.015876824458584543
+    },
+    "all_ex_root": {
+      "inherited": -0.027309760880176365,
+      "current_stage71_gain": -0.04632462118442461,
+      "candidate_stage71_gain": -0.0031380361278910696,
+      "stage71_gain_gap": 0.04318658505653354,
+      "final_gap": 0.015876824176357177
+    },
+    "leg": {
+      "inherited": -0.20678617242413372,
+      "current_stage71_gain": -0.2605759941623884,
+      "candidate_stage71_gain": -0.017651453219387325,
+      "stage71_gain_gap": 0.2429245409430011,
+      "final_gap": 0.03613836851886737
+    },
+    "nonleg": {
+      "inherited": 0.011495949723922538,
+      "current_stage71_gain": 0.0,
+      "candidate_stage71_gain": 0.0,
+      "stage71_gain_gap": 0.0,
+      "final_gap": 0.011495949723922538
+    },
+    "arm": {
+      "inherited": 0.009184037606418477,
+      "current_stage71_gain": 0.0,
+      "candidate_stage71_gain": 0.0,
+      "stage71_gain_gap": 0.0,
+      "final_gap": 0.009184037606418477
+    },
+    "legs_main": {
+      "inherited": -0.20678617242413372,
+      "current_stage71_gain": -0.2605759941623884,
+      "candidate_stage71_gain": -0.017651453219387325,
+      "stage71_gain_gap": 0.2429245409430011,
+      "final_gap": 0.03613836851886737
+    },
+    "arms_main": {
+      "inherited": 0.009184037606418477,
+      "current_stage71_gain": 0.0,
+      "candidate_stage71_gain": 0.0,
+      "stage71_gain_gap": 0.0,
+      "final_gap": 0.009184037606418477
+    },
+    "foot_l_ball_l_SIC12_15": {
+      "inherited": -0.25838760822080076,
+      "current_stage71_gain": -0.519211204489693,
+      "candidate_stage71_gain": -0.3195203031064011,
+      "stage71_gain_gap": 0.19969090138329193,
+      "final_gap": -0.05869670683750883
+    },
+    "calf_r_SIC2_4": {
+      "inherited": -0.22083021700382238,
+      "current_stage71_gain": -0.17293672511974972,
+      "candidate_stage71_gain": -0.09737512469291687,
+      "stage71_gain_gap": 0.07556160042683285,
+      "final_gap": -0.14526861657698953
+    }
+  },
+  "final_joint_attribution": {
+    "candidate71_vs_current71_leg_joints": {
+      "best": [
+        {
+          "joint": "thigh_l",
+          "delta": -0.03168824346476168,
+          "ref": 0.37082867251795737,
+          "cur": 0.3391404290531957
+        },
+        {
+          "joint": "calf_r",
+          "delta": -0.031371353967061144,
+          "ref": 0.2879973349396984,
+          "cur": 0.2566259809726373
+        },
+        {
+          "joint": "ball_l",
+          "delta": 0.0031013066100692988,
+          "ref": 0.27636415394412917,
+          "cur": 0.27946546055419846
+        },
+        {
+          "joint": "thigh_r",
+          "delta": 0.006593473648197595,
+          "ref": 0.23962716253333574,
+          "cur": 0.24622063618153334
+        },
+        {
+          "joint": "foot_r",
+          "delta": 0.053937167465296976,
+          "ref": 0.2913095191889984,
+          "cur": 0.34524668665429536
+        },
+        {
+          "joint": "foot_l",
+          "delta": 0.05520188766748235,
+          "ref": 0.4087086500989836,
+          "cur": 0.46391053776646596
+        },
+        {
+          "joint": "ball_r",
+          "delta": 0.05637440662885215,
+          "ref": 0.21430000749167574,
+          "cur": 0.2706744141205279
+        },
+        {
+          "joint": "calf_l",
+          "delta": 0.17695830356286363,
+          "ref": 0.2746480342628824,
+          "cur": 0.45160633782574605
+        }
+      ],
+      "worst": [
+        {
+          "joint": "calf_l",
+          "delta": 0.17695830356286363,
+          "ref": 0.2746480342628824,
+          "cur": 0.45160633782574605
+        },
+        {
+          "joint": "ball_r",
+          "delta": 0.05637440662885215,
+          "ref": 0.21430000749167574,
+          "cur": 0.2706744141205279
+        },
+        {
+          "joint": "foot_l",
+          "delta": 0.05520188766748235,
+          "ref": 0.4087086500989836,
+          "cur": 0.46391053776646596
+        },
+        {
+          "joint": "foot_r",
+          "delta": 0.053937167465296976,
+          "ref": 0.2913095191889984,
+          "cur": 0.34524668665429536
+        },
+        {
+          "joint": "thigh_r",
+          "delta": 0.006593473648197595,
+          "ref": 0.23962716253333574,
+          "cur": 0.24622063618153334
+        },
+        {
+          "joint": "ball_l",
+          "delta": 0.0031013066100692988,
+          "ref": 0.27636415394412917,
+          "cur": 0.27946546055419846
+        },
+        {
+          "joint": "calf_r",
+          "delta": -0.031371353967061144,
+          "ref": 0.2879973349396984,
+          "cur": 0.2566259809726373
+        },
+        {
+          "joint": "thigh_l",
+          "delta": -0.03168824346476168,
+          "ref": 0.37082867251795737,
+          "cur": 0.3391404290531957
+        }
+      ]
+    },
+    "candidate71_vs_current71_all_joints": {
+      "best": [
+        {
+          "joint": "thigh_l",
+          "delta": -0.03168824346476168,
+          "ref": 0.37082867251795737,
+          "cur": 0.3391404290531957
+        },
+        {
+          "joint": "calf_r",
+          "delta": -0.031371353967061144,
+          "ref": 0.2879973349396984,
+          "cur": 0.2566259809726373
+        },
+        {
+          "joint": "lowerarm_r",
+          "delta": -0.007684940900945056,
+          "ref": 0.10211706860155932,
+          "cur": 0.09443212770061427
+        },
+        {
+          "joint": "upperarm_r",
+          "delta": -0.0059810556514665325,
+          "ref": 0.22099757942284437,
+          "cur": 0.21501652377137784
+        },
+        {
+          "joint": "lowerarm_l",
+          "delta": -0.00359312040128254,
+          "ref": 0.16897480595612568,
+          "cur": 0.16538168555484314
+        },
+        {
+          "joint": "thumb_01_r",
+          "delta": -0.003108591094428976,
+          "ref": 0.030939183850382822,
+          "cur": 0.027830592755953846
+        },
+        {
+          "joint": "pinky_01_r",
+          "delta": -0.0013494699158527069,
+          "ref": 0.015775259493492802,
+          "cur": 0.014425789577640095
+        },
+        {
+          "joint": "L_ForeTwist_01",
+          "delta": -0.0004597310786784662,
+          "ref": 0.013668042456899012,
+          "cur": 0.013208311378220546
+        },
+        {
+          "joint": "Bip001",
+          "delta": 3.647040448658023e-07,
+          "ref": 5.479474242569727e-06,
+          "cur": 5.8441782874355295e-06
+        },
+        {
+          "joint": "ring_01_r",
+          "delta": 0.00023090598399501828,
+          "ref": 0.0066922735608978805,
+          "cur": 0.006923179544892899
+        },
+        {
+          "joint": "index_01_r",
+          "delta": 0.001521979920061165,
+          "ref": 0.007774946307404736,
+          "cur": 0.0092969262274659
+        },
+        {
+          "joint": "index_01_l",
+          "delta": 0.0016552724964851787,
+          "ref": 0.032890747485379145,
+          "cur": 0.03454601998186432
+        }
+      ],
+      "worst": [
+        {
+          "joint": "calf_l",
+          "delta": 0.17695830356286363,
+          "ref": 0.2746480342628824,
+          "cur": 0.45160633782574605
+        },
+        {
+          "joint": "spine_01",
+          "delta": 0.06079907453792212,
+          "ref": 0.08846339109613625,
+          "cur": 0.14926246563405837
+        },
+        {
+          "joint": "ball_r",
+          "delta": 0.05637440662885215,
+          "ref": 0.21430000749167574,
+          "cur": 0.2706744141205279
+        },
+        {
+          "joint": "foot_l",
+          "delta": 0.05520188766748235,
+          "ref": 0.4087086500989836,
+          "cur": 0.46391053776646596
+        },
+        {
+          "joint": "foot_r",
+          "delta": 0.053937167465296976,
+          "ref": 0.2913095191889984,
+          "cur": 0.34524668665429536
+        },
+        {
+          "joint": "RUpArmTwist_l_01",
+          "delta": 0.040729518333094794,
+          "ref": 0.0822442613646693,
+          "cur": 0.12297377969776409
+        },
+        {
+          "joint": "RUpArmTwist_r_01",
+          "delta": 0.03255136183758814,
+          "ref": 0.13837405488684876,
+          "cur": 0.1709254167244369
+        },
+        {
+          "joint": "RUpArmTwist_l_02",
+          "delta": 0.031562064284270136,
+          "ref": 0.05881769114941118,
+          "cur": 0.09037975543368132
+        },
+        {
+          "joint": "head",
+          "delta": 0.027449314831756055,
+          "ref": 0.08235230927388075,
+          "cur": 0.1098016241056368
+        },
+        {
+          "joint": "hand_r",
+          "delta": 0.026960417322359598,
+          "ref": 0.27596606260306356,
+          "cur": 0.30292647992542315
+        },
+        {
+          "joint": "neck_01",
+          "delta": 0.02459042282439336,
+          "ref": 0.06966110538734599,
+          "cur": 0.09425152821173935
+        },
+        {
+          "joint": "RUpArmTwist_r_02",
+          "delta": 0.020884084142253845,
+          "ref": 0.08632755341851978,
+          "cur": 0.10721163756077362
+        }
+      ]
+    },
+    "candidate71_vs_current71_leg_sic": {
+      "best": [
+        {
+          "sic": 52,
+          "delta": -0.40920505626127124,
+          "ref": 0.6714784791693091,
+          "cur": 0.2622734229080379
+        },
+        {
+          "sic": 80,
+          "delta": -0.28911784605588764,
+          "ref": 0.4939151507569477,
+          "cur": 0.20479730470106006
+        },
+        {
+          "sic": 41,
+          "delta": -0.19101484076236375,
+          "ref": 0.4033397024322767,
+          "cur": 0.21232486166991293
+        },
+        {
+          "sic": 79,
+          "delta": -0.17779387556947768,
+          "ref": 0.3378280660836026,
+          "cur": 0.16003419051412493
+        },
+        {
+          "sic": 53,
+          "delta": -0.1674309193622321,
+          "ref": 0.5423253960907459,
+          "cur": 0.37489447672851384
+        },
+        {
+          "sic": 84,
+          "delta": -0.1642608743859455,
+          "ref": 0.36962407175451517,
+          "cur": 0.20536319736856967
+        },
+        {
+          "sic": 83,
+          "delta": -0.14219045999925584,
+          "ref": 0.3290869449265301,
+          "cur": 0.1868964849272743
+        },
+        {
+          "sic": 81,
+          "delta": -0.12813914648722857,
+          "ref": 0.3002424092264846,
+          "cur": 0.17210326273925602
+        },
+        {
+          "sic": 57,
+          "delta": -0.12347132712602615,
+          "ref": 0.4326660968363285,
+          "cur": 0.30919476971030235
+        },
+        {
+          "sic": 1,
+          "delta": -0.11324307485483587,
+          "ref": 0.41475943103432655,
+          "cur": 0.3015163561794907
+        },
+        {
+          "sic": 14,
+          "delta": -0.10269729018909857,
+          "ref": 0.3209214316448197,
+          "cur": 0.2182241414557211
+        },
+        {
+          "sic": 6,
+          "delta": -0.07907653669826686,
+          "ref": 0.4176864307373762,
+          "cur": 0.33860989403910935
+        }
+      ],
+      "worst": [
+        {
+          "sic": 26,
+          "delta": 0.23944298666901886,
+          "ref": 0.09122387389652431,
+          "cur": 0.3306668605655432
+        },
+        {
+          "sic": 3,
+          "delta": 0.22948738117702305,
+          "ref": 0.29856137349270284,
+          "cur": 0.5280487546697259
+        },
+        {
+          "sic": 12,
+          "delta": 0.22222563449759036,
+          "ref": 0.3984638204565272,
+          "cur": 0.6206894549541175
+        },
+        {
+          "sic": 24,
+          "delta": 0.20864665252156556,
+          "ref": 0.19052228680811822,
+          "cur": 0.3991689393296838
+        },
+        {
+          "sic": 25,
+          "delta": 0.19259910692926496,
+          "ref": 0.21458834037184715,
+          "cur": 0.4071874473011121
+        },
+        {
+          "sic": 13,
+          "delta": 0.17861973482649773,
+          "ref": 0.28012998041231185,
+          "cur": 0.4587497152388096
+        },
+        {
+          "sic": 18,
+          "delta": 0.17236808710731566,
+          "ref": 0.1555055632488802,
+          "cur": 0.32787365035619587
+        },
+        {
+          "sic": 9,
+          "delta": 0.15712293318938464,
+          "ref": 0.2922042210120708,
+          "cur": 0.4493271542014554
+        },
+        {
+          "sic": 34,
+          "delta": 0.1494270660332404,
+          "ref": 0.26736101490678266,
+          "cur": 0.41678808094002306
+        },
+        {
+          "sic": 8,
+          "delta": 0.1386798454914242,
+          "ref": 0.4920358774252236,
+          "cur": 0.6307157229166478
+        },
+        {
+          "sic": 37,
+          "delta": 0.13149128144141287,
+          "ref": 0.3249069193843752,
+          "cur": 0.4563982008257881
+        },
+        {
+          "sic": 30,
+          "delta": 0.12982817529700696,
+          "ref": 0.22110234596766531,
+          "cur": 0.3509305212646723
+        }
+      ]
+    },
+    "candidate71_vs_current71_joint_sic": {
+      "calf_l": {
+        "best": [
+          {
+            "sic": 30,
+            "delta": -0.3929392248392105,
+            "ref": 0.7196687161922455,
+            "cur": 0.326729491353035
+          },
+          {
+            "sic": 31,
+            "delta": -0.3217901401221752,
+            "ref": 0.667240783572197,
+            "cur": 0.34545064345002174
+          },
+          {
+            "sic": 62,
+            "delta": -0.29577857814729214,
+            "ref": 0.4253648668527603,
+            "cur": 0.12958628870546818
+          },
+          {
+            "sic": 52,
+            "delta": -0.2763097584247589,
+            "ref": 0.40676333755254745,
+            "cur": 0.13045357912778854
+          },
+          {
+            "sic": 1,
+            "delta": -0.26828570291399956,
+            "ref": 0.5055541321635246,
+            "cur": 0.23726842924952507
+          },
+          {
+            "sic": 4,
+            "delta": -0.24654581025242805,
+            "ref": 0.4907010495662689,
+            "cur": 0.24415523931384087
+          },
+          {
+            "sic": 56,
+            "delta": -0.219862163066864,
+            "ref": 0.35420916974544525,
+            "cur": 0.13434700667858124
+          },
+          {
+            "sic": 55,
+            "delta": -0.21772237494587898,
+            "ref": 0.34896689653396606,
+            "cur": 0.13124452158808708
+          }
+        ],
+        "worst": [
+          {
+            "sic": 25,
+            "delta": 1.6054734960198402,
+            "ref": 0.24920188635587692,
+            "cur": 1.8546753823757172
+          },
+          {
+            "sic": 24,
+            "delta": 1.5505701135843992,
+            "ref": 0.21425928361713886,
+            "cur": 1.764829397201538
+          },
+          {
+            "sic": 9,
+            "delta": 1.144946737214923,
+            "ref": 0.11365390010178089,
+            "cur": 1.2586006373167038
+          },
+          {
+            "sic": 8,
+            "delta": 1.0573046393692493,
+            "ref": 0.29637838527560234,
+            "cur": 1.3536830246448517
+          },
+          {
+            "sic": 7,
+            "delta": 0.7812392935156822,
+            "ref": 0.30337441712617874,
+            "cur": 1.084613710641861
+          },
+          {
+            "sic": 26,
+            "delta": 0.7565815495327115,
+            "ref": 0.08243375550955534,
+            "cur": 0.8390153050422668
+          },
+          {
+            "sic": 12,
+            "delta": 0.7067682445049286,
+            "ref": 1.0988805890083313,
+            "cur": 1.8056488335132599
+          },
+          {
+            "sic": 13,
+            "delta": 0.5841049626469612,
+            "ref": 0.3283573016524315,
+            "cur": 0.9124622642993927
+          }
+        ]
+      },
+      "ball_r": {
+        "best": [
+          {
+            "sic": 52,
+            "delta": -0.4981594756245613,
+            "ref": 0.7346350699663162,
+            "cur": 0.2364755943417549
+          },
+          {
+            "sic": 20,
+            "delta": -0.30433958768844604,
+            "ref": 0.4567296430468559,
+            "cur": 0.15239005535840988
+          },
+          {
+            "sic": 53,
+            "delta": -0.2919696308672428,
+            "ref": 0.5871914327144623,
+            "cur": 0.29522180184721947
+          },
+          {
+            "sic": 4,
+            "delta": -0.2910299748182297,
+            "ref": 0.6429786682128906,
+            "cur": 0.35194869339466095
+          },
+          {
+            "sic": 17,
+            "delta": -0.2879457976669073,
+            "ref": 0.3626802861690521,
+            "cur": 0.07473448850214481
+          },
+          {
+            "sic": 32,
+            "delta": -0.1747957170009613,
+            "ref": 0.2507069744169712,
+            "cur": 0.0759112574160099
+          },
+          {
+            "sic": 45,
+            "delta": -0.16752303019165993,
+            "ref": 0.46859582513570786,
+            "cur": 0.30107279494404793
+          },
+          {
+            "sic": 36,
+            "delta": -0.16060040518641472,
+            "ref": 0.261781245470047,
+            "cur": 0.10118084028363228
+          }
+        ],
+        "worst": [
+          {
+            "sic": 49,
+            "delta": 0.9044179059565067,
+            "ref": 0.24634456261992455,
+            "cur": 1.1507624685764313
+          },
+          {
+            "sic": 59,
+            "delta": 0.4760252945125103,
+            "ref": 0.19028549268841743,
+            "cur": 0.6663107872009277
+          },
+          {
+            "sic": 50,
+            "delta": 0.4541570693254471,
+            "ref": 0.31601808965206146,
+            "cur": 0.7701751589775085
+          },
+          {
+            "sic": 58,
+            "delta": 0.3396405354142189,
+            "ref": 0.16904975473880768,
+            "cur": 0.5086902901530266
+          },
+          {
+            "sic": 12,
+            "delta": 0.3106903648003936,
+            "ref": 0.05783286038786173,
+            "cur": 0.3685232251882553
+          },
+          {
+            "sic": 18,
+            "delta": 0.2821358013898134,
+            "ref": 0.04620838724076748,
+            "cur": 0.3283441886305809
+          },
+          {
+            "sic": 13,
+            "delta": 0.2702452354133129,
+            "ref": 0.17214252427220345,
+            "cur": 0.44238775968551636
+          },
+          {
+            "sic": 14,
+            "delta": 0.2276734784245491,
+            "ref": 0.2209455817937851,
+            "cur": 0.4486190602183342
+          }
+        ]
+      },
+      "foot_l": {
+        "best": [
+          {
+            "sic": 14,
+            "delta": -0.607125683221966,
+            "ref": 0.6520836353302002,
+            "cur": 0.04495795210823417
+          },
+          {
+            "sic": 41,
+            "delta": -0.48377905786037445,
+            "ref": 0.759289339184761,
+            "cur": 0.2755102813243866
+          },
+          {
+            "sic": 47,
+            "delta": -0.45177046582102776,
+            "ref": 0.7383287698030472,
+            "cur": 0.2865583039820194
+          },
+          {
+            "sic": 40,
+            "delta": -0.3512676954269409,
+            "ref": 1.1266809701919556,
+            "cur": 0.7754132747650146
+          },
+          {
+            "sic": 50,
+            "delta": -0.3486301191151142,
+            "ref": 0.5975050330162048,
+            "cur": 0.24887491390109062
+          },
+          {
+            "sic": 39,
+            "delta": -0.3481462001800537,
+            "ref": 1.5481464266777039,
+            "cur": 1.2000002264976501
+          },
+          {
+            "sic": 45,
+            "delta": -0.3439374528825283,
+            "ref": 0.6330931186676025,
+            "cur": 0.28915566578507423
+          },
+          {
+            "sic": 52,
+            "delta": -0.3294142037630081,
+            "ref": 0.6853066384792328,
+            "cur": 0.35589243471622467
+          }
+        ],
+        "worst": [
+          {
+            "sic": 8,
+            "delta": 0.8902442455291748,
+            "ref": 0.44426459074020386,
+            "cur": 1.3345088362693787
+          },
+          {
+            "sic": 7,
+            "delta": 0.792983703315258,
+            "ref": 0.195423923432827,
+            "cur": 0.988407626748085
+          },
+          {
+            "sic": 15,
+            "delta": 0.6662083100527525,
+            "ref": 0.09383316524326801,
+            "cur": 0.7600414752960205
+          },
+          {
+            "sic": 37,
+            "delta": 0.5177765786647797,
+            "ref": 1.1918503046035767,
+            "cur": 1.7096268832683563
+          },
+          {
+            "sic": 13,
+            "delta": 0.47824516892433167,
+            "ref": 0.5081243515014648,
+            "cur": 0.9863695204257965
+          },
+          {
+            "sic": 3,
+            "delta": 0.4544360488653183,
+            "ref": 0.310244157910347,
+            "cur": 0.7646802067756653
+          },
+          {
+            "sic": 36,
+            "delta": 0.4179568290710449,
+            "ref": 0.9607589542865753,
+            "cur": 1.3787157833576202
+          },
+          {
+            "sic": 4,
+            "delta": 0.40476564317941666,
+            "ref": 0.31144412606954575,
+            "cur": 0.7162097692489624
+          }
+        ]
+      },
+      "foot_r": {
+        "best": [
+          {
+            "sic": 52,
+            "delta": -1.0923393703997135,
+            "ref": 1.3376130163669586,
+            "cur": 0.2452736459672451
+          },
+          {
+            "sic": 56,
+            "delta": -0.41233958303928375,
+            "ref": 0.9332337528467178,
+            "cur": 0.5208941698074341
+          },
+          {
+            "sic": 57,
+            "delta": -0.4122959300875664,
+            "ref": 0.8469638079404831,
+            "cur": 0.4346678778529167
+          },
+          {
+            "sic": 85,
+            "delta": -0.4074717052280903,
+            "ref": 0.5117062777280807,
+            "cur": 0.10423457249999046
+          },
+          {
+            "sic": 84,
+            "delta": -0.3850058140233159,
+            "ref": 0.43771296739578247,
+            "cur": 0.052707153372466564
+          },
+          {
+            "sic": 51,
+            "delta": -0.37794221192598343,
+            "ref": 0.7773977220058441,
+            "cur": 0.3994555100798607
+          },
+          {
+            "sic": 83,
+            "delta": -0.3086653146892786,
+            "ref": 0.38474079221487045,
+            "cur": 0.07607547752559185
+          },
+          {
+            "sic": 80,
+            "delta": -0.27818121388554573,
+            "ref": 0.4624515548348427,
+            "cur": 0.18427034094929695
+          }
+        ],
+        "worst": [
+          {
+            "sic": 54,
+            "delta": 0.7167780101299286,
+            "ref": 0.5541498064994812,
+            "cur": 1.2709278166294098
+          },
+          {
+            "sic": 48,
+            "delta": 0.5537907471880317,
+            "ref": 0.04721060488373041,
+            "cur": 0.6010013520717621
+          },
+          {
+            "sic": 34,
+            "delta": 0.43906179815530777,
+            "ref": 0.34592559188604355,
+            "cur": 0.7849873900413513
+          },
+          {
+            "sic": 47,
+            "delta": 0.4272054396569729,
+            "ref": 0.1198091097176075,
+            "cur": 0.5470145493745804
+          },
+          {
+            "sic": 60,
+            "delta": 0.3754342161118984,
+            "ref": 0.20407536998391151,
+            "cur": 0.5795095860958099
+          },
+          {
+            "sic": 2,
+            "delta": 0.3629591315984726,
+            "ref": 0.7265796810388565,
+            "cur": 1.089538812637329
+          },
+          {
+            "sic": 33,
+            "delta": 0.3622181471437216,
+            "ref": 0.08820799179375172,
+            "cur": 0.4504261389374733
+          },
+          {
+            "sic": 61,
+            "delta": 0.31368741393089294,
+            "ref": 0.40521469712257385,
+            "cur": 0.7189021110534668
+          }
+        ]
+      },
+      "calf_r": {
+        "best": [
+          {
+            "sic": 1,
+            "delta": -0.7248928677290678,
+            "ref": 0.855353593826294,
+            "cur": 0.13046072609722614
+          },
+          {
+            "sic": 52,
+            "delta": -0.6950039677321911,
+            "ref": 0.8574193567037582,
+            "cur": 0.16241538897156715
+          },
+          {
+            "sic": 80,
+            "delta": -0.5639220848679543,
+            "ref": 0.940592035651207,
+            "cur": 0.3766699507832527
+          },
+          {
+            "sic": 57,
+            "delta": -0.4423432908952236,
+            "ref": 0.712702289223671,
+            "cur": 0.27035899832844734
+          },
+          {
+            "sic": 81,
+            "delta": -0.4408681020140648,
+            "ref": 0.5663922652602196,
+            "cur": 0.12552416324615479
+          },
+          {
+            "sic": 66,
+            "delta": -0.4344407543540001,
+            "ref": 0.6865720450878143,
+            "cur": 0.25213129073381424
+          },
+          {
+            "sic": 2,
+            "delta": -0.4326986148953438,
+            "ref": 0.7746110707521439,
+            "cur": 0.3419124558568001
+          },
+          {
+            "sic": 79,
+            "delta": -0.41284945234656334,
+            "ref": 0.6779944151639938,
+            "cur": 0.2651449628174305
+          }
+        ],
+        "worst": [
+          {
+            "sic": 85,
+            "delta": 0.47106808610260487,
+            "ref": 0.07601462118327618,
+            "cur": 0.547082707285881
+          },
+          {
+            "sic": 64,
+            "delta": 0.42807186394929886,
+            "ref": 0.4130007103085518,
+            "cur": 0.8410725742578506
+          },
+          {
+            "sic": 30,
+            "delta": 0.376558355987072,
+            "ref": 0.12841914594173431,
+            "cur": 0.5049775019288063
+          },
+          {
+            "sic": 63,
+            "delta": 0.37526635825634,
+            "ref": 0.086419977247715,
+            "cur": 0.461686335504055
+          },
+          {
+            "sic": 68,
+            "delta": 0.3575994726270437,
+            "ref": 0.12875478900969028,
+            "cur": 0.486354261636734
+          },
+          {
+            "sic": 69,
+            "delta": 0.3279288550838828,
+            "ref": 0.06787042412906885,
+            "cur": 0.39579927921295166
+          },
+          {
+            "sic": 26,
+            "delta": 0.2950481232255697,
+            "ref": 0.09462233074009418,
+            "cur": 0.3896704539656639
+          },
+          {
+            "sic": 34,
+            "delta": 0.29074937105178833,
+            "ref": 0.08770902454853058,
+            "cur": 0.3784583956003189
+          }
+        ]
+      },
+      "ball_l": {
+        "best": [
+          {
+            "sic": 49,
+            "delta": -0.5601297244429588,
+            "ref": 1.020532712340355,
+            "cur": 0.4604029878973961
+          },
+          {
+            "sic": 14,
+            "delta": -0.42178962752223015,
+            "ref": 0.5496302098035812,
+            "cur": 0.1278405822813511
+          },
+          {
+            "sic": 54,
+            "delta": -0.39723584707826376,
+            "ref": 0.45357556641101837,
+            "cur": 0.05633971933275461
+          },
+          {
+            "sic": 32,
+            "delta": -0.37131547182798386,
+            "ref": 0.8092073202133179,
+            "cur": 0.437891848385334
+          },
+          {
+            "sic": 9,
+            "delta": -0.3478417741134763,
+            "ref": 0.4293729215860367,
+            "cur": 0.0815311474725604
+          },
+          {
+            "sic": 13,
+            "delta": -0.3226580061018467,
+            "ref": 0.577149048447609,
+            "cur": 0.25449104234576225
+          },
+          {
+            "sic": 15,
+            "delta": -0.3126195818185806,
+            "ref": 1.2779507637023926,
+            "cur": 0.965331181883812
+          },
+          {
+            "sic": 25,
+            "delta": -0.305338311009109,
+            "ref": 0.3763839453458786,
+            "cur": 0.07104563433676958
+          }
+        ],
+        "worst": [
+          {
+            "sic": 30,
+            "delta": 0.37054305523633957,
+            "ref": 0.10782532393932343,
+            "cur": 0.478368379175663
+          },
+          {
+            "sic": 5,
+            "delta": 0.3532129395753145,
+            "ref": 0.10386786423623562,
+            "cur": 0.45708080381155014
+          },
+          {
+            "sic": 2,
+            "delta": 0.31532061845064163,
+            "ref": 0.31189585477113724,
+            "cur": 0.6272164732217789
+          },
+          {
+            "sic": 48,
+            "delta": 0.29493188112974167,
+            "ref": 0.27514106780290604,
+            "cur": 0.5700729489326477
+          },
+          {
+            "sic": 11,
+            "delta": 0.2897562775760889,
+            "ref": 0.12271649949252605,
+            "cur": 0.41247277706861496
+          },
+          {
+            "sic": 3,
+            "delta": 0.2765065636485815,
+            "ref": 0.09539357759058475,
+            "cur": 0.37190014123916626
+          },
+          {
+            "sic": 46,
+            "delta": 0.23396554589271545,
+            "ref": 0.7236008644104004,
+            "cur": 0.9575664103031158
+          },
+          {
+            "sic": 8,
+            "delta": 0.21815896034240723,
+            "ref": 0.990758627653122,
+            "cur": 1.2089175879955292
+          }
+        ]
+      },
+      "thigh_l": {
+        "best": [
+          {
+            "sic": 80,
+            "delta": -0.9528533257544041,
+            "ref": 1.148692101240158,
+            "cur": 0.195838775485754
+          },
+          {
+            "sic": 8,
+            "delta": -0.9362029656767845,
+            "ref": 1.2596229314804077,
+            "cur": 0.3234199658036232
+          },
+          {
+            "sic": 79,
+            "delta": -0.8286503264680505,
+            "ref": 0.90562304854393,
+            "cur": 0.07697272207587957
+          },
+          {
+            "sic": 84,
+            "delta": -0.7344331257045269,
+            "ref": 0.9220895171165466,
+            "cur": 0.18765639141201973
+          },
+          {
+            "sic": 81,
+            "delta": -0.6920593958348036,
+            "ref": 0.8023995757102966,
+            "cur": 0.11034017987549305
+          },
+          {
+            "sic": 7,
+            "delta": -0.6818433627486229,
+            "ref": 1.016957014799118,
+            "cur": 0.33511365205049515
+          },
+          {
+            "sic": 83,
+            "delta": -0.47184425592422485,
+            "ref": 0.7003883719444275,
+            "cur": 0.22854411602020264
+          },
+          {
+            "sic": 41,
+            "delta": -0.45128437876701355,
+            "ref": 0.6247973740100861,
+            "cur": 0.1735129952430725
+          }
+        ],
+        "worst": [
+          {
+            "sic": 4,
+            "delta": 0.5382957234978676,
+            "ref": 0.13386524468660355,
+            "cur": 0.6721609681844711
+          },
+          {
+            "sic": 3,
+            "delta": 0.40580713748931885,
+            "ref": 0.19749975204467773,
+            "cur": 0.6033068895339966
+          },
+          {
+            "sic": 51,
+            "delta": 0.3439669720828533,
+            "ref": 0.26606543734669685,
+            "cur": 0.6100324094295502
+          },
+          {
+            "sic": 12,
+            "delta": 0.3407330922782421,
+            "ref": 0.30517934635281563,
+            "cur": 0.6459124386310577
+          },
+          {
+            "sic": 32,
+            "delta": 0.3314479999244213,
+            "ref": 0.23779704049229622,
+            "cur": 0.5692450404167175
+          },
+          {
+            "sic": 68,
+            "delta": 0.31227745953947306,
+            "ref": 0.07382675167173147,
+            "cur": 0.38610421121120453
+          },
+          {
+            "sic": 10,
+            "delta": 0.30710192769765854,
+            "ref": 0.21815671771764755,
+            "cur": 0.5252586454153061
+          },
+          {
+            "sic": 55,
+            "delta": 0.3030169680714607,
+            "ref": 0.41816898435354233,
+            "cur": 0.721185952425003
+          }
+        ]
+      },
+      "thigh_r": {
+        "best": [
+          {
+            "sic": 52,
+            "delta": -0.37628569453954697,
+            "ref": 0.6162757575511932,
+            "cur": 0.23999006301164627
+          },
+          {
+            "sic": 60,
+            "delta": -0.36612270772457123,
+            "ref": 0.4611975848674774,
+            "cur": 0.09507487714290619
+          },
+          {
+            "sic": 53,
+            "delta": -0.2989883925765753,
+            "ref": 0.4622458815574646,
+            "cur": 0.16325748898088932
+          },
+          {
+            "sic": 8,
+            "delta": -0.240034282207489,
+            "ref": 0.38206053525209427,
+            "cur": 0.14202625304460526
+          },
+          {
+            "sic": 41,
+            "delta": -0.22182331047952175,
+            "ref": 0.3848163112998009,
+            "cur": 0.16299300082027912
+          },
+          {
+            "sic": 75,
+            "delta": -0.20851387549191713,
+            "ref": 0.24405710771679878,
+            "cur": 0.03554323222488165
+          },
+          {
+            "sic": 59,
+            "delta": -0.18733536079525948,
+            "ref": 0.3399118110537529,
+            "cur": 0.15257645025849342
+          },
+          {
+            "sic": 7,
+            "delta": -0.1812894530594349,
+            "ref": 0.42046792805194855,
+            "cur": 0.23917847499251366
+          }
+        ],
+        "worst": [
+          {
+            "sic": 36,
+            "delta": 0.3869987577199936,
+            "ref": 0.12695297598838806,
+            "cur": 0.5139517337083817
+          },
+          {
+            "sic": 37,
+            "delta": 0.36645276844501495,
+            "ref": 0.14614402502775192,
+            "cur": 0.5125967934727669
+          },
+          {
+            "sic": 38,
+            "delta": 0.3085000142455101,
+            "ref": 0.341762937605381,
+            "cur": 0.6502629518508911
+          },
+          {
+            "sic": 39,
+            "delta": 0.29288632795214653,
+            "ref": 0.22843952849507332,
+            "cur": 0.5213258564472198
+          },
+          {
+            "sic": 35,
+            "delta": 0.2600732035934925,
+            "ref": 0.16427075490355492,
+            "cur": 0.4243439584970474
+          },
+          {
+            "sic": 2,
+            "delta": 0.24557851999998093,
+            "ref": 0.17204447090625763,
+            "cur": 0.41762299090623856
+          },
+          {
+            "sic": 32,
+            "delta": 0.2355635454878211,
+            "ref": 0.05422417912632227,
+            "cur": 0.28978772461414337
+          },
+          {
+            "sic": 21,
+            "delta": 0.20449589332565665,
+            "ref": 0.03274368355050683,
+            "cur": 0.23723957687616348
+          }
+        ]
+      }
+    }
+  },
+  "recommendation": {
+    "best_next_step": "shorter_71_or_early_stop",
+    "why": "candidate replay improves through mid-training but never catches current 71; snapshot selection helps a bit, but not enough by itself",
+    "candidate_best_all_ex_root": {
+      "tag": "s120",
+      "value": 0.12630868116539498
+    },
+    "candidate_best_leg": {
+      "tag": "s120",
+      "value": 0.32329306363207316
+    },
+    "current_best_all_ex_root": {
+      "tag": "s180",
+      "value": 0.11191065641286034
+    },
+    "current_best_leg": {
+      "tag": "s180",
+      "value": 0.29547294187220763
+    }
+  },
+  "answers": {
+    "q1_earliest_regression_snapshot": [
+      "s020",
+      {
+        "DirectGeoLocalDeg": 0.013402795180851634,
+        "all_ex_root": 0.013402795177630003,
+        "leg": 0.022221955401027005,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "legs_main": 0.022221955401027005,
+        "arms_main": 0.009184037606418477,
+        "foot_l_ball_l_SIC12_15": 0.31025065411813557,
+        "calf_r_SIC2_4": 0.019596516465147318
+      }
+    ],
+    "q2_hotspot_paradox": "candidate 71 keeps local wins at calf_r@SIC2-4 and foot_l/ball_l@SIC12-15, but broader leg regressions on calf_l/foot_l/foot_r/ball_r and SIC00/03/08-13/24-26/34-37 outweigh them",
+    "q3_main_cause": "71-stage under-gain dominates; inherited nonleg/arm deficit remains, but the bigger failure is that candidate 71 does not harvest the same leg/all_ex_root gains that current 71 gets from its 70R start",
+    "q4_best_next_step": "shorter_71_or_early_stop"
+  }
+}

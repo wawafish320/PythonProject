@@ -1,0 +1,24 @@
+{
+  "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_phasefrontload_20260314/cp015_stage6_phasezin_frontload/posttrain_log_cp015_stage6_phasezin_frontload_20260314.json",
+  "rows": 300,
+  "head_count": 20,
+  "step1": {
+    "step": 1.0,
+    "dir_leg_base": 0.1906062662601471,
+    "dir_nonleg_base": 0.06132429838180542,
+    "leg_over_nonleg": 3.1081687241398415,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 0.6043336873101687,
+    "direct_grad_norm_out_else": 0.08530563006756786,
+    "grad_arm_over_else": 7.0843353109460105
+  },
+  "head20_mean": {
+    "dir_leg_base": 0.12938919961452483,
+    "dir_nonleg_base": 0.03597613582387567,
+    "leg_over_nonleg": 3.6801025309492217,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 1.0169696809007864,
+    "direct_grad_norm_out_else": 0.15191171685597232,
+    "grad_arm_over_else": 6.812917977495412
+  }
+}

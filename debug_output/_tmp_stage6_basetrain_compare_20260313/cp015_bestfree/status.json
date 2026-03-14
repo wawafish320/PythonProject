@@ -1,0 +1,13 @@
+{
+  "lane": {
+    "name": "cp015_bestfree",
+    "family": "main_cp015_tailk3",
+    "selector": "best_free",
+    "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth"
+  },
+  "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/cp015_bestfree/basetrain_group_summary.json",
+  "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/cp015_bestfree/posttrain_stage6_init_stats.json",
+  "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/cp015_bestfree/stage6_group_summary.json",
+  "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/cp015_bestfree/ckpt_last_cp015_bestfree_stage6_cmp_20260313.pth",
+  "completed_at": "2026-03-13 02:18:47"
+}

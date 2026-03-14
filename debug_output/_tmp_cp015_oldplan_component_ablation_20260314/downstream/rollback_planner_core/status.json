@@ -1,0 +1,18 @@
+{
+  "lane": "rollback_planner_core",
+  "stage_ckpts": {
+    "70a": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/70a/ckpt_last_WalkF_stage7_70a_from_rollback_planner_core_20260314.pth",
+    "70b": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/70b/ckpt_last_WalkF_stage7_70b_from_rollback_planner_core_20260314.pth",
+    "warmstart": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/warmstart/ckpt_last_rollback_planner_core_replace_zerophase_20260314.pth",
+    "70b_replace": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/70b_replace/ckpt_last_WalkF_stage7_70b_replace_from_rollback_planner_core_20260314.pth",
+    "70R": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/70R/ckpt_last_WalkF_stage7_70R_from_rollback_planner_core_20260314.pth",
+    "71": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/71/ckpt_last_WalkF_stage7_71_from_rollback_planner_core_20260314.pth",
+    "72": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/72/ckpt_last_WalkF_stage7_72_from_rollback_planner_core_20260314.pth",
+    "lambda": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/lambda/ckpt_last_WalkF_stage7_lambda_from_rollback_planner_core_20260314.pth"
+  },
+  "evals": {
+    "strict_pretrain_contact": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/eval_pretrain_contact/Walk_F_freerun_cycles.json",
+    "model_source": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_component_ablation_20260314/downstream/rollback_planner_core/eval_model_source/Walk_F_freerun_cycles.json"
+  },
+  "completed_at": "2026-03-14 15:11:58"
+}

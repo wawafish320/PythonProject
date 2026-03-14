@@ -1,0 +1,138 @@
+{
+  "run_date": "2026-03-14",
+  "mask_primary": "cycle>=1 && !wrap_boundary_step",
+  "models": {
+    "old_bestfree": {
+      "contacts_plan_vs_gt": {
+        "all": {
+          "n_steps": 434,
+          "plan_bce": 0.6253023655627987,
+          "plan_mae": 0.3695375173966706,
+          "plan_mse": 0.14681924576866692,
+          "plan_logit_abs_mean": 0.37374270497070206,
+          "plan_prob_delta_abs_mean": 0.009480409788755017,
+          "plan_logit_delta_abs_mean": 0.03999455580724442,
+          "stance_acc_thr0.7": 0.7783641160949868,
+          "stance_acc_n": 379
+        },
+        "cycle_gte1_dropwrap": {
+          "n_steps": 344,
+          "plan_bce": 0.611715633223218,
+          "plan_mae": 0.3629154929527685,
+          "plan_mse": 0.14034808625392872,
+          "plan_logit_abs_mean": 0.37286634314372097,
+          "plan_prob_delta_abs_mean": 0.00932275766707718,
+          "plan_logit_delta_abs_mean": 0.0388768044715807,
+          "stance_acc_thr0.7": 0.8033333333333333,
+          "stance_acc_n": 300
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.3132793551955468,
+        "leg": 0.8742295720575236,
+        "nonleg": 0.1919928218199842,
+        "arm": 0.21749107248109364,
+        "else": 0.13172422934827105
+      }
+    },
+    "cp015_bestfree": {
+      "contacts_plan_vs_gt": {
+        "all": {
+          "n_steps": 434,
+          "plan_bce": 0.8847223627868744,
+          "plan_mae": 0.3922597872042137,
+          "plan_mse": 0.25579598854365193,
+          "plan_logit_abs_mean": 1.5614830923657264,
+          "plan_prob_delta_abs_mean": 0.0043375264793014965,
+          "plan_logit_delta_abs_mean": 0.02958217972145345,
+          "stance_acc_thr0.7": 0.5118733509234829,
+          "stance_acc_n": 379
+        },
+        "cycle_gte1_dropwrap": {
+          "n_steps": 344,
+          "plan_bce": 0.8778546212257304,
+          "plan_mae": 0.39088259823666854,
+          "plan_mse": 0.25436282134435606,
+          "plan_logit_abs_mean": 1.566154455549495,
+          "plan_prob_delta_abs_mean": 0.0037166134457025167,
+          "plan_logit_delta_abs_mean": 0.025986135701048827,
+          "stance_acc_thr0.7": 0.5066666666666667,
+          "stance_acc_n": 300
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.43137680891071384,
+        "leg": 1.1671711441906452,
+        "nonleg": 0.2722861418231612,
+        "arm": 0.3280119348514316,
+        "else": 0.1405706310290674
+      }
+    },
+    "cp015_with_old_planstack": {
+      "contacts_plan_vs_gt": {
+        "all": {
+          "n_steps": 434,
+          "plan_bce": 0.6271756731282021,
+          "plan_mae": 0.3704357079603955,
+          "plan_mse": 0.14804981949914484,
+          "plan_logit_abs_mean": 0.3747842495147544,
+          "plan_prob_delta_abs_mean": 0.009034789014633478,
+          "plan_logit_delta_abs_mean": 0.03824204538559528,
+          "stance_acc_thr0.7": 0.7387862796833773,
+          "stance_acc_n": 379
+        },
+        "cycle_gte1_dropwrap": {
+          "n_steps": 344,
+          "plan_bce": 0.6115864034945215,
+          "plan_mae": 0.3628395607937882,
+          "plan_mse": 0.14055448101110493,
+          "plan_logit_abs_mean": 0.36952548051458717,
+          "plan_prob_delta_abs_mean": 0.008810470516063033,
+          "plan_logit_delta_abs_mean": 0.03684091036351881,
+          "stance_acc_thr0.7": 0.8,
+          "stance_acc_n": 300
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.2955326631516289,
+        "leg": 0.7407025703794843,
+        "nonleg": 0.19927971023749796,
+        "arm": 0.2287046377238896,
+        "else": 0.12972988163329954
+      }
+    },
+    "rollback_planner_core": {
+      "contacts_plan_vs_gt": {
+        "all": {
+          "n_steps": 434,
+          "plan_bce": 0.6463921957857921,
+          "plan_mae": 0.3736157320671892,
+          "plan_mse": 0.15845350893777624,
+          "plan_logit_abs_mean": 0.5034789566738179,
+          "plan_prob_delta_abs_mean": 0.00675871713607471,
+          "plan_logit_delta_abs_mean": 0.029527725109843403,
+          "stance_acc_thr0.7": 0.5145118733509235,
+          "stance_acc_n": 379
+        },
+        "cycle_gte1_dropwrap": {
+          "n_steps": 344,
+          "plan_bce": 0.6334185744360811,
+          "plan_mae": 0.3664852405989561,
+          "plan_mse": 0.15225517493584814,
+          "plan_logit_abs_mean": 0.5054572420424869,
+          "plan_prob_delta_abs_mean": 0.00649861609101643,
+          "plan_logit_delta_abs_mean": 0.028291758437676263,
+          "stance_acc_thr0.7": 0.53,
+          "stance_acc_n": 300
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.3052498772873446,
+        "leg": 0.7668286018380841,
+        "nonleg": 0.2054490719790766,
+        "arm": 0.23888225408014618,
+        "else": 0.12642518701291217
+      }
+    }
+  }
+}

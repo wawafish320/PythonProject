@@ -1,0 +1,308 @@
+{
+  "run_date": "20260313",
+  "policy": {
+    "stage6_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+    "teacher": "/Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json",
+    "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+    "affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+    "posttrain_contract": "docs/posttrain_pipeline.md Stage6 current mainline: pretrain_contact + affine_mix08 + shared encoder_bundle"
+  },
+  "baseline": "old_bestfree",
+  "lanes": [
+    {
+      "name": "old_bestfree",
+      "family": "main_old",
+      "selector": "best_free",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+      "basetrain": {
+        "all_ex_root_mean": 6.431959098065124,
+        "leg_mean": 10.517242296837097,
+        "nonleg_mean": 5.5486546226549684,
+        "arm_mean": 7.022836314472235,
+        "else_mean": 2.0642251692687013
+      },
+      "stage6_init": {
+        "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/old_bestfree/posttrain_log_old_bestfree_stage6_cmp_20260313.json",
+        "rows": 300,
+        "head_count": 20,
+        "step1": {
+          "dir_leg_base": 0.19168874621391296,
+          "dir_nonleg_base": 0.061304062604904175,
+          "leg_over_nonleg": NaN,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 0.6715153574383924,
+          "direct_grad_norm_out_else": 0.08367805563648194,
+          "grad_arm_over_else": 8.024987582833191,
+          "step": 1.0
+        },
+        "head20_mean": {
+          "dir_leg_base": 0.13607504814863206,
+          "dir_nonleg_base": 0.0364359543658793,
+          "leg_over_nonleg": NaN,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 1.0607068800849615,
+          "direct_grad_norm_out_else": 0.15332370620920882,
+          "grad_arm_over_else": 7.169632094444822
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root_mean": 0.3132793551955468,
+        "leg_mean": 0.8742295720575236,
+        "nonleg_mean": 0.1919928218199842,
+        "arm_mean": 0.21749107248109364,
+        "else_mean": 0.13172422934827105
+      },
+      "paths": {
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/old_bestfree/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/old_bestfree/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/old_bestfree/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/old_bestfree/ckpt_last_old_bestfree_stage6_cmp_20260313.pth"
+      },
+      "delta_vs_old_bestfree": {
+        "basetrain_all_ex_root_mean": 0.0,
+        "basetrain_leg_mean": 0.0,
+        "stage6_step1_leg_over_nonleg": NaN,
+        "stage6_head20_leg_over_nonleg": NaN,
+        "stage6_exit_all_ex_root_mean": 0.0,
+        "stage6_exit_leg_mean": 0.0,
+        "stage6_exit_nonleg_mean": 0.0
+      }
+    },
+    {
+      "name": "cp015_bestfree",
+      "family": "main_cp015_tailk3",
+      "selector": "best_free",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+      "basetrain": {
+        "all_ex_root_mean": 5.647743532250623,
+        "leg_mean": 10.826995120318823,
+        "nonleg_mean": 4.527905351046688,
+        "arm_mean": 5.622656480011559,
+        "else_mean": 1.9403117734933566
+      },
+      "stage6_init": {
+        "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/cp015_bestfree/posttrain_log_cp015_bestfree_stage6_cmp_20260313.json",
+        "rows": 300,
+        "head_count": 20,
+        "step1": {
+          "dir_leg_base": 0.19191282987594604,
+          "dir_nonleg_base": 0.061324622482061386,
+          "leg_over_nonleg": NaN,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 0.6735646382312334,
+          "direct_grad_norm_out_else": 0.08473227136970211,
+          "grad_arm_over_else": 7.949328246995172,
+          "step": 1.0
+        },
+        "head20_mean": {
+          "dir_leg_base": 0.1339013446122408,
+          "dir_nonleg_base": 0.03605204513296485,
+          "leg_over_nonleg": NaN,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 1.1292228277289968,
+          "direct_grad_norm_out_else": 0.15573206661533073,
+          "grad_arm_over_else": 7.356859867758978
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root_mean": 0.43137680891071384,
+        "leg_mean": 1.1671711441906452,
+        "nonleg_mean": 0.2722861418231612,
+        "arm_mean": 0.3280119348514316,
+        "else_mean": 0.1405706310290674
+      },
+      "paths": {
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/cp015_bestfree/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/cp015_bestfree/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/cp015_bestfree/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/cp015_bestfree/ckpt_last_cp015_bestfree_stage6_cmp_20260313.pth"
+      },
+      "delta_vs_old_bestfree": {
+        "basetrain_all_ex_root_mean": -0.7842155658145007,
+        "basetrain_leg_mean": 0.30975282348172684,
+        "stage6_step1_leg_over_nonleg": NaN,
+        "stage6_head20_leg_over_nonleg": NaN,
+        "stage6_exit_all_ex_root_mean": 0.11809745371516706,
+        "stage6_exit_leg_mean": 0.29294157213312155,
+        "stage6_exit_nonleg_mean": 0.08029332000317699
+      }
+    },
+    {
+      "name": "geofix_bestteacher",
+      "family": "geofix_r3",
+      "selector": "best_teacher",
+      "ckpt": "/tmp/MLPL2_DirectBranch_v1_geofix_r3/exp_phase_DirectBranch_v1_d1_geofix_r3/ckpt_best_teacher_exp_phase_DirectBranch_v1_d1_geofix_r3.pth",
+      "basetrain": {
+        "all_ex_root_mean": 6.426109800982272,
+        "leg_mean": 10.931709888323514,
+        "nonleg_mean": 5.451925998313895,
+        "arm_mean": 6.911221024937252,
+        "else_mean": 2.002683208113235
+      },
+      "stage6_init": {
+        "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/geofix_bestteacher/posttrain_log_geofix_bestteacher_stage6_cmp_20260313.json",
+        "rows": 300,
+        "head_count": 20,
+        "step1": {
+          "dir_leg_base": 0.1917564421892166,
+          "dir_nonleg_base": 0.061401061713695526,
+          "leg_over_nonleg": NaN,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 0.6872130575453849,
+          "direct_grad_norm_out_else": 0.08450823100928787,
+          "grad_arm_over_else": 8.131906789882477,
+          "step": 1.0
+        },
+        "head20_mean": {
+          "dir_leg_base": 0.1303407609462738,
+          "dir_nonleg_base": 0.035891553945839406,
+          "leg_over_nonleg": NaN,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 1.080760160980935,
+          "direct_grad_norm_out_else": 0.15548483676272734,
+          "grad_arm_over_else": 7.222805362145751
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root_mean": 0.3371868738120492,
+        "leg_mean": 0.901038323751066,
+        "nonleg_mean": 0.21527304679820777,
+        "arm_mean": 0.2488929482189933,
+        "else_mean": 0.13580782525816923
+      },
+      "paths": {
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_bestteacher/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_bestteacher/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_bestteacher/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/geofix_bestteacher/ckpt_last_geofix_bestteacher_stage6_cmp_20260313.pth"
+      },
+      "delta_vs_old_bestfree": {
+        "basetrain_all_ex_root_mean": -0.00584929708285209,
+        "basetrain_leg_mean": 0.4144675914864173,
+        "stage6_step1_leg_over_nonleg": NaN,
+        "stage6_head20_leg_over_nonleg": NaN,
+        "stage6_exit_all_ex_root_mean": 0.02390751861650242,
+        "stage6_exit_leg_mean": 0.026808751693542354,
+        "stage6_exit_nonleg_mean": 0.023280224978223574
+      }
+    },
+    {
+      "name": "geofix_bestfree",
+      "family": "geofix_r3",
+      "selector": "best_free",
+      "ckpt": "/tmp/MLPL2_DirectBranch_v1_geofix_r3/exp_phase_DirectBranch_v1_d1_geofix_r3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_geofix_r3.pth",
+      "basetrain": {
+        "all_ex_root_mean": 6.349273247803547,
+        "leg_mean": 10.520260184563,
+        "nonleg_mean": 5.447438234450152,
+        "arm_mean": 6.8944384765464735,
+        "else_mean": 2.0272558440406643
+      },
+      "stage6_init": {
+        "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/geofix_bestfree/posttrain_log_geofix_bestfree_stage6_cmp_20260313.json",
+        "rows": 300,
+        "head_count": 20,
+        "step1": {
+          "dir_leg_base": 0.19173544645309448,
+          "dir_nonleg_base": 0.061400555074214935,
+          "leg_over_nonleg": NaN,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 0.6875477904268654,
+          "direct_grad_norm_out_else": 0.08432712863628951,
+          "grad_arm_over_else": 8.153340467601131,
+          "step": 1.0
+        },
+        "head20_mean": {
+          "dir_leg_base": 0.1314178839325905,
+          "dir_nonleg_base": 0.03584571331739426,
+          "leg_over_nonleg": NaN,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 1.0211605687802994,
+          "direct_grad_norm_out_else": 0.1543256224872999,
+          "grad_arm_over_else": 6.972982625122829
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root_mean": 0.35547479305023366,
+        "leg_mean": 0.9748282364493799,
+        "nonleg_mean": 0.22156053501798584,
+        "arm_mean": 0.25945231836630034,
+        "else_mean": 0.13199813801287885
+      },
+      "paths": {
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_bestfree/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_bestfree/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_bestfree/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/geofix_bestfree/ckpt_last_geofix_bestfree_stage6_cmp_20260313.pth"
+      },
+      "delta_vs_old_bestfree": {
+        "basetrain_all_ex_root_mean": -0.08268585026157727,
+        "basetrain_leg_mean": 0.003017887725903279,
+        "stage6_step1_leg_over_nonleg": NaN,
+        "stage6_head20_leg_over_nonleg": NaN,
+        "stage6_exit_all_ex_root_mean": 0.04219543785468688,
+        "stage6_exit_leg_mean": 0.10059866439185627,
+        "stage6_exit_nonleg_mean": 0.02956771319800164
+      }
+    },
+    {
+      "name": "geofix_last",
+      "family": "geofix_r3",
+      "selector": "last",
+      "ckpt": "/tmp/MLPL2_DirectBranch_v1_geofix_r3/exp_phase_DirectBranch_v1_d1_geofix_r3/ckpt_last_exp_phase_DirectBranch_v1_d1_geofix_r3.pth",
+      "basetrain": {
+        "all_ex_root_mean": 6.426109800982272,
+        "leg_mean": 10.931709888323514,
+        "nonleg_mean": 5.451925998313895,
+        "arm_mean": 6.911221024937252,
+        "else_mean": 2.002683208113235
+      },
+      "stage6_init": {
+        "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/geofix_last/posttrain_log_geofix_last_stage6_cmp_20260313.json",
+        "rows": 300,
+        "head_count": 20,
+        "step1": {
+          "dir_leg_base": 0.1917564421892166,
+          "dir_nonleg_base": 0.061401061713695526,
+          "leg_over_nonleg": NaN,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 0.6872130575453849,
+          "direct_grad_norm_out_else": 0.08450823100928787,
+          "grad_arm_over_else": 8.131906789882477,
+          "step": 1.0
+        },
+        "head20_mean": {
+          "dir_leg_base": 0.1303407609462738,
+          "dir_nonleg_base": 0.035891553945839406,
+          "leg_over_nonleg": NaN,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 1.080760160980935,
+          "direct_grad_norm_out_else": 0.15548483676272734,
+          "grad_arm_over_else": 7.222805362145751
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root_mean": 0.3371868738120492,
+        "leg_mean": 0.901038323751066,
+        "nonleg_mean": 0.21527304679820777,
+        "arm_mean": 0.2488929482189933,
+        "else_mean": 0.13580782525816923
+      },
+      "paths": {
+        "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/basetrain_group_summary.json",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/geofix_last/ckpt_last_geofix_last_stage6_cmp_20260313.pth"
+      },
+      "delta_vs_old_bestfree": {
+        "basetrain_all_ex_root_mean": -0.00584929708285209,
+        "basetrain_leg_mean": 0.4144675914864173,
+        "stage6_step1_leg_over_nonleg": NaN,
+        "stage6_head20_leg_over_nonleg": NaN,
+        "stage6_exit_all_ex_root_mean": 0.02390751861650242,
+        "stage6_exit_leg_mean": 0.026808751693542354,
+        "stage6_exit_nonleg_mean": 0.023280224978223574
+      }
+    }
+  ]
+}

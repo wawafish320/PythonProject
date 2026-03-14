@@ -1,0 +1,262 @@
+{
+  "run_date": "20260314",
+  "policy": {
+    "base_stage6_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+    "baseline_compare_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/compare_summary.json",
+    "plantransplant_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/summary.json",
+    "teacher": "/Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json",
+    "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+    "affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+    "posttrain_contacts_source": "pretrain_contact",
+    "posttrain_contacts_pretrain_clamp": "1.0",
+    "validate_contacts_meas_source": "pretrain_contact",
+    "validate_contacts_meas_pretrain_clamp": "1.0",
+    "validate_phase_reset_source": "none"
+  },
+  "reference_stage6_exit": {
+    "cp015_bestfree": {
+      "all_ex_root": 0.43137680891071384,
+      "leg": 1.1671711441906452,
+      "nonleg": 0.2722861418231612,
+      "arm": 0.3280119348514316,
+      "else": 0.1405706310290674
+    },
+    "old_bestfree": {
+      "all_ex_root": 0.3132793551955468,
+      "leg": 0.8742295720575236,
+      "nonleg": 0.1919928218199842,
+      "arm": 0.21749107248109364,
+      "else": 0.13172422934827105
+    },
+    "cp015_with_old_planstack": {
+      "all_ex_root": 0.2955326631516289,
+      "leg": 0.7407025703794843,
+      "nonleg": 0.19927971023749796,
+      "arm": 0.2287046377238896,
+      "else": 0.12972988163329954
+    }
+  },
+  "cases": [
+    {
+      "name": "cp015_stage6_phasezin_frontload",
+      "baseline_case": "cp015_bestfree",
+      "note": "Stage6 frontloads historical 70b concat semantics while keeping Stage6 reinit/train budget unchanged.",
+      "config_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_phasefrontload_20260314/configs/cp015_stage6_phasezin_frontload.json",
+      "config_diff_vs_base": {
+        "direct_pose_phase_z_mode": {
+          "base": "concat",
+          "case": "concat"
+        },
+        "direct_pose_use_phase_z": {
+          "base": false,
+          "case": true
+        }
+      },
+      "runtime_contract": {
+        "config_base": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+        "posttrain_contacts_source": "pretrain_contact",
+        "posttrain_contacts_pretrain_clamp": "1.0",
+        "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+        "posttrain_contacts_pretrain_affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+        "validate_teacher": "/Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json",
+        "validate_rounds": 5,
+        "validate_depth": 3,
+        "validate_time_index_mode": "cycle",
+        "validate_phase_reset_source": "none",
+        "validate_contacts_meas_source": "pretrain_contact",
+        "validate_contacts_meas_pretrain_clamp": "1.0",
+        "validate_contacts_meas_pretrain_affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+        "group_summary_args": [
+          "--cycle_gte",
+          "1",
+          "--drop_wrap"
+        ]
+      },
+      "stage6_init": {
+        "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_phasefrontload_20260314/cp015_stage6_phasezin_frontload/posttrain_log_cp015_stage6_phasezin_frontload_20260314.json",
+        "rows": 300,
+        "head_count": 20,
+        "step1": {
+          "step": 1.0,
+          "dir_leg_base": 0.1906062662601471,
+          "dir_nonleg_base": 0.06132429838180542,
+          "leg_over_nonleg": 3.1081687241398415,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 0.6043336873101687,
+          "direct_grad_norm_out_else": 0.08530563006756786,
+          "grad_arm_over_else": 7.0843353109460105
+        },
+        "head20_mean": {
+          "dir_leg_base": 0.12938919961452483,
+          "dir_nonleg_base": 0.03597613582387567,
+          "leg_over_nonleg": 3.6801025309492217,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 1.0169696809007864,
+          "direct_grad_norm_out_else": 0.15191171685597232,
+          "grad_arm_over_else": 6.812917977495412
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.43670156317431635,
+        "leg": 1.0376596111834027,
+        "nonleg": 0.30676468792910855,
+        "arm": 0.35500372594873714,
+        "else": 0.1927451435190773
+      },
+      "improvement_vs_cp015_bestfree": {
+        "all_ex_root": -0.005324754263602516,
+        "leg": 0.1295115330072425,
+        "nonleg": -0.03447854610594736,
+        "arm": -0.02699179109730554,
+        "else": -0.0521745124900099
+      },
+      "delta_vs_old_bestfree": {
+        "all_ex_root": 0.12342220797876957,
+        "leg": 0.16343003912587906,
+        "nonleg": 0.11477186610912435,
+        "arm": 0.1375126534676435,
+        "else": 0.06102091417080624
+      },
+      "delta_vs_cp015_with_old_planstack": {
+        "all_ex_root": 0.14116890002268745,
+        "leg": 0.2969570408039184,
+        "nonleg": 0.10748497769161058,
+        "arm": 0.12629908822484753,
+        "else": 0.06301526188577775
+      },
+      "paths": {
+        "lane_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_phasefrontload_20260314/cp015_stage6_phasezin_frontload",
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_phasefrontload_20260314/cp015_stage6_phasezin_frontload/lane.log",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_phasefrontload_20260314/cp015_stage6_phasezin_frontload/ckpt_last_cp015_stage6_phasezin_frontload_20260314.pth",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_phasefrontload_20260314/cp015_stage6_phasezin_frontload/posttrain_stage6_init_stats.json",
+        "stage6_eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_phasefrontload_20260314/cp015_stage6_phasezin_frontload/stage6_freerun/Walk_F_freerun_cycles.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_phasefrontload_20260314/cp015_stage6_phasezin_frontload/stage6_group_summary.json"
+      }
+    },
+    {
+      "name": "cp015_stage6_replacecontacts_frontload",
+      "baseline_case": "cp015_bestfree",
+      "note": "Stage6 frontloads historical 70c replace_contacts semantics while keeping Stage6 reinit/train budget unchanged.",
+      "config_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_phasefrontload_20260314/configs/cp015_stage6_replacecontacts_frontload.json",
+      "config_diff_vs_base": {
+        "direct_pose_phase_z_mode": {
+          "base": "concat",
+          "case": "replace_contacts"
+        },
+        "direct_pose_use_phase_z": {
+          "base": false,
+          "case": true
+        }
+      },
+      "runtime_contract": {
+        "config_base": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+        "posttrain_contacts_source": "pretrain_contact",
+        "posttrain_contacts_pretrain_clamp": "1.0",
+        "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+        "posttrain_contacts_pretrain_affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+        "validate_teacher": "/Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json",
+        "validate_rounds": 5,
+        "validate_depth": 3,
+        "validate_time_index_mode": "cycle",
+        "validate_phase_reset_source": "none",
+        "validate_contacts_meas_source": "pretrain_contact",
+        "validate_contacts_meas_pretrain_clamp": "1.0",
+        "validate_contacts_meas_pretrain_affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+        "group_summary_args": [
+          "--cycle_gte",
+          "1",
+          "--drop_wrap"
+        ]
+      },
+      "stage6_init": {
+        "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_phasefrontload_20260314/cp015_stage6_replacecontacts_frontload/posttrain_log_cp015_stage6_replacecontacts_frontload_20260314.json",
+        "rows": 300,
+        "head_count": 20,
+        "step1": {
+          "step": 1.0,
+          "dir_leg_base": 0.1910787969827652,
+          "dir_nonleg_base": 0.06098966300487518,
+          "leg_over_nonleg": 3.1329702045983003,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 0.6676021261348204,
+          "direct_grad_norm_out_else": 0.08630642893394744,
+          "grad_arm_over_else": 7.735253727688741
+        },
+        "head20_mean": {
+          "dir_leg_base": 0.12946707122027873,
+          "dir_nonleg_base": 0.035692255664616826,
+          "leg_over_nonleg": 3.6573302001011876,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 1.1741508980947488,
+          "direct_grad_norm_out_else": 0.15992758638305277,
+          "grad_arm_over_else": 7.42908621221599
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root": 0.4709932259114279,
+        "leg": 1.3126064408611138,
+        "nonleg": 0.28902280105744177,
+        "arm": 0.32921723390736896,
+        "else": 0.19401777795761388
+      },
+      "improvement_vs_cp015_bestfree": {
+        "all_ex_root": -0.039616417000714055,
+        "leg": -0.14543529667046862,
+        "nonleg": -0.016736659234280582,
+        "arm": -0.0012052990559373589,
+        "else": -0.05344714692854649
+      },
+      "delta_vs_old_bestfree": {
+        "all_ex_root": 0.1577138707158811,
+        "leg": 0.43837686880359017,
+        "nonleg": 0.09702997923745757,
+        "arm": 0.11172616142627531,
+        "else": 0.06229354860934283
+      },
+      "delta_vs_cp015_with_old_planstack": {
+        "all_ex_root": 0.175460562759799,
+        "leg": 0.5719038704816295,
+        "nonleg": 0.0897430908199438,
+        "arm": 0.10051259618347935,
+        "else": 0.06428789632431434
+      },
+      "paths": {
+        "lane_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_phasefrontload_20260314/cp015_stage6_replacecontacts_frontload",
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_phasefrontload_20260314/cp015_stage6_replacecontacts_frontload/lane.log",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_phasefrontload_20260314/cp015_stage6_replacecontacts_frontload/ckpt_last_cp015_stage6_replacecontacts_frontload_20260314.pth",
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_phasefrontload_20260314/cp015_stage6_replacecontacts_frontload/posttrain_stage6_init_stats.json",
+        "stage6_eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_phasefrontload_20260314/cp015_stage6_replacecontacts_frontload/stage6_freerun/Walk_F_freerun_cycles.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_phasefrontload_20260314/cp015_stage6_replacecontacts_frontload/stage6_group_summary.json"
+      }
+    }
+  ],
+  "answers": {
+    "q1_phasezin_frontload_improvement_vs_cp015_bestfree": {
+      "all_ex_root": -0.005324754263602516,
+      "leg": 0.1295115330072425,
+      "nonleg": -0.03447854610594736,
+      "arm": -0.02699179109730554,
+      "else": -0.0521745124900099
+    },
+    "q2_replacecontacts_frontload_improvement_vs_cp015_bestfree": {
+      "all_ex_root": -0.039616417000714055,
+      "leg": -0.14543529667046862,
+      "nonleg": -0.016736659234280582,
+      "arm": -0.0012052990559373589,
+      "else": -0.05344714692854649
+    },
+    "q3_closest_to_old_bestfree": {
+      "case": "cp015_stage6_phasezin_frontload",
+      "all_ex_root_gap": 0.12342220797876957,
+      "old_bestfree_all_ex_root": 0.3132793551955468
+    },
+    "q4_replacecontacts_vs_cp015_with_old_planstack": {
+      "replacecontacts_all_ex_root": 0.4709932259114279,
+      "cp015_with_old_planstack_all_ex_root": 0.2955326631516289,
+      "gap_all_ex_root": 0.175460562759799,
+      "leg_gap": 0.5719038704816295,
+      "nonleg_gap": 0.0897430908199438
+    },
+    "best_frontload_case": "cp015_stage6_phasezin_frontload"
+  }
+}

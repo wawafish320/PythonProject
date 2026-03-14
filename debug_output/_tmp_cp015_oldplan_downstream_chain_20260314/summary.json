@@ -1,0 +1,480 @@
+{
+  "run_date": "20260314",
+  "stage6_source_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/summary.json",
+  "stage6_case": {
+    "name": "cp015_with_old_planstack",
+    "case_type": "planstack_transplant",
+    "backbone_case": "cp015_bestfree",
+    "planstack_case": "old_bestfree",
+    "source_baseline": "cp015_bestfree",
+    "stage6_exit": {
+      "all_ex_root": 0.2955326631516289,
+      "leg": 0.7407025703794843,
+      "nonleg": 0.19927971023749796,
+      "arm": 0.2287046377238896,
+      "else": 0.12972988163329954
+    },
+    "stage6_init": {
+      "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/posttrain_log_cp015_with_old_planstack_stage6_plantransplant_20260314.json",
+      "rows": 300,
+      "head_count": 20,
+      "step1": {
+        "step": 1.0,
+        "dir_leg_base": 0.19178400933742523,
+        "dir_nonleg_base": 0.06136901304125786,
+        "leg_over_nonleg": 3.1250952204248503,
+        "arm_over_else": NaN,
+        "direct_grad_norm_out_arm": 0.6871937156212261,
+        "direct_grad_norm_out_else": 0.08460554931679411,
+        "grad_arm_over_else": 8.122324376715783
+      },
+      "head20_mean": {
+        "dir_leg_base": 0.13195244297385217,
+        "dir_nonleg_base": 0.036026413645595314,
+        "leg_over_nonleg": 3.694465728580366,
+        "arm_over_else": NaN,
+        "direct_grad_norm_out_arm": 1.1136674414452084,
+        "direct_grad_norm_out_else": 0.1538858684595619,
+        "grad_arm_over_else": 7.396490079786474
+      }
+    },
+    "delta_vs_source_baseline": {
+      "all_ex_root": -0.13584414575908493,
+      "leg": -0.4264685738111609,
+      "nonleg": -0.07300643158566322,
+      "arm": -0.099307297127542,
+      "else": -0.010840749395767846
+    },
+    "improvement_vs_source_baseline": {
+      "all_ex_root": 0.13584414575908493,
+      "leg": 0.4264685738111609,
+      "nonleg": 0.07300643158566322,
+      "arm": 0.099307297127542,
+      "else": 0.010840749395767846
+    },
+    "delta_vs_old_bestfree": {
+      "all_ex_root": -0.017746692043917878,
+      "leg": -0.13352700167803933,
+      "nonleg": 0.007286888417513765,
+      "arm": 0.011213565242795959,
+      "else": -0.001994347714971506
+    },
+    "init_delta_vs_source_baseline": {
+      "step1": {
+        "arm_over_else": NaN,
+        "dir_leg_base": -0.000128820538520813,
+        "dir_nonleg_base": 4.439055919647217e-05,
+        "direct_grad_norm_out_arm": 0.01362907738999275,
+        "direct_grad_norm_out_else": -0.0001267220529080071,
+        "grad_arm_over_else": 0.17299612972061063,
+        "leg_over_nonleg": -0.004362770646911596,
+        "step": 0.0
+      },
+      "head20_mean": {
+        "arm_over_else": NaN,
+        "dir_leg_base": -0.0019489016383886226,
+        "dir_nonleg_base": -2.563148736953874e-05,
+        "direct_grad_norm_out_arm": -0.015555386283788497,
+        "direct_grad_norm_out_else": -0.0018461981557688356,
+        "grad_arm_over_else": 0.039630212027496725,
+        "leg_over_nonleg": -0.06645598265595076
+      }
+    },
+    "gap_to_old_bestfree": {
+      "all_ex_root": -0.017746692043917878,
+      "leg": -0.13352700167803933,
+      "nonleg": 0.007286888417513765,
+      "arm": 0.011213565242795959,
+      "else": -0.001994347714971506
+    },
+    "paths": {
+      "lane_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack",
+      "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/posttrain_stage6_init_stats.json",
+      "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/stage6_group_summary.json",
+      "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/ckpt_last_cp015_with_old_planstack_stage6_plantransplant_20260314.pth",
+      "surgery_report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/transplant_report.json",
+      "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth"
+    },
+    "transplant_report": {
+      "key_count": 50,
+      "changed_key_count": 45,
+      "verified_all_after": true
+    }
+  },
+  "policy": {
+    "teacher": "/Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json",
+    "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+    "affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+    "posttrain_contacts_source": "pretrain_contact",
+    "posttrain_contacts_pretrain_clamp": "1.0",
+    "final_eval_strict": {
+      "rounds": 5,
+      "depth": 3,
+      "time_index_mode": "cycle",
+      "event_clock": "auto",
+      "phase_reset_source": "none",
+      "contacts_meas_source": "pretrain_contact",
+      "contacts_meas_pretrain_clamp": "1.0",
+      "contacts_meas_pretrain_affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+      "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt"
+    },
+    "final_eval_model_source": {
+      "rounds": 5,
+      "depth": 3,
+      "time_index_mode": "cycle",
+      "event_clock": "auto",
+      "phase_reset_source": "none",
+      "contacts_meas_source": "model"
+    }
+  },
+  "stages": {
+    "transplant_stage6": {
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/ckpt_last_cp015_with_old_planstack_stage6_plantransplant_20260314.pth",
+      "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/stage6_group_summary.json"
+    },
+    "70a": {
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_70a_splitB2_pe32h512_20260227_fromarmchain.json",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70a/ckpt_last_WalkF_stage7_70a_from_cp015_oldplan_20260314.pth"
+    },
+    "70b": {
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_70b_phasezin_splitB2_pe32h512_20260227_fromarmchain.json",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70b/ckpt_last_WalkF_stage7_70b_concat_from_cp015_oldplan_20260314.pth"
+    },
+    "70a_replace_warmstart": {
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/warmstart/ckpt_last_cp015_oldplan_70a_replacecontacts_zerophase_20260314.pth",
+      "report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/warmstart/replace_zerophase_report.json"
+    },
+    "new70b_replace": {
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/configs/posttrain_70b_replacecontacts_from_cp015oldplan_20260314.json",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70b_replace/ckpt_last_WalkF_stage7_70b_replacecontacts_from_cp015_oldplan_20260314.pth"
+    },
+    "70R_promoted_s180": {
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/configs/posttrain_70R_from_cp015oldplan_replace_lr3e4_e1_s60_20260314.json",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/70R/ckpt_last_WalkF_stage7_70R_from_cp015_oldplan_trunkfull_s180_20260314.pth"
+    },
+    "71": {
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_71_legonly_after_nonlegproj256_20260227_fromarmchain.json",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/71/ckpt_last_WalkF_stage7_71_from_cp015_oldplan_20260314.pth"
+    },
+    "72": {
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_72_legomega_after_nonlegproj256_20260227_fromarmchain.json",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/72/ckpt_last_WalkF_stage7_72_from_cp015_oldplan_20260314.pth"
+    },
+    "lambda_final": {
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_lambda_final_calib_20260227_fromarmchain_fullcompat.json",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_downstream_chain_20260314/lambda/ckpt_last_WalkF_stage7_lambda_from_cp015_oldplan_20260314.pth"
+    }
+  },
+  "accepted_references": {
+    "accepted_old_baseline_r5": {
+      "source_direct_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_accepted_r5_direct/global_signal_summary.txt",
+      "source_blend_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_accepted_r5_blend/summary_metrics.txt",
+      "masked_means": {
+        "BlendGeoLocalDeg": 0.531568,
+        "BlendGeoLocalDegWeighted": 0.490858,
+        "GeoLocalDeg": 1.030833,
+        "GeoLocalDegWeighted": 0.94484,
+        "DirectGeoLocalDeg": 0.147802,
+        "DirectGeoLocalDegWeighted": 0.17156,
+        "LambdaMean": 0.973585,
+        "LambdaEffMean": 0.973585,
+        "LambdaRelMean": 1.0
+      },
+      "direct_group_summary": {
+        "all_ex_root": 0.147802,
+        "leg": 0.313692,
+        "nonleg": 0.111934
+      }
+    },
+    "accepted_final_model_source": {
+      "source_direct_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_accepted_r5_direct/global_signal_summary.txt",
+      "source_blend_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_accepted_r5_blend/summary_metrics.txt",
+      "masked_means": {
+        "BlendGeoLocalDeg": 0.491534,
+        "BlendGeoLocalDegWeighted": 0.467904,
+        "GeoLocalDeg": 0.955117,
+        "GeoLocalDegWeighted": 0.914284,
+        "DirectGeoLocalDeg": 0.112947,
+        "DirectGeoLocalDegWeighted": 0.13318,
+        "LambdaMean": 0.973549,
+        "LambdaEffMean": 0.973549,
+        "LambdaRelMean": 1.0
+      },
+      "direct_group_summary": {
+        "all_ex_root": 0.112947,
+        "leg": 0.27436,
+        "nonleg": 0.078048
+      },
+      "artifact_note": "Current accepted final compare artifact is model-source, not strict pretrain_contact."
+    },
+    "evalon_20260307_baseline": {
+      "source_direct_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_evalon_20260307_direct/global_signal_summary.txt",
+      "source_blend_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/compare_vs_evalon_20260307_blend/summary_metrics.txt",
+      "masked_means": {
+        "BlendGeoLocalDeg": 0.497677,
+        "BlendGeoLocalDegWeighted": 0.485475,
+        "GeoLocalDeg": 0.961235,
+        "GeoLocalDegWeighted": 0.932387,
+        "DirectGeoLocalDeg": 0.131316,
+        "DirectGeoLocalDegWeighted": 0.148235,
+        "LambdaMean": 0.972715,
+        "LambdaEffMean": 0.972715,
+        "LambdaRelMean": 1.0
+      },
+      "direct_group_summary": {
+        "all_ex_root": 0.131316,
+        "leg": 0.292003,
+        "nonleg": 0.096573
+      }
+    },
+    "accepted_chain_verdict": {
+      "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_chain_s180promote_20260308/chain_verdict.md",
+      "parsed": {
+        "stage71": {
+          "overall": {
+            "legs_main": -0.065894,
+            "arms_main": -0.103466,
+            "left_arm_main": -0.097107,
+            "right_arm_main": -0.109825
+          },
+          "A_52_59": {
+            "legs_main": -0.154649,
+            "arms_main": -0.236356
+          },
+          "B_76_80": {
+            "legs_main": -0.075964,
+            "arms_main": -0.115982
+          }
+        },
+        "stage72": {
+          "overall": {
+            "legs_main": -0.026292,
+            "arms_main": -0.103466,
+            "left_arm_main": -0.097107,
+            "right_arm_main": -0.109825
+          },
+          "A_52_59": {
+            "legs_main": -0.189506,
+            "arms_main": -0.236356
+          },
+          "B_76_80": {
+            "legs_main": -0.005523,
+            "arms_main": -0.115982
+          }
+        },
+        "lambda_direct_path": {
+          "overall": {
+            "legs_main": -0.026292,
+            "arms_main": -0.103466,
+            "left_arm_main": -0.097107,
+            "right_arm_main": -0.109825
+          },
+          "A_52_59": {
+            "legs_main": -0.189506,
+            "arms_main": -0.236356
+          },
+          "B_76_80": {
+            "legs_main": -0.005523,
+            "arms_main": -0.115982
+          }
+        },
+        "lambda_blend_summary": {
+          "BlendGeoLocalDeg": -0.020124,
+          "BlendGeoLocalDegWeighted": -0.033764,
+          "GeoLocalDeg": -0.014627,
+          "GeoLocalDegWeighted": -0.027642,
+          "DirectGeoLocalDeg": -0.032109,
+          "DirectGeoLocalDegWeighted": -0.039647,
+          "LambdaMean": 0.000702
+        }
+      }
+    },
+    "strict_reference_status": {
+      "available": false,
+      "reason": "Repo docs explicitly note the accepted chain compare artifacts are model-source; a strict pretrain_contact+affine_mix08 accepted-final eval snapshot is not archived locally."
+    }
+  },
+  "final_evals": {
+    "strict_pretrain_contact": {
+      "masked_means": {
+        "masked_steps": 344.0,
+        "BlendGeoLocalDeg": 0.11686341884697593,
+        "BlendGeoLocalDegWeighted": 0.13701452592084573,
+        "GeoLocalDeg": 0.47573024277077164,
+        "GeoLocalDegWeighted": 0.5110863064264142,
+        "DirectGeoLocalDeg": 0.11788293870902339,
+        "DirectGeoLocalDegWeighted": 0.1381669548708339,
+        "LambdaMean": 0.9461449453997057,
+        "LambdaEffMean": 0.9461449453997057,
+        "LambdaRelMean": 1.0
+      },
+      "direct_group_summary": {
+        "all_ex_root": 0.11788293883833882,
+        "leg": 0.2801937920066425,
+        "nonleg": 0.08278870031546234,
+        "arm": 0.09373125996758136,
+        "else": 0.05692446841045377
+      },
+      "window_summary": {
+        "overall": {
+          "legs_main": 0.2801937920066425,
+          "arms_main": 0.09373125996758136,
+          "left_arm_main": 0.12106793576169991,
+          "right_arm_main": 0.08694283884871357
+        },
+        "A_52_59": {
+          "legs_main": 0.33008480099670123,
+          "arms_main": 0.07851249918163515,
+          "left_arm_main": 0.10991671043383475,
+          "right_arm_main": 0.05473331669499101
+        },
+        "B_76_80": {
+          "legs_main": 0.1975132770719938,
+          "arms_main": 0.10707002464142323,
+          "left_arm_main": 0.16675652179401368,
+          "right_arm_main": 0.08396950002449254
+        },
+        "hotspots": {
+          "foot_l_ball_l_SIC12_15": 0.7432816582731903,
+          "calf_r_SIC2_4": 0.13312878366559744
+        }
+      },
+      "paths": {
+        "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/eval_pretrain_contact/Walk_F_freerun_cycles.json",
+        "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/eval_pretrain_contact_group_summary.json"
+      }
+    },
+    "model_source": {
+      "masked_means": {
+        "masked_steps": 344.0,
+        "BlendGeoLocalDeg": 0.1194091760661713,
+        "BlendGeoLocalDegWeighted": 0.140812914450328,
+        "GeoLocalDeg": 0.48286008609588754,
+        "GeoLocalDegWeighted": 0.5234064516979594,
+        "DirectGeoLocalDeg": 0.12014488221774268,
+        "DirectGeoLocalDegWeighted": 0.1413016416522306,
+        "LambdaMean": 0.9457244845323785,
+        "LambdaEffMean": 0.9457244845323785,
+        "LambdaRelMean": 1.0
+      },
+      "direct_group_summary": {
+        "all_ex_root": 0.12014488184111712,
+        "leg": 0.278087370049582,
+        "nonleg": 0.08599515466090848,
+        "arm": 0.0983616177808661,
+        "else": 0.05676533274100867
+      },
+      "window_summary": {
+        "overall": {
+          "legs_main": 0.278087370049582,
+          "arms_main": 0.0983616177808661,
+          "left_arm_main": 0.12840701079174144,
+          "right_arm_main": 0.09169135193699729
+        },
+        "A_52_59": {
+          "legs_main": 0.33186943412874825,
+          "arms_main": 0.07504738856044486,
+          "left_arm_main": 0.10880442487460742,
+          "right_arm_main": 0.05557236399060154
+        },
+        "B_76_80": {
+          "legs_main": 0.19507373776868916,
+          "arms_main": 0.10547445720898954,
+          "left_arm_main": 0.15938192047696148,
+          "right_arm_main": 0.08387113205519402
+        },
+        "hotspots": {
+          "foot_l_ball_l_SIC12_15": 0.6088193624746054,
+          "calf_r_SIC2_4": 0.13619550752143064
+        }
+      },
+      "paths": {
+        "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/eval_model_source/Walk_F_freerun_cycles.json",
+        "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_oldplan_downstream_chain_20260314/eval_model_source_group_summary.json"
+      }
+    }
+  },
+  "comparisons": {
+    "model_source_vs_accepted_final_model_source": {
+      "masked_means_delta": {
+        "DirectGeoLocalDeg": 0.007197882217742674,
+        "DirectGeoLocalDegWeighted": 0.008121641652230616,
+        "BlendGeoLocalDeg": -0.37212482393382873,
+        "BlendGeoLocalDegWeighted": -0.327091085549672,
+        "GeoLocalDeg": -0.47225691390411245,
+        "GeoLocalDegWeighted": -0.3908775483020406
+      },
+      "direct_group_delta": {
+        "all_ex_root": 0.00719788184111711,
+        "leg": 0.003727370049582013,
+        "nonleg": 0.007947154660908479
+      }
+    },
+    "model_source_vs_accepted_old_baseline_r5": {
+      "masked_means_delta": {
+        "DirectGeoLocalDeg": -0.02765711778225731,
+        "DirectGeoLocalDegWeighted": -0.030258358347769382,
+        "BlendGeoLocalDeg": -0.41215882393382874,
+        "BlendGeoLocalDegWeighted": -0.350045085549672,
+        "GeoLocalDeg": -0.5479729139041125,
+        "GeoLocalDegWeighted": -0.4214335483020406
+      },
+      "direct_group_delta": {
+        "all_ex_root": -0.027657118158882874,
+        "leg": -0.03560462995041802,
+        "nonleg": -0.02593884533909152
+      }
+    },
+    "strict_pretrain_contact_vs_accepted_old_baseline_r5": {
+      "masked_means_delta": {
+        "DirectGeoLocalDeg": -0.0299190612909766,
+        "DirectGeoLocalDegWeighted": -0.03339304512916608,
+        "BlendGeoLocalDeg": -0.4147045811530241,
+        "BlendGeoLocalDegWeighted": -0.3538434740791543,
+        "GeoLocalDeg": -0.5551027572292284,
+        "GeoLocalDegWeighted": -0.43375369357358584
+      },
+      "direct_group_delta": {
+        "all_ex_root": -0.029919061161661167,
+        "leg": -0.03349820799335751,
+        "nonleg": -0.029145299684537662
+      }
+    },
+    "model_source_vs_evalon_20260307_baseline": {
+      "masked_means_delta": {
+        "DirectGeoLocalDeg": -0.011171117782257309,
+        "DirectGeoLocalDegWeighted": -0.006933358347769397,
+        "BlendGeoLocalDeg": -0.3782678239338287,
+        "BlendGeoLocalDegWeighted": -0.344662085549672,
+        "GeoLocalDeg": -0.4783749139041124,
+        "GeoLocalDegWeighted": -0.40898054830204056
+      },
+      "direct_group_delta": {
+        "all_ex_root": -0.011171118158882873,
+        "leg": -0.013915629950418007,
+        "nonleg": -0.010577845339091521
+      }
+    }
+  },
+  "answers": {
+    "q1_advantage_penetrates_to_lambda_final": {
+      "value": true,
+      "interpretation": "Measured against the accepted old baseline r5 anchor, not against the current accepted final."
+    },
+    "q2_final_beats_current_accepted_mainline": {
+      "value": false
+    },
+    "q3_strict_eval_still_supports_advantage": {
+      "value": true,
+      "note": "Repo docs explicitly note the accepted chain compare artifacts are model-source; a strict pretrain_contact+affine_mix08 accepted-final eval snapshot is not archived locally."
+    },
+    "q4_should_switch_baseline_now": {
+      "value": false
+    },
+    "q5_should_only_do_future_simplification_on_this_chain": {
+      "value": false,
+      "note": "Only promote after it clears the current accepted final, not merely the old baseline."
+    }
+  }
+}

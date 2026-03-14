@@ -1,0 +1,84 @@
+{
+  "run_date": "20260313",
+  "config": {
+    "source_stage6_config": "config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+    "keepweight_config": "debug_output/_tmp_stage6_keepweight_compare_20260313/stage6_direct_cond_anchor_splitfirst_3way_armchain_keepweight_20260313.json",
+    "delta": {
+      "direct_pose_reinit": false,
+      "direct_pose_hidden_override": null,
+      "direct_pose_time_pe_dim": -1,
+      "direct_pose_feat_source": "auto",
+      "direct_pose_split_enable": true,
+      "direct_pose_arm_split_enable": true,
+      "direct_pose_nonleg_proj_dim": 256
+    }
+  },
+  "verification": {
+    "criterion": "lane.log must not contain \"dropped 10 direct_pose_* tensors from checkpoint (reinit/override).\"",
+    "all_lanes_keepweight_verified": true
+  },
+  "lanes": [
+    {
+      "name": "old_bestfree",
+      "selector": "best_free",
+      "keepweight_verified": true,
+      "verification": {
+        "drop_log_present": false,
+        "drop_log_absent": true,
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/results/old_bestfree/lane.log"
+      },
+      "reinit_baseline": {
+        "all_ex_root_mean": 0.3132793551955468,
+        "leg_mean": 0.8742295720575236,
+        "nonleg_mean": 0.1919928218199842,
+        "arm_mean": 0.21749107248109364,
+        "else_mean": 0.13172422934827105
+      },
+      "keepweight": {
+        "all_ex_root_mean": 3.3382564045893157,
+        "leg_mean": 9.563805466466366,
+        "nonleg_mean": 1.9921917425618456,
+        "arm_mean": 2.1961898855878186,
+        "else_mean": 1.5100143135913633
+      },
+      "delta_keep_minus_reinit": {
+        "all_ex_root_mean": 3.024977049393769,
+        "leg_mean": 8.689575894408843,
+        "nonleg_mean": 1.8001989207418614,
+        "arm_mean": 1.978698813106725,
+        "else_mean": 1.3782900842430923
+      }
+    },
+    {
+      "name": "cp015_bestfree",
+      "selector": "best_free",
+      "keepweight_verified": true,
+      "verification": {
+        "drop_log_present": false,
+        "drop_log_absent": true,
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/results/cp015_bestfree/lane.log"
+      },
+      "reinit_baseline": {
+        "all_ex_root_mean": 0.43137680891071384,
+        "leg_mean": 1.1671711441906452,
+        "nonleg_mean": 0.2722861418231612,
+        "arm_mean": 0.3280119348514316,
+        "else_mean": 0.1405706310290674
+      },
+      "keepweight": {
+        "all_ex_root_mean": 3.905214057030626,
+        "leg_mean": 10.875861752694364,
+        "nonleg_mean": 2.3980469876979256,
+        "arm_mean": 2.6997695520703555,
+        "else_mean": 1.6848845628176379
+      },
+      "delta_keep_minus_reinit": {
+        "all_ex_root_mean": 3.4738372481199122,
+        "leg_mean": 9.70869060850372,
+        "nonleg_mean": 2.1257608458747645,
+        "arm_mean": 2.371757617218924,
+        "else_mean": 1.5443139317885706
+      }
+    }
+  ]
+}

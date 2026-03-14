@@ -1,0 +1,36 @@
+{
+  "run_date": "20260314",
+  "status": "skipped_after_stage1_gate",
+  "stage1_summary": "debug_output/_tmp_stage6_phasefrontload_20260314/summary.json",
+  "best_frontload_case": "cp015_stage6_phasezin_frontload",
+  "best_frontload_stage6_exit": {
+    "all_ex_root": 0.43670156317431635,
+    "leg": 1.0376596111834027,
+    "nonleg": 0.30676468792910855,
+    "arm": 0.35500372594873714,
+    "else": 0.1927451435190773
+  },
+  "best_frontload_improvement_vs_cp015_bestfree": {
+    "all_ex_root": -0.005324754263602516,
+    "leg": 0.1295115330072425,
+    "nonleg": -0.03447854610594736,
+    "arm": -0.02699179109730554,
+    "else": -0.0521745124900099
+  },
+  "skip_reason": {
+    "condition": "continue only if a frontload case clearly beats cp015_bestfree and approaches/reaches old_bestfree",
+    "observed": {
+      "best_case_all_ex_root": 0.43670156317431635,
+      "cp015_bestfree_all_ex_root": 0.43137680891071384,
+      "old_bestfree_all_ex_root": 0.3132793551955468,
+      "cp015_with_old_planstack_all_ex_root": 0.2955326631516289,
+      "best_case_improvement_vs_cp015_bestfree": -0.005324754263602516,
+      "best_case_gap_to_old_bestfree": 0.12342220797876957
+    },
+    "decision": "do_not_run_stage2_chain"
+  },
+  "answer_stub": {
+    "minimal_chain_established": false,
+    "reason": "Stage6 frontload did not improve cp015 Stage6 exit, so the simplification chain was not promoted to stage2."
+  }
+}

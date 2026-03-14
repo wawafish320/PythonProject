@@ -1,0 +1,24 @@
+{
+  "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_restore_wcontact_stage6_20260314/cp015_restorewcontact/posttrain_log_cp015_restorewcontact_stage6_cmp_restorewcontact_20260314_restorewcontact.json",
+  "rows": 300,
+  "head_count": 20,
+  "step1": {
+    "dir_leg_base": 0.19182926416397095,
+    "dir_nonleg_base": 0.06136532872915268,
+    "leg_over_nonleg": 3.126020313696113,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 0.6886348136670672,
+    "direct_grad_norm_out_else": 0.0846218572049545,
+    "grad_arm_over_else": 8.137788940263869,
+    "step": 1.0
+  },
+  "head20_mean": {
+    "dir_leg_base": 0.13043964765965937,
+    "dir_nonleg_base": 0.03586919689550996,
+    "leg_over_nonleg": 3.6753873507318504,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 1.0503069329285877,
+    "direct_grad_norm_out_else": 0.15121623698858558,
+    "grad_arm_over_else": 7.192907030642301
+  }
+}

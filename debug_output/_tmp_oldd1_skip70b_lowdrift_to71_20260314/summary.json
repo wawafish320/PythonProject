@@ -1,0 +1,368 @@
+{
+  "run_date": "20260314",
+  "source_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_newflow_chain_20260314/summary.json",
+  "replace_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_skip70b_lowdrift_20260314/summary.json",
+  "policy": {
+    "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+    "affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+    "posttrain_contacts_source": "pretrain_contact",
+    "posttrain_contacts_pretrain_clamp": "1.0",
+    "compare_contract": "model_source"
+  },
+  "control": {
+    "current_70R": {
+      "masked_means": {
+        "masked_steps": 344.0,
+        "BlendGeoLocalDeg": 60.28211112355077,
+        "BlendGeoLocalDegWeighted": 43.14079326807067,
+        "GeoLocalDeg": 60.28211112355077,
+        "GeoLocalDegWeighted": 43.14079326807067,
+        "DirectGeoLocalDeg": 0.15823527791559003,
+        "DirectGeoLocalDegWeighted": 0.18808107472263103,
+        "LambdaMean": NaN,
+        "LambdaEffMean": NaN,
+        "LambdaRelMean": NaN
+      },
+      "direct_group_summary": {
+        "all_ex_root": 0.15823527759728495,
+        "leg": 0.556048936034596,
+        "nonleg": 0.07222151361083931,
+        "arm": 0.08266488065130256,
+        "else": 0.04753719151519886
+      },
+      "window_summary": {
+        "overall": {
+          "legs_main": 0.556048936034596,
+          "arms_main": 0.08266488065130256,
+          "left_arm_main": 0.10915616009521942,
+          "right_arm_main": 0.08030111667993613
+        },
+        "A_52_59": {
+          "legs_main": 1.0194085305556655,
+          "arms_main": 0.07121839742351838,
+          "left_arm_main": 0.09967851682611378,
+          "right_arm_main": 0.05727500207689849
+        },
+        "B_76_80": {
+          "legs_main": 0.4423606975004077,
+          "arms_main": 0.09059350668187038,
+          "left_arm_main": 0.13928188802674413,
+          "right_arm_main": 0.08473783650171957
+        },
+        "hotspots": {
+          "foot_l_ball_l_SIC12_15": 1.1184829957783222,
+          "calf_r_SIC2_4": 0.6138490301867326
+        }
+      },
+      "paths": {
+        "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_newflow_chain_20260314/stage_eval_model/70R/Walk_F_freerun_cycles.json",
+        "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_newflow_chain_20260314/stage_eval_model/70R_group_summary.json"
+      }
+    },
+    "current_71": {
+      "masked_means": {
+        "masked_steps": 344.0,
+        "BlendGeoLocalDeg": 60.28211112355077,
+        "BlendGeoLocalDegWeighted": 43.14079326807067,
+        "GeoLocalDeg": 60.28211112355077,
+        "GeoLocalDegWeighted": 43.14079326807067,
+        "DirectGeoLocalDeg": 0.11191065632196706,
+        "DirectGeoLocalDegWeighted": 0.1290073149599308,
+        "LambdaMean": NaN,
+        "LambdaEffMean": NaN,
+        "LambdaRelMean": NaN
+      },
+      "direct_group_summary": {
+        "all_ex_root": 0.11191065641286034,
+        "leg": 0.29547294187220763,
+        "nonleg": 0.07222151361083931,
+        "arm": 0.08266488065130256,
+        "else": 0.04753719151519886
+      },
+      "window_summary": {
+        "overall": {
+          "legs_main": 0.29547294187220763,
+          "arms_main": 0.08266488065130256,
+          "left_arm_main": 0.10915616009521942,
+          "right_arm_main": 0.08030111667993613
+        },
+        "A_52_59": {
+          "legs_main": 0.4253831942623947,
+          "arms_main": 0.07121839742351838,
+          "left_arm_main": 0.09967851682611378,
+          "right_arm_main": 0.05727500207689849
+        },
+        "B_76_80": {
+          "legs_main": 0.25504510874161496,
+          "arms_main": 0.09059350668187038,
+          "left_arm_main": 0.13928188802674413,
+          "right_arm_main": 0.08473783650171957
+        },
+        "hotspots": {
+          "foot_l_ball_l_SIC12_15": 0.5992717912886292,
+          "calf_r_SIC2_4": 0.4409123050669829
+        }
+      },
+      "paths": {
+        "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_newflow_chain_20260314/stage_eval_model/71/Walk_F_freerun_cycles.json",
+        "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_newflow_chain_20260314/stage_eval_model/71_group_summary.json"
+      }
+    },
+    "candidate_replace": {
+      "masked_means": {
+        "masked_steps": 344.0,
+        "BlendGeoLocalDeg": 60.28211112355077,
+        "BlendGeoLocalDegWeighted": 43.14079326807067,
+        "GeoLocalDeg": 60.28211112355077,
+        "GeoLocalDegWeighted": 43.14079326807067,
+        "DirectGeoLocalDeg": 0.1567092366126734,
+        "DirectGeoLocalDegWeighted": 0.1935403539344322,
+        "LambdaMean": NaN,
+        "LambdaEffMean": NaN,
+        "LambdaRelMean": NaN
+      },
+      "direct_group_summary": {
+        "all_ex_root": 0.15670923637996145,
+        "leg": 0.37586705683599236,
+        "nonleg": 0.10932376168676558,
+        "arm": 0.12645845618893314,
+        "else": 0.06882357468164224
+      },
+      "window_summary": {
+        "overall": {
+          "legs_main": 0.37586705683599236,
+          "arms_main": 0.12645845618893314,
+          "left_arm_main": 0.17536767139143533,
+          "right_arm_main": 0.12213801662571104
+        },
+        "A_52_59": {
+          "legs_main": 0.5230430340816383,
+          "arms_main": 0.157746469927378,
+          "left_arm_main": 0.2204784685333531,
+          "right_arm_main": 0.15081544051402793
+        },
+        "B_76_80": {
+          "legs_main": 0.33796036840649324,
+          "arms_main": 0.19946922888943497,
+          "left_arm_main": 0.31033399685596424,
+          "right_arm_main": 0.1857394832949568
+        },
+        "hotspots": {
+          "foot_l_ball_l_SIC12_15": 0.5517905079759657,
+          "calf_r_SIC2_4": 1.03013110657533
+        }
+      },
+      "paths": {
+        "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_skip70b_lowdrift_20260314/eval_model_source/Walk_F_freerun_cycles.json",
+        "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_skip70b_lowdrift_20260314/eval_model_source_group_summary.json"
+      }
+    }
+  },
+  "candidate": {
+    "ckpt_70R": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_skip70b_lowdrift_to71_20260314/70R/ckpt_last_WalkF_stage7_70R_from_oldd1_lowdrift_replace_20260314.pth",
+    "ckpt_71": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_skip70b_lowdrift_to71_20260314/71/ckpt_last_WalkF_stage7_71_from_oldd1_lowdrift_replace_20260314.pth",
+    "config_70R": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_skip70b_lowdrift_to71_20260314/configs/posttrain_70R_from_oldd1_lowdrift_replace_20260314.json",
+    "eval_70R": {
+      "masked_means": {
+        "masked_steps": 344.0,
+        "BlendGeoLocalDeg": 60.28211112355077,
+        "BlendGeoLocalDegWeighted": 43.14079326807067,
+        "GeoLocalDeg": 60.28211112355077,
+        "GeoLocalDegWeighted": 43.14079326807067,
+        "DirectGeoLocalDeg": 0.13092551713939324,
+        "DirectGeoLocalDegWeighted": 0.15562674058817846,
+        "LambdaMean": NaN,
+        "LambdaEffMean": NaN,
+        "LambdaRelMean": NaN
+      },
+      "direct_group_summary": {
+        "all_ex_root": 0.1309255167171086,
+        "leg": 0.3492627636104623,
+        "nonleg": 0.08371746333476185,
+        "arm": 0.09184891825772104,
+        "else": 0.06449766078958558
+      },
+      "window_summary": {
+        "overall": {
+          "legs_main": 0.3492627636104623,
+          "arms_main": 0.09184891825772104,
+          "left_arm_main": 0.1178979079568237,
+          "right_arm_main": 0.08307270974670053
+        },
+        "A_52_59": {
+          "legs_main": 0.5226275748573244,
+          "arms_main": 0.09607913540031195,
+          "left_arm_main": 0.1287261820883335,
+          "right_arm_main": 0.07227576512660663
+        },
+        "B_76_80": {
+          "legs_main": 0.28358400067081674,
+          "arms_main": 0.092246418049266,
+          "left_arm_main": 0.11831645604429973,
+          "right_arm_main": 0.0748200510809612
+        },
+        "hotspots": {
+          "foot_l_ball_l_SIC12_15": 0.8600953875575215,
+          "calf_r_SIC2_4": 0.39301881318291026
+        }
+      },
+      "paths": {
+        "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_skip70b_lowdrift_to71_20260314/eval_70R_model/Walk_F_freerun_cycles.json",
+        "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_skip70b_lowdrift_to71_20260314/eval_70R_model_group_summary.json"
+      }
+    },
+    "eval_71": {
+      "masked_means": {
+        "masked_steps": 344.0,
+        "BlendGeoLocalDeg": 60.28211112355077,
+        "BlendGeoLocalDegWeighted": 43.14079326807067,
+        "GeoLocalDeg": 60.28211112355077,
+        "GeoLocalDegWeighted": 43.14079326807067,
+        "DirectGeoLocalDeg": 0.1277874807805516,
+        "DirectGeoLocalDegWeighted": 0.14738908433896858,
+        "LambdaMean": NaN,
+        "LambdaEffMean": NaN,
+        "LambdaRelMean": NaN
+      },
+      "direct_group_summary": {
+        "all_ex_root": 0.12778748058921752,
+        "leg": 0.331611310391075,
+        "nonleg": 0.08371746333476185,
+        "arm": 0.09184891825772104,
+        "else": 0.06449766078958558
+      },
+      "window_summary": {
+        "overall": {
+          "legs_main": 0.331611310391075,
+          "arms_main": 0.09184891825772104,
+          "left_arm_main": 0.1178979079568237,
+          "right_arm_main": 0.08307270974670053
+        },
+        "A_52_59": {
+          "legs_main": 0.35506428945518564,
+          "arms_main": 0.09607913540031195,
+          "left_arm_main": 0.1287261820883335,
+          "right_arm_main": 0.07227576512660663
+        },
+        "B_76_80": {
+          "legs_main": 0.16948254012968392,
+          "arms_main": 0.092246418049266,
+          "left_arm_main": 0.11831645604429973,
+          "right_arm_main": 0.0748200510809612
+        },
+        "hotspots": {
+          "foot_l_ball_l_SIC12_15": 0.5405750844511203,
+          "calf_r_SIC2_4": 0.2956436884899934
+        }
+      },
+      "paths": {
+        "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_skip70b_lowdrift_to71_20260314/eval_71_model/Walk_F_freerun_cycles.json",
+        "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_skip70b_lowdrift_to71_20260314/eval_71_model_group_summary.json"
+      }
+    }
+  },
+  "comparisons": {
+    "candidate_70R_vs_current_70R": {
+      "masked_means_delta": {
+        "DirectGeoLocalDeg": -0.02730976077619679,
+        "BlendGeoLocalDeg": 0.0,
+        "GeoLocalDeg": 0.0
+      },
+      "direct_group_delta": {
+        "all_ex_root": -0.027309760880176365,
+        "leg": -0.20678617242413372,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "else": 0.016960469274386714
+      },
+      "overall_window_delta": {
+        "legs_main": -0.20678617242413372,
+        "arms_main": 0.009184037606418477,
+        "left_arm_main": 0.008741747861604282,
+        "right_arm_main": 0.0027715930667644023
+      },
+      "hotspot_delta": {
+        "foot_l_ball_l_SIC12_15": -0.25838760822080076,
+        "calf_r_SIC2_4": -0.22083021700382238
+      }
+    },
+    "candidate_71_vs_current_71": {
+      "masked_means_delta": {
+        "DirectGeoLocalDeg": 0.015876824458584543,
+        "BlendGeoLocalDeg": 0.0,
+        "GeoLocalDeg": 0.0
+      },
+      "direct_group_delta": {
+        "all_ex_root": 0.015876824176357177,
+        "leg": 0.03613836851886737,
+        "nonleg": 0.011495949723922538,
+        "arm": 0.009184037606418477,
+        "else": 0.016960469274386714
+      },
+      "overall_window_delta": {
+        "legs_main": 0.03613836851886737,
+        "arms_main": 0.009184037606418477,
+        "left_arm_main": 0.008741747861604282,
+        "right_arm_main": 0.0027715930667644023
+      },
+      "hotspot_delta": {
+        "foot_l_ball_l_SIC12_15": -0.05869670683750883,
+        "calf_r_SIC2_4": -0.14526861657698953
+      }
+    },
+    "candidate_70R_vs_candidate_replace": {
+      "masked_means_delta": {
+        "DirectGeoLocalDeg": -0.025783719473280176,
+        "BlendGeoLocalDeg": 0.0,
+        "GeoLocalDeg": 0.0
+      },
+      "direct_group_delta": {
+        "all_ex_root": -0.025783719662852866,
+        "leg": -0.02660429322553004,
+        "nonleg": -0.02560629835200373,
+        "arm": -0.0346095379312121,
+        "else": -0.004325913892056665
+      },
+      "overall_window_delta": {
+        "legs_main": -0.02660429322553004,
+        "arms_main": -0.0346095379312121,
+        "left_arm_main": -0.05746976343461163,
+        "right_arm_main": -0.03906530687901051
+      },
+      "hotspot_delta": {
+        "foot_l_ball_l_SIC12_15": 0.3083048795815557,
+        "calf_r_SIC2_4": -0.6371122933924198
+      }
+    },
+    "candidate_71_vs_candidate_70R": {
+      "masked_means_delta": {
+        "DirectGeoLocalDeg": -0.003138036358841634,
+        "BlendGeoLocalDeg": 0.0,
+        "GeoLocalDeg": 0.0
+      },
+      "direct_group_delta": {
+        "all_ex_root": -0.0031380361278910696,
+        "leg": -0.017651453219387325,
+        "nonleg": 0.0,
+        "arm": 0.0,
+        "else": 0.0
+      },
+      "overall_window_delta": {
+        "legs_main": -0.017651453219387325,
+        "arms_main": 0.0,
+        "left_arm_main": 0.0,
+        "right_arm_main": 0.0
+      },
+      "hotspot_delta": {
+        "foot_l_ball_l_SIC12_15": -0.3195203031064011,
+        "calf_r_SIC2_4": -0.09737512469291687
+      }
+    }
+  },
+  "answers": {
+    "calf_recovers_at_70R_vs_replace": true,
+    "calf_recovers_at_71_vs_70R": true,
+    "candidate_71_beats_current_71_leg": false,
+    "candidate_71_beats_current_71_calf_hotspot": true
+  }
+}

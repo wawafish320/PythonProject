@@ -1,0 +1,19 @@
+{
+  "run_date": "20260313",
+  "out_root": "debug_output/_tmp_stage6_directposeoff_compare_20260313",
+  "model_root": "models/__tmp_stage6_directposeoff_compare_20260313",
+  "lanes": [
+    {
+      "lane": "old_dpoff",
+      "source_config": "models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/config_resolved.json",
+      "config": "debug_output/_tmp_stage6_directposeoff_compare_20260313/exp_phase_DirectBranch_v1_d1_directposeoff_20260313.json",
+      "run_name": "exp_phase_DirectBranch_v1_d1_directposeoff_20260313"
+    },
+    {
+      "lane": "cp015_dpoff",
+      "source_config": "models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/config_resolved.json",
+      "config": "debug_output/_tmp_stage6_directposeoff_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_directposeoff_20260313.json",
+      "run_name": "exp_phase_DirectBranch_v1_d1_cp015_tailk3_directposeoff_20260313"
+    }
+  ]
+}

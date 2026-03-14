@@ -1,0 +1,24 @@
+{
+  "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/old_bestfree/posttrain_log_old_bestfree_stage6_cmp_20260313.json",
+  "rows": 300,
+  "head_count": 20,
+  "step1": {
+    "dir_leg_base": 0.19168874621391296,
+    "dir_nonleg_base": 0.061304062604904175,
+    "leg_over_nonleg": 3.126852252016628,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 0.6715153574383924,
+    "direct_grad_norm_out_else": 0.08367805563648194,
+    "grad_arm_over_else": 8.024987582833191,
+    "step": 1.0
+  },
+  "head20_mean": {
+    "dir_leg_base": 0.13607504814863206,
+    "dir_nonleg_base": 0.0364359543658793,
+    "leg_over_nonleg": 3.785067819247004,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 1.0607068800849615,
+    "direct_grad_norm_out_else": 0.15332370620920882,
+    "grad_arm_over_else": 7.169632094444822
+  }
+}

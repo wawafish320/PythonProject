@@ -1,0 +1,24 @@
+{
+  "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_hiddenfeat_stage6_20260313/cp015_hidden_gradon/posttrain_log_cp015_hidden_gradon_stage6_cmp_hiddenfeat_20260313_hiddenfeat_cp015_gradon.json",
+  "rows": 300,
+  "head_count": 20,
+  "step1": {
+    "dir_leg_base": 0.19097912311553955,
+    "dir_nonleg_base": 0.06134796142578125,
+    "leg_over_nonleg": 3.1130475842556895,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 0.6809045812730012,
+    "direct_grad_norm_out_else": 0.08237563515278629,
+    "grad_arm_over_else": 8.265849240616996,
+    "step": 1.0
+  },
+  "head20_mean": {
+    "dir_leg_base": 0.13792371340095996,
+    "dir_nonleg_base": 0.036681598890572785,
+    "leg_over_nonleg": 3.8154360429280794,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 1.02989857036618,
+    "direct_grad_norm_out_else": 0.14707738665362532,
+    "grad_arm_over_else": 7.31279721473021
+  }
+}

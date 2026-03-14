@@ -1,0 +1,14 @@
+{
+  "source_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/config_resolved.json",
+  "reference_old_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/config_resolved.json",
+  "generated_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_cp015_restore_wcontact_20260314/configs/exp_phase_DirectBranch_v1_d1_cp015_tailk3_restorewcontact_20260314.json",
+  "run_name": "exp_phase_DirectBranch_v1_d1_cp015_tailk3_restorewcontact_20260314",
+  "changes": {
+    "w_contact_plan": {
+      "old": 1.0,
+      "new": 1.0
+    },
+    "freerun_stage_schedule": "replaced with old schedule",
+    "resume": null
+  }
+}

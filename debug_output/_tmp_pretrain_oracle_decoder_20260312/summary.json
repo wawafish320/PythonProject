@@ -1,0 +1,3813 @@
+{
+  "config": {
+    "bundles": [
+      "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv_stageA.pt",
+      "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt"
+    ],
+    "norm_spec": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/pretrain_template.json",
+    "npz": "/Users/xingzhaorui/PycharmProjects/PythonProject/raw_data/processed_data/Walk_F.npz",
+    "device": "cpu",
+    "out_dir": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_pretrain_oracle_decoder_20260312",
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "max_epochs": 800,
+    "min_epochs": 100,
+    "patience": 150,
+    "decoder_hidden_dim": 256,
+    "decoder_layers": 3,
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "aux_mse_weight": 0.02,
+    "min_delta_deg": 0.0001
+  },
+  "overall_verdict": "H1",
+  "bundle_verdicts": [
+    {
+      "bundle": "pt_best",
+      "verdict": "H1",
+      "baseline_hotspot_mean_deg": 24.367802449635096,
+      "soft_period_full_hotspot_mean_deg": 0.31768824472757323,
+      "soft_period_calf_only_hotspot_mean_deg": 0.2791915377158494,
+      "h_period_full_hotspot_mean_deg": 0.2655688316694328,
+      "explanation": "baseline hotspot mean=24.368deg; soft_period->full=0.318deg; soft_period->calf_only=0.279deg; h_period->full=0.266deg; soft_period full decoder already removes the calf hotspot, so latent information is present"
+    },
+    {
+      "bundle": "stageA",
+      "verdict": "H1",
+      "baseline_hotspot_mean_deg": 18.95199578148978,
+      "soft_period_full_hotspot_mean_deg": 0.8970637982711196,
+      "soft_period_calf_only_hotspot_mean_deg": 0.8327506373614251,
+      "h_period_full_hotspot_mean_deg": 0.34583669162488406,
+      "explanation": "baseline hotspot mean=18.952deg; soft_period->full=0.897deg; soft_period->calf_only=0.833deg; h_period->full=0.346deg; soft_period full decoder already removes the calf hotspot, so latent information is present; h_period still leaves some headroom, but it is secondary because soft_period is already sufficient"
+    }
+  ],
+  "results": {
+    "pt_best": {
+      "baseline_frozen": {
+        "probe_id": "baseline_frozen",
+        "label": "baseline frozen decoder",
+        "bundle": "pt_best",
+        "seeds": [
+          0
+        ],
+        "output_mode": "baseline",
+        "latent_kind": "soft_period",
+        "overall_mean_deg_ex_root": 6.59598877473832,
+        "window_metrics": {
+          "calf_r_56_62": {
+            "window_id": "calf_r_56_62",
+            "label": "calf_r @ sic 56-62",
+            "mean_deg": 27.528966086251394,
+            "std_deg": 0.0,
+            "p90_deg": 28.864704132080078,
+            "p90_std_deg": 0.0,
+            "requested_bones": [
+              "calf_r"
+            ],
+            "available_bones": [
+              "calf_r"
+            ],
+            "coverage": "1/1",
+            "sic_min": 56,
+            "sic_max": 62,
+            "seed_values_deg": [
+              27.528966086251394
+            ],
+            "seed_p90_deg": [
+              28.864704132080078
+            ],
+            "count": 7
+          },
+          "calf_l_78_85": {
+            "window_id": "calf_l_78_85",
+            "label": "calf_l @ sic 78-85",
+            "mean_deg": 21.2066388130188,
+            "std_deg": 0.0,
+            "p90_deg": 22.55146007537842,
+            "p90_std_deg": 0.0,
+            "requested_bones": [
+              "calf_l"
+            ],
+            "available_bones": [
+              "calf_l"
+            ],
+            "coverage": "1/1",
+            "sic_min": 78,
+            "sic_max": 85,
+            "seed_values_deg": [
+              21.2066388130188
+            ],
+            "seed_p90_deg": [
+              22.55146007537842
+            ],
+            "count": 8
+          },
+          "foot_l_ball_l_12_15": {
+            "window_id": "foot_l_ball_l_12_15",
+            "label": "foot_l + ball_l @ sic 12-15",
+            "mean_deg": 12.923514693975449,
+            "std_deg": 0.0,
+            "p90_deg": 24.435718154907228,
+            "p90_std_deg": 0.0,
+            "requested_bones": [
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "foot_l",
+              "ball_l"
+            ],
+            "coverage": "2/2",
+            "sic_min": 12,
+            "sic_max": 15,
+            "seed_values_deg": [
+              12.923514693975449
+            ],
+            "seed_p90_deg": [
+              24.435718154907228
+            ],
+            "count": 8
+          },
+          "legs_all": {
+            "window_id": "legs_all",
+            "label": "legs @ all sic",
+            "mean_deg": 10.194432330642675,
+            "std_deg": 0.0,
+            "p90_deg": 21.733113861083986,
+            "p90_std_deg": 0.0,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l",
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r"
+            ],
+            "coverage": "8/8",
+            "sic_min": null,
+            "sic_max": null,
+            "seed_values_deg": [
+              10.194432330642675
+            ],
+            "seed_p90_deg": [
+              21.733113861083986
+            ],
+            "count": 688
+          },
+          "legs_ge_40": {
+            "window_id": "legs_ge_40",
+            "label": "legs @ sic >= 40",
+            "mean_deg": 10.175129249044087,
+            "std_deg": 0.0,
+            "p90_deg": 23.235869026184083,
+            "p90_std_deg": 0.0,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l",
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r"
+            ],
+            "coverage": "8/8",
+            "sic_min": 40,
+            "sic_max": null,
+            "seed_values_deg": [
+              10.175129249044087
+            ],
+            "seed_p90_deg": [
+              23.235869026184083
+            ],
+            "count": 368
+          }
+        },
+        "seed_runs": [
+          {
+            "seed": 0,
+            "best_epoch": 0,
+            "stop_metric_deg": 21.531198117676755,
+            "train_loss": NaN,
+            "train_geodesic_rad": NaN,
+            "train_aux_mse": NaN,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 27.528966086251394,
+                "p90_deg": 28.864704132080078,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 21.2066388130188,
+                "p90_deg": 22.55146007537842,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": 12.923514693975449,
+                "p90_deg": 24.435718154907228,
+                "count": 8,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "coverage": "2/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 10.194432330642675,
+                "p90_deg": 21.733113861083986,
+                "count": 688,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 10.175129249044087,
+                "p90_deg": 23.235869026184083,
+                "count": 368,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+          }
+        ],
+        "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+      },
+      "oracle_soft_period_full": {
+        "probe_id": "oracle_soft_period_full",
+        "label": "oracle soft_period full decoder",
+        "bundle": "pt_best",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "output_mode": "full",
+        "latent_kind": "soft_period",
+        "overall_mean_deg_ex_root": 0.333261015467365,
+        "window_metrics": {
+          "calf_r_56_62": {
+            "window_id": "calf_r_56_62",
+            "label": "calf_r @ sic 56-62",
+            "mean_deg": 0.26505791183028904,
+            "std_deg": 0.03580456202722187,
+            "p90_deg": 0.44267060558001203,
+            "p90_std_deg": 0.042741766301714806,
+            "requested_bones": [
+              "calf_r"
+            ],
+            "available_bones": [
+              "calf_r"
+            ],
+            "coverage": "1/1",
+            "sic_min": 56,
+            "sic_max": 62,
+            "seed_values_deg": [
+              0.31559515425137113,
+              0.2425169891544751,
+              0.2370615920850209
+            ],
+            "seed_p90_deg": [
+              0.4916409671306611,
+              0.44887281060218814,
+              0.38749803900718693
+            ],
+            "count": 7
+          },
+          "calf_l_78_85": {
+            "window_id": "calf_l_78_85",
+            "label": "calf_l @ sic 78-85",
+            "mean_deg": 0.3703185776248574,
+            "std_deg": 0.032000274136182456,
+            "p90_deg": 0.7161366601785023,
+            "p90_std_deg": 0.0710220179669091,
+            "requested_bones": [
+              "calf_l"
+            ],
+            "available_bones": [
+              "calf_l"
+            ],
+            "coverage": "1/1",
+            "sic_min": 78,
+            "sic_max": 85,
+            "seed_values_deg": [
+              0.3460093690082431,
+              0.415531056933105,
+              0.3494153069332242
+            ],
+            "seed_p90_deg": [
+              0.6689305424690246,
+              0.816517823934555,
+              0.6629616141319274
+            ],
+            "count": 8
+          },
+          "foot_l_ball_l_12_15": {
+            "window_id": "foot_l_ball_l_12_15",
+            "label": "foot_l + ball_l @ sic 12-15",
+            "mean_deg": 1.5740400291979313,
+            "std_deg": 0.3590180191110539,
+            "p90_deg": 3.07461473941803,
+            "p90_std_deg": 0.8226395296173165,
+            "requested_bones": [
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "foot_l",
+              "ball_l"
+            ],
+            "coverage": "2/2",
+            "sic_min": 12,
+            "sic_max": 15,
+            "seed_values_deg": [
+              1.2241391818970442,
+              1.4303716290742159,
+              2.067609276622534
+            ],
+            "seed_p90_deg": [
+              2.5869631290435793,
+              2.403699803352356,
+              4.233181285858154
+            ],
+            "count": 8
+          },
+          "legs_all": {
+            "window_id": "legs_all",
+            "label": "legs @ all sic",
+            "mean_deg": 0.6171022508322268,
+            "std_deg": 0.031747381640658004,
+            "p90_deg": 1.1660184303919479,
+            "p90_std_deg": 0.08105688700758047,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l",
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r"
+            ],
+            "coverage": "8/8",
+            "sic_min": null,
+            "sic_max": null,
+            "seed_values_deg": [
+              0.5729215635842275,
+              0.6322720079726085,
+              0.6461131809398445
+            ],
+            "seed_p90_deg": [
+              1.0808909296989446,
+              1.2750675916671754,
+              1.1420967698097235
+            ],
+            "count": 688
+          },
+          "legs_ge_40": {
+            "window_id": "legs_ge_40",
+            "label": "legs @ sic >= 40",
+            "mean_deg": 0.5694263056932908,
+            "std_deg": 0.02250037366986281,
+            "p90_deg": 1.0271408557891846,
+            "p90_std_deg": 0.02758363392295718,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l",
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r"
+            ],
+            "coverage": "8/8",
+            "sic_min": 40,
+            "sic_max": null,
+            "seed_values_deg": [
+              0.5427914885196673,
+              0.5676659124336488,
+              0.5978215161265562
+            ],
+            "seed_p90_deg": [
+              0.9955192685127259,
+              1.0231692910194397,
+              1.0627340078353882
+            ],
+            "count": 368
+          }
+        },
+        "seed_runs": [
+          {
+            "seed": 0,
+            "best_epoch": 775,
+            "stop_metric_deg": 0.3762131145142352,
+            "train_loss": 0.0049539669416844845,
+            "train_geodesic_rad": 0.004953764379024506,
+            "train_aux_mse": 1.0133420801139437e-05,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.31559515425137113,
+                "p90_deg": 0.4916409671306611,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.3460093690082431,
+                "p90_deg": 0.6689305424690246,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": 1.2241391818970442,
+                "p90_deg": 2.5869631290435793,
+                "count": 8,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "coverage": "2/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 0.5729215635842275,
+                "p90_deg": 1.0808909296989446,
+                "count": 688,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 0.5427914885196673,
+                "p90_deg": 0.9955192685127259,
+                "count": 368,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+          },
+          {
+            "seed": 1,
+            "best_epoch": 605,
+            "stop_metric_deg": 0.3832130104756578,
+            "train_loss": 0.005903211887925863,
+            "train_geodesic_rad": 0.0059029459953308105,
+            "train_aux_mse": 1.3303915693541057e-05,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.2425169891544751,
+                "p90_deg": 0.44887281060218814,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.415531056933105,
+                "p90_deg": 0.816517823934555,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": 1.4303716290742159,
+                "p90_deg": 2.403699803352356,
+                "count": 8,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "coverage": "2/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 0.6322720079726085,
+                "p90_deg": 1.2750675916671754,
+                "count": 688,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 0.5676659124336488,
+                "p90_deg": 1.0231692910194397,
+                "count": 368,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+          },
+          {
+            "seed": 2,
+            "best_epoch": 636,
+            "stop_metric_deg": 0.35898422931393814,
+            "train_loss": 0.006030153948813677,
+            "train_geodesic_rad": 0.006029870361089706,
+            "train_aux_mse": 1.417472321918467e-05,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.2370615920850209,
+                "p90_deg": 0.38749803900718693,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.3494153069332242,
+                "p90_deg": 0.6629616141319274,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": 2.067609276622534,
+                "p90_deg": 4.233181285858154,
+                "count": 8,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "coverage": "2/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 0.6461131809398445,
+                "p90_deg": 1.1420967698097235,
+                "count": 688,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 0.5978215161265562,
+                "p90_deg": 1.0627340078353882,
+                "count": 368,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+          }
+        ],
+        "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+      },
+      "oracle_soft_period_calf_only": {
+        "probe_id": "oracle_soft_period_calf_only",
+        "label": "oracle soft_period calf-only decoder",
+        "bundle": "pt_best",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "output_mode": "calf_only",
+        "latent_kind": "soft_period",
+        "overall_mean_deg_ex_root": 0.5023265055185834,
+        "window_metrics": {
+          "calf_r_56_62": {
+            "window_id": "calf_r_56_62",
+            "label": "calf_r @ sic 56-62",
+            "mean_deg": 0.23090628587773868,
+            "std_deg": 0.018050195871979983,
+            "p90_deg": 0.4670934518178304,
+            "p90_std_deg": 0.06692339756233422,
+            "requested_bones": [
+              "calf_r"
+            ],
+            "available_bones": [
+              "calf_r"
+            ],
+            "coverage": "1/1",
+            "sic_min": 56,
+            "sic_max": 62,
+            "seed_values_deg": [
+              0.22418642629470145,
+              0.25559335734163013,
+              0.21293907399688447
+            ],
+            "seed_p90_deg": [
+              0.4521848022937775,
+              0.5554885625839233,
+              0.3936069905757904
+            ],
+            "count": 7
+          },
+          "calf_l_78_85": {
+            "window_id": "calf_l_78_85",
+            "label": "calf_l @ sic 78-85",
+            "mean_deg": 0.32747678955396015,
+            "std_deg": 0.02184967774128657,
+            "p90_deg": 0.7001270790894826,
+            "p90_std_deg": 0.03120153411355845,
+            "requested_bones": [
+              "calf_l"
+            ],
+            "available_bones": [
+              "calf_l"
+            ],
+            "coverage": "1/1",
+            "sic_min": 78,
+            "sic_max": 85,
+            "seed_values_deg": [
+              0.33426773361861706,
+              0.35018735006451607,
+              0.29797528497874737
+            ],
+            "seed_p90_deg": [
+              0.6823263585567474,
+              0.7439939141273498,
+              0.6740609645843505
+            ],
+            "count": 8
+          },
+          "foot_l_ball_l_12_15": {
+            "window_id": "foot_l_ball_l_12_15",
+            "label": "foot_l + ball_l @ sic 12-15",
+            "mean_deg": NaN,
+            "std_deg": NaN,
+            "p90_deg": NaN,
+            "p90_std_deg": NaN,
+            "requested_bones": [
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [],
+            "coverage": "0/2",
+            "sic_min": 12,
+            "sic_max": 15,
+            "seed_values_deg": [
+              NaN,
+              NaN,
+              NaN
+            ],
+            "seed_p90_deg": [
+              NaN,
+              NaN,
+              NaN
+            ],
+            "count": 0
+          },
+          "legs_all": {
+            "window_id": "legs_all",
+            "label": "legs @ all sic",
+            "mean_deg": 0.5023265055185834,
+            "std_deg": 0.04605288579401156,
+            "p90_deg": 0.9336114307244621,
+            "p90_std_deg": 0.03971540057553307,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "calf_l",
+              "calf_r"
+            ],
+            "coverage": "2/8",
+            "sic_min": null,
+            "sic_max": null,
+            "seed_values_deg": [
+              0.4464194346219301,
+              0.5592127560616232,
+              0.5013473258721967
+            ],
+            "seed_p90_deg": [
+              0.8776591420173647,
+              0.9573478102684021,
+              0.9658273398876195
+            ],
+            "count": 172
+          },
+          "legs_ge_40": {
+            "window_id": "legs_ge_40",
+            "label": "legs @ sic >= 40",
+            "mean_deg": 0.40722117537929525,
+            "std_deg": 0.04208693993044266,
+            "p90_deg": 0.8076218545436862,
+            "p90_std_deg": 0.08612700079478167,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "calf_l",
+              "calf_r"
+            ],
+            "coverage": "2/8",
+            "sic_min": 40,
+            "sic_max": null,
+            "seed_values_deg": [
+              0.36579370474361855,
+              0.46494557506040385,
+              0.3909242463338634
+            ],
+            "seed_p90_deg": [
+              0.7840028762817388,
+              0.922912734746933,
+              0.7159499526023868
+            ],
+            "count": 92
+          }
+        },
+        "seed_runs": [
+          {
+            "seed": 0,
+            "best_epoch": 638,
+            "stop_metric_deg": 0.3046029779018823,
+            "train_loss": 0.008788254112005234,
+            "train_geodesic_rad": 0.008787726052105427,
+            "train_aux_mse": 2.6425530450069346e-05,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.22418642629470145,
+                "p90_deg": 0.4521848022937775,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.33426773361861706,
+                "p90_deg": 0.6823263585567474,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": NaN,
+                "p90_deg": NaN,
+                "count": 0,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [],
+                "coverage": "0/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 0.4464194346219301,
+                "p90_deg": 0.8776591420173647,
+                "count": 172,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "calf_l",
+                  "calf_r"
+                ],
+                "coverage": "2/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 0.36579370474361855,
+                "p90_deg": 0.7840028762817388,
+                "count": 92,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "calf_l",
+                  "calf_r"
+                ],
+                "coverage": "2/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 2/8; foot_l+ball_l coverage 0/2"
+          },
+          {
+            "seed": 1,
+            "best_epoch": 382,
+            "stop_metric_deg": 0.3447281160746612,
+            "train_loss": 0.01048178318887949,
+            "train_geodesic_rad": 0.010481112636625767,
+            "train_aux_mse": 3.35101576638408e-05,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.25559335734163013,
+                "p90_deg": 0.5554885625839233,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.35018735006451607,
+                "p90_deg": 0.7439939141273498,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": NaN,
+                "p90_deg": NaN,
+                "count": 0,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [],
+                "coverage": "0/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 0.5592127560616232,
+                "p90_deg": 0.9573478102684021,
+                "count": 172,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "calf_l",
+                  "calf_r"
+                ],
+                "coverage": "2/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 0.46494557506040385,
+                "p90_deg": 0.922912734746933,
+                "count": 92,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "calf_l",
+                  "calf_r"
+                ],
+                "coverage": "2/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 2/8; foot_l+ball_l coverage 0/2"
+          },
+          {
+            "seed": 2,
+            "best_epoch": 456,
+            "stop_metric_deg": 0.29359290081085876,
+            "train_loss": 0.009673625230789185,
+            "train_geodesic_rad": 0.009673038497567177,
+            "train_aux_mse": 2.9336502848309465e-05,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.21293907399688447,
+                "p90_deg": 0.3936069905757904,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.29797528497874737,
+                "p90_deg": 0.6740609645843505,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": NaN,
+                "p90_deg": NaN,
+                "count": 0,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [],
+                "coverage": "0/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 0.5013473258721967,
+                "p90_deg": 0.9658273398876195,
+                "count": 172,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "calf_l",
+                  "calf_r"
+                ],
+                "coverage": "2/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 0.3909242463338634,
+                "p90_deg": 0.7159499526023868,
+                "count": 92,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "calf_l",
+                  "calf_r"
+                ],
+                "coverage": "2/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 2/8; foot_l+ball_l coverage 0/2"
+          }
+        ],
+        "coverage_note": "legs coverage 2/8; foot_l+ball_l coverage 0/2"
+      },
+      "oracle_h_period_full": {
+        "probe_id": "oracle_h_period_full",
+        "label": "oracle h_period full decoder",
+        "bundle": "pt_best",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "output_mode": "full",
+        "latent_kind": "h_period",
+        "overall_mean_deg_ex_root": 0.3071389873817316,
+        "window_metrics": {
+          "calf_r_56_62": {
+            "window_id": "calf_r_56_62",
+            "label": "calf_r @ sic 56-62",
+            "mean_deg": 0.21418060681649617,
+            "std_deg": 0.03771284992606882,
+            "p90_deg": 0.34262254039446516,
+            "p90_std_deg": 0.09217598032681946,
+            "requested_bones": [
+              "calf_r"
+            ],
+            "available_bones": [
+              "calf_r"
+            ],
+            "coverage": "1/1",
+            "sic_min": 56,
+            "sic_max": 62,
+            "seed_values_deg": [
+              0.16326502710580826,
+              0.22588734648057393,
+              0.2533894468631063
+            ],
+            "seed_p90_deg": [
+              0.221281898021698,
+              0.36203812360763554,
+              0.444547599554062
+            ],
+            "count": 7
+          },
+          "calf_l_78_85": {
+            "window_id": "calf_l_78_85",
+            "label": "calf_l @ sic 78-85",
+            "mean_deg": 0.3169570565223694,
+            "std_deg": 0.04460475603305482,
+            "p90_deg": 0.5198616087436676,
+            "p90_std_deg": 0.08117606406603725,
+            "requested_bones": [
+              "calf_l"
+            ],
+            "available_bones": [
+              "calf_l"
+            ],
+            "coverage": "1/1",
+            "sic_min": 78,
+            "sic_max": 85,
+            "seed_values_deg": [
+              0.3664218410849571,
+              0.3261260315775871,
+              0.2583232969045639
+            ],
+            "seed_p90_deg": [
+              0.5824640959501266,
+              0.5718971908092498,
+              0.40522353947162626
+            ],
+            "count": 8
+          },
+          "foot_l_ball_l_12_15": {
+            "window_id": "foot_l_ball_l_12_15",
+            "label": "foot_l + ball_l @ sic 12-15",
+            "mean_deg": 1.0239851356794436,
+            "std_deg": 0.18260853764350293,
+            "p90_deg": 2.0034369587898255,
+            "p90_std_deg": 0.4662962034483931,
+            "requested_bones": [
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "foot_l",
+              "ball_l"
+            ],
+            "coverage": "2/2",
+            "sic_min": 12,
+            "sic_max": 15,
+            "seed_values_deg": [
+              1.0301127023994923,
+              1.2445072568953037,
+              0.797335447743535
+            ],
+            "seed_p90_deg": [
+              1.99006130695343,
+              2.581101179122925,
+              1.4391483902931212
+            ],
+            "count": 8
+          },
+          "legs_all": {
+            "window_id": "legs_all",
+            "label": "legs @ all sic",
+            "mean_deg": 0.5024308206661525,
+            "std_deg": 0.041497601286552485,
+            "p90_deg": 0.9133706072966262,
+            "p90_std_deg": 0.06295320555206281,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l",
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r"
+            ],
+            "coverage": "8/8",
+            "sic_min": null,
+            "sic_max": null,
+            "seed_values_deg": [
+              0.520542177268802,
+              0.5417182953475953,
+              0.4450319893820601
+            ],
+            "seed_p90_deg": [
+              0.9625702500343327,
+              0.9530296802520759,
+              0.8245118916034699
+            ],
+            "count": 688
+          },
+          "legs_ge_40": {
+            "window_id": "legs_ge_40",
+            "label": "legs @ sic >= 40",
+            "mean_deg": 0.4567242092790379,
+            "std_deg": 0.031698149772588155,
+            "p90_deg": 0.808907308181127,
+            "p90_std_deg": 0.04892052001168412,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l",
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r"
+            ],
+            "coverage": "8/8",
+            "sic_min": 40,
+            "sic_max": null,
+            "seed_values_deg": [
+              0.478168056619799,
+              0.4800945150301508,
+              0.41191005618716386
+            ],
+            "seed_p90_deg": [
+              0.8110556602478027,
+              0.8677193939685822,
+              0.7479468703269959
+            ],
+            "count": 368
+          }
+        },
+        "seed_runs": [
+          {
+            "seed": 0,
+            "best_epoch": 538,
+            "stop_metric_deg": 0.3117457706651663,
+            "train_loss": 0.005950972903519869,
+            "train_geodesic_rad": 0.005950734950602055,
+            "train_aux_mse": 1.1898868251591921e-05,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.16326502710580826,
+                "p90_deg": 0.221281898021698,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.3664218410849571,
+                "p90_deg": 0.5824640959501266,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": 1.0301127023994923,
+                "p90_deg": 1.99006130695343,
+                "count": 8,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "coverage": "2/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 0.520542177268802,
+                "p90_deg": 0.9625702500343327,
+                "count": 688,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 0.478168056619799,
+                "p90_deg": 0.8110556602478027,
+                "count": 368,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+          },
+          {
+            "seed": 1,
+            "best_epoch": 581,
+            "stop_metric_deg": 0.3229866322610391,
+            "train_loss": 0.005883275996893644,
+            "train_geodesic_rad": 0.0058830478228628635,
+            "train_aux_mse": 1.1406717931095045e-05,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.22588734648057393,
+                "p90_deg": 0.36203812360763554,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.3261260315775871,
+                "p90_deg": 0.5718971908092498,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": 1.2445072568953037,
+                "p90_deg": 2.581101179122925,
+                "count": 8,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "coverage": "2/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 0.5417182953475953,
+                "p90_deg": 0.9530296802520759,
+                "count": 688,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 0.4800945150301508,
+                "p90_deg": 0.8677193939685822,
+                "count": 368,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+          },
+          {
+            "seed": 2,
+            "best_epoch": 745,
+            "stop_metric_deg": 0.2903793020639905,
+            "train_loss": 0.0050016711466014385,
+            "train_geodesic_rad": 0.005001514218747616,
+            "train_aux_mse": 7.84174699219875e-06,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.2533894468631063,
+                "p90_deg": 0.444547599554062,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.2583232969045639,
+                "p90_deg": 0.40522353947162626,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": 0.797335447743535,
+                "p90_deg": 1.4391483902931212,
+                "count": 8,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "coverage": "2/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 0.4450319893820601,
+                "p90_deg": 0.8245118916034699,
+                "count": 688,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 0.41191005618716386,
+                "p90_deg": 0.7479468703269959,
+                "count": 368,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+          }
+        ],
+        "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+      }
+    },
+    "stageA": {
+      "baseline_frozen": {
+        "probe_id": "baseline_frozen",
+        "label": "baseline frozen decoder",
+        "bundle": "stageA",
+        "seeds": [
+          0
+        ],
+        "output_mode": "baseline",
+        "latent_kind": "soft_period",
+        "overall_mean_deg_ex_root": 6.353083331579462,
+        "window_metrics": {
+          "calf_r_56_62": {
+            "window_id": "calf_r_56_62",
+            "label": "calf_r @ sic 56-62",
+            "mean_deg": 20.640658242361887,
+            "std_deg": 0.0,
+            "p90_deg": 21.937388610839843,
+            "p90_std_deg": 0.0,
+            "requested_bones": [
+              "calf_r"
+            ],
+            "available_bones": [
+              "calf_r"
+            ],
+            "coverage": "1/1",
+            "sic_min": 56,
+            "sic_max": 62,
+            "seed_values_deg": [
+              20.640658242361887
+            ],
+            "seed_p90_deg": [
+              21.937388610839843
+            ],
+            "count": 7
+          },
+          "calf_l_78_85": {
+            "window_id": "calf_l_78_85",
+            "label": "calf_l @ sic 78-85",
+            "mean_deg": 17.263333320617676,
+            "std_deg": 0.0,
+            "p90_deg": 18.369810485839842,
+            "p90_std_deg": 0.0,
+            "requested_bones": [
+              "calf_l"
+            ],
+            "available_bones": [
+              "calf_l"
+            ],
+            "coverage": "1/1",
+            "sic_min": 78,
+            "sic_max": 85,
+            "seed_values_deg": [
+              17.263333320617676
+            ],
+            "seed_p90_deg": [
+              18.369810485839842
+            ],
+            "count": 8
+          },
+          "foot_l_ball_l_12_15": {
+            "window_id": "foot_l_ball_l_12_15",
+            "label": "foot_l + ball_l @ sic 12-15",
+            "mean_deg": 13.021755754947662,
+            "std_deg": 0.0,
+            "p90_deg": 24.935646629333498,
+            "p90_std_deg": 0.0,
+            "requested_bones": [
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "foot_l",
+              "ball_l"
+            ],
+            "coverage": "2/2",
+            "sic_min": 12,
+            "sic_max": 15,
+            "seed_values_deg": [
+              13.021755754947662
+            ],
+            "seed_p90_deg": [
+              24.935646629333498
+            ],
+            "count": 8
+          },
+          "legs_all": {
+            "window_id": "legs_all",
+            "label": "legs @ all sic",
+            "mean_deg": 9.970469171755276,
+            "std_deg": 0.0,
+            "p90_deg": 20.405844306945806,
+            "p90_std_deg": 0.0,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l",
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r"
+            ],
+            "coverage": "8/8",
+            "sic_min": null,
+            "sic_max": null,
+            "seed_values_deg": [
+              9.970469171755276
+            ],
+            "seed_p90_deg": [
+              20.405844306945806
+            ],
+            "count": 688
+          },
+          "legs_ge_40": {
+            "window_id": "legs_ge_40",
+            "label": "legs @ sic >= 40",
+            "mean_deg": 9.649055291088702,
+            "std_deg": 0.0,
+            "p90_deg": 20.28393669128418,
+            "p90_std_deg": 0.0,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l",
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r"
+            ],
+            "coverage": "8/8",
+            "sic_min": 40,
+            "sic_max": null,
+            "seed_values_deg": [
+              9.649055291088702
+            ],
+            "seed_p90_deg": [
+              20.28393669128418
+            ],
+            "count": 368
+          }
+        },
+        "seed_runs": [
+          {
+            "seed": 0,
+            "best_epoch": 0,
+            "stop_metric_deg": 17.123549071476223,
+            "train_loss": NaN,
+            "train_geodesic_rad": NaN,
+            "train_aux_mse": NaN,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 20.640658242361887,
+                "p90_deg": 21.937388610839843,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 17.263333320617676,
+                "p90_deg": 18.369810485839842,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": 13.021755754947662,
+                "p90_deg": 24.935646629333498,
+                "count": 8,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "coverage": "2/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 9.970469171755276,
+                "p90_deg": 20.405844306945806,
+                "count": 688,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 9.649055291088702,
+                "p90_deg": 20.28393669128418,
+                "count": 368,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+          }
+        ],
+        "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+      },
+      "oracle_soft_period_full": {
+        "probe_id": "oracle_soft_period_full",
+        "label": "oracle soft_period full decoder",
+        "bundle": "stageA",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "output_mode": "full",
+        "latent_kind": "soft_period",
+        "overall_mean_deg_ex_root": 0.6011535601261249,
+        "window_metrics": {
+          "calf_r_56_62": {
+            "window_id": "calf_r_56_62",
+            "label": "calf_r @ sic 56-62",
+            "mean_deg": 0.9827908327182134,
+            "std_deg": 0.027145827746357536,
+            "p90_deg": 1.7571673154830934,
+            "p90_std_deg": 0.18845659472934265,
+            "requested_bones": [
+              "calf_r"
+            ],
+            "available_bones": [
+              "calf_r"
+            ],
+            "coverage": "1/1",
+            "sic_min": 56,
+            "sic_max": 62,
+            "seed_values_deg": [
+              0.9879511850220817,
+              0.9472656718322209,
+              1.0131556413003378
+            ],
+            "seed_p90_deg": [
+              1.5378791332244874,
+              1.735630798339844,
+              1.9979920148849488
+            ],
+            "count": 7
+          },
+          "calf_l_78_85": {
+            "window_id": "calf_l_78_85",
+            "label": "calf_l @ sic 78-85",
+            "mean_deg": 0.8113367638240258,
+            "std_deg": 0.04199813796296046,
+            "p90_deg": 1.3990015864372252,
+            "p90_std_deg": 0.12972747636101653,
+            "requested_bones": [
+              "calf_l"
+            ],
+            "available_bones": [
+              "calf_l"
+            ],
+            "coverage": "1/1",
+            "sic_min": 78,
+            "sic_max": 85,
+            "seed_values_deg": [
+              0.7954771928489208,
+              0.7696971949189901,
+              0.8688359037041664
+            ],
+            "seed_p90_deg": [
+              1.2278910517692565,
+              1.4272444128990172,
+              1.541869294643402
+            ],
+            "count": 8
+          },
+          "foot_l_ball_l_12_15": {
+            "window_id": "foot_l_ball_l_12_15",
+            "label": "foot_l + ball_l @ sic 12-15",
+            "mean_deg": 4.3025103608767195,
+            "std_deg": 0.6035140126108431,
+            "p90_deg": 9.532177257537843,
+            "p90_std_deg": 1.9463499929951078,
+            "requested_bones": [
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "foot_l",
+              "ball_l"
+            ],
+            "coverage": "2/2",
+            "sic_min": 12,
+            "sic_max": 15,
+            "seed_values_deg": [
+              3.536053627729416,
+              4.360543705523014,
+              5.0109337493777275
+            ],
+            "seed_p90_deg": [
+              6.872514152526855,
+              10.247955417633056,
+              11.476062202453614
+            ],
+            "count": 8
+          },
+          "legs_all": {
+            "window_id": "legs_all",
+            "label": "legs @ all sic",
+            "mean_deg": 1.4806833534894959,
+            "std_deg": 0.08457966817772022,
+            "p90_deg": 3.22158124446869,
+            "p90_std_deg": 0.19686080082317797,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l",
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r"
+            ],
+            "coverage": "8/8",
+            "sic_min": null,
+            "sic_max": null,
+            "seed_values_deg": [
+              1.4434361735163905,
+              1.5977450767965165,
+              1.4008688101555806
+            ],
+            "seed_p90_deg": [
+              3.1975232362747206,
+              3.4738126039505017,
+              2.9934078931808483
+            ],
+            "count": 688
+          },
+          "legs_ge_40": {
+            "window_id": "legs_ge_40",
+            "label": "legs @ sic >= 40",
+            "mean_deg": 1.4885169460060264,
+            "std_deg": 0.0859237567631572,
+            "p90_deg": 3.121308183670044,
+            "p90_std_deg": 0.21057611984701086,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l",
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r"
+            ],
+            "coverage": "8/8",
+            "sic_min": 40,
+            "sic_max": null,
+            "seed_values_deg": [
+              1.4292653769902561,
+              1.6100191509999011,
+              1.426266310027922
+            ],
+            "seed_p90_deg": [
+              2.9837716817855835,
+              3.4188257217407227,
+              2.961327147483826
+            ],
+            "count": 368
+          }
+        },
+        "seed_runs": [
+          {
+            "seed": 0,
+            "best_epoch": 737,
+            "stop_metric_deg": 1.0006415061990657,
+            "train_loss": 0.010015597566962242,
+            "train_geodesic_rad": 0.01001429371535778,
+            "train_aux_mse": 6.51920709060505e-05,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.9879511850220817,
+                "p90_deg": 1.5378791332244874,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.7954771928489208,
+                "p90_deg": 1.2278910517692565,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": 3.536053627729416,
+                "p90_deg": 6.872514152526855,
+                "count": 8,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "coverage": "2/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 1.4434361735163905,
+                "p90_deg": 3.1975232362747206,
+                "count": 688,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 1.4292653769902561,
+                "p90_deg": 2.9837716817855835,
+                "count": 368,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+          },
+          {
+            "seed": 1,
+            "best_epoch": 695,
+            "stop_metric_deg": 1.007561569480126,
+            "train_loss": 0.01215225737541914,
+            "train_geodesic_rad": 0.012150484137237072,
+            "train_aux_mse": 8.8663880887907e-05,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.9472656718322209,
+                "p90_deg": 1.735630798339844,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.7696971949189901,
+                "p90_deg": 1.4272444128990172,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": 4.360543705523014,
+                "p90_deg": 10.247955417633056,
+                "count": 8,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "coverage": "2/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 1.5977450767965165,
+                "p90_deg": 3.4738126039505017,
+                "count": 688,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 1.6100191509999011,
+                "p90_deg": 3.4188257217407227,
+                "count": 368,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+          },
+          {
+            "seed": 2,
+            "best_epoch": 776,
+            "stop_metric_deg": 1.0355101300201521,
+            "train_loss": 0.01054039690643549,
+            "train_geodesic_rad": 0.010538971051573753,
+            "train_aux_mse": 7.130616722861305e-05,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 1.0131556413003378,
+                "p90_deg": 1.9979920148849488,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.8688359037041664,
+                "p90_deg": 1.541869294643402,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": 5.0109337493777275,
+                "p90_deg": 11.476062202453614,
+                "count": 8,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "coverage": "2/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 1.4008688101555806,
+                "p90_deg": 2.9934078931808483,
+                "count": 688,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 1.426266310027922,
+                "p90_deg": 2.961327147483826,
+                "count": 368,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+          }
+        ],
+        "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+      },
+      "oracle_soft_period_calf_only": {
+        "probe_id": "oracle_soft_period_calf_only",
+        "label": "oracle soft_period calf-only decoder",
+        "bundle": "stageA",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "output_mode": "calf_only",
+        "latent_kind": "soft_period",
+        "overall_mean_deg_ex_root": 2.2724760376754425,
+        "window_metrics": {
+          "calf_r_56_62": {
+            "window_id": "calf_r_56_62",
+            "label": "calf_r @ sic 56-62",
+            "mean_deg": 0.9023027923845109,
+            "std_deg": 0.04008653065047636,
+            "p90_deg": 1.2943288803100585,
+            "p90_std_deg": 0.055769577188119424,
+            "requested_bones": [
+              "calf_r"
+            ],
+            "available_bones": [
+              "calf_r"
+            ],
+            "coverage": "1/1",
+            "sic_min": 56,
+            "sic_max": 62,
+            "seed_values_deg": [
+              0.8614594553198133,
+              0.8886765348059791,
+              0.9567723870277405
+            ],
+            "seed_p90_deg": [
+              1.2401330947875977,
+              1.3710501670837403,
+              1.271803379058838
+            ],
+            "count": 7
+          },
+          "calf_l_78_85": {
+            "window_id": "calf_l_78_85",
+            "label": "calf_l @ sic 78-85",
+            "mean_deg": 0.7631984823383391,
+            "std_deg": 0.04389050179704883,
+            "p90_deg": 1.3856990377108256,
+            "p90_std_deg": 0.09348031336420252,
+            "requested_bones": [
+              "calf_l"
+            ],
+            "available_bones": [
+              "calf_l"
+            ],
+            "coverage": "1/1",
+            "sic_min": 78,
+            "sic_max": 85,
+            "seed_values_deg": [
+              0.7685221936553717,
+              0.8140932116657495,
+              0.706980041693896
+            ],
+            "seed_p90_deg": [
+              1.4834707260131834,
+              1.413874053955078,
+              1.259752333164215
+            ],
+            "count": 8
+          },
+          "foot_l_ball_l_12_15": {
+            "window_id": "foot_l_ball_l_12_15",
+            "label": "foot_l + ball_l @ sic 12-15",
+            "mean_deg": NaN,
+            "std_deg": NaN,
+            "p90_deg": NaN,
+            "p90_std_deg": NaN,
+            "requested_bones": [
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [],
+            "coverage": "0/2",
+            "sic_min": 12,
+            "sic_max": 15,
+            "seed_values_deg": [
+              NaN,
+              NaN,
+              NaN
+            ],
+            "seed_p90_deg": [
+              NaN,
+              NaN,
+              NaN
+            ],
+            "count": 0
+          },
+          "legs_all": {
+            "window_id": "legs_all",
+            "label": "legs @ all sic",
+            "mean_deg": 2.2724760376754425,
+            "std_deg": 0.13302771674551586,
+            "p90_deg": 5.561032152175904,
+            "p90_std_deg": 0.4623859342764686,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "calf_l",
+              "calf_r"
+            ],
+            "coverage": "2/8",
+            "sic_min": null,
+            "sic_max": null,
+            "seed_values_deg": [
+              2.4571999395915936,
+              2.210974582167732,
+              2.1492535912670023
+            ],
+            "seed_p90_deg": [
+              6.047879791259766,
+              5.69567666053772,
+              4.939540004730224
+            ],
+            "count": 172
+          },
+          "legs_ge_40": {
+            "window_id": "legs_ge_40",
+            "label": "legs @ sic >= 40",
+            "mean_deg": 2.2295308568771333,
+            "std_deg": 0.05358126563949374,
+            "p90_deg": 4.565781609217328,
+            "p90_std_deg": 0.1770222345633385,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "calf_l",
+              "calf_r"
+            ],
+            "coverage": "2/8",
+            "sic_min": 40,
+            "sic_max": null,
+            "seed_values_deg": [
+              2.255510632758555,
+              2.1548950730863474,
+              2.278186864786498
+            ],
+            "seed_p90_deg": [
+              4.76950421333313,
+              4.337911844253543,
+              4.589928770065309
+            ],
+            "count": 92
+          }
+        },
+        "seed_runs": [
+          {
+            "seed": 0,
+            "best_epoch": 577,
+            "stop_metric_deg": 1.1232637168250887,
+            "train_loss": 0.04466206207871437,
+            "train_geodesic_rad": 0.044648829847574234,
+            "train_aux_mse": 0.0006616859463974833,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.8614594553198133,
+                "p90_deg": 1.2401330947875977,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.7685221936553717,
+                "p90_deg": 1.4834707260131834,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": NaN,
+                "p90_deg": NaN,
+                "count": 0,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [],
+                "coverage": "0/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 2.4571999395915936,
+                "p90_deg": 6.047879791259766,
+                "count": 172,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "calf_l",
+                  "calf_r"
+                ],
+                "coverage": "2/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 2.255510632758555,
+                "p90_deg": 4.76950421333313,
+                "count": 92,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "calf_l",
+                  "calf_r"
+                ],
+                "coverage": "2/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 2/8; foot_l+ball_l coverage 0/2"
+          },
+          {
+            "seed": 1,
+            "best_epoch": 790,
+            "stop_metric_deg": 1.1176948641140994,
+            "train_loss": 0.0397670604288578,
+            "train_geodesic_rad": 0.039755772799253464,
+            "train_aux_mse": 0.00056434515863657,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.8886765348059791,
+                "p90_deg": 1.3710501670837403,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.8140932116657495,
+                "p90_deg": 1.413874053955078,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": NaN,
+                "p90_deg": NaN,
+                "count": 0,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [],
+                "coverage": "0/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 2.210974582167732,
+                "p90_deg": 5.69567666053772,
+                "count": 172,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "calf_l",
+                  "calf_r"
+                ],
+                "coverage": "2/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 2.1548950730863474,
+                "p90_deg": 4.337911844253543,
+                "count": 92,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "calf_l",
+                  "calf_r"
+                ],
+                "coverage": "2/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 2/8; foot_l+ball_l coverage 0/2"
+          },
+          {
+            "seed": 2,
+            "best_epoch": 767,
+            "stop_metric_deg": 1.1082450170940046,
+            "train_loss": 0.039442919194698334,
+            "train_geodesic_rad": 0.03943285346031189,
+            "train_aux_mse": 0.0005033341003581882,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.9567723870277405,
+                "p90_deg": 1.271803379058838,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.706980041693896,
+                "p90_deg": 1.259752333164215,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": NaN,
+                "p90_deg": NaN,
+                "count": 0,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [],
+                "coverage": "0/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 2.1492535912670023,
+                "p90_deg": 4.939540004730224,
+                "count": 172,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "calf_l",
+                  "calf_r"
+                ],
+                "coverage": "2/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 2.278186864786498,
+                "p90_deg": 4.589928770065309,
+                "count": 92,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "calf_l",
+                  "calf_r"
+                ],
+                "coverage": "2/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 2/8; foot_l+ball_l coverage 0/2"
+          }
+        ],
+        "coverage_note": "legs coverage 2/8; foot_l+ball_l coverage 0/2"
+      },
+      "oracle_h_period_full": {
+        "probe_id": "oracle_h_period_full",
+        "label": "oracle h_period full decoder",
+        "bundle": "stageA",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "output_mode": "full",
+        "latent_kind": "h_period",
+        "overall_mean_deg_ex_root": 0.31396861173281515,
+        "window_metrics": {
+          "calf_r_56_62": {
+            "window_id": "calf_r_56_62",
+            "label": "calf_r @ sic 56-62",
+            "mean_deg": 0.3084958796167657,
+            "std_deg": 0.04947584833470916,
+            "p90_deg": 0.5278644005457561,
+            "p90_std_deg": 0.10327037299487643,
+            "requested_bones": [
+              "calf_r"
+            ],
+            "available_bones": [
+              "calf_r"
+            ],
+            "coverage": "1/1",
+            "sic_min": 56,
+            "sic_max": 62,
+            "seed_values_deg": [
+              0.37819658645561766,
+              0.26834006181785036,
+              0.2789509905768292
+            ],
+            "seed_p90_deg": [
+              0.6456907689571383,
+              0.39421926140785224,
+              0.5436831712722779
+            ],
+            "count": 7
+          },
+          "calf_l_78_85": {
+            "window_id": "calf_l_78_85",
+            "label": "calf_l @ sic 78-85",
+            "mean_deg": 0.38317750363300246,
+            "std_deg": 0.009202745465424022,
+            "p90_deg": 0.6252068986495335,
+            "p90_std_deg": 0.12093492084535865,
+            "requested_bones": [
+              "calf_l"
+            ],
+            "available_bones": [
+              "calf_l"
+            ],
+            "coverage": "1/1",
+            "sic_min": 78,
+            "sic_max": 85,
+            "seed_values_deg": [
+              0.3821312263607979,
+              0.3949351767078042,
+              0.37246610783040524
+            ],
+            "seed_p90_deg": [
+              0.5617663353681563,
+              0.7944748222827911,
+              0.5193795382976532
+            ],
+            "count": 8
+          },
+          "foot_l_ball_l_12_15": {
+            "window_id": "foot_l_ball_l_12_15",
+            "label": "foot_l + ball_l @ sic 12-15",
+            "mean_deg": 1.7828019680455327,
+            "std_deg": 0.11733767527374533,
+            "p90_deg": 3.775585516293843,
+            "p90_std_deg": 0.3642997565139464,
+            "requested_bones": [
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "foot_l",
+              "ball_l"
+            ],
+            "coverage": "2/2",
+            "sic_min": 12,
+            "sic_max": 15,
+            "seed_values_deg": [
+              1.8394671445712447,
+              1.619399070739746,
+              1.8895396888256073
+            ],
+            "seed_p90_deg": [
+              4.196337032318115,
+              3.3077265739440915,
+              3.8226929426193235
+            ],
+            "count": 8
+          },
+          "legs_all": {
+            "window_id": "legs_all",
+            "label": "legs @ all sic",
+            "mean_deg": 0.5619031378030127,
+            "std_deg": 0.022084825463482154,
+            "p90_deg": 1.0961677511533106,
+            "p90_std_deg": 0.02244446677780467,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l",
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r"
+            ],
+            "coverage": "8/8",
+            "sic_min": null,
+            "sic_max": null,
+            "seed_values_deg": [
+              0.5700525160294113,
+              0.5317171484632635,
+              0.5839397489163635
+            ],
+            "seed_p90_deg": [
+              1.077238464355469,
+              1.083566749095917,
+              1.1276980400085457
+            ],
+            "count": 688
+          },
+          "legs_ge_40": {
+            "window_id": "legs_ge_40",
+            "label": "legs @ sic >= 40",
+            "mean_deg": 0.5288518271847642,
+            "std_deg": 0.020298629702786505,
+            "p90_deg": 1.0170543332894646,
+            "p90_std_deg": 0.026353139770424763,
+            "requested_bones": [
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r",
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l"
+            ],
+            "available_bones": [
+              "thigh_l",
+              "calf_l",
+              "foot_l",
+              "ball_l",
+              "thigh_r",
+              "calf_r",
+              "foot_r",
+              "ball_r"
+            ],
+            "coverage": "8/8",
+            "sic_min": 40,
+            "sic_max": null,
+            "seed_values_deg": [
+              0.5388830243407384,
+              0.5005428204312921,
+              0.547129636782262
+            ],
+            "seed_p90_deg": [
+              0.9887056767940523,
+              1.0102764010429386,
+              1.0521809220314027
+            ],
+            "count": 368
+          }
+        },
+        "seed_runs": [
+          {
+            "seed": 0,
+            "best_epoch": 788,
+            "stop_metric_deg": 0.4150246791635812,
+            "train_loss": 0.0057624164037406445,
+            "train_geodesic_rad": 0.005762150045484304,
+            "train_aux_mse": 1.3308663255884312e-05,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.37819658645561766,
+                "p90_deg": 0.6456907689571383,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.3821312263607979,
+                "p90_deg": 0.5617663353681563,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": 1.8394671445712447,
+                "p90_deg": 4.196337032318115,
+                "count": 8,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "coverage": "2/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 0.5700525160294113,
+                "p90_deg": 1.077238464355469,
+                "count": 688,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 0.5388830243407384,
+                "p90_deg": 0.9887056767940523,
+                "count": 368,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+          },
+          {
+            "seed": 1,
+            "best_epoch": 797,
+            "stop_metric_deg": 0.3685360922997174,
+            "train_loss": 0.0056023686192929745,
+            "train_geodesic_rad": 0.005602141376584768,
+            "train_aux_mse": 1.135766797233373e-05,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.26834006181785036,
+                "p90_deg": 0.39421926140785224,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.3949351767078042,
+                "p90_deg": 0.7944748222827911,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": 1.619399070739746,
+                "p90_deg": 3.3077265739440915,
+                "count": 8,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "coverage": "2/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 0.5317171484632635,
+                "p90_deg": 1.083566749095917,
+                "count": 688,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 0.5005428204312921,
+                "p90_deg": 1.0102764010429386,
+                "count": 368,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+          },
+          {
+            "seed": 2,
+            "best_epoch": 757,
+            "stop_metric_deg": 0.37367377793275636,
+            "train_loss": 0.005571077112108469,
+            "train_geodesic_rad": 0.005570820067077875,
+            "train_aux_mse": 1.2846960089518689e-05,
+            "window_metrics": {
+              "calf_r_56_62": {
+                "window_id": "calf_r_56_62",
+                "label": "calf_r @ sic 56-62",
+                "mean_deg": 0.2789509905768292,
+                "p90_deg": 0.5436831712722779,
+                "count": 7,
+                "requested_bones": [
+                  "calf_r"
+                ],
+                "available_bones": [
+                  "calf_r"
+                ],
+                "coverage": "1/1",
+                "sic_min": 56,
+                "sic_max": 62
+              },
+              "calf_l_78_85": {
+                "window_id": "calf_l_78_85",
+                "label": "calf_l @ sic 78-85",
+                "mean_deg": 0.37246610783040524,
+                "p90_deg": 0.5193795382976532,
+                "count": 8,
+                "requested_bones": [
+                  "calf_l"
+                ],
+                "available_bones": [
+                  "calf_l"
+                ],
+                "coverage": "1/1",
+                "sic_min": 78,
+                "sic_max": 85
+              },
+              "foot_l_ball_l_12_15": {
+                "window_id": "foot_l_ball_l_12_15",
+                "label": "foot_l + ball_l @ sic 12-15",
+                "mean_deg": 1.8895396888256073,
+                "p90_deg": 3.8226929426193235,
+                "count": 8,
+                "requested_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "foot_l",
+                  "ball_l"
+                ],
+                "coverage": "2/2",
+                "sic_min": 12,
+                "sic_max": 15
+              },
+              "legs_all": {
+                "window_id": "legs_all",
+                "label": "legs @ all sic",
+                "mean_deg": 0.5839397489163635,
+                "p90_deg": 1.1276980400085457,
+                "count": 688,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": null,
+                "sic_max": null
+              },
+              "legs_ge_40": {
+                "window_id": "legs_ge_40",
+                "label": "legs @ sic >= 40",
+                "mean_deg": 0.547129636782262,
+                "p90_deg": 1.0521809220314027,
+                "count": 368,
+                "requested_bones": [
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r",
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l"
+                ],
+                "available_bones": [
+                  "thigh_l",
+                  "calf_l",
+                  "foot_l",
+                  "ball_l",
+                  "thigh_r",
+                  "calf_r",
+                  "foot_r",
+                  "ball_r"
+                ],
+                "coverage": "8/8",
+                "sic_min": 40,
+                "sic_max": null
+              }
+            },
+            "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+          }
+        ],
+        "coverage_note": "legs coverage 8/8; foot_l+ball_l coverage 2/2"
+      }
+    }
+  }
+}

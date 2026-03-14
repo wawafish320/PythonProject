@@ -1,0 +1,24 @@
+{
+  "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_keepweight_compare_20260313/old_bestfree/posttrain_log_old_bestfree_stage6_probe_keepweight_20260313_keepweight.json",
+  "rows": 300,
+  "head_count": 20,
+  "step1": {
+    "dir_leg_base": 0.37940922379493713,
+    "dir_nonleg_base": 0.12937764823436737,
+    "leg_over_nonleg": 2.932571653394395,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 1.7741390764697604,
+    "direct_grad_norm_out_else": 0.1690146711785789,
+    "grad_arm_over_else": 10.49695309938642,
+    "step": 1.0
+  },
+  "head20_mean": {
+    "dir_leg_base": 0.18983208686113356,
+    "dir_nonleg_base": 0.05109796691685915,
+    "leg_over_nonleg": 3.8460602852023724,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 0.7133113077849558,
+    "direct_grad_norm_out_else": 0.11066809066361172,
+    "grad_arm_over_else": 6.4087818716560205
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_hiddenfeat_compare_20260313/results/cp015_hidden_gradon/basetrain_freerun/Walk_F_freerun_cycles.json",
+  "mask": {
+    "cycle_gte": 1,
+    "drop_wrap": true,
+    "kept_steps": 344,
+    "total_steps": 434
+  },
+  "groups": {
+    "leg": {
+      "j": 8,
+      "samples": 2752,
+      "mean": 9.720002637610252,
+      "p50": 7.989965438842773,
+      "p90": 19.691072463989258,
+      "p95": 25.935022354125977
+    },
+    "nonleg": {
+      "j": 37,
+      "samples": 12728,
+      "mean": 2.6352572914877843,
+      "p50": 1.2991580963134766,
+      "p90": 6.821689605712891,
+      "p95": 10.503863334655762
+    },
+    "arm": {
+      "j": 26,
+      "samples": 8944,
+      "mean": 3.066989888002429,
+      "p50": 1.50072181224823,
+      "p90": 8.459855079650879,
+      "p95": 11.63357162475586
+    },
+    "else": {
+      "j": 11,
+      "samples": 3784,
+      "mean": 1.614798426998625,
+      "p50": 0.9637466669082642,
+      "p90": 4.092663764953613,
+      "p95": 5.143172740936279
+    },
+    "all_ex_root": {
+      "j": 45,
+      "samples": 15480,
+      "mean": 3.8947675752428896,
+      "p50": 1.7423182725906372,
+      "p90": 11.010437965393066,
+      "p95": 15.159862518310547
+    }
+  },
+  "group_names": {
+    "leg": [
+      "thigh_l",
+      "calf_l",
+      "foot_l",
+      "ball_l",
+      "thigh_r",
+      "calf_r",
+      "foot_r",
+      "ball_r"
+    ],
+    "arm": [
+      "clavicle_l",
+      "upperarm_l",
+      "RUpArmTwist_l_01",
+      "RUpArmTwist_l_02",
+      "lowerarm_l",
+      "L_ForeTwist_01",
+      "L_ForeTwist_02",
+      "hand_l",
+      "index_01_l",
+      "middle_01_l",
+      "pinky_01_l",
+      "ring_01_l",
+      "thumb_01_l",
+      "clavicle_r",
+      "upperarm_r",
+      "RUpArmTwist_r_01",
+      "RUpArmTwist_r_02",
+      "lowerarm_r",
+      "R_ForeTwist_01",
+      "R_ForeTwist_02",
+      "hand_r",
+      "index_01_r",
+      "middle_01_r",
+      "pinky_01_r",
+      "ring_01_r",
+      "thumb_01_r"
+    ],
+    "else": [
+      "Bip001",
+      "spine_01",
+      "spine_02",
+      "neck_01",
+      "head",
+      "LCalfTwist_01",
+      "LCalfTwist_02",
+      "LCalfTwist_03",
+      "RCalfTwist_01",
+      "RCalfTwist_02",
+      "RCalfTwist_03"
+    ]
+  }
+}

@@ -1,0 +1,230 @@
+{
+  "stageA": {
+    "overall_mean_deg_ex_root": 6.353083331579462,
+    "focus_windows": {
+      "calf_r@2-4": 15.846926333333334,
+      "foot_l+ball_l@12-15": 13.021755875,
+      "legs@49-55": 8.380363892857144,
+      "legs@40-55": 9.158198,
+      "legs@all": 9.970469168604652
+    },
+    "top_leg_pairs_overall": [
+      {
+        "sic": 81,
+        "bone": "calf_r",
+        "deg": 37.684612
+      },
+      {
+        "sic": 80,
+        "bone": "calf_r",
+        "deg": 37.528503
+      },
+      {
+        "sic": 82,
+        "bone": "calf_r",
+        "deg": 36.508808
+      },
+      {
+        "sic": 79,
+        "bone": "calf_r",
+        "deg": 36.250229
+      },
+      {
+        "sic": 17,
+        "bone": "calf_l",
+        "deg": 35.833134
+      },
+      {
+        "sic": 16,
+        "bone": "calf_l",
+        "deg": 35.694416
+      },
+      {
+        "sic": 18,
+        "bone": "calf_l",
+        "deg": 35.438782
+      },
+      {
+        "sic": 15,
+        "bone": "calf_l",
+        "deg": 35.076397
+      },
+      {
+        "sic": 78,
+        "bone": "calf_r",
+        "deg": 34.864235
+      },
+      {
+        "sic": 83,
+        "bone": "calf_r",
+        "deg": 34.713711
+      }
+    ],
+    "top_leg_pairs_sic_ge_40": [
+      {
+        "sic": 81,
+        "bone": "calf_r",
+        "deg": 37.684612
+      },
+      {
+        "sic": 80,
+        "bone": "calf_r",
+        "deg": 37.528503
+      },
+      {
+        "sic": 82,
+        "bone": "calf_r",
+        "deg": 36.508808
+      },
+      {
+        "sic": 79,
+        "bone": "calf_r",
+        "deg": 36.250229
+      },
+      {
+        "sic": 78,
+        "bone": "calf_r",
+        "deg": 34.864235
+      },
+      {
+        "sic": 83,
+        "bone": "calf_r",
+        "deg": 34.713711
+      },
+      {
+        "sic": 77,
+        "bone": "calf_r",
+        "deg": 32.931431
+      },
+      {
+        "sic": 84,
+        "bone": "calf_r",
+        "deg": 32.533573
+      },
+      {
+        "sic": 85,
+        "bone": "calf_r",
+        "deg": 31.441574
+      },
+      {
+        "sic": 76,
+        "bone": "calf_r",
+        "deg": 31.011839
+      }
+    ]
+  },
+  "best": {
+    "overall_mean_deg_ex_root": 6.59598877473832,
+    "focus_windows": {
+      "calf_r@2-4": 14.30392,
+      "foot_l+ball_l@12-15": 12.923514625,
+      "legs@49-55": 9.215839910714285,
+      "legs@40-55": 9.261940875,
+      "legs@all": 10.194432343023257
+    },
+    "top_leg_pairs_overall": [
+      {
+        "sic": 17,
+        "bone": "calf_l",
+        "deg": 36.772427
+      },
+      {
+        "sic": 16,
+        "bone": "calf_l",
+        "deg": 36.638191
+      },
+      {
+        "sic": 18,
+        "bone": "calf_l",
+        "deg": 36.323696
+      },
+      {
+        "sic": 15,
+        "bone": "calf_l",
+        "deg": 35.980026
+      },
+      {
+        "sic": 19,
+        "bone": "calf_l",
+        "deg": 35.309914
+      },
+      {
+        "sic": 14,
+        "bone": "calf_l",
+        "deg": 34.681759
+      },
+      {
+        "sic": 20,
+        "bone": "calf_l",
+        "deg": 33.762306
+      },
+      {
+        "sic": 13,
+        "bone": "calf_l",
+        "deg": 32.602547
+      },
+      {
+        "sic": 21,
+        "bone": "calf_l",
+        "deg": 31.637724
+      },
+      {
+        "sic": 81,
+        "bone": "calf_r",
+        "deg": 31.213764
+      }
+    ],
+    "top_leg_pairs_sic_ge_40": [
+      {
+        "sic": 81,
+        "bone": "calf_r",
+        "deg": 31.213764
+      },
+      {
+        "sic": 80,
+        "bone": "calf_r",
+        "deg": 30.946764
+      },
+      {
+        "sic": 82,
+        "bone": "calf_r",
+        "deg": 30.032421
+      },
+      {
+        "sic": 79,
+        "bone": "calf_r",
+        "deg": 29.632111
+      },
+      {
+        "sic": 57,
+        "bone": "calf_r",
+        "deg": 28.912672
+      },
+      {
+        "sic": 58,
+        "bone": "calf_r",
+        "deg": 28.832726
+      },
+      {
+        "sic": 56,
+        "bone": "calf_r",
+        "deg": 28.450302
+      },
+      {
+        "sic": 83,
+        "bone": "calf_r",
+        "deg": 28.440685
+      },
+      {
+        "sic": 59,
+        "bone": "calf_r",
+        "deg": 28.359318
+      },
+      {
+        "sic": 78,
+        "bone": "calf_r",
+        "deg": 28.214216
+      }
+    ]
+  }
+}

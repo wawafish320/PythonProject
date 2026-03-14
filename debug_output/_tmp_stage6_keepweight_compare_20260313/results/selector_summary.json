@@ -1,0 +1,256 @@
+{
+  "run_tag": "20260313_keepweight",
+  "policy": {
+    "stage6_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/stage6_direct_cond_anchor_splitfirst_3way_armchain_keepweight_20260313.json",
+    "teacher": "/Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json",
+    "encoder_bundle": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt",
+    "affine_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+    "score_formula": "1.000*all_ex_root + 1.500*leg + 0.500*nonleg"
+  },
+  "recommended": {
+    "name": "old_bestfree",
+    "score": 18.680060475569785
+  },
+  "ranking": [
+    {
+      "rank": 1,
+      "row": {
+        "name": "old_bestfree",
+        "family": "MLPL2_DirectBranch_v1",
+        "selector": "best_free",
+        "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+        "score": {
+          "weights": {
+            "all_ex_root": 1.0,
+            "leg": 1.5,
+            "nonleg": 0.5
+          },
+          "stage6_exit": {
+            "all_ex_root_mean": 3.3382564045893157,
+            "leg_mean": 9.563805466466366,
+            "nonleg_mean": 1.9921917425618456
+          },
+          "value": 18.680060475569785
+        },
+        "basetrain": null,
+        "stage6_init": {
+          "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_keepweight_compare_20260313/old_bestfree/posttrain_log_old_bestfree_stage6_probe_keepweight_20260313_keepweight.json",
+          "rows": 300,
+          "head_count": 20,
+          "step1": {
+            "dir_leg_base": 0.37940922379493713,
+            "dir_nonleg_base": 0.12937764823436737,
+            "leg_over_nonleg": 2.932571653394395,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 1.7741390764697604,
+            "direct_grad_norm_out_else": 0.1690146711785789,
+            "grad_arm_over_else": 10.49695309938642,
+            "step": 1.0
+          },
+          "head20_mean": {
+            "dir_leg_base": 0.18983208686113356,
+            "dir_nonleg_base": 0.05109796691685915,
+            "leg_over_nonleg": 3.8460602852023724,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 0.7133113077849558,
+            "direct_grad_norm_out_else": 0.11066809066361172,
+            "grad_arm_over_else": 6.4087818716560205
+          }
+        },
+        "stage6_exit": {
+          "all_ex_root_mean": 3.3382564045893157,
+          "leg_mean": 9.563805466466366,
+          "nonleg_mean": 1.9921917425618456,
+          "arm_mean": 2.1961898855878186,
+          "else_mean": 1.5100143135913633
+        },
+        "paths": {
+          "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/results/old_bestfree/lane.log",
+          "basetrain_group_summary": null,
+          "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/results/old_bestfree/posttrain_stage6_init_stats.json",
+          "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/results/old_bestfree/stage6_group_summary.json",
+          "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_keepweight_compare_20260313/old_bestfree/ckpt_last_old_bestfree_stage6_probe_keepweight_20260313_keepweight.pth"
+        }
+      }
+    },
+    {
+      "rank": 2,
+      "row": {
+        "name": "cp015_bestfree",
+        "family": "MLPL2_DirectBranch_v1",
+        "selector": "best_free",
+        "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+        "score": {
+          "weights": {
+            "all_ex_root": 1.0,
+            "leg": 1.5,
+            "nonleg": 0.5
+          },
+          "stage6_exit": {
+            "all_ex_root_mean": 3.905214057030626,
+            "leg_mean": 10.875861752694364,
+            "nonleg_mean": 2.3980469876979256
+          },
+          "value": 21.418030179921136
+        },
+        "basetrain": null,
+        "stage6_init": {
+          "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_keepweight_compare_20260313/cp015_bestfree/posttrain_log_cp015_bestfree_stage6_probe_keepweight_20260313_keepweight.json",
+          "rows": 300,
+          "head_count": 20,
+          "step1": {
+            "dir_leg_base": 0.4246257543563843,
+            "dir_nonleg_base": 0.09716631472110748,
+            "leg_over_nonleg": 4.370092202994117,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 1.7082628678020444,
+            "direct_grad_norm_out_else": 0.21426740197183633,
+            "grad_arm_over_else": 7.972574699097632,
+            "step": 1.0
+          },
+          "head20_mean": {
+            "dir_leg_base": 0.19173094853758813,
+            "dir_nonleg_base": 0.045140113309025766,
+            "leg_over_nonleg": 4.258153530587353,
+            "arm_over_else": NaN,
+            "direct_grad_norm_out_arm": 0.9017746117663675,
+            "direct_grad_norm_out_else": 0.1350663288827779,
+            "grad_arm_over_else": 6.772363501078907
+          }
+        },
+        "stage6_exit": {
+          "all_ex_root_mean": 3.905214057030626,
+          "leg_mean": 10.875861752694364,
+          "nonleg_mean": 2.3980469876979256,
+          "arm_mean": 2.6997695520703555,
+          "else_mean": 1.6848845628176379
+        },
+        "paths": {
+          "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/results/cp015_bestfree/lane.log",
+          "basetrain_group_summary": null,
+          "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/results/cp015_bestfree/posttrain_stage6_init_stats.json",
+          "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/results/cp015_bestfree/stage6_group_summary.json",
+          "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_keepweight_compare_20260313/cp015_bestfree/ckpt_last_cp015_bestfree_stage6_probe_keepweight_20260313_keepweight.pth"
+        }
+      }
+    }
+  ],
+  "rows": [
+    {
+      "name": "old_bestfree",
+      "family": "MLPL2_DirectBranch_v1",
+      "selector": "best_free",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+      "score": {
+        "weights": {
+          "all_ex_root": 1.0,
+          "leg": 1.5,
+          "nonleg": 0.5
+        },
+        "stage6_exit": {
+          "all_ex_root_mean": 3.3382564045893157,
+          "leg_mean": 9.563805466466366,
+          "nonleg_mean": 1.9921917425618456
+        },
+        "value": 18.680060475569785
+      },
+      "basetrain": null,
+      "stage6_init": {
+        "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_keepweight_compare_20260313/old_bestfree/posttrain_log_old_bestfree_stage6_probe_keepweight_20260313_keepweight.json",
+        "rows": 300,
+        "head_count": 20,
+        "step1": {
+          "dir_leg_base": 0.37940922379493713,
+          "dir_nonleg_base": 0.12937764823436737,
+          "leg_over_nonleg": 2.932571653394395,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 1.7741390764697604,
+          "direct_grad_norm_out_else": 0.1690146711785789,
+          "grad_arm_over_else": 10.49695309938642,
+          "step": 1.0
+        },
+        "head20_mean": {
+          "dir_leg_base": 0.18983208686113356,
+          "dir_nonleg_base": 0.05109796691685915,
+          "leg_over_nonleg": 3.8460602852023724,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 0.7133113077849558,
+          "direct_grad_norm_out_else": 0.11066809066361172,
+          "grad_arm_over_else": 6.4087818716560205
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root_mean": 3.3382564045893157,
+        "leg_mean": 9.563805466466366,
+        "nonleg_mean": 1.9921917425618456,
+        "arm_mean": 2.1961898855878186,
+        "else_mean": 1.5100143135913633
+      },
+      "paths": {
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/results/old_bestfree/lane.log",
+        "basetrain_group_summary": null,
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/results/old_bestfree/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/results/old_bestfree/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_keepweight_compare_20260313/old_bestfree/ckpt_last_old_bestfree_stage6_probe_keepweight_20260313_keepweight.pth"
+      }
+    },
+    {
+      "name": "cp015_bestfree",
+      "family": "MLPL2_DirectBranch_v1",
+      "selector": "best_free",
+      "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+      "score": {
+        "weights": {
+          "all_ex_root": 1.0,
+          "leg": 1.5,
+          "nonleg": 0.5
+        },
+        "stage6_exit": {
+          "all_ex_root_mean": 3.905214057030626,
+          "leg_mean": 10.875861752694364,
+          "nonleg_mean": 2.3980469876979256
+        },
+        "value": 21.418030179921136
+      },
+      "basetrain": null,
+      "stage6_init": {
+        "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_keepweight_compare_20260313/cp015_bestfree/posttrain_log_cp015_bestfree_stage6_probe_keepweight_20260313_keepweight.json",
+        "rows": 300,
+        "head_count": 20,
+        "step1": {
+          "dir_leg_base": 0.4246257543563843,
+          "dir_nonleg_base": 0.09716631472110748,
+          "leg_over_nonleg": 4.370092202994117,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 1.7082628678020444,
+          "direct_grad_norm_out_else": 0.21426740197183633,
+          "grad_arm_over_else": 7.972574699097632,
+          "step": 1.0
+        },
+        "head20_mean": {
+          "dir_leg_base": 0.19173094853758813,
+          "dir_nonleg_base": 0.045140113309025766,
+          "leg_over_nonleg": 4.258153530587353,
+          "arm_over_else": NaN,
+          "direct_grad_norm_out_arm": 0.9017746117663675,
+          "direct_grad_norm_out_else": 0.1350663288827779,
+          "grad_arm_over_else": 6.772363501078907
+        }
+      },
+      "stage6_exit": {
+        "all_ex_root_mean": 3.905214057030626,
+        "leg_mean": 10.875861752694364,
+        "nonleg_mean": 2.3980469876979256,
+        "arm_mean": 2.6997695520703555,
+        "else_mean": 1.6848845628176379
+      },
+      "paths": {
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/results/cp015_bestfree/lane.log",
+        "basetrain_group_summary": null,
+        "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/results/cp015_bestfree/posttrain_stage6_init_stats.json",
+        "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_keepweight_compare_20260313/results/cp015_bestfree/stage6_group_summary.json",
+        "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_keepweight_compare_20260313/cp015_bestfree/ckpt_last_cp015_bestfree_stage6_probe_keepweight_20260313_keepweight.pth"
+      }
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "source": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_planner_core/posttrain/posttrain_log_WalkF_stage6_rollback_planner_core_20260314.json",
+  "rows": 300,
+  "head_count": 20,
+  "step1": {
+    "step": 1.0,
+    "dir_leg_base": 0.19193412363529205,
+    "dir_nonleg_base": 0.061325181275606155,
+    "leg_over_nonleg": 3.1297767025376793,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 0.6730851984432321,
+    "direct_grad_norm_out_else": 0.08472699947649001,
+    "grad_arm_over_else": 7.944164228664787
+  },
+  "head20_mean": {
+    "dir_leg_base": 0.1332666829228401,
+    "dir_nonleg_base": 0.036026346031576395,
+    "leg_over_nonleg": 3.7414394990041657,
+    "arm_over_else": NaN,
+    "direct_grad_norm_out_arm": 1.2045218273192666,
+    "direct_grad_norm_out_else": 0.15374518828923797,
+    "grad_arm_over_else": 7.8796011918845394
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "lane": {
+    "name": "geofix_last",
+    "family": "geofix_r3",
+    "selector": "last",
+    "ckpt": "/tmp/MLPL2_DirectBranch_v1_geofix_r3/exp_phase_DirectBranch_v1_d1_geofix_r3/ckpt_last_exp_phase_DirectBranch_v1_d1_geofix_r3.pth"
+  },
+  "basetrain_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/basetrain_group_summary.json",
+  "stage6_init_stats": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/posttrain_stage6_init_stats.json",
+  "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_basetrain_compare_20260313/geofix_last/stage6_group_summary.json",
+  "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_basetrain_compare_20260313/geofix_last/ckpt_last_geofix_last_stage6_cmp_20260313.pth",
+  "completed_at": "2026-03-13 03:13:13"
+}

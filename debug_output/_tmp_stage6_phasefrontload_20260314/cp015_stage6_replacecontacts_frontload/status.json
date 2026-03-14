@@ -1,0 +1,16 @@
+{
+  "case": {
+    "name": "cp015_stage6_replacecontacts_frontload",
+    "baseline_case": "cp015_bestfree",
+    "run_name": "cp015_stage6_replacecontacts_frontload_20260314",
+    "semantic_overrides": {
+      "direct_pose_use_phase_z": true,
+      "direct_pose_phase_z_mode": "replace_contacts"
+    },
+    "note": "Stage6 frontloads historical 70c replace_contacts semantics while keeping Stage6 reinit/train budget unchanged."
+  },
+  "config_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_phasefrontload_20260314/configs/cp015_stage6_replacecontacts_frontload.json",
+  "stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_phasefrontload_20260314/cp015_stage6_replacecontacts_frontload/ckpt_last_cp015_stage6_replacecontacts_frontload_20260314.pth",
+  "stage6_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_phasefrontload_20260314/cp015_stage6_replacecontacts_frontload/stage6_group_summary.json",
+  "completed_at": "2026-03-14 09:34:28"
+}

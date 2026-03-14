@@ -1,0 +1,150 @@
+{
+  "run_date": "20260313",
+  "basetrain_configs": [
+    "debug_output/_tmp_stage6_directposeoff_compare_20260313/exp_phase_DirectBranch_v1_d1_directposeoff_20260313.json",
+    "debug_output/_tmp_stage6_directposeoff_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_directposeoff_20260313.json"
+  ],
+  "stage6_config": "config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+  "verification": {
+    "basetrain_direct_pose_disabled": true,
+    "stage6_direct_pose_initialized_after_basetrain": true
+  },
+  "lanes": [
+    {
+      "name": "old_dpoff_bestfree",
+      "baseline_name": "old_bestfree",
+      "ckpt": "models/__tmp_stage6_directposeoff_compare_20260313/exp_phase_DirectBranch_v1_d1_directposeoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_directposeoff_20260313.pth",
+      "basetrain_verification": {
+        "config_direct_pose_enable": false,
+        "config_w_direct_pose": 0.0,
+        "direct_pose_head_key_count": 0,
+        "direct_pose_keys": [
+          "direct_pose_arm_out_idx",
+          "direct_pose_else_out_idx",
+          "direct_pose_leg_out_idx",
+          "direct_pose_nonleg_out_idx"
+        ]
+      },
+      "stage6_verification": {
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_directposeoff_compare_20260313/results/old_dpoff_bestfree/lane.log",
+        "stage6_train_direct_pose": true,
+        "stage6_trainable_direct_pose_params": true,
+        "drop_line_present": false
+      },
+      "basetrain": {
+        "all_ex_root_mean": 69.57140189573985,
+        "leg_mean": 77.84958166120097,
+        "nonleg_mean": 67.78152518969421,
+        "arm_mean": 80.32287068662903,
+        "else_mean": 38.13834492421188
+      },
+      "stage6_exit": {
+        "all_ex_root_mean": 0.3753584747160029,
+        "leg_mean": 0.8436897755918623,
+        "nonleg_mean": 0.27409765290500626,
+        "arm_mean": 0.3183113813663189,
+        "else_mean": 0.16959247654190368
+      },
+      "baseline_basetrain": {
+        "all_ex_root_mean": 6.431959098065124,
+        "leg_mean": 10.517242296837097,
+        "nonleg_mean": 5.5486546226549684,
+        "arm_mean": 7.022836314472235,
+        "else_mean": 2.0642251692687013
+      },
+      "baseline_stage6_exit": {
+        "all_ex_root_mean": 0.3132793551955468,
+        "leg_mean": 0.8742295720575236,
+        "nonleg_mean": 0.1919928218199842,
+        "arm_mean": 0.21749107248109364,
+        "else_mean": 0.13172422934827105
+      },
+      "delta_vs_baseline": {
+        "basetrain": {
+          "all_ex_root_mean": 63.13944279767473,
+          "leg_mean": 67.33233936436388,
+          "nonleg_mean": 62.23287056703924,
+          "arm_mean": 73.3000343721568,
+          "else_mean": 36.074119754943176
+        },
+        "stage6_exit": {
+          "all_ex_root_mean": 0.06207911952045614,
+          "leg_mean": -0.030539796465661295,
+          "nonleg_mean": 0.08210483108502206,
+          "arm_mean": 0.10082030888522528,
+          "else_mean": 0.03786824719363263
+        }
+      }
+    },
+    {
+      "name": "cp015_dpoff_bestfree",
+      "baseline_name": "cp015_bestfree",
+      "ckpt": "models/__tmp_stage6_directposeoff_compare_20260313/exp_phase_DirectBranch_v1_d1_cp015_tailk3_directposeoff_20260313/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3_directposeoff_20260313.pth",
+      "basetrain_verification": {
+        "config_direct_pose_enable": false,
+        "config_w_direct_pose": 0.0,
+        "direct_pose_head_key_count": 0,
+        "direct_pose_keys": [
+          "direct_pose_arm_out_idx",
+          "direct_pose_else_out_idx",
+          "direct_pose_leg_out_idx",
+          "direct_pose_nonleg_out_idx"
+        ]
+      },
+      "stage6_verification": {
+        "lane_log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_directposeoff_compare_20260313/results/cp015_dpoff_bestfree/lane.log",
+        "stage6_train_direct_pose": true,
+        "stage6_trainable_direct_pose_params": true,
+        "drop_line_present": false
+      },
+      "basetrain": {
+        "all_ex_root_mean": 40.97296663875289,
+        "leg_mean": 57.42612574444434,
+        "nonleg_mean": 37.415526832116896,
+        "arm_mean": 44.647842413895766,
+        "else_mean": 20.320962729730486
+      },
+      "stage6_exit": {
+        "all_ex_root_mean": 0.32537328272935456,
+        "leg_mean": 0.7780090133452431,
+        "nonleg_mean": 0.22750609773132463,
+        "arm_mean": 0.24899283696239316,
+        "else_mean": 0.17671925954879902
+      },
+      "baseline_basetrain": {
+        "all_ex_root_mean": 5.647743532250623,
+        "leg_mean": 10.826995120318823,
+        "nonleg_mean": 4.527905351046688,
+        "arm_mean": 5.622656480011559,
+        "else_mean": 1.9403117734933566
+      },
+      "baseline_stage6_exit": {
+        "all_ex_root_mean": 0.43137680891071384,
+        "leg_mean": 1.1671711441906452,
+        "nonleg_mean": 0.2722861418231612,
+        "arm_mean": 0.3280119348514316,
+        "else_mean": 0.1405706310290674
+      },
+      "delta_vs_baseline": {
+        "basetrain": {
+          "all_ex_root_mean": 35.325223106502264,
+          "leg_mean": 46.59913062412552,
+          "nonleg_mean": 32.887621481070205,
+          "arm_mean": 39.02518593388421,
+          "else_mean": 18.38065095623713
+        },
+        "stage6_exit": {
+          "all_ex_root_mean": -0.10600352618135928,
+          "leg_mean": -0.3891621308454021,
+          "nonleg_mean": -0.04478004409183656,
+          "arm_mean": -0.07901909788903844,
+          "else_mean": 0.036148628519731635
+        }
+      }
+    }
+  ],
+  "recommended": {
+    "name": "cp015_dpoff_bestfree",
+    "score": 1.6061398516128815
+  }
+}

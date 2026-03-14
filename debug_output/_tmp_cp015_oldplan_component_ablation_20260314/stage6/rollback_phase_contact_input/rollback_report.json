@@ -1,0 +1,120 @@
+{
+  "lane": "rollback_phase_contact_input",
+  "lane_code": "D",
+  "lane_label": "D. phase/contact input-side rollback",
+  "note": "Rollback phase/contact-side input modules to cp015; keep old-plan core/head/init intact.",
+  "rollback_groups": [
+    {
+      "name": "phase_contact_input",
+      "label": "D. phase/contact input-side rollback",
+      "prefixes": [
+        "contact_plan_phase_head.",
+        "contact_phase_state_delta_head."
+      ],
+      "exact_keys": [],
+      "keys": [
+        "contact_plan_phase_head.0.bias",
+        "contact_plan_phase_head.0.weight",
+        "contact_plan_phase_head.1.bias",
+        "contact_plan_phase_head.1.weight",
+        "contact_plan_phase_head.4.bias",
+        "contact_plan_phase_head.4.weight",
+        "contact_phase_state_delta_head.0.bias",
+        "contact_phase_state_delta_head.0.weight",
+        "contact_phase_state_delta_head.1.bias",
+        "contact_phase_state_delta_head.1.weight",
+        "contact_phase_state_delta_head.3.bias",
+        "contact_phase_state_delta_head.3.weight"
+      ],
+      "key_count": 12,
+      "rationale": "Phase/contact side inputs into the planner: phase residual on logits and phase-state update head driven by cond/meas/delta_meas."
+    }
+  ],
+  "rollback_keys": [
+    "contact_plan_phase_head.0.bias",
+    "contact_plan_phase_head.0.weight",
+    "contact_plan_phase_head.1.bias",
+    "contact_plan_phase_head.1.weight",
+    "contact_plan_phase_head.4.bias",
+    "contact_plan_phase_head.4.weight",
+    "contact_phase_state_delta_head.0.bias",
+    "contact_phase_state_delta_head.0.weight",
+    "contact_phase_state_delta_head.1.bias",
+    "contact_phase_state_delta_head.1.weight",
+    "contact_phase_state_delta_head.3.bias",
+    "contact_phase_state_delta_head.3.weight"
+  ],
+  "rollback_key_count": 12,
+  "effective_changed_keys": [
+    "contact_plan_phase_head.0.bias",
+    "contact_plan_phase_head.0.weight",
+    "contact_plan_phase_head.1.bias",
+    "contact_plan_phase_head.1.weight",
+    "contact_plan_phase_head.4.bias",
+    "contact_plan_phase_head.4.weight",
+    "contact_phase_state_delta_head.1.bias",
+    "contact_phase_state_delta_head.1.weight"
+  ],
+  "effective_changed_key_count": 8,
+  "parent_control_case": "cp015_with_old_planstack",
+  "parent_control_stage6_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/stage6/cp015_with_old_planstack/ckpt_last_cp015_with_old_planstack_stage6_plantransplant_20260314.pth",
+  "parent_control_surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth",
+  "control_transplant_report": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_stage6_plantransplant_20260314/cp015_with_old_planstack/transplant_report.json",
+  "recipient_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+  "donor_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+  "source_baseline_case": "cp015_bestfree",
+  "created_at": "2026-03-14 13:02:31",
+  "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_cp015_oldplan_component_ablation_20260314/stage6/rollback_phase_contact_input/surgery/rollback_phase_contact_input.pth",
+  "verify_same_as_recipient_after_count": 12,
+  "verified_all_after": true,
+  "per_key": [
+    {
+      "key": "contact_plan_phase_head.0.bias",
+      "same_as_recipient_before": false
+    },
+    {
+      "key": "contact_plan_phase_head.0.weight",
+      "same_as_recipient_before": false
+    },
+    {
+      "key": "contact_plan_phase_head.1.bias",
+      "same_as_recipient_before": false
+    },
+    {
+      "key": "contact_plan_phase_head.1.weight",
+      "same_as_recipient_before": false
+    },
+    {
+      "key": "contact_plan_phase_head.4.bias",
+      "same_as_recipient_before": false
+    },
+    {
+      "key": "contact_plan_phase_head.4.weight",
+      "same_as_recipient_before": false
+    },
+    {
+      "key": "contact_phase_state_delta_head.0.bias",
+      "same_as_recipient_before": true
+    },
+    {
+      "key": "contact_phase_state_delta_head.0.weight",
+      "same_as_recipient_before": true
+    },
+    {
+      "key": "contact_phase_state_delta_head.1.bias",
+      "same_as_recipient_before": false
+    },
+    {
+      "key": "contact_phase_state_delta_head.1.weight",
+      "same_as_recipient_before": false
+    },
+    {
+      "key": "contact_phase_state_delta_head.3.bias",
+      "same_as_recipient_before": true
+    },
+    {
+      "key": "contact_phase_state_delta_head.3.weight",
+      "same_as_recipient_before": true
+    }
+  ]
+}

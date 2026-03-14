@@ -1,0 +1,1508 @@
+{
+  "run_date": "20260314",
+  "policy": {
+    "compare_contract": "model_source",
+    "snapshot_steps": [
+      0,
+      5,
+      10,
+      20,
+      40,
+      60,
+      120,
+      180
+    ],
+    "sweep": [
+      {
+        "name": "lr5e4",
+        "lr": 0.0005
+      },
+      {
+        "name": "lr3e4",
+        "lr": 0.0003
+      }
+    ],
+    "note": "candidate 70R handoff only; unchanged 71 semantics, lower-LR sweep"
+  },
+  "references": {
+    "attribution_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_regression_attribution_20260314/summary.json",
+    "candidate_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_skip70b_lowdrift_to71_20260314/summary.json",
+    "candidate_70R_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_skip70b_lowdrift_to71_20260314/70R/ckpt_last_WalkF_stage7_70R_from_oldd1_lowdrift_replace_20260314.pth",
+    "current_snapshots": {
+      "s000": {
+        "DirectGeoLocalDeg": 0.15823527791559003,
+        "all_ex_root": 0.15823527759728495,
+        "leg": 0.556048936034596,
+        "nonleg": 0.07222151361083931,
+        "arm": 0.08266488065130256,
+        "legs_main": 0.556048936034596,
+        "arms_main": 0.08266488065130256,
+        "foot_l_ball_l_SIC12_15": 1.1184829957783222,
+        "calf_r_SIC2_4": 0.6138490301867326
+      },
+      "s020": {
+        "DirectGeoLocalDeg": 0.12229471491259891,
+        "all_ex_root": 0.12229471477273716,
+        "leg": 0.3538832701465147,
+        "nonleg": 0.07222151361083931,
+        "arm": 0.08266488065130256,
+        "legs_main": 0.3538832701465147,
+        "arms_main": 0.08266488065130256,
+        "foot_l_ball_l_SIC12_15": 0.4735059493687004,
+        "calf_r_SIC2_4": 0.4086132726321618
+      },
+      "s060": {
+        "DirectGeoLocalDeg": 0.12493191540327876,
+        "all_ex_root": 0.12493191497264944,
+        "leg": 0.3687175212710213,
+        "nonleg": 0.07222151361083931,
+        "arm": 0.08266488065130256,
+        "legs_main": 0.3687175212710213,
+        "arms_main": 0.08266488065130256,
+        "foot_l_ball_l_SIC12_15": 0.9522483439650387,
+        "calf_r_SIC2_4": 0.3203817705313365
+      },
+      "s120": {
+        "DirectGeoLocalDeg": 0.11226891537825036,
+        "all_ex_root": 0.11226891499376603,
+        "leg": 0.2974881463898021,
+        "nonleg": 0.07222151361083931,
+        "arm": 0.08266488065130256,
+        "legs_main": 0.2974881463898021,
+        "arms_main": 0.08266488065130256,
+        "foot_l_ball_l_SIC12_15": 0.43342721299268305,
+        "calf_r_SIC2_4": 0.5355324608584245
+      },
+      "s180": {
+        "DirectGeoLocalDeg": 0.11191065632196706,
+        "all_ex_root": 0.11191065641286034,
+        "leg": 0.29547294187220763,
+        "nonleg": 0.07222151361083931,
+        "arm": 0.08266488065130256,
+        "legs_main": 0.29547294187220763,
+        "arms_main": 0.08266488065130256,
+        "foot_l_ball_l_SIC12_15": 0.5992717912886292,
+        "calf_r_SIC2_4": 0.4409123050669829
+      }
+    },
+    "candidate_baseline_snapshots": {
+      "s000": {
+        "DirectGeoLocalDeg": 0.13092551713939324,
+        "all_ex_root": 0.1309255167171086,
+        "leg": 0.3492627636104623,
+        "nonleg": 0.08371746333476185,
+        "arm": 0.09184891825772104,
+        "legs_main": 0.3492627636104623,
+        "arms_main": 0.09184891825772104,
+        "foot_l_ball_l_SIC12_15": 0.8600953875575215,
+        "calf_r_SIC2_4": 0.39301881318291026
+      },
+      "s020": {
+        "DirectGeoLocalDeg": 0.13569751009345055,
+        "all_ex_root": 0.13569750995036717,
+        "leg": 0.3761052255475417,
+        "nonleg": 0.08371746333476185,
+        "arm": 0.09184891825772104,
+        "legs_main": 0.3761052255475417,
+        "arms_main": 0.09184891825772104,
+        "foot_l_ball_l_SIC12_15": 0.783756603486836,
+        "calf_r_SIC2_4": 0.4282097890973091
+      },
+      "s060": {
+        "DirectGeoLocalDeg": 0.13453657455135917,
+        "all_ex_root": 0.13453657448191525,
+        "leg": 0.36957496353749963,
+        "nonleg": 0.08371746333476185,
+        "arm": 0.09184891825772104,
+        "legs_main": 0.36957496353749963,
+        "arms_main": 0.09184891825772104,
+        "foot_l_ball_l_SIC12_15": 0.7229850688017905,
+        "calf_r_SIC2_4": 0.1983694595595201
+      },
+      "s120": {
+        "DirectGeoLocalDeg": 0.12630868098850168,
+        "all_ex_root": 0.12630868116539498,
+        "leg": 0.32329306363207316,
+        "nonleg": 0.08371746333476185,
+        "arm": 0.09184891825772104,
+        "legs_main": 0.32329306363207316,
+        "arms_main": 0.09184891825772104,
+        "foot_l_ball_l_SIC12_15": 0.5362328439950943,
+        "calf_r_SIC2_4": 0.13636084956427416
+      },
+      "s180": {
+        "DirectGeoLocalDeg": 0.1277874807805516,
+        "all_ex_root": 0.12778748058921752,
+        "leg": 0.331611310391075,
+        "nonleg": 0.08371746333476185,
+        "arm": 0.09184891825772104,
+        "legs_main": 0.331611310391075,
+        "arms_main": 0.09184891825772104,
+        "foot_l_ball_l_SIC12_15": 0.5405750844511203,
+        "calf_r_SIC2_4": 0.2956436884899934
+      }
+    }
+  },
+  "cases": {
+    "lr5e4": {
+      "lr": 0.0005,
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/configs/posttrain_71_lr5e4_20260314.json",
+      "run_name": "WalkF_stage7_71_lr5e4_from_candidate70R_20260314",
+      "last_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr5e4/ckpt_last_WalkF_stage7_71_lr5e4_from_candidate70R_20260314.pth",
+      "snapshots": {
+        "s000": {
+          "step": 0,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr5e4/ckpt_step_000000_WalkF_stage7_71_lr5e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.13092551713939324,
+              "DirectGeoLocalDegWeighted": 0.15562674058817846,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.1309255167171086,
+              "leg": 0.3492627636104623,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.3492627636104623,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.5226275748573244,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.28358400067081674,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.8600953875575215,
+                "calf_r_SIC2_4": 0.39301881318291026
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.13092551713939324,
+              "all_ex_root": 0.1309255167171086,
+              "leg": 0.3492627636104623,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.3492627636104623,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.8600953875575215,
+              "calf_r_SIC2_4": 0.39301881318291026
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s000/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s000_group_summary.json"
+            }
+          }
+        },
+        "s005": {
+          "step": 5,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr5e4/ckpt_step_000005_WalkF_stage7_71_lr5e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.12912639816356605,
+              "DirectGeoLocalDegWeighted": 0.149113358561556,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.12912639801025497,
+              "leg": 0.33914272088441066,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.33914272088441066,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.39600400082417764,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.19671869848389179,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 1.0749704027548432,
+                "calf_r_SIC2_4": 0.15127838713427386
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.12912639816356605,
+              "all_ex_root": 0.12912639801025497,
+              "leg": 0.33914272088441066,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.33914272088441066,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 1.0749704027548432,
+              "calf_r_SIC2_4": 0.15127838713427386
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s005/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s005_group_summary.json"
+            }
+          }
+        },
+        "s010": {
+          "step": 10,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr5e4/ckpt_step_000010_WalkF_stage7_71_lr5e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.1264068520801185,
+              "DirectGeoLocalDegWeighted": 0.14702361466926198,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.1264068517028809,
+              "leg": 0.3238452729054315,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.3238452729054315,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.4192640694527654,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.24326684116385877,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.6283623310737312,
+                "calf_r_SIC2_4": 0.16172423213720322
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.1264068520801185,
+              "all_ex_root": 0.1264068517028809,
+              "leg": 0.3238452729054315,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.3238452729054315,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.6283623310737312,
+              "calf_r_SIC2_4": 0.16172423213720322
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s010/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s010_group_summary.json"
+            }
+          }
+        },
+        "s020": {
+          "step": 20,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr5e4/ckpt_step_000020_WalkF_stage7_71_lr5e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.12325714701829954,
+              "DirectGeoLocalDegWeighted": 0.14338452644039726,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.12325714686390551,
+              "leg": 0.306128183186195,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.306128183186195,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.42464022772037424,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.17626416112761945,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.5057983614969999,
+                "calf_r_SIC2_4": 0.13982025409738222
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.12325714701829954,
+              "all_ex_root": 0.12325714686390551,
+              "leg": 0.306128183186195,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.306128183186195,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.5057983614969999,
+              "calf_r_SIC2_4": 0.13982025409738222
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s020/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s020_group_summary.json"
+            }
+          }
+        },
+        "s040": {
+          "step": 40,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr5e4/ckpt_step_000040_WalkF_stage7_71_lr5e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.12257604918247739,
+              "DirectGeoLocalDegWeighted": 0.14197624248430826,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.12257604905696158,
+              "leg": 0.3022970080221353,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.3022970080221353,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.33772591198794544,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.23551345767918974,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.41847213223809376,
+                "calf_r_SIC2_4": 0.1255523736278216
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.12257604918247739,
+              "all_ex_root": 0.12257604905696158,
+              "leg": 0.3022970080221353,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.3022970080221353,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.41847213223809376,
+              "calf_r_SIC2_4": 0.1255523736278216
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s040/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s040_group_summary.json"
+            }
+          }
+        },
+        "s060": {
+          "step": 60,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr5e4/ckpt_step_000060_WalkF_stage7_71_lr5e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.1239038362535973,
+              "DirectGeoLocalDegWeighted": 0.14550640698262426,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.12390383583207974,
+              "leg": 0.309765808632175,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.309765808632175,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.4192458154866472,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.20117892952403055,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.4572805776260793,
+                "calf_r_SIC2_4": 0.11077278479933739
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.1239038362535973,
+              "all_ex_root": 0.12390383583207974,
+              "leg": 0.309765808632175,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.309765808632175,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.4572805776260793,
+              "calf_r_SIC2_4": 0.11077278479933739
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s060/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s060_group_summary.json"
+            }
+          }
+        },
+        "s120": {
+          "step": 120,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr5e4/ckpt_step_000120_WalkF_stage7_71_lr5e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.11566721612241032,
+              "DirectGeoLocalDegWeighted": 0.13471363846559165,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.1156672157096164,
+              "leg": 0.26343482044331873,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.26343482044331873,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.2667216699846904,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.22964007941773162,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.47445368370972574,
+                "calf_r_SIC2_4": 0.2532287848492463
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.11566721612241032,
+              "all_ex_root": 0.1156672157096164,
+              "leg": 0.26343482044331873,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.26343482044331873,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.47445368370972574,
+              "calf_r_SIC2_4": 0.2532287848492463
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s120/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s120_group_summary.json"
+            }
+          }
+        },
+        "s180": {
+          "step": 180,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr5e4/ckpt_step_000180_WalkF_stage7_71_lr5e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.11279193428886491,
+              "DirectGeoLocalDegWeighted": 0.13079525694944139,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.1127919341919942,
+              "leg": 0.2472613619066938,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.2472613619066938,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.3550950041972101,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.157845762046054,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.5616638083010912,
+                "calf_r_SIC2_4": 0.054137974977493286
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.11279193428886491,
+              "all_ex_root": 0.1127919341919942,
+              "leg": 0.2472613619066938,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.2472613619066938,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.5616638083010912,
+              "calf_r_SIC2_4": 0.054137974977493286
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s180/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr5e4/s180_group_summary.json"
+            }
+          }
+        }
+      },
+      "delta_vs_current_final": {
+        "s000": {
+          "DirectGeoLocalDeg": 0.019014860817426177,
+          "all_ex_root": 0.019014860304248246,
+          "leg": 0.053789821738254695,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": 0.053789821738254695,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": 0.2608235962688923,
+          "calf_r_SIC2_4": -0.04789349188407266
+        },
+        "s005": {
+          "DirectGeoLocalDeg": 0.01721574184159899,
+          "all_ex_root": 0.017215741597394627,
+          "leg": 0.043669779012203036,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": 0.043669779012203036,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": 0.47569861146621406,
+          "calf_r_SIC2_4": -0.2896339179327091
+        },
+        "s010": {
+          "DirectGeoLocalDeg": 0.014496195758151448,
+          "all_ex_root": 0.014496195290020567,
+          "leg": 0.028372331033223896,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": 0.028372331033223896,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": 0.02909053978510201,
+          "calf_r_SIC2_4": -0.2791880729297797
+        },
+        "s020": {
+          "DirectGeoLocalDeg": 0.011346490696332479,
+          "all_ex_root": 0.011346490451045174,
+          "leg": 0.010655241313987374,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": 0.010655241313987374,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": -0.09347342979162931,
+          "calf_r_SIC2_4": -0.3010920509696007
+        },
+        "s040": {
+          "DirectGeoLocalDeg": 0.010665392860510325,
+          "all_ex_root": 0.01066539264410124,
+          "leg": 0.006824066149927699,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": 0.006824066149927699,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": -0.1807996590505354,
+          "calf_r_SIC2_4": -0.3153599314391613
+        },
+        "s060": {
+          "DirectGeoLocalDeg": 0.011993179931630238,
+          "all_ex_root": 0.011993179419219402,
+          "leg": 0.014292866759967382,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": 0.014292866759967382,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": -0.14199121366254985,
+          "calf_r_SIC2_4": -0.33013952026764554
+        },
+        "s120": {
+          "DirectGeoLocalDeg": 0.00375655980044326,
+          "all_ex_root": 0.003756559296756057,
+          "leg": -0.0320381214288889,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": -0.0320381214288889,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": -0.12481810757890344,
+          "calf_r_SIC2_4": -0.1876835202177366
+        },
+        "s180": {
+          "DirectGeoLocalDeg": 0.0008812779668978532,
+          "all_ex_root": 0.0008812777791338544,
+          "leg": -0.04821157996551384,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": -0.04821157996551384,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": -0.03760798298753798,
+          "calf_r_SIC2_4": -0.38677433008948964
+        }
+      },
+      "delta_vs_baseline_candidate_shared": {
+        "s000": {
+          "DirectGeoLocalDeg": 0.0,
+          "all_ex_root": 0.0,
+          "leg": 0.0,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": 0.0,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": 0.0,
+          "calf_r_SIC2_4": 0.0
+        },
+        "s020": {
+          "DirectGeoLocalDeg": -0.012440363075151006,
+          "all_ex_root": -0.012440363086461653,
+          "leg": -0.06997704236134672,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": -0.06997704236134672,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": -0.2779582419898361,
+          "calf_r_SIC2_4": -0.2883895349999269
+        },
+        "s060": {
+          "DirectGeoLocalDeg": -0.010632738297761873,
+          "all_ex_root": -0.010632738649835508,
+          "leg": -0.059809154905324624,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": -0.059809154905324624,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": -0.26570449117571115,
+          "calf_r_SIC2_4": -0.08759667476018271
+        },
+        "s120": {
+          "DirectGeoLocalDeg": -0.010641464866091355,
+          "all_ex_root": -0.010641465455778584,
+          "leg": -0.059858243188754434,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": -0.059858243188754434,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": -0.06177916028536856,
+          "calf_r_SIC2_4": 0.11686793528497216
+        },
+        "s180": {
+          "DirectGeoLocalDeg": -0.01499554649168669,
+          "all_ex_root": -0.014995546397223322,
+          "leg": -0.08434994848438121,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": -0.08434994848438121,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": 0.021088723849970847,
+          "calf_r_SIC2_4": -0.2415057135125001
+        }
+      },
+      "best_snapshot": {
+        "all_ex_root": {
+          "tag": "s180",
+          "value": 0.1127919341919942
+        },
+        "leg": {
+          "tag": "s180",
+          "value": 0.2472613619066938
+        }
+      }
+    },
+    "lr3e4": {
+      "lr": 0.0003,
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/configs/posttrain_71_lr3e4_20260314.json",
+      "run_name": "WalkF_stage7_71_lr3e4_from_candidate70R_20260314",
+      "last_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr3e4/ckpt_last_WalkF_stage7_71_lr3e4_from_candidate70R_20260314.pth",
+      "snapshots": {
+        "s000": {
+          "step": 0,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr3e4/ckpt_step_000000_WalkF_stage7_71_lr3e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.13092551713939324,
+              "DirectGeoLocalDegWeighted": 0.15562674058817846,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.1309255167171086,
+              "leg": 0.3492627636104623,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.3492627636104623,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.5226275748573244,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.28358400067081674,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.8600953875575215,
+                "calf_r_SIC2_4": 0.39301881318291026
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.13092551713939324,
+              "all_ex_root": 0.1309255167171086,
+              "leg": 0.3492627636104623,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.3492627636104623,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.8600953875575215,
+              "calf_r_SIC2_4": 0.39301881318291026
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s000/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s000_group_summary.json"
+            }
+          }
+        },
+        "s005": {
+          "step": 5,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr3e4/ckpt_step_000005_WalkF_stage7_71_lr3e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.1262531238824649,
+              "DirectGeoLocalDegWeighted": 0.14668107169225467,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.12625312351774118,
+              "leg": 0.3229805518640205,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.3229805518640205,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.37676784596988,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.1850310740992427,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.9956196211278439,
+                "calf_r_SIC2_4": 0.1710487644498547
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.1262531238824649,
+              "all_ex_root": 0.12625312351774118,
+              "leg": 0.3229805518640205,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.3229805518640205,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.9956196211278439,
+              "calf_r_SIC2_4": 0.1710487644498547
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s005/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s005_group_summary.json"
+            }
+          }
+        },
+        "s010": {
+          "step": 10,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr3e4/ckpt_step_000010_WalkF_stage7_71_lr3e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.12298508644710447,
+              "DirectGeoLocalDegWeighted": 0.14314260420411132,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.1229850865263232,
+              "leg": 0.3045978437872945,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.3045978437872945,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.3846424100702279,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.215195244923234,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.6235091076232493,
+                "calf_r_SIC2_4": 0.14793663130452236
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.12298508644710447,
+              "all_ex_root": 0.1229850865263232,
+              "leg": 0.3045978437872945,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.3045978437872945,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.6235091076232493,
+              "calf_r_SIC2_4": 0.14793663130452236
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s010/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s010_group_summary.json"
+            }
+          }
+        },
+        "s020": {
+          "step": 20,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr3e4/ckpt_step_000020_WalkF_stage7_71_lr3e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.11924041478439819,
+              "DirectGeoLocalDegWeighted": 0.13869880624981815,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.11924041462131062,
+              "leg": 0.28353406432159867,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.28353406432159867,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.37584658073683386,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.18304263542522675,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.5662946379743516,
+                "calf_r_SIC2_4": 0.1703438808520635
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.11924041478439819,
+              "all_ex_root": 0.11924041462131062,
+              "leg": 0.28353406432159867,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.28353406432159867,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.5662946379743516,
+              "calf_r_SIC2_4": 0.1703438808520635
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s020/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s020_group_summary.json"
+            }
+          }
+        },
+        "s040": {
+          "step": 40,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr3e4/ckpt_step_000040_WalkF_stage7_71_lr3e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.11731980900215201,
+              "DirectGeoLocalDegWeighted": 0.1350497177823685,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.11731980882558794,
+              "leg": 0.2727306567206586,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.2727306567206586,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.29518186721543316,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.19016006214078515,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.5273803905583918,
+                "calf_r_SIC2_4": 0.09187251577774684
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.11731980900215201,
+              "all_ex_root": 0.11731980882558794,
+              "leg": 0.2727306567206586,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.2727306567206586,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.5273803905583918,
+              "calf_r_SIC2_4": 0.09187251577774684
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s040/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s040_group_summary.json"
+            }
+          }
+        },
+        "s060": {
+          "step": 60,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr3e4/ckpt_step_000060_WalkF_stage7_71_lr3e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.11772845904234537,
+              "DirectGeoLocalDegWeighted": 0.13736857075330822,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.11772845983614963,
+              "leg": 0.27502931865506813,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.27502931865506813,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.30672099367075134,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.18297243711422198,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.6124880127608776,
+                "calf_r_SIC2_4": 0.05390891696636876
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.11772845904234537,
+              "all_ex_root": 0.11772845983614963,
+              "leg": 0.27502931865506813,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.27502931865506813,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.6124880127608776,
+              "calf_r_SIC2_4": 0.05390891696636876
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s060/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s060_group_summary.json"
+            }
+          }
+        },
+        "s120": {
+          "step": 120,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr3e4/ckpt_step_000120_WalkF_stage7_71_lr3e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.11059262434583764,
+              "DirectGeoLocalDegWeighted": 0.12855336158861255,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.1105926248495662,
+              "leg": 0.23489024685553633,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.23489024685553633,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.23726437280129176,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.1683199479302857,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.40462772257160395,
+                "calf_r_SIC2_4": 0.10019995893041293
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.11059262434583764,
+              "all_ex_root": 0.1105926248495662,
+              "leg": 0.23489024685553633,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.23489024685553633,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.40462772257160395,
+              "calf_r_SIC2_4": 0.10019995893041293
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s120/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s120_group_summary.json"
+            }
+          }
+        },
+        "s180": {
+          "step": 180,
+          "ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_71_lowlr_sweep_20260314/lr3e4/ckpt_step_000180_WalkF_stage7_71_lr3e4_from_candidate70R_20260314.pth",
+          "eval": {
+            "masked_means": {
+              "masked_steps": 344.0,
+              "BlendGeoLocalDeg": 60.28211112355077,
+              "BlendGeoLocalDegWeighted": 43.14079326807067,
+              "GeoLocalDeg": 60.28211112355077,
+              "GeoLocalDegWeighted": 43.14079326807067,
+              "DirectGeoLocalDeg": 0.10706447615006635,
+              "DirectGeoLocalDegWeighted": 0.12317775711850372,
+              "LambdaMean": NaN,
+              "LambdaEffMean": NaN,
+              "LambdaRelMean": NaN
+            },
+            "direct_group_summary": {
+              "all_ex_root": 0.10706447656007607,
+              "leg": 0.21504441272715435,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "else": 0.06449766078958558
+            },
+            "window_summary": {
+              "overall": {
+                "legs_main": 0.21504441272715435,
+                "arms_main": 0.09184891825772104,
+                "left_arm_main": 0.1178979079568237,
+                "right_arm_main": 0.08307270974670053
+              },
+              "A_52_59": {
+                "legs_main": 0.2375363229366485,
+                "arms_main": 0.09607913540031195,
+                "left_arm_main": 0.1287261820883335,
+                "right_arm_main": 0.07227576512660663
+              },
+              "B_76_80": {
+                "legs_main": 0.13965534384333295,
+                "arms_main": 0.092246418049266,
+                "left_arm_main": 0.11831645604429973,
+                "right_arm_main": 0.0748200510809612
+              },
+              "hotspots": {
+                "foot_l_ball_l_SIC12_15": 0.4294491719920188,
+                "calf_r_SIC2_4": 0.09960248321294785
+              }
+            },
+            "selected_metrics": {
+              "DirectGeoLocalDeg": 0.10706447615006635,
+              "all_ex_root": 0.10706447656007607,
+              "leg": 0.21504441272715435,
+              "nonleg": 0.08371746333476185,
+              "arm": 0.09184891825772104,
+              "legs_main": 0.21504441272715435,
+              "arms_main": 0.09184891825772104,
+              "foot_l_ball_l_SIC12_15": 0.4294491719920188,
+              "calf_r_SIC2_4": 0.09960248321294785
+            },
+            "paths": {
+              "eval_json": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s180/Walk_F_freerun_cycles.json",
+              "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_71_lowlr_sweep_20260314/eval_model/lr3e4/s180_group_summary.json"
+            }
+          }
+        }
+      },
+      "delta_vs_current_final": {
+        "s000": {
+          "DirectGeoLocalDeg": 0.019014860817426177,
+          "all_ex_root": 0.019014860304248246,
+          "leg": 0.053789821738254695,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": 0.053789821738254695,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": 0.2608235962688923,
+          "calf_r_SIC2_4": -0.04789349188407266
+        },
+        "s005": {
+          "DirectGeoLocalDeg": 0.01434246756049784,
+          "all_ex_root": 0.014342467104880838,
+          "leg": 0.027507609991812898,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": 0.027507609991812898,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": 0.3963478298392147,
+          "calf_r_SIC2_4": -0.26986354061712825
+        },
+        "s010": {
+          "DirectGeoLocalDeg": 0.01107443012513741,
+          "all_ex_root": 0.01107443011346286,
+          "leg": 0.009124901915086858,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": 0.009124901915086858,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": 0.024237316334620118,
+          "calf_r_SIC2_4": -0.2929756737624606
+        },
+        "s020": {
+          "DirectGeoLocalDeg": 0.007329758462431127,
+          "all_ex_root": 0.007329758208450277,
+          "leg": -0.011938877550608962,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": -0.011938877550608962,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": -0.03297715331427753,
+          "calf_r_SIC2_4": -0.27056842421491945
+        },
+        "s040": {
+          "DirectGeoLocalDeg": 0.0054091526801849504,
+          "all_ex_root": 0.0054091524127276025,
+          "leg": -0.022742285151549024,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": -0.022742285151549024,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": -0.07189140073023736,
+          "calf_r_SIC2_4": -0.34903978928923607
+        },
+        "s060": {
+          "DirectGeoLocalDeg": 0.0058178027203783095,
+          "all_ex_root": 0.005817803423289289,
+          "leg": -0.020443623217139495,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": -0.020443623217139495,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": 0.013216221472248435,
+          "calf_r_SIC2_4": -0.3870033881006142
+        },
+        "s120": {
+          "DirectGeoLocalDeg": -0.0013180319761294246,
+          "all_ex_root": -0.0013180315632941447,
+          "leg": -0.060582695016671295,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": -0.060582695016671295,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": -0.19464406871702522,
+          "calf_r_SIC2_4": -0.34071234613657
+        },
+        "s180": {
+          "DirectGeoLocalDeg": -0.0048461801719007075,
+          "all_ex_root": -0.004846179852784266,
+          "leg": -0.08042852914505327,
+          "nonleg": 0.011495949723922538,
+          "arm": 0.009184037606418477,
+          "legs_main": -0.08042852914505327,
+          "arms_main": 0.009184037606418477,
+          "foot_l_ball_l_SIC12_15": -0.16982261929661036,
+          "calf_r_SIC2_4": -0.3413098218540351
+        }
+      },
+      "delta_vs_baseline_candidate_shared": {
+        "s000": {
+          "DirectGeoLocalDeg": 0.0,
+          "all_ex_root": 0.0,
+          "leg": 0.0,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": 0.0,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": 0.0,
+          "calf_r_SIC2_4": 0.0
+        },
+        "s020": {
+          "DirectGeoLocalDeg": -0.016457095309052358,
+          "all_ex_root": -0.01645709532905655,
+          "leg": -0.09257116122594305,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": -0.09257116122594305,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": -0.2174619655124843,
+          "calf_r_SIC2_4": -0.2578659082452456
+        },
+        "s060": {
+          "DirectGeoLocalDeg": -0.016808115509013802,
+          "all_ex_root": -0.01680811464576562,
+          "leg": -0.0945456448824315,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": -0.0945456448824315,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": -0.11049705604091287,
+          "calf_r_SIC2_4": -0.14446054259315133
+        },
+        "s120": {
+          "DirectGeoLocalDeg": -0.01571605664266404,
+          "all_ex_root": -0.015716056315828786,
+          "leg": -0.08840281677653683,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": -0.08840281677653683,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": -0.13160512142349035,
+          "calf_r_SIC2_4": -0.03616089063386123
+        },
+        "s180": {
+          "DirectGeoLocalDeg": -0.02072300463048525,
+          "all_ex_root": -0.020723004029141442,
+          "leg": -0.11656689766392064,
+          "nonleg": 0.0,
+          "arm": 0.0,
+          "legs_main": -0.11656689766392064,
+          "arms_main": 0.0,
+          "foot_l_ball_l_SIC12_15": -0.11112591245910153,
+          "calf_r_SIC2_4": -0.19604120527704555
+        }
+      },
+      "best_snapshot": {
+        "all_ex_root": {
+          "tag": "s180",
+          "value": 0.10706447656007607
+        },
+        "leg": {
+          "tag": "s180",
+          "value": 0.21504441272715435
+        }
+      }
+    }
+  },
+  "answers": {
+    "best_case_by_all_ex_root": "lr3e4",
+    "best_case_beats_current_final": true,
+    "best_case_beats_baseline_candidate_final": true,
+    "best_case_earliest_shared_improvement_vs_baseline": "s020"
+  }
+}

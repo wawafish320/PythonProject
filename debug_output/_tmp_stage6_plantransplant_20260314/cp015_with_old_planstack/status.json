@@ -1,0 +1,1412 @@
+{
+  "case": {
+    "name": "cp015_with_old_planstack",
+    "backbone_case": "cp015_bestfree",
+    "planstack_case": "old_bestfree",
+    "run_name": "cp015_with_old_planstack_stage6_plantransplant_20260314"
+  },
+  "transplant_report": {
+    "donor": "old_bestfree",
+    "recipient": "cp015_bestfree",
+    "key_count": 50,
+    "changed_key_count": 45,
+    "unchanged_key_count": 5,
+    "prefix_counts": {
+      "contact_plan_cell.": 4,
+      "contact_plan_head.": 6,
+      "contact_plan_time_head.": 2,
+      "contact_plan_phase_head.": 6,
+      "contact_plan_init_head.": 6,
+      "contact_phase_state_delta_head.": 6,
+      "event_clock_gate.": 10,
+      "event_clock_corrector.": 8
+    },
+    "exact_keys": [
+      "contact_plan_init_z",
+      "contact_phase_state_init"
+    ],
+    "keys": [
+      "contact_plan_cell.bias_hh",
+      "contact_plan_cell.bias_ih",
+      "contact_plan_cell.weight_hh",
+      "contact_plan_cell.weight_ih",
+      "contact_plan_head.0.bias",
+      "contact_plan_head.0.weight",
+      "contact_plan_head.1.bias",
+      "contact_plan_head.1.weight",
+      "contact_plan_head.4.bias",
+      "contact_plan_head.4.weight",
+      "contact_plan_time_head.bias",
+      "contact_plan_time_head.weight",
+      "contact_plan_phase_head.0.bias",
+      "contact_plan_phase_head.0.weight",
+      "contact_plan_phase_head.1.bias",
+      "contact_plan_phase_head.1.weight",
+      "contact_plan_phase_head.4.bias",
+      "contact_plan_phase_head.4.weight",
+      "contact_plan_init_head.0.bias",
+      "contact_plan_init_head.0.weight",
+      "contact_plan_init_head.1.bias",
+      "contact_plan_init_head.1.weight",
+      "contact_plan_init_head.4.bias",
+      "contact_plan_init_head.4.weight",
+      "contact_phase_state_delta_head.0.bias",
+      "contact_phase_state_delta_head.0.weight",
+      "contact_phase_state_delta_head.1.bias",
+      "contact_phase_state_delta_head.1.weight",
+      "contact_phase_state_delta_head.3.bias",
+      "contact_phase_state_delta_head.3.weight",
+      "event_clock_gate.confidence_head.0.bias",
+      "event_clock_gate.confidence_head.0.weight",
+      "event_clock_gate.confidence_head.2.bias",
+      "event_clock_gate.confidence_head.2.weight",
+      "event_clock_gate.confidence_head.4.bias",
+      "event_clock_gate.confidence_head.4.weight",
+      "event_clock_gate.prior_head.0.bias",
+      "event_clock_gate.prior_head.0.weight",
+      "event_clock_gate.prior_head.2.bias",
+      "event_clock_gate.prior_head.2.weight",
+      "event_clock_corrector.correction_head.0.bias",
+      "event_clock_corrector.correction_head.0.weight",
+      "event_clock_corrector.correction_head.2.bias",
+      "event_clock_corrector.correction_head.2.weight",
+      "event_clock_corrector.correction_head.4.bias",
+      "event_clock_corrector.correction_head.4.weight",
+      "event_clock_corrector.layer_norm.bias",
+      "event_clock_corrector.layer_norm.weight",
+      "contact_plan_init_z",
+      "contact_phase_state_init"
+    ],
+    "per_key": [
+      {
+        "key": "contact_plan_cell.bias_hh",
+        "prefix_group": "contact_plan_cell.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            192
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0035197839606553316,
+          "std": 0.07422084361314774,
+          "norm": 1.0295900106430054
+        },
+        "recipient_before": {
+          "shape": [
+            192
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.006380096543580294,
+          "std": 0.06762820482254028,
+          "norm": 0.9412447810173035
+        }
+      },
+      {
+        "key": "contact_plan_cell.bias_ih",
+        "prefix_group": "contact_plan_cell.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            192
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.001951561775058508,
+          "std": 0.07025265693664551,
+          "norm": 0.9738249182701111
+        },
+        "recipient_before": {
+          "shape": [
+            192
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.001996068051084876,
+          "std": 0.06601820886135101,
+          "norm": 0.9151932597160339
+        }
+      },
+      {
+        "key": "contact_plan_cell.weight_hh",
+        "prefix_group": "contact_plan_cell.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            192,
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0002488716854713857,
+          "std": 0.07271967083215714,
+          "norm": 8.061112403869629
+        },
+        "recipient_before": {
+          "shape": [
+            192,
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.00018291415472049266,
+          "std": 0.07317569851875305,
+          "norm": 8.11164379119873
+        }
+      },
+      {
+        "key": "contact_plan_cell.weight_ih",
+        "prefix_group": "contact_plan_cell.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            192,
+            7
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.00011578606063267216,
+          "std": 0.07200515270233154,
+          "norm": 2.6397557258605957
+        },
+        "recipient_before": {
+          "shape": [
+            192,
+            7
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0031132434960454702,
+          "std": 0.07310919463634491,
+          "norm": 2.6826560497283936
+        }
+      },
+      {
+        "key": "contact_plan_head.0.bias",
+        "prefix_group": "contact_plan_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.00048182043246924877,
+          "std": 0.007483621593564749,
+          "norm": 0.05999292805790901
+        },
+        "recipient_before": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.0012869539204984903,
+          "std": 0.010205945931375027,
+          "norm": 0.08229413628578186
+        }
+      },
+      {
+        "key": "contact_plan_head.0.weight",
+        "prefix_group": "contact_plan_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 1.0044926404953003,
+          "std": 0.008962154388427734,
+          "norm": 8.036261558532715
+        },
+        "recipient_before": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 1.0089021921157837,
+          "std": 0.011005469597876072,
+          "norm": 8.071698188781738
+        }
+      },
+      {
+        "key": "contact_plan_head.1.bias",
+        "prefix_group": "contact_plan_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.00498032383620739,
+          "std": 0.07018373161554337,
+          "norm": 0.5628817081451416
+        },
+        "recipient_before": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.025031767785549164,
+          "std": 0.07185758650302887,
+          "norm": 0.6087417602539062
+        }
+      },
+      {
+        "key": "contact_plan_head.1.weight",
+        "prefix_group": "contact_plan_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.00016191258328035474,
+          "std": 0.07355821132659912,
+          "norm": 4.707737445831299
+        },
+        "recipient_before": {
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.00013144203694537282,
+          "std": 0.07419717311859131,
+          "norm": 4.748625755310059
+        }
+      },
+      {
+        "key": "contact_plan_head.4.bias",
+        "prefix_group": "contact_plan_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            2
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.06244991719722748,
+          "std": 0.03101973421871662,
+          "norm": 0.09861253201961517
+        },
+        "recipient_before": {
+          "shape": [
+            2
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.0276793260127306,
+          "std": 0.0784694254398346,
+          "norm": 0.1176740899682045
+        }
+      },
+      {
+        "key": "contact_plan_head.4.weight",
+        "prefix_group": "contact_plan_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            2,
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0005802778759971261,
+          "std": 0.06981894373893738,
+          "norm": 0.7899384498596191
+        },
+        "recipient_before": {
+          "shape": [
+            2,
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.004306986462324858,
+          "std": 0.07704554498195648,
+          "norm": 0.8730317950248718
+        }
+      },
+      {
+        "key": "contact_plan_time_head.bias",
+        "prefix_group": "contact_plan_time_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            2
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.0037334486842155457,
+          "std": 0.001906068529933691,
+          "norm": 0.005928192753344774
+        },
+        "recipient_before": {
+          "shape": [
+            2
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.0036015240475535393,
+          "std": 0.006355931982398033,
+          "norm": 0.010331393219530582
+        }
+      },
+      {
+        "key": "contact_plan_time_head.weight",
+        "prefix_group": "contact_plan_time_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            2,
+            16
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.0009581419872120023,
+          "std": 0.02198716253042221,
+          "norm": 0.1244962140917778
+        },
+        "recipient_before": {
+          "shape": [
+            2,
+            16
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.000636350188869983,
+          "std": 0.02153186686336994,
+          "norm": 0.12185581773519516
+        }
+      },
+      {
+        "key": "contact_plan_phase_head.0.bias",
+        "prefix_group": "contact_plan_phase_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            4
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0057145580649375916,
+          "std": 0.014749840833246708,
+          "norm": 0.0316363088786602
+        },
+        "recipient_before": {
+          "shape": [
+            4
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.0038026021793484688,
+          "std": 0.015110140666365623,
+          "norm": 0.031162548810243607
+        }
+      },
+      {
+        "key": "contact_plan_phase_head.0.weight",
+        "prefix_group": "contact_plan_phase_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            4
+          ],
+          "dtype": "torch.float32",
+          "mean": 1.0251617431640625,
+          "std": 0.006194317247718573,
+          "norm": 2.050360918045044
+        },
+        "recipient_before": {
+          "shape": [
+            4
+          ],
+          "dtype": "torch.float32",
+          "mean": 1.0187780857086182,
+          "std": 0.009771537035703659,
+          "norm": 2.0376498699188232
+        }
+      },
+      {
+        "key": "contact_plan_phase_head.1.bias",
+        "prefix_group": "contact_plan_phase_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.004921740852296352,
+          "std": 0.2751690745353699,
+          "norm": 2.201704502105713
+        },
+        "recipient_before": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.021382108330726624,
+          "std": 0.28889116644859314,
+          "norm": 2.317451238632202
+        }
+      },
+      {
+        "key": "contact_plan_phase_head.1.weight",
+        "prefix_group": "contact_plan_phase_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64,
+            4
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.015263429842889309,
+          "std": 0.2927001416683197,
+          "norm": 4.689565658569336
+        },
+        "recipient_before": {
+          "shape": [
+            64,
+            4
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.03357718512415886,
+          "std": 0.29900267720222473,
+          "norm": 4.814113616943359
+        }
+      },
+      {
+        "key": "contact_plan_phase_head.4.bias",
+        "prefix_group": "contact_plan_phase_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            2
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.003732493845745921,
+          "std": 0.0016972480807453394,
+          "norm": 0.005798648111522198
+        },
+        "recipient_before": {
+          "shape": [
+            2
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.0034754707012325525,
+          "std": 0.003480688901618123,
+          "norm": 0.006956161465495825
+        }
+      },
+      {
+        "key": "contact_plan_phase_head.4.weight",
+        "prefix_group": "contact_plan_phase_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            2,
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.0010190944885835052,
+          "std": 0.02326578088104725,
+          "norm": 0.26347464323043823
+        },
+        "recipient_before": {
+          "shape": [
+            2,
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.0006643877131864429,
+          "std": 0.020214449614286423,
+          "norm": 0.22882385551929474
+        }
+      },
+      {
+        "key": "contact_plan_init_head.0.bias",
+        "prefix_group": "contact_plan_init_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            968
+          ],
+          "dtype": "torch.float32",
+          "mean": 2.493238207534887e-05,
+          "std": 0.006005483213812113,
+          "norm": 0.18684840202331543
+        },
+        "recipient_before": {
+          "shape": [
+            968
+          ],
+          "dtype": "torch.float32",
+          "mean": -1.4576529792975634e-05,
+          "std": 0.006296262610703707,
+          "norm": 0.19589422643184662
+        }
+      },
+      {
+        "key": "contact_plan_init_head.0.weight",
+        "prefix_group": "contact_plan_init_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            968
+          ],
+          "dtype": "torch.float32",
+          "mean": 1.0019797086715698,
+          "std": 0.006306088995188475,
+          "norm": 31.17490577697754
+        },
+        "recipient_before": {
+          "shape": [
+            968
+          ],
+          "dtype": "torch.float32",
+          "mean": 1.003157615661621,
+          "std": 0.00675713736563921,
+          "norm": 31.211647033691406
+        }
+      },
+      {
+        "key": "contact_plan_init_head.1.bias",
+        "prefix_group": "contact_plan_init_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            128
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.009352356195449829,
+          "std": 0.019375666975975037,
+          "norm": 0.24341122806072235
+        },
+        "recipient_before": {
+          "shape": [
+            128
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.005439412780106068,
+          "std": 0.018180079758167267,
+          "norm": 0.2146930992603302
+        }
+      },
+      {
+        "key": "contact_plan_init_head.1.weight",
+        "prefix_group": "contact_plan_init_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            128,
+            968
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0001339070004178211,
+          "std": 0.01998678594827652,
+          "norm": 7.035490989685059
+        },
+        "recipient_before": {
+          "shape": [
+            128,
+            968
+          ],
+          "dtype": "torch.float32",
+          "mean": -6.584435323020443e-05,
+          "std": 0.01994691789150238,
+          "norm": 7.0213470458984375
+        }
+      },
+      {
+        "key": "contact_plan_init_head.4.bias",
+        "prefix_group": "contact_plan_init_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.00018146252841688693,
+          "std": 0.007051778491586447,
+          "norm": 0.056432902812957764
+        },
+        "recipient_before": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.000353927694959566,
+          "std": 0.005834557116031647,
+          "norm": 0.04676225781440735
+        }
+      },
+      {
+        "key": "contact_plan_init_head.4.weight",
+        "prefix_group": "contact_plan_init_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64,
+            128
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0010182175319641829,
+          "std": 0.009122875519096851,
+          "norm": 0.8308353424072266
+        },
+        "recipient_before": {
+          "shape": [
+            64,
+            128
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.000362924940418452,
+          "std": 0.008957572281360626,
+          "norm": 0.8114118576049805
+        }
+      },
+      {
+        "key": "contact_phase_state_delta_head.0.bias",
+        "prefix_group": "contact_phase_state_delta_head.",
+        "same_before": true,
+        "donor": {
+          "shape": [
+            15
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0,
+          "std": 0.0,
+          "norm": 0.0
+        },
+        "recipient_before": {
+          "shape": [
+            15
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0,
+          "std": 0.0,
+          "norm": 0.0
+        }
+      },
+      {
+        "key": "contact_phase_state_delta_head.0.weight",
+        "prefix_group": "contact_phase_state_delta_head.",
+        "same_before": true,
+        "donor": {
+          "shape": [
+            15
+          ],
+          "dtype": "torch.float32",
+          "mean": 1.0,
+          "std": 0.0,
+          "norm": 3.872983455657959
+        },
+        "recipient_before": {
+          "shape": [
+            15
+          ],
+          "dtype": "torch.float32",
+          "mean": 1.0,
+          "std": 0.0,
+          "norm": 3.872983455657959
+        }
+      },
+      {
+        "key": "contact_phase_state_delta_head.1.bias",
+        "prefix_group": "contact_phase_state_delta_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.009304437786340714,
+          "std": 0.15773247182369232,
+          "norm": 1.2640533447265625
+        },
+        "recipient_before": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.01349256094545126,
+          "std": 0.15169702470302582,
+          "norm": 1.218367099761963
+        }
+      },
+      {
+        "key": "contact_phase_state_delta_head.1.weight",
+        "prefix_group": "contact_phase_state_delta_head.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64,
+            15
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.002950542140752077,
+          "std": 0.1509046107530594,
+          "norm": 4.676501750946045
+        },
+        "recipient_before": {
+          "shape": [
+            64,
+            15
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.004200863651931286,
+          "std": 0.14978940784931183,
+          "norm": 4.642879486083984
+        }
+      },
+      {
+        "key": "contact_phase_state_delta_head.3.bias",
+        "prefix_group": "contact_phase_state_delta_head.",
+        "same_before": true,
+        "donor": {
+          "shape": [
+            2
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.15839102864265442,
+          "std": 0.0,
+          "norm": 0.22399874031543732
+        },
+        "recipient_before": {
+          "shape": [
+            2
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.15839102864265442,
+          "std": 0.0,
+          "norm": 0.22399874031543732
+        }
+      },
+      {
+        "key": "contact_phase_state_delta_head.3.weight",
+        "prefix_group": "contact_phase_state_delta_head.",
+        "same_before": true,
+        "donor": {
+          "shape": [
+            2,
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0,
+          "std": 0.0,
+          "norm": 0.0
+        },
+        "recipient_before": {
+          "shape": [
+            2,
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0,
+          "std": 0.0,
+          "norm": 0.0
+        }
+      },
+      {
+        "key": "event_clock_gate.confidence_head.0.bias",
+        "prefix_group": "event_clock_gate.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            32
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.019907189533114433,
+          "std": 0.2527208924293518,
+          "norm": 1.4340335130691528
+        },
+        "recipient_before": {
+          "shape": [
+            32
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.0014283452183008194,
+          "std": 0.23738962411880493,
+          "norm": 1.3429027795791626
+        }
+      },
+      {
+        "key": "event_clock_gate.confidence_head.0.weight",
+        "prefix_group": "event_clock_gate.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            32,
+            5
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.03374714404344559,
+          "std": 0.251459538936615,
+          "norm": 3.2092559337615967
+        },
+        "recipient_before": {
+          "shape": [
+            32,
+            5
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.005573013331741095,
+          "std": 0.2724935710430145,
+          "norm": 3.4475221633911133
+        }
+      },
+      {
+        "key": "event_clock_gate.confidence_head.2.bias",
+        "prefix_group": "event_clock_gate.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            32
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.007511395961046219,
+          "std": 0.10506105422973633,
+          "norm": 0.595832109451294
+        },
+        "recipient_before": {
+          "shape": [
+            32
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.025969188660383224,
+          "std": 0.10483960807323456,
+          "norm": 0.6109858751296997
+        }
+      },
+      {
+        "key": "event_clock_gate.confidence_head.2.weight",
+        "prefix_group": "event_clock_gate.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            32,
+            32
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0005268293898552656,
+          "std": 0.10282661020755768,
+          "norm": 3.290494918823242
+        },
+        "recipient_before": {
+          "shape": [
+            32,
+            32
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.002074956661090255,
+          "std": 0.10333328694105148,
+          "norm": 3.3073318004608154
+        }
+      },
+      {
+        "key": "event_clock_gate.confidence_head.4.bias",
+        "prefix_group": "event_clock_gate.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            1
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.08492903411388397,
+          "std": 0.0,
+          "norm": 0.08492903411388397
+        },
+        "recipient_before": {
+          "shape": [
+            1
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.13776858150959015,
+          "std": 0.0,
+          "norm": 0.13776858150959015
+        }
+      },
+      {
+        "key": "event_clock_gate.confidence_head.4.weight",
+        "prefix_group": "event_clock_gate.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            1,
+            32
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.006463952362537384,
+          "std": 0.10134012997150421,
+          "norm": 0.5744313597679138
+        },
+        "recipient_before": {
+          "shape": [
+            1,
+            32
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.002167471218854189,
+          "std": 0.10250254720449448,
+          "norm": 0.5799715518951416
+        }
+      },
+      {
+        "key": "event_clock_gate.prior_head.0.bias",
+        "prefix_group": "event_clock_gate.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            16
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.016490250825881958,
+          "std": 0.4855457544326782,
+          "norm": 1.9433027505874634
+        },
+        "recipient_before": {
+          "shape": [
+            16
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.06920557469129562,
+          "std": 0.3955027163028717,
+          "norm": 1.6060477495193481
+        }
+      },
+      {
+        "key": "event_clock_gate.prior_head.0.weight",
+        "prefix_group": "event_clock_gate.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            16,
+            2
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.05367960035800934,
+          "std": 0.37206223607063293,
+          "norm": 2.1264944076538086
+        },
+        "recipient_before": {
+          "shape": [
+            16,
+            2
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.11855009943246841,
+          "std": 0.42040175199508667,
+          "norm": 2.470897912979126
+        }
+      },
+      {
+        "key": "event_clock_gate.prior_head.2.bias",
+        "prefix_group": "event_clock_gate.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            1
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.14393293857574463,
+          "std": 0.0,
+          "norm": 0.14393293857574463
+        },
+        "recipient_before": {
+          "shape": [
+            1
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.193886399269104,
+          "std": 0.0,
+          "norm": 0.193886399269104
+        }
+      },
+      {
+        "key": "event_clock_gate.prior_head.2.weight",
+        "prefix_group": "event_clock_gate.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            1,
+            16
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.04458042234182358,
+          "std": 0.16916276514530182,
+          "norm": 0.6997537612915039
+        },
+        "recipient_before": {
+          "shape": [
+            1,
+            16
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.03208484128117561,
+          "std": 0.11043475568294525,
+          "norm": 0.4600047469139099
+        }
+      },
+      {
+        "key": "event_clock_corrector.correction_head.0.bias",
+        "prefix_group": "event_clock_corrector.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.0017352666473016143,
+          "std": 0.06426163762807846,
+          "norm": 0.5142804980278015
+        },
+        "recipient_before": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0019772816449403763,
+          "std": 0.06796520948410034,
+          "norm": 0.5439517498016357
+        }
+      },
+      {
+        "key": "event_clock_corrector.correction_head.0.weight",
+        "prefix_group": "event_clock_corrector.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64,
+            70
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.000930600508581847,
+          "std": 0.06986824423074722,
+          "norm": 4.676893711090088
+        },
+        "recipient_before": {
+          "shape": [
+            64,
+            70
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0008831308223307133,
+          "std": 0.06921076774597168,
+          "norm": 4.632847309112549
+        }
+      },
+      {
+        "key": "event_clock_corrector.correction_head.2.bias",
+        "prefix_group": "event_clock_corrector.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.010970772244036198,
+          "std": 0.07283727079629898,
+          "norm": 0.589270830154419
+        },
+        "recipient_before": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.012810515239834785,
+          "std": 0.0710168406367302,
+          "norm": 0.5773041248321533
+        }
+      },
+      {
+        "key": "event_clock_corrector.correction_head.2.weight",
+        "prefix_group": "event_clock_corrector.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.00010210496839135885,
+          "std": 0.07302376627922058,
+          "norm": 4.673525333404541
+        },
+        "recipient_before": {
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0006200408097356558,
+          "std": 0.07197939604520798,
+          "norm": 4.606852054595947
+        }
+      },
+      {
+        "key": "event_clock_corrector.correction_head.4.bias",
+        "prefix_group": "event_clock_corrector.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0014274984132498503,
+          "std": 0.06946048140525818,
+          "norm": 0.5558012127876282
+        },
+        "recipient_before": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0017267437651753426,
+          "std": 0.06385628134012222,
+          "norm": 0.5110369920730591
+        }
+      },
+      {
+        "key": "event_clock_corrector.correction_head.4.weight",
+        "prefix_group": "event_clock_corrector.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.0017592264339327812,
+          "std": 0.07197185605764389,
+          "norm": 4.607574939727783
+        },
+        "recipient_before": {
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.0004921143990941346,
+          "std": 0.07211561501026154,
+          "norm": 4.615507125854492
+        }
+      },
+      {
+        "key": "event_clock_corrector.layer_norm.bias",
+        "prefix_group": "event_clock_corrector.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.0007607147563248873,
+          "std": 0.006932943128049374,
+          "norm": 0.05579641833901405
+        },
+        "recipient_before": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.00022707378957420588,
+          "std": 0.00780072994530201,
+          "norm": 0.06243227422237396
+        }
+      },
+      {
+        "key": "event_clock_corrector.layer_norm.weight",
+        "prefix_group": "event_clock_corrector.",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 1.0023208856582642,
+          "std": 0.007153346668928862,
+          "norm": 8.018771171569824
+        },
+        "recipient_before": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.9991840124130249,
+          "std": 0.010262254625558853,
+          "norm": 7.993893146514893
+        }
+      },
+      {
+        "key": "contact_plan_init_z",
+        "prefix_group": "exact",
+        "same_before": false,
+        "donor": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.00018146252841688693,
+          "std": 0.007051778491586447,
+          "norm": 0.056432902812957764
+        },
+        "recipient_before": {
+          "shape": [
+            64
+          ],
+          "dtype": "torch.float32",
+          "mean": -0.000353927694959566,
+          "std": 0.005834557116031647,
+          "norm": 0.04676225781440735
+        }
+      },
+      {
+        "key": "contact_phase_state_init",
+        "prefix_group": "exact",
+        "same_before": true,
+        "donor": {
+          "shape": [
+            4
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.5,
+          "std": 0.5,
+          "norm": 1.4142135381698608
+        },
+        "recipient_before": {
+          "shape": [
+            4
+          ],
+          "dtype": "torch.float32",
+          "mean": 0.5,
+          "std": 0.5,
+          "norm": 1.4142135381698608
+        }
+      }
+    ],
+    "donor_prefix_map": {
+      "contact_plan_cell.": [
+        "contact_plan_cell.bias_hh",
+        "contact_plan_cell.bias_ih",
+        "contact_plan_cell.weight_hh",
+        "contact_plan_cell.weight_ih"
+      ],
+      "contact_plan_head.": [
+        "contact_plan_head.0.bias",
+        "contact_plan_head.0.weight",
+        "contact_plan_head.1.bias",
+        "contact_plan_head.1.weight",
+        "contact_plan_head.4.bias",
+        "contact_plan_head.4.weight"
+      ],
+      "contact_plan_time_head.": [
+        "contact_plan_time_head.bias",
+        "contact_plan_time_head.weight"
+      ],
+      "contact_plan_phase_head.": [
+        "contact_plan_phase_head.0.bias",
+        "contact_plan_phase_head.0.weight",
+        "contact_plan_phase_head.1.bias",
+        "contact_plan_phase_head.1.weight",
+        "contact_plan_phase_head.4.bias",
+        "contact_plan_phase_head.4.weight"
+      ],
+      "contact_plan_init_head.": [
+        "contact_plan_init_head.0.bias",
+        "contact_plan_init_head.0.weight",
+        "contact_plan_init_head.1.bias",
+        "contact_plan_init_head.1.weight",
+        "contact_plan_init_head.4.bias",
+        "contact_plan_init_head.4.weight"
+      ],
+      "contact_phase_state_delta_head.": [
+        "contact_phase_state_delta_head.0.bias",
+        "contact_phase_state_delta_head.0.weight",
+        "contact_phase_state_delta_head.1.bias",
+        "contact_phase_state_delta_head.1.weight",
+        "contact_phase_state_delta_head.3.bias",
+        "contact_phase_state_delta_head.3.weight"
+      ],
+      "event_clock_gate.": [
+        "event_clock_gate.confidence_head.0.bias",
+        "event_clock_gate.confidence_head.0.weight",
+        "event_clock_gate.confidence_head.2.bias",
+        "event_clock_gate.confidence_head.2.weight",
+        "event_clock_gate.confidence_head.4.bias",
+        "event_clock_gate.confidence_head.4.weight",
+        "event_clock_gate.prior_head.0.bias",
+        "event_clock_gate.prior_head.0.weight",
+        "event_clock_gate.prior_head.2.bias",
+        "event_clock_gate.prior_head.2.weight"
+      ],
+      "event_clock_corrector.": [
+        "event_clock_corrector.correction_head.0.bias",
+        "event_clock_corrector.correction_head.0.weight",
+        "event_clock_corrector.correction_head.2.bias",
+        "event_clock_corrector.correction_head.2.weight",
+        "event_clock_corrector.correction_head.4.bias",
+        "event_clock_corrector.correction_head.4.weight",
+        "event_clock_corrector.layer_norm.bias",
+        "event_clock_corrector.layer_norm.weight"
+      ]
+    },
+    "recipient_prefix_map": {
+      "contact_plan_cell.": [
+        "contact_plan_cell.bias_hh",
+        "contact_plan_cell.bias_ih",
+        "contact_plan_cell.weight_hh",
+        "contact_plan_cell.weight_ih"
+      ],
+      "contact_plan_head.": [
+        "contact_plan_head.0.bias",
+        "contact_plan_head.0.weight",
+        "contact_plan_head.1.bias",
+        "contact_plan_head.1.weight",
+        "contact_plan_head.4.bias",
+        "contact_plan_head.4.weight"
+      ],
+      "contact_plan_time_head.": [
+        "contact_plan_time_head.bias",
+        "contact_plan_time_head.weight"
+      ],
+      "contact_plan_phase_head.": [
+        "contact_plan_phase_head.0.bias",
+        "contact_plan_phase_head.0.weight",
+        "contact_plan_phase_head.1.bias",
+        "contact_plan_phase_head.1.weight",
+        "contact_plan_phase_head.4.bias",
+        "contact_plan_phase_head.4.weight"
+      ],
+      "contact_plan_init_head.": [
+        "contact_plan_init_head.0.bias",
+        "contact_plan_init_head.0.weight",
+        "contact_plan_init_head.1.bias",
+        "contact_plan_init_head.1.weight",
+        "contact_plan_init_head.4.bias",
+        "contact_plan_init_head.4.weight"
+      ],
+      "contact_phase_state_delta_head.": [
+        "contact_phase_state_delta_head.0.bias",
+        "contact_phase_state_delta_head.0.weight",
+        "contact_phase_state_delta_head.1.bias",
+        "contact_phase_state_delta_head.1.weight",
+        "contact_phase_state_delta_head.3.bias",
+        "contact_phase_state_delta_head.3.weight"
+      ],
+      "event_clock_gate.": [
+        "event_clock_gate.confidence_head.0.bias",
+        "event_clock_gate.confidence_head.0.weight",
+        "event_clock_gate.confidence_head.2.bias",
+        "event_clock_gate.confidence_head.2.weight",
+        "event_clock_gate.confidence_head.4.bias",
+        "event_clock_gate.confidence_head.4.weight",
+        "event_clock_gate.prior_head.0.bias",
+        "event_clock_gate.prior_head.0.weight",
+        "event_clock_gate.prior_head.2.bias",
+        "event_clock_gate.prior_head.2.weight"
+      ],
+      "event_clock_corrector.": [
+        "event_clock_corrector.correction_head.0.bias",
+        "event_clock_corrector.correction_head.0.weight",
+        "event_clock_corrector.correction_head.2.bias",
+        "event_clock_corrector.correction_head.2.weight",
+        "event_clock_corrector.correction_head.4.bias",
+        "event_clock_corrector.correction_head.4.weight",
+        "event_clock_corrector.layer_norm.bias",
+        "event_clock_corrector.layer_norm.weight"
+      ]
+    },
+    "backbone_case": "cp015_bestfree",
+    "planstack_case": "old_bestfree",
+    "recipient_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1_cp015_tailk3/ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+    "donor_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+    "surgery_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_stage6_plantransplant_20260314/surgery_ckpts/cp015_with_old_planstack/cp015_with_old_planstack.pth",
+    "verify_same_after_count": 50,
+    "verified_all_after": true,
+    "created_at": "2026-03-14 01:25:00"
+  },
+  "completed_at": "2026-03-14 01:46:35"
+}
