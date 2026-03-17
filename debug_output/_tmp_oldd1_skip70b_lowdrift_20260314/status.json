@@ -1,5 +1,5 @@
 {
-  "completed_at": "2026-03-14 20:16:30",
+  "completed_at": "2026-03-16 23:11:47",
   "stage70a_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_newflow_chain_20260314/70a/ckpt_last_WalkF_stage7_70a_from_oldd1_newflow_20260314.pth",
   "warmstart_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_skip70b_lowdrift_20260314/warmstart/ckpt_last_oldd1_skip70b_zerophase_20260314.pth",
   "candidate_config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_oldd1_skip70b_lowdrift_20260314/configs/posttrain_70b_replace_lowdrift_from_oldd1_20260314.json",

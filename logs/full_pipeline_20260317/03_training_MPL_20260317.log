@@ -1,0 +1,137 @@
+[ARPG-PATCH] 参数准备完毕，即将进入训练入口: train_entry()
+[config_json] Loaded defaults from config/exp_phase_mpl.clean.json (58 keys)
+[Spec] Loaded norm_template: raw_data/processed_data/norm_template.json
+[Spec] Loaded pretrain_template: models/pretrain_template.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[IndexOpt] stride=1 min_speed=0.0 -> windows=89
+[Export][Dims] Dx=419, Dy=278, Dc=7 | L=3, H=512, K=16
+[MPL] Attached MotionEncoder bundle: models/motion_encoder_equiv_stageA_20260317.pt
+[MPL] trainbase_contacts_source: requested=pretrain_contact, resolved=pretrain_contact
+[LossWeights] w_rot_ortho=0.001 w_rot_local=0.2 rot_local_tail_weight=0.0 rot_local_tail_k=0 rot_local_tail_scope=all rot_local_tail_select=batch rot_local_tail_ema_beta=0.9 adaptive_bone_weights=True
+[Dt] dt_traj=0.016667s | dt_bone=0.016667s (dataset fps=60.0)
+[LR-DBG:init] arg_lr=1.00e-03 opt_pg0=1.00e-03
+[Config] saved resolved config to models/MLPL2_DirectBranch_v1_20260317/exp_phase_DirectBranch_v1_d1_20260317/config_resolved.json
+[GeoLoss] TRAIN denorm(Y.rot6d) applied on flat D.
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[GradConn] ok: window=8 grad_hits=115.
+[LR-DBG:fit-epoch001-start] pg0=1.00e-03
+[StageSched][ep 001] stage=1-4 stage1_warmup_tf1 | opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Smoke] contact_plan_bce=0.6874307990074158
+[LR-DBG:after-opt-step] pg0=1.00e-03
+[Train][ep 001] loss=0.7632
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep001.json
+[ValTeacher@ep 001] loss=0.634758 | GeoDeg=0.779° | GeoLocalDeg=0.653° | AngVelMAE=0.03379 rad/s | AngMagRel=0.046
+[StageSched][ep 002] stage=1-4 stage1_warmup_tf1 | opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 002] loss=0.5823
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep002.json
+[ValTeacher@ep 002] loss=0.508443 | GeoDeg=0.399° | GeoLocalDeg=0.331° | AngVelMAE=0.01439 rad/s | AngMagRel=0.020
+[StageSched][ep 003] stage=1-4 stage1_warmup_tf1 | opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 003] loss=0.5235
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep003.json
+[ValTeacher@ep 003] loss=0.546219 | GeoDeg=0.315° | GeoLocalDeg=0.181° | AngVelMAE=0.00834 rad/s | AngMagRel=0.011
+[StageSched][ep 004] stage=1-4 stage1_warmup_tf1 | opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 004] loss=0.5297
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep004.json
+[ValTeacher@ep 004] loss=0.542643 | GeoDeg=0.264° | GeoLocalDeg=0.143° | AngVelMAE=0.00619 rad/s | AngMagRel=0.007
+[StageSched][ep 005] stage=5-8 stage2_transition_tf1_to_p05 | opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 005] loss=0.5376
+[TeacherDiag] saved to debug_output/freerun_diag_ep002_teacher_ep005.json
+[ValTeacher@ep 005] loss=0.504277 | GeoDeg=0.260° | GeoLocalDeg=0.114° | AngVelMAE=0.00563 rad/s | AngMagRel=0.007
+[StageSched][ep 006] stage=5-8 stage2_transition_tf1_to_p05 | opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 006] loss=0.4836
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep006_b00.pt :: root_vel 0.157 | |Δ| 0.156
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep006_b01.pt :: root_vel 0.166 | |Δ| 0.156
+[ValFree@ep 006] GeoDeg=4.535° | RootVelMAE=0.30223 | AngVelMAE=0.53779 rad/s | AngMagRel=0.717 | LimbGeoDeg=6.960° | LimbGeoLocalDeg=6.955°
+[Gap@ep 006] teach_loss=0.457923 | GeoDeg=4.535° | AngVelMAE=0.53779 | LimbGeoDeg=6.960° | LimbGeoLocalDeg=6.955°
+[StageSched][ep 007] stage=5-8 stage2_transition_tf1_to_p05 | opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 007] loss=0.4617
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep007_b00.pt :: root_vel 0.153 | |Δ| 0.200
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep007_b01.pt :: root_vel 0.159 | |Δ| 0.200
+[ValFree@ep 007] GeoDeg=4.760° | RootVelMAE=0.30618 | AngVelMAE=0.54019 rad/s | AngMagRel=0.664 | LimbGeoDeg=6.749° | LimbGeoLocalDeg=6.739°
+[Gap@ep 007] teach_loss=0.468469 | GeoDeg=4.760° | AngVelMAE=0.54019 | LimbGeoDeg=6.749° | LimbGeoLocalDeg=6.739°
+[StageSched][ep 008] stage=5-8 stage2_transition_tf1_to_p05 | opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 008] loss=0.4605
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep008_b00.pt :: root_vel 0.158 | |Δ| 0.254
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep008_b01.pt :: root_vel 0.176 | |Δ| 0.254
+[ValFree@ep 008] GeoDeg=5.026° | RootVelMAE=0.32154 | AngVelMAE=0.54929 rad/s | AngMagRel=0.630 | LimbGeoDeg=6.832° | LimbGeoLocalDeg=6.823°
+[Gap@ep 008] teach_loss=0.415618 | GeoDeg=5.026° | AngVelMAE=0.54929 | LimbGeoDeg=6.832° | LimbGeoLocalDeg=6.823°
+[StageSched][ep 009] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 009] loss=0.4217
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep009_b00.pt :: root_vel 0.164 | |Δ| 0.272
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep009_b01.pt :: root_vel 0.146 | |Δ| 0.278
+[ValFree@ep 009] GeoDeg=5.070° | RootVelMAE=0.29659 | AngVelMAE=0.56023 rad/s | AngMagRel=0.629 | LimbGeoDeg=6.812° | LimbGeoLocalDeg=6.810°
+[Gap@ep 009] teach_loss=0.412596 | GeoDeg=5.070° | AngVelMAE=0.56023 | LimbGeoDeg=6.812° | LimbGeoLocalDeg=6.810°
+[StageSched][ep 010] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 010] loss=0.4060
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep010_b00.pt :: root_vel 0.164 | |Δ| 0.295
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep010_b01.pt :: root_vel 0.158 | |Δ| 0.293
+[ValFree@ep 010] GeoDeg=5.026° | RootVelMAE=0.29262 | AngVelMAE=0.54956 rad/s | AngMagRel=0.619 | LimbGeoDeg=6.670° | LimbGeoLocalDeg=6.664°
+[Gap@ep 010] teach_loss=0.388634 | GeoDeg=5.026° | AngVelMAE=0.54956 | LimbGeoDeg=6.670° | LimbGeoLocalDeg=6.664°
+[StageSched][ep 011] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 011] loss=0.4107
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep011_b00.pt :: root_vel 0.158 | |Δ| 0.313
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep011_b01.pt :: root_vel 0.165 | |Δ| 0.314
+[ValFree@ep 011] GeoDeg=5.240° | RootVelMAE=0.32516 | AngVelMAE=0.57006 rad/s | AngMagRel=0.639 | LimbGeoDeg=7.018° | LimbGeoLocalDeg=7.012°
+[Gap@ep 011] teach_loss=0.392983 | GeoDeg=5.240° | AngVelMAE=0.57006 | LimbGeoDeg=7.018° | LimbGeoLocalDeg=7.012°
+[StageSched][ep 012] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 012] loss=0.4225
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep012_b00.pt :: root_vel 0.168 | |Δ| 0.332
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep012_b01.pt :: root_vel 0.160 | |Δ| 0.331
+[ValFree@ep 012] GeoDeg=5.304° | RootVelMAE=0.31607 | AngVelMAE=0.57382 rad/s | AngMagRel=0.627 | LimbGeoDeg=7.014° | LimbGeoLocalDeg=7.009°
+[Gap@ep 012] teach_loss=0.390833 | GeoDeg=5.304° | AngVelMAE=0.57382 | LimbGeoDeg=7.014° | LimbGeoLocalDeg=7.009°
+[StageSched][ep 013] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 013] loss=0.4076
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep013_b00.pt :: root_vel 0.163 | |Δ| 0.345
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep013_b01.pt :: root_vel 0.174 | |Δ| 0.348
+[ValFree@ep 013] GeoDeg=5.227° | RootVelMAE=0.32175 | AngVelMAE=0.56700 rad/s | AngMagRel=0.616 | LimbGeoDeg=6.728° | LimbGeoLocalDeg=6.725°
+[Gap@ep 013] teach_loss=0.384274 | GeoDeg=5.227° | AngVelMAE=0.56700 | LimbGeoDeg=6.728° | LimbGeoLocalDeg=6.725°
+[StageSched][ep 014] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 014] loss=0.3979
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep014_b00.pt :: root_vel 0.160 | |Δ| 0.352
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep014_b01.pt :: root_vel 0.159 | |Δ| 0.352
+[ValFree@ep 014] GeoDeg=5.308° | RootVelMAE=0.31184 | AngVelMAE=0.57257 rad/s | AngMagRel=0.638 | LimbGeoDeg=6.945° | LimbGeoLocalDeg=6.942°
+[Gap@ep 014] teach_loss=0.369711 | GeoDeg=5.308° | AngVelMAE=0.57257 | LimbGeoDeg=6.945° | LimbGeoLocalDeg=6.942°
+[StageSched][ep 015] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 015] loss=0.3869
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep015_b00.pt :: root_vel 0.173 | |Δ| 0.358
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep015_b01.pt :: root_vel 0.155 | |Δ| 0.359
+[ValFree@ep 015] GeoDeg=5.358° | RootVelMAE=0.32669 | AngVelMAE=0.57550 rad/s | AngMagRel=0.634 | LimbGeoDeg=7.200° | LimbGeoLocalDeg=7.195°
+[Gap@ep 015] teach_loss=0.361408 | GeoDeg=5.358° | AngVelMAE=0.57550 | LimbGeoDeg=7.200° | LimbGeoLocalDeg=7.195°
+[StageSched][ep 016] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 016] loss=0.3761
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep016_b00.pt :: root_vel 0.161 | |Δ| 0.359
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep016_b01.pt :: root_vel 0.163 | |Δ| 0.361
+[ValFree@ep 016] GeoDeg=5.165° | RootVelMAE=0.30323 | AngVelMAE=0.55964 rad/s | AngMagRel=0.632 | LimbGeoDeg=6.772° | LimbGeoLocalDeg=6.764°
+[Gap@ep 016] teach_loss=0.356905 | GeoDeg=5.165° | AngVelMAE=0.55964 | LimbGeoDeg=6.772° | LimbGeoLocalDeg=6.764°
+[StageSched][ep 017] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 017] loss=0.3814
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep017_b00.pt :: root_vel 0.162 | |Δ| 0.365
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep017_b01.pt :: root_vel 0.172 | |Δ| 0.360
+[ValFree@ep 017] GeoDeg=5.235° | RootVelMAE=0.33354 | AngVelMAE=0.56719 rad/s | AngMagRel=0.653 | LimbGeoDeg=7.005° | LimbGeoLocalDeg=6.999°
+[Gap@ep 017] teach_loss=0.360530 | GeoDeg=5.235° | AngVelMAE=0.56719 | LimbGeoDeg=7.005° | LimbGeoLocalDeg=6.999°
+[StageSched][ep 018] stage=9-18 stage3_p05 | opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 018] loss=0.3823
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep018_b00.pt :: root_vel 0.172 | |Δ| 0.365
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep018_b01.pt :: root_vel 0.165 | |Δ| 0.365
+[ValFree@ep 018] GeoDeg=5.083° | RootVelMAE=0.32063 | AngVelMAE=0.56837 rad/s | AngMagRel=0.632 | LimbGeoDeg=6.805° | LimbGeoLocalDeg=6.800°
+[Gap@ep 018] teach_loss=0.354887 | GeoDeg=5.083° | AngVelMAE=0.56837 | LimbGeoDeg=6.805° | LimbGeoLocalDeg=6.800°
+[BestTeacher] ckpt=models/MLPL2_DirectBranch_v1_20260317/exp_phase_DirectBranch_v1_d1_20260317/ckpt_best_teacher_exp_phase_DirectBranch_v1_d1_20260317.pth GeoLocalDeg=0.093467°
+[BestFree] ckpt=models/MLPL2_DirectBranch_v1_20260317/exp_phase_DirectBranch_v1_d1_20260317/ckpt_best_free_exp_phase_DirectBranch_v1_d1_20260317.pth GeoDriftSlope=0.609312 deg/step
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep018_b00.pt :: root_vel 0.154 | |Δ| 0.364
+[FreeRunDiag] saved diagnostics to debug_output/freerun_diag_ep002_exp_phase_DirectBranch_v1_d1_20260317_ep018_b01.pt :: root_vel 0.147 | |Δ| 0.364
+[ValFree@last] GeoDeg=4.900 RootVelMAE=0.27861 AngVelMAE=0.53743 rad/s
+[Export][ENTER] preparing to export ONNX...
+[Export][ProbeDims] Dx=419 Dy=278 Dc=7
+[Export][Sanity] input dims check OK
+[Export][BatchShapes] {'motion': (16, 60, 419), 'gt_motion': (16, 60, 278), 'clip_id': (16,), 'start': (16,), 'clip_len': (16,), 'cond_in': (16, 60, 7), 'cond_tgt': (16, 60, 7), 'cond_tgt_raw': (16, 60, 7), 'contacts': (16, 60, 2), 'ttc_td': (16, 60, 2), 'ttc_td_valid': (16, 60, 2), 'ttc_td_events': (16, 60, 2), 'angvel': (16, 60, 138), 'angvel_raw': (16, 60, 138), 'pose_hist': (16, 60, 828)}
+[torch.onnx] Obtain model graph for `_StatelessWrapper([...]` with `torch.export.export(..., strict=False)`...
+[torch.onnx] Obtain model graph for `_StatelessWrapper([...]` with `torch.export.export(..., strict=False)`... ✅
+[torch.onnx] Run decomposition...
+[torch.onnx] Run decomposition... ✅
+[torch.onnx] Translate the graph into ONNX...
+[torch.onnx] Translate the graph into ONNX... ✅
+Applied 1 of general pattern rewrite rules.
+Applied 5 of general pattern rewrite rules.
+[Export][OK] saved: models/MLPL2_DirectBranch_v1_20260317/exp_phase_DirectBranch_v1_d1_20260317/exp_phase_DirectBranch_v1_d1_20260317_step_stateful_nophase.onnx | Dx=419 Dy=278 Dc=7 C=2 A=138 P=828 Hp=64 Hz=4

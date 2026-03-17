@@ -126,6 +126,83 @@ def _build_runner_args(args: argparse.Namespace) -> argparse.Namespace:
     )
 
 
+def _apply_ckpt_runner_overrides(runner: FreeRunCycleRunner) -> None:
+    cfg = getattr(runner, "_ckpt_posttrain_cfg", None)
+    if not isinstance(cfg, dict):
+        return
+
+    def _set_arg(name: str, cast: Any) -> None:
+        if name not in cfg:
+            return
+        raw = cfg.get(name)
+        if raw is None:
+            return
+        try:
+            value = cast(raw)
+        except Exception:
+            return
+        setattr(runner.args, name, value)
+
+    for key in ("num_heads", "context_len", "depth"):
+        _set_arg(key, int)
+    for key in ("dropout", "event_clock_max_delta"):
+        _set_arg(key, float)
+    for key in ("time_index_mode", "event_clock", "phase_reset_source", "contacts_meas_source"):
+        _set_arg(key, str)
+
+    runner.contacts_meas_source = str(getattr(runner.args, "contacts_meas_source", runner.contacts_meas_source) or runner.contacts_meas_source).strip().lower()
+    runner.phase_reset_source = str(getattr(runner.args, "phase_reset_source", runner.phase_reset_source) or runner.phase_reset_source).strip().lower()
+
+    if bool(cfg.get("train_lambda_head", False)) and not bool(getattr(runner.args, "lambda_fusion_apply", False)):
+        runner.args.lambda_fusion_apply = True
+    runner.lambda_fusion_apply = bool(getattr(runner.args, "lambda_fusion_apply", runner.lambda_fusion_apply))
+
+
+def _apply_loss_group_metadata(
+    runner: FreeRunCycleRunner,
+    *,
+    ds: Any,
+) -> None:
+    trainer = runner.trainer
+    if trainer is None:
+        return
+
+    bone_names = list(getattr(ds, "bone_names", []) or getattr(trainer, "_bone_names", []) or [])
+    if bone_names:
+        try:
+            trainer._bone_names = list(bone_names)
+        except Exception:
+            pass
+        try:
+            trainer.bone_names = list(bone_names)
+        except Exception:
+            pass
+
+    loss_fn = getattr(trainer, "loss_fn", None)
+    if loss_fn is None:
+        return
+
+    if bone_names:
+        try:
+            if hasattr(loss_fn, "set_bone_names"):
+                loss_fn.set_bone_names(bone_names)
+            else:
+                loss_fn.bone_names = list(bone_names)
+        except Exception:
+            pass
+
+    cfg = getattr(runner, "_ckpt_posttrain_cfg", None)
+    if not isinstance(cfg, dict):
+        return
+    for key in ("direct_pose_leg_bones", "direct_pose_arm_bones", "direct_pose_loss_leg_split"):
+        if key not in cfg:
+            continue
+        try:
+            setattr(loss_fn, key, cfg.get(key))
+        except Exception:
+            pass
+
+
 def _clone_sample(sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     cloned: Dict[str, torch.Tensor] = {}
     for key, value in sample.items():
@@ -230,6 +307,94 @@ def _infer_root_speed_and_pos(
     return motion_raw_stack, root_speed, root_pos
 
 
+def _touchdown_stats(
+    contact_signal: Optional[np.ndarray],
+    *,
+    threshold: float,
+    rounds: int,
+) -> Dict[str, Any]:
+    stats: Dict[str, Any] = {
+        "available": False,
+        "best_channel": 0,
+        "best_events": [],
+        "best_count": 0,
+        "channel_counts": [],
+        "channel_gap": float("inf"),
+        "count_error": float("inf"),
+        "over_target": float("inf"),
+        "interval_cv": float("inf"),
+        "td_unstable": True,
+    }
+    if contact_signal is None or contact_signal.ndim != 2 or contact_signal.shape[1] <= 0:
+        return stats
+    if contact_signal.size <= 0 or not np.isfinite(contact_signal).any():
+        return stats
+    if float(np.abs(contact_signal).max()) <= 1e-6:
+        return stats
+
+    target_count = max(1, int(rounds))
+    min_events = max(2, int(rounds) - 1)
+    max_events = max(min_events, target_count + 2)
+
+    channel_events: List[List[int]] = []
+    channel_scores: List[tuple[float, float, float, float, float]] = []
+    for ch in range(int(contact_signal.shape[1])):
+        events = _rising_edges(contact_signal[:, ch], threshold=threshold).tolist()
+        channel_events.append(events)
+        count = len(events)
+        count_error = abs(count - target_count)
+        over_target = max(0, count - target_count)
+        if count >= 3:
+            gaps = np.diff(np.asarray(events, dtype=np.float32))
+            mean_gap = float(gaps.mean())
+            interval_cv = float(gaps.std(ddof=0) / max(mean_gap, 1e-6))
+        else:
+            interval_cv = float("inf")
+        channel_scores.append(
+            (
+                float(count < min_events),
+                float(count > max_events),
+                float(count_error),
+                float(over_target),
+                float(interval_cv),
+            )
+        )
+
+    best_channel = min(range(len(channel_scores)), key=lambda idx: channel_scores[idx])
+    best_events = channel_events[best_channel]
+    counts = [len(events) for events in channel_events]
+    best_count = len(best_events)
+    channel_gap = max(counts) - min(counts) if counts else 0
+    count_error = abs(best_count - target_count)
+    over_target = max(0, best_count - target_count)
+    if best_count >= 3:
+        gaps = np.diff(np.asarray(best_events, dtype=np.float32))
+        mean_gap = float(gaps.mean())
+        interval_cv = float(gaps.std(ddof=0) / max(mean_gap, 1e-6))
+    else:
+        interval_cv = float("inf")
+
+    td_unstable = best_count < min_events or best_count > max_events
+    if len(counts) >= 2 and channel_gap > 1:
+        td_unstable = True
+
+    stats.update(
+        {
+            "available": True,
+            "best_channel": int(best_channel),
+            "best_events": list(best_events),
+            "best_count": int(best_count),
+            "channel_counts": [int(v) for v in counts],
+            "channel_gap": int(channel_gap),
+            "count_error": int(count_error),
+            "over_target": int(over_target),
+            "interval_cv": float(interval_cv),
+            "td_unstable": bool(td_unstable),
+        }
+    )
+    return stats
+
+
 def _choose_contact_series(
     *,
     requested: str,
@@ -237,37 +402,45 @@ def _choose_contact_series(
     contacts_plan: Optional[np.ndarray],
     contacts_teacher: Optional[np.ndarray],
     threshold: float,
-) -> tuple[str, Optional[np.ndarray]]:
+    rounds: int,
+) -> tuple[str, Optional[np.ndarray], Dict[str, Any]]:
     candidates = {
         "meas": contacts_meas,
         "plan": contacts_plan,
         "teacher": contacts_teacher,
     }
     if requested != "auto":
-        return requested, candidates.get(requested)
+        arr = candidates.get(requested)
+        return requested, arr, _touchdown_stats(arr, threshold=threshold, rounds=rounds)
 
     best_key = "none"
     best_arr: Optional[np.ndarray] = None
-    best_score = -1
+    best_stats = _touchdown_stats(None, threshold=threshold, rounds=rounds)
+    best_score = (1.0, float("inf"), float("inf"), float("inf"), float("inf"), float("inf"))
+    source_priority = {
+        "meas": 0.0,
+        "plan": 1.0,
+        "teacher": 2.0,
+    }
     for key in ("meas", "plan", "teacher"):
         arr = candidates.get(key)
-        if arr is None:
+        stats = _touchdown_stats(arr, threshold=threshold, rounds=rounds)
+        if not bool(stats.get("available", False)):
             continue
-        if arr.size <= 0:
-            continue
-        if not np.isfinite(arr).any():
-            continue
-        if float(np.abs(arr).max()) <= 1e-6:
-            continue
-        score = 0
-        if arr.ndim == 2:
-            for ch in range(int(arr.shape[1])):
-                score = max(score, int(_rising_edges(arr[:, ch], threshold=threshold).size))
-        if score > best_score:
+        score = (
+            float(bool(stats.get("td_unstable", True))),
+            float(stats.get("count_error", float("inf"))),
+            float(stats.get("over_target", float("inf"))),
+            float(stats.get("channel_gap", float("inf"))),
+            float(stats.get("interval_cv", float("inf"))),
+            float(source_priority.get(key, 9.0)),
+        )
+        if score < best_score:
             best_key = key
             best_arr = arr
             best_score = score
-    return best_key, best_arr
+            best_stats = stats
+    return best_key, best_arr, best_stats
 
 
 def _rising_edges(signal: np.ndarray, threshold: float) -> np.ndarray:
@@ -276,34 +449,6 @@ def _rising_edges(signal: np.ndarray, threshold: float) -> np.ndarray:
     active = signal > float(threshold)
     rises = np.nonzero((~active[:-1]) & active[1:])[0] + 1
     return rises.astype(np.int64, copy=False)
-
-
-def _detect_touchdowns(
-    contact_signal: Optional[np.ndarray],
-    *,
-    threshold: float,
-    rounds: int,
-) -> tuple[int, List[int], bool]:
-    if contact_signal is None or contact_signal.ndim != 2 or contact_signal.shape[1] <= 0:
-        return 0, [], True
-
-    best_channel = 0
-    best_events: List[int] = []
-    channel_events: List[List[int]] = []
-    for ch in range(int(contact_signal.shape[1])):
-        events = _rising_edges(contact_signal[:, ch], threshold=threshold).tolist()
-        channel_events.append(events)
-        if len(events) > len(best_events):
-            best_channel = ch
-            best_events = events
-
-    min_events = max(2, int(rounds) - 1)
-    td_unstable = len(best_events) < min_events
-    if len(channel_events) >= 2:
-        counts = [len(v) for v in channel_events]
-        if max(counts) - min(counts) > 1:
-            td_unstable = True
-    return best_channel, best_events, td_unstable
 
 
 def _fallback_cycle_boundaries(total_steps: int, rounds: int) -> tuple[List[int], List[int]]:
@@ -506,18 +651,17 @@ def _run_scaled_trace(
     if contacts_teacher is not None:
         contacts_teacher = contacts_teacher[0, :gt_steps]
 
-    contact_source_used, contact_signal = _choose_contact_series(
+    contact_source_used, contact_signal, contact_stats = _choose_contact_series(
         requested=contact_source,
         contacts_meas=contacts_meas,
         contacts_plan=contacts_plan,
         contacts_teacher=contacts_teacher,
         threshold=touchdown_threshold,
-    )
-    touchdown_channel, touchdown_indices, td_unstable = _detect_touchdowns(
-        contact_signal,
-        threshold=touchdown_threshold,
         rounds=rounds,
     )
+    touchdown_channel = int(contact_stats.get("best_channel", 0))
+    touchdown_indices = list(contact_stats.get("best_events", []))
+    td_unstable = bool(contact_stats.get("td_unstable", True))
     cycle_starts, cycle_stops = _build_cycle_boundaries(
         touchdown_indices,
         total_steps=int(pred_y_raw.shape[0]),
@@ -701,6 +845,7 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     runner = FreeRunCycleRunner(_build_runner_args(args))
+    _apply_ckpt_runner_overrides(runner)
 
     teacher_payload = _load_json(teacher_path)
     clip_name = str(teacher_payload.get("clip") or args.clip)
@@ -715,6 +860,7 @@ def main() -> None:
     npz_path = _resolve_npz_path(clip_name, teacher_payload.get("source_json"), Path(args.npz_root).expanduser().resolve())
     ds = runner._build_dataset(npz_path, seq_len=cycle_len_teacher)
     runner._ensure_model_ready(ds)
+    _apply_loss_group_metadata(runner, ds=ds)
     trainer = runner.trainer
     if trainer is None:
         raise RuntimeError("Failed to initialize trainer for white-box evaluator.")
@@ -831,11 +977,12 @@ def main() -> None:
             "reference_nonleg_metric_deg": float(ref_aligned["nonleg_deg"]),
             "reference_template_cycle_count": int(ref_cycle_count),
             "status_policy": "heuristic_v0",
+            "touchdown_source_policy": "stable_touchdown_v1",
             "notes": [
                 "E_speed uses carried root velocity after applying scaled cond_raw speed.",
                 "R_leg/R_nonleg are aligned-to-original-GT degradation proxies, not scaled-GT errors.",
                 "Cycle consistency compares normalized predicted cycles against the 1.0x predicted template.",
-                "Touchdown events are detected from runtime contacts_meas/contacts_plan when available, then fall back to teacher contacts.",
+                "When contact_source=auto, touchdown source selection prefers stable per-cycle anchors before source priority.",
             ],
         },
         "per_scale": per_scale,

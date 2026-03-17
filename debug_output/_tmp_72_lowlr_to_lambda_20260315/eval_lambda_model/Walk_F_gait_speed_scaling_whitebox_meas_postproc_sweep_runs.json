@@ -1,0 +1,173 @@
+{
+  "cases": [
+    {
+      "name": "teacher_control_recheck",
+      "contact_source": "teacher",
+      "extra": [],
+      "out": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model/Walk_F_gait_speed_scaling_whitebox_teacher_control_recheck.json",
+      "status_by_scale": {
+        "0.8": "pass",
+        "0.9": "pass",
+        "1": "pass",
+        "1.1": "pass",
+        "1.2": "pass"
+      }
+    },
+    {
+      "name": "plan_control_recheck",
+      "contact_source": "plan",
+      "extra": [],
+      "out": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model/Walk_F_gait_speed_scaling_whitebox_plan_control_recheck.json",
+      "status_by_scale": {
+        "0.8": "fail",
+        "0.9": "fail",
+        "1": "pass",
+        "1.1": "fail",
+        "1.2": "fail"
+      }
+    },
+    {
+      "name": "meas_baseline_recheck",
+      "contact_source": "meas",
+      "extra": [],
+      "out": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model/Walk_F_gait_speed_scaling_whitebox_meas_baseline_recheck.json",
+      "status_by_scale": {
+        "0.8": "fail",
+        "0.9": "fail",
+        "1": "fail",
+        "1.1": "fail",
+        "1.2": "fail"
+      }
+    },
+    {
+      "name": "meas_logit_scale_0p5",
+      "contact_source": "meas",
+      "extra": [
+        "--contacts_meas_model_logit_scale",
+        "0.5"
+      ],
+      "out": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model/Walk_F_gait_speed_scaling_whitebox_meas_logit_scale_0p5.json",
+      "status_by_scale": {
+        "0.8": "fail",
+        "0.9": "fail",
+        "1": "fail",
+        "1.1": "fail",
+        "1.2": "fail"
+      }
+    },
+    {
+      "name": "meas_logit_scale_1p0",
+      "contact_source": "meas",
+      "extra": [
+        "--contacts_meas_model_logit_scale",
+        "1.0"
+      ],
+      "out": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model/Walk_F_gait_speed_scaling_whitebox_meas_logit_scale_1p0.json",
+      "status_by_scale": {
+        "0.8": "fail",
+        "0.9": "fail",
+        "1": "fail",
+        "1.1": "fail",
+        "1.2": "fail"
+      }
+    },
+    {
+      "name": "meas_logit_scale_1p5",
+      "contact_source": "meas",
+      "extra": [
+        "--contacts_meas_model_logit_scale",
+        "1.5"
+      ],
+      "out": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model/Walk_F_gait_speed_scaling_whitebox_meas_logit_scale_1p5.json",
+      "status_by_scale": {
+        "0.8": "fail",
+        "0.9": "fail",
+        "1": "fail",
+        "1.1": "fail",
+        "1.2": "fail"
+      }
+    },
+    {
+      "name": "meas_logit_scale_2p0",
+      "contact_source": "meas",
+      "extra": [
+        "--contacts_meas_model_logit_scale",
+        "2.0"
+      ],
+      "out": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model/Walk_F_gait_speed_scaling_whitebox_meas_logit_scale_2p0.json",
+      "status_by_scale": {
+        "0.8": "fail",
+        "0.9": "fail",
+        "1": "fail",
+        "1.1": "fail",
+        "1.2": "fail"
+      }
+    },
+    {
+      "name": "meas_onehot_conditional_ds_0p4",
+      "contact_source": "meas",
+      "extra": [
+        "--contacts_meas_model_onehot_conditional",
+        "--contacts_meas_model_onehot_ds_thr",
+        "0.4"
+      ],
+      "out": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model/Walk_F_gait_speed_scaling_whitebox_meas_onehot_conditional_ds_0p4.json",
+      "status_by_scale": {
+        "0.8": "fail",
+        "0.9": "fail",
+        "1": "fail",
+        "1.1": "fail",
+        "1.2": "fail"
+      }
+    },
+    {
+      "name": "meas_onehot_conditional_ds_0p5",
+      "contact_source": "meas",
+      "extra": [
+        "--contacts_meas_model_onehot_conditional",
+        "--contacts_meas_model_onehot_ds_thr",
+        "0.5"
+      ],
+      "out": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model/Walk_F_gait_speed_scaling_whitebox_meas_onehot_conditional_ds_0p5.json",
+      "status_by_scale": {
+        "0.8": "fail",
+        "0.9": "fail",
+        "1": "fail",
+        "1.1": "fail",
+        "1.2": "fail"
+      }
+    },
+    {
+      "name": "meas_onehot_conditional_ds_0p6",
+      "contact_source": "meas",
+      "extra": [
+        "--contacts_meas_model_onehot_conditional",
+        "--contacts_meas_model_onehot_ds_thr",
+        "0.6"
+      ],
+      "out": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model/Walk_F_gait_speed_scaling_whitebox_meas_onehot_conditional_ds_0p6.json",
+      "status_by_scale": {
+        "0.8": "fail",
+        "0.9": "fail",
+        "1": "fail",
+        "1.1": "fail",
+        "1.2": "fail"
+      }
+    },
+    {
+      "name": "meas_onehot_strict",
+      "contact_source": "meas",
+      "extra": [
+        "--contacts_meas_model_onehot"
+      ],
+      "out": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model/Walk_F_gait_speed_scaling_whitebox_meas_onehot_strict.json",
+      "status_by_scale": {
+        "0.8": "fail",
+        "0.9": "fail",
+        "1": "fail",
+        "1.1": "fail",
+        "1.2": "fail"
+      }
+    }
+  ]
+}

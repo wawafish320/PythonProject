@@ -1,0 +1,77 @@
+# [2026-03-16] EventMotionModel refactor Phase A key refs raw
+# generated_on: 2026-03-17T00:34:26.811126+08:00
+# file_scope: train/models.py
+# method: exact-substring scan for roadmap hotspot anchors
+
+## contacts_input_canonicalization_block_a
+# needle: # contacts_meas: external override only.
+train/models.py:2578: # contacts_meas: external override only.
+
+## contacts_input_canonicalization_block_b
+# needle: # contacts_meas: external override only; otherwise zeros.
+train/models.py:2941: # contacts_meas: external override only; otherwise zeros.
+
+## meas_logits_prev_canonicalization
+# needle: # Canonicalize meas_prev to (B, C) (logits if available else probs).
+train/models.py:2603: # Canonicalize meas_prev to (B, C) (logits if available else probs).
+train/models.py:2966: # Canonicalize meas_prev to (B, C) (logits if available else probs).
+
+## phase_state_init_event_clock_on
+# needle: if phase_enabled and phase_z_t is None and phase_dim > 0:
+train/models.py:2646: if phase_enabled and phase_z_t is None and phase_dim > 0:
+
+## phase_state_init_event_clock_off
+# needle: if phase_z_t is None and phase_dim > 0:
+train/models.py:3001: if phase_z_t is None and phase_dim > 0:
+
+## contact_plan_loop_scaffold
+# needle: for _t in range(Tq):
+train/models.py:2777: for _t in range(Tq):
+train/models.py:3097: for _t in range(Tq):
+
+## direct_pose_trunk
+# needle: self.direct_pose_head = nn.Sequential(
+train/models.py:1481: self.direct_pose_head = nn.Sequential(
+train/models.py:1516: self.direct_pose_head = nn.Sequential(
+
+## direct_pose_leg_head
+# needle: self.direct_pose_leg_head = nn.Sequential(
+train/models.py:1533: self.direct_pose_leg_head = nn.Sequential(
+
+## direct_pose_leg_gate_head
+# needle: self.direct_pose_leg_gate_head = nn.Sequential(
+train/models.py:1556: self.direct_pose_leg_gate_head = nn.Sequential(
+
+## direct_pose_leg_head_shared
+# needle: self.direct_pose_leg_head_shared = nn.Sequential(
+train/models.py:1614: self.direct_pose_leg_head_shared = nn.Sequential(
+
+## direct_pose_leg_gate_head_shared
+# needle: self.direct_pose_leg_gate_head_shared = nn.Sequential(
+train/models.py:1637: self.direct_pose_leg_gate_head_shared = nn.Sequential(
+
+## rot6d_joint_count_helper
+# needle: def _resolve_rot6d_joint_count(rot_slice: Optional[slice], bone_names: Optional[Sequence[str]]) -> int:
+train/models.py:133: def _resolve_rot6d_joint_count(rot_slice: Optional[slice], bone_names: Optional[Sequence[str]]) -> int:
+
+## lambda_fusion_joint_count_manual_parse
+# needle: self.lambda_fusion_joint_count = int(rot_dim // 6)
+train/models.py:1687: self.lambda_fusion_joint_count = int(rot_dim // 6)
+
+## so3_corr_joint_count_manual_parse
+# needle: self.so3_corr_joint_count = int(rot_dim // 6)
+train/models.py:1732: self.so3_corr_joint_count = int(rot_dim // 6)
+
+## direct_pose_plan_override_canonicalization
+# needle: override = getattr(self, "direct_pose_plan_override", None)
+train/models.py:3493: override = getattr(self, "direct_pose_plan_override", None)
+
+## direct_pose_meas_override_canonicalization
+# needle: override = getattr(self, "direct_pose_meas_override", None)
+train/models.py:3548: override = getattr(self, "direct_pose_meas_override", None)
+
+## ablate_layout_helper
+# needle: def _ablate(xx: torch.Tensor, ch: int) -> None:
+train/models.py:4102: def _ablate(xx: torch.Tensor, ch: int) -> None:
+train/models.py:4143: def _ablate(xx: torch.Tensor, ch: int) -> None:
+

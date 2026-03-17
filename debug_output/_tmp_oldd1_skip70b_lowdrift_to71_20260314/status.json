@@ -1,5 +1,5 @@
 {
-  "completed_at": "2026-03-14 20:49:16",
+  "completed_at": "2026-03-16 23:11:48",
   "replace_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_skip70b_lowdrift_20260314/70b_replace_lowdrift/ckpt_last_WalkF_stage7_70b_replace_lowdrift_from_oldd1_20260314.pth",
   "candidate_70R_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_skip70b_lowdrift_to71_20260314/70R/ckpt_last_WalkF_stage7_70R_from_oldd1_lowdrift_replace_20260314.pth",
   "candidate_71_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_skip70b_lowdrift_to71_20260314/71/ckpt_last_WalkF_stage7_71_from_oldd1_lowdrift_replace_20260314.pth",

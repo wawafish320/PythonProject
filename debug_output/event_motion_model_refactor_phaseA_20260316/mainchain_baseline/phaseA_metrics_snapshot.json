@@ -1,0 +1,86 @@
+{
+  "generated_on": "2026-03-17T00:34:26.812534+08:00",
+  "source_file": "train/models.py",
+  "structure_metrics": {
+    "train_models_loc": 6177,
+    "event_motion_model": {
+      "start_line": 513,
+      "end_line": 4473,
+      "length": 3961
+    },
+    "event_motion_model_forward": {
+      "start_line": 2256,
+      "end_line": 4385,
+      "length": 2130
+    },
+    "event_motion_model_except_exception_pass_count": 39,
+    "hotspot_group_count": 9,
+    "hotspot_groups": [
+      "contacts_input shape canonicalization",
+      "meas_logits_prev canonicalization",
+      "phase_z / phase_event_age init",
+      "contact-plan per-step loop scaffold",
+      "direct-pose trunk definition",
+      "direct-pose leg/gate/shared/shared-gate heads",
+      "rot6d joint-count parsing",
+      "plan_in / meas_in override canonicalization",
+      "_ablate layout A/B helper"
+    ],
+    "hotspot_anchor_hit_count": 21
+  },
+  "baseline_commands": [
+    {
+      "label": "py_compile",
+      "command": "python -m py_compile train/models.py",
+      "expected": "pass",
+      "note": "roadmap Phase A required baseline command",
+      "exit_code": 0,
+      "log_path": "debug_output/event_motion_model_refactor_phaseA_20260316/mainchain_baseline/py_compile.log"
+    },
+    {
+      "label": "debug_contact_loop_script_path",
+      "command": "python train/debug_contact_loop.py",
+      "expected": "frozen_failure",
+      "note": "exact roadmap spelling; frozen as-is even though package import fails from repo root",
+      "exit_code": 1,
+      "log_path": "debug_output/event_motion_model_refactor_phaseA_20260316/mainchain_baseline/debug_contact_loop_script_path.log"
+    },
+    {
+      "label": "debug_contact_loop_module_path",
+      "command": "python -m train.debug_contact_loop",
+      "expected": "pass",
+      "note": "package-form replay command used as working smoke equivalent for post-refactor comparison",
+      "exit_code": 0,
+      "log_path": "debug_output/event_motion_model_refactor_phaseA_20260316/mainchain_baseline/debug_contact_loop_module_path.log"
+    }
+  ],
+  "key_ref_stats": {
+    "file_scope": [
+      "train/models.py"
+    ],
+    "total_hits": 21,
+    "per_file_hits": {
+      "train/models.py": 21
+    },
+    "per_key_hits": {
+      "contacts_input_canonicalization_block_a": 1,
+      "contacts_input_canonicalization_block_b": 1,
+      "meas_logits_prev_canonicalization": 2,
+      "phase_state_init_event_clock_on": 1,
+      "phase_state_init_event_clock_off": 1,
+      "contact_plan_loop_scaffold": 2,
+      "direct_pose_trunk": 2,
+      "direct_pose_leg_head": 1,
+      "direct_pose_leg_gate_head": 1,
+      "direct_pose_leg_head_shared": 1,
+      "direct_pose_leg_gate_head_shared": 1,
+      "rot6d_joint_count_helper": 1,
+      "lambda_fusion_joint_count_manual_parse": 1,
+      "so3_corr_joint_count_manual_parse": 1,
+      "direct_pose_plan_override_canonicalization": 1,
+      "direct_pose_meas_override_canonicalization": 1,
+      "ablate_layout_helper": 2
+    },
+    "raw_file": "docs/changes/2026-03-16_event_motion_model_refactor_phaseA_key_refs_raw.txt"
+  }
+}

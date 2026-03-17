@@ -1,0 +1,29 @@
+{
+  "source_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/70a/ckpt_last_WalkF_stage7_70a_fromfresh_20260317.pth",
+  "output_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/warmstart/ckpt_last_70a_replace_zerophase_20260317.pth",
+  "phase_dim": 4,
+  "changed": [
+    {
+      "key": "direct_pose_head.0.weight",
+      "shape": [
+        512,
+        43
+      ],
+      "base_in": 39,
+      "phase_dim": 4
+    },
+    {
+      "key": "direct_pose_leg_head.0.weight",
+      "shape": [
+        512,
+        43
+      ],
+      "base_in": 39,
+      "phase_dim": 4
+    }
+  ],
+  "posttrain_cfg_updates": {
+    "direct_pose_use_phase_z": true,
+    "direct_pose_phase_z_mode": "replace_contacts"
+  }
+}

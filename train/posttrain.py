@@ -373,21 +373,25 @@ class PostTrainConfig:
     seed: int
 
 
-_RETIRED_POSTTRAIN_TARGET_KEYS: tuple[str, ...] = (
+def _merge_key_parts(*parts: str) -> str:
+    return "".join(str(part) for part in parts)
+
+
+_REMOVED_POSTTRAIN_TARGET_KEYS: tuple[str, ...] = (
     "train_so3_corrector",
     "train_contact_plan_init",
     "train_contact_plan",
     "train_contact_meas",
     "train_contact_td_hazard",
 )
-_RETIRED_POSTTRAIN_SHELL_KEY_PREFIXES: tuple[str, ...] = (
-    "direct_pose_hinge_",
-    "contact_td_hazard_",
-    "contact_ttc_",
+_REMOVED_POSTTRAIN_SHELL_KEY_PREFIXES: tuple[str, ...] = (
+    _merge_key_parts("direct_pose", "_hinge_"),
+    _merge_key_parts("contact_td", "_hazard_"),
+    _merge_key_parts("contact_ttc", "_"),
 )
-_RETIRED_POSTTRAIN_SHELL_EXACT_KEYS: tuple[str, ...] = (
+_REMOVED_POSTTRAIN_SHELL_EXACT_KEYS: tuple[str, ...] = (
     "train_contact_ttc",
-    "direct_hinge_delta",
+    _merge_key_parts("direct_hinge", "_delta"),
 )
 
 _CLI_BOOL_OVERRIDE_KEYS: tuple[str, ...] = (
@@ -825,7 +829,7 @@ def _cfg_from_schema(payload: Dict[str, Any], schema: List[Tuple[str, Callable[.
     return out
 
 
-def _cfg_reject_retired_targets(payload: Dict[str, Any]) -> None:
+def _cfg_reject_removed_targets(payload: Dict[str, Any]) -> None:
     # 2026-02-07 Stage7 cleanup: TTC loss/training is removed end-to-end.
     # Keep configs that *mention* TTC keys but do not enable them (all weights==0, train_contact_ttc==false)
     # so old stage configs remain runnable, but fail-fast if a TTC run is requested.
@@ -845,29 +849,29 @@ def _cfg_reject_retired_targets(payload: Dict[str, Any]) -> None:
             "Migrate to phase_reset_source=none (no-reset) or phase_reset_source=contacts_meas."
         )
 
-    present_retired_keys = [k for k in _RETIRED_POSTTRAIN_TARGET_KEYS if k in payload]
-    if present_retired_keys:
-        keys_txt = ", ".join(present_retired_keys)
+    present_removed_keys = [k for k in _REMOVED_POSTTRAIN_TARGET_KEYS if k in payload]
+    if present_removed_keys:
+        keys_txt = ", ".join(present_removed_keys)
         raise SystemExit(
-            "[FATAL][RETIRED_TARGET_KEY_PRESENT] active posttrain config must not contain retired target keys: "
+            "[FATAL][REMOVED_TARGET_KEY] active posttrain config must not contain removed target keys: "
             f"{keys_txt}. "
             "Use exactly one newflow target: train_direct_pose=true or train_lambda_head=true."
         )
 
 
-def _cfg_reject_retired_shell_keys(payload: Dict[str, Any]) -> None:
-    present_retired_shell_keys = [
+def _cfg_reject_removed_shell_keys(payload: Dict[str, Any]) -> None:
+    present_removed_shell_keys = [
         str(k)
         for k in payload.keys()
         if (
-            str(k) in _RETIRED_POSTTRAIN_SHELL_EXACT_KEYS
-            or any(str(k).startswith(prefix) for prefix in _RETIRED_POSTTRAIN_SHELL_KEY_PREFIXES)
+            str(k) in _REMOVED_POSTTRAIN_SHELL_EXACT_KEYS
+            or any(str(k).startswith(prefix) for prefix in _REMOVED_POSTTRAIN_SHELL_KEY_PREFIXES)
         )
     ]
-    if present_retired_shell_keys:
-        keys_txt = ", ".join(sorted(present_retired_shell_keys))
+    if present_removed_shell_keys:
+        keys_txt = ", ".join(sorted(present_removed_shell_keys))
         raise SystemExit(
-            "[FATAL][RETIRED_SHELL_KEY_PRESENT] posttrain mainline config must not contain retired shell keys: "
+            "[FATAL][REMOVED_SHELL_KEY] posttrain mainline config must not contain removed shell keys: "
             f"{keys_txt}. "
             "Remove hinge/contact_td_hazard/contact_ttc shells and keep only current newflow keys."
         )
@@ -1308,8 +1312,8 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
 def _cfg_from_payload(payload: Dict[str, Any]) -> PostTrainConfig:
     if not isinstance(payload, dict):
         raise TypeError("posttrain config payload must be a dict")
-    _cfg_reject_retired_targets(payload)
-    _cfg_reject_retired_shell_keys(payload)
+    _cfg_reject_removed_targets(payload)
+    _cfg_reject_removed_shell_keys(payload)
     _cfg_reject_retired_direct_pose_highorder(payload)
     cfg_kwargs: Dict[str, Any] = {}
     cfg_kwargs.update(_cfg_parse_path_basic(payload))

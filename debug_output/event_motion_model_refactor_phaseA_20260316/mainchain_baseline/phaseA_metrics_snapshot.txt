@@ -1,0 +1,37 @@
+[2026-03-16] EventMotionModel refactor Phase A metrics snapshot
+generated_on: 2026-03-17T00:34:26.812534+08:00
+source_file: train/models.py
+
+structure_metrics
+- train/models.py LOC: 6177
+- EventMotionModel: lines 513-4473 (length=3961)
+- EventMotionModel.forward: lines 2256-4385 (length=2130)
+- except Exception: pass count: 39
+- hotspot group count: 9
+- hotspot anchor hit count: 21
+
+baseline_commands
+- [py_compile] exit_code=0 cmd=python -m py_compile train/models.py log=debug_output/event_motion_model_refactor_phaseA_20260316/mainchain_baseline/py_compile.log
+- [debug_contact_loop_script_path] exit_code=1 cmd=python train/debug_contact_loop.py log=debug_output/event_motion_model_refactor_phaseA_20260316/mainchain_baseline/debug_contact_loop_script_path.log
+- [debug_contact_loop_module_path] exit_code=0 cmd=python -m train.debug_contact_loop log=debug_output/event_motion_model_refactor_phaseA_20260316/mainchain_baseline/debug_contact_loop_module_path.log
+
+key_ref_stats
+- raw_file: docs/changes/2026-03-16_event_motion_model_refactor_phaseA_key_refs_raw.txt
+- total_hits: 21
+- contacts_input_canonicalization_block_a: 1
+- contacts_input_canonicalization_block_b: 1
+- meas_logits_prev_canonicalization: 2
+- phase_state_init_event_clock_on: 1
+- phase_state_init_event_clock_off: 1
+- contact_plan_loop_scaffold: 2
+- direct_pose_trunk: 2
+- direct_pose_leg_head: 1
+- direct_pose_leg_gate_head: 1
+- direct_pose_leg_head_shared: 1
+- direct_pose_leg_gate_head_shared: 1
+- rot6d_joint_count_helper: 1
+- lambda_fusion_joint_count_manual_parse: 1
+- so3_corr_joint_count_manual_parse: 1
+- direct_pose_plan_override_canonicalization: 1
+- direct_pose_meas_override_canonicalization: 1
+- ablate_layout_helper: 2

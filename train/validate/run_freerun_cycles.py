@@ -685,20 +685,6 @@ class FreeRunCycleRunner:
                         self.direct_pose_softgt_stats = payload
         except Exception:
             self.direct_pose_softgt_stats = None
-        self.direct_pose_hinge_enable = bool(getattr(args, "direct_pose_hinge_enable", False))
-        self.direct_pose_hinge_bones = str(getattr(args, "direct_pose_hinge_bones", "calf_r") or "calf_r")
-        self.direct_pose_hinge_axis = str(getattr(args, "direct_pose_hinge_axis", "z") or "z").strip().lower()
-        # Diagnostics: replace the model's hinge head output with an axis-oracle delta computed from GT,
-        # then apply it via the normal hinge correction path (to verify apply/target consistency).
-        self.direct_pose_hinge_oracle_delta = bool(getattr(args, "direct_pose_hinge_oracle_delta", False))
-        try:
-            self.direct_pose_hinge_max_deg = float(getattr(args, "direct_pose_hinge_max_deg", 45.0) or 45.0)
-        except Exception:
-            self.direct_pose_hinge_max_deg = 45.0
-        try:
-            self.direct_pose_hinge_hidden = int(getattr(args, "direct_pose_hinge_hidden", 0) or 0)
-        except Exception:
-            self.direct_pose_hinge_hidden = 0
         # Cross-leg feature ablations (evaluation-time only).
         self.direct_pose_leg_cross_leg_ablate = str(
             getattr(args, "direct_pose_leg_cross_leg_ablate", "none") or "none"
@@ -1333,182 +1319,6 @@ class FreeRunCycleRunner:
         if phase_event_kind == "none":
             phase_min_interval = 0
 
-        # ---- Direct hinge extra config (feat source / contact gating) ----
-        # These options are stored in posttrain checkpoints (posttrain_cfg) but historically weren't
-        # reconstructed here, which can cause size-mismatch (hinge_feat_source) or behavior mismatch (gating).
-        direct_pose_hinge_feat_source = None
-        direct_pose_hinge_base_feat = "none"
-        direct_pose_hinge_clean = False
-        direct_pose_hinge_eps_max_deg = None
-        direct_pose_hinge_eps_max_scale = 0.5
-        direct_pose_hinge_eps_hidden = None
-        direct_pose_hinge_eps_dropout = 0.0
-        direct_pose_hinge_eps_source = "hidden"
-        direct_pose_hinge_gate_mode = "none"
-        direct_pose_hinge_gate_source = "plan"
-        direct_pose_hinge_gate_power = 1.0
-        direct_pose_hinge_hidden = int(self.direct_pose_hinge_hidden)
-
-        if bool(getattr(self, "direct_pose_hinge_enable", False)):
-            # Prefer checkpoint posttrain_cfg when present.
-            if isinstance(self._ckpt_posttrain_cfg, dict):
-                try:
-                    v = self._ckpt_posttrain_cfg.get("direct_pose_hinge_feat_source", None)
-                    if v is not None:
-                        s = str(v).strip().lower()
-                        direct_pose_hinge_feat_source = None if s in ("", "auto") else s
-                except Exception:
-                    pass
-                try:
-                    v = self._ckpt_posttrain_cfg.get("direct_pose_hinge_base_feat", None)
-                    if v is not None:
-                        s = str(v).strip().lower()
-                        if s in ("rot6d", "rot_6d", "base_rot6d", "y_rot6d", "y_direct_rot6d"):
-                            direct_pose_hinge_base_feat = "rot6d"
-                        elif s in ("", "auto", "off", "disable", "disabled", "0", "none", "null"):
-                            direct_pose_hinge_base_feat = "none"
-                except Exception:
-                    pass
-                try:
-                    direct_pose_hinge_clean = bool(self._ckpt_posttrain_cfg.get("direct_pose_hinge_clean", False))
-                except Exception:
-                    direct_pose_hinge_clean = False
-                try:
-                    v = float(self._ckpt_posttrain_cfg.get("direct_pose_hinge_eps_max_deg", 0.0) or 0.0)
-                    direct_pose_hinge_eps_max_deg = None if (not math.isfinite(v) or v <= 0.0) else float(v)
-                except Exception:
-                    direct_pose_hinge_eps_max_deg = None
-                # NOTE: allow 0.0 to explicitly disable eps(hidden) in clean hinge mode.
-                try:
-                    _raw = self._ckpt_posttrain_cfg.get("direct_pose_hinge_eps_max_scale", 0.5)
-                    if _raw is None:
-                        _raw = 0.5
-                    v = float(_raw)
-                    if (not math.isfinite(v)) or v < 0.0:
-                        v = 0.5
-                    direct_pose_hinge_eps_max_scale = float(v)
-                except Exception:
-                    direct_pose_hinge_eps_max_scale = 0.5
-                try:
-                    v = self._ckpt_posttrain_cfg.get("direct_pose_hinge_eps_hidden", None)
-                    direct_pose_hinge_eps_hidden = int(v) if v is not None else None
-                except Exception:
-                    direct_pose_hinge_eps_hidden = None
-                try:
-                    v = float(self._ckpt_posttrain_cfg.get("direct_pose_hinge_eps_dropout", 0.0) or 0.0)
-                    if (not math.isfinite(v)) or v < 0.0:
-                        v = 0.0
-                    direct_pose_hinge_eps_dropout = float(max(0.0, min(1.0, v)))
-                except Exception:
-                    direct_pose_hinge_eps_dropout = 0.0
-                try:
-                    v = self._ckpt_posttrain_cfg.get("direct_pose_hinge_eps_source", None)
-                    if v is not None:
-                        s = str(v).strip().lower()
-                        if s in ("h_pre", "h_temporal", "pre", "temporal", "mid", "hidden_pre"):
-                            direct_pose_hinge_eps_source = "hidden_pre"
-                        elif s in ("h_final", "post", "final", "hidden"):
-                            direct_pose_hinge_eps_source = "hidden"
-                except Exception:
-                    direct_pose_hinge_eps_source = "hidden"
-                try:
-                    direct_pose_hinge_gate_mode = str(
-                        self._ckpt_posttrain_cfg.get("direct_pose_hinge_gate_mode", direct_pose_hinge_gate_mode)
-                        or direct_pose_hinge_gate_mode
-                    ).strip().lower()
-                except Exception:
-                    pass
-                try:
-                    direct_pose_hinge_gate_source = str(
-                        self._ckpt_posttrain_cfg.get("direct_pose_hinge_gate_source", direct_pose_hinge_gate_source)
-                        or direct_pose_hinge_gate_source
-                    ).strip().lower()
-                except Exception:
-                    pass
-                try:
-                    direct_pose_hinge_gate_power = float(
-                        self._ckpt_posttrain_cfg.get("direct_pose_hinge_gate_power", direct_pose_hinge_gate_power)
-                        or direct_pose_hinge_gate_power
-                    )
-                except Exception:
-                    pass
-
-            # If not explicitly set, infer clean/legacy hinge mode from weights.
-            if not bool(direct_pose_hinge_clean):
-                try:
-                    if (
-                        ("direct_pose_hinge_nonhidden_head.0.weight" in self.state_dict)
-                        or ("direct_pose_hinge_eps_head.1.weight" in self.state_dict)
-                    ):
-                        direct_pose_hinge_clean = True
-                except Exception:
-                    pass
-
-            # Infer hinge hidden sizes from weights (needed when ckpt used default/None).
-            if bool(direct_pose_hinge_clean):
-                try:
-                    w0 = self.state_dict.get("direct_pose_hinge_nonhidden_head.0.weight", None)
-                    if torch.is_tensor(w0) and w0.ndim == 2 and int(w0.shape[0]) > 0:
-                        direct_pose_hinge_hidden = int(w0.shape[0])
-                except Exception:
-                    pass
-                if direct_pose_hinge_eps_hidden is None:
-                    try:
-                        w_eps = self.state_dict.get("direct_pose_hinge_eps_head.1.weight", None)
-                        if torch.is_tensor(w_eps) and w_eps.ndim == 2 and int(w_eps.shape[0]) > 0:
-                            direct_pose_hinge_eps_hidden = int(w_eps.shape[0])
-                    except Exception:
-                        pass
-            else:
-                try:
-                    w0 = self.state_dict.get("direct_pose_hinge_head.0.weight", None)
-                    if torch.is_tensor(w0) and w0.ndim == 2 and int(w0.shape[0]) > 0:
-                        direct_pose_hinge_hidden = int(w0.shape[0])
-                except Exception:
-                    pass
-
-            # If feat source isn't in checkpoint config, infer it from hinge input dim.
-            if direct_pose_hinge_feat_source is None:
-                try:
-                    w0 = self.state_dict.get("direct_pose_hinge_head.0.weight", None)
-                    if torch.is_tensor(w0) and w0.ndim == 2:
-                        in_dim = int(w0.shape[1])
-                        # If base_feat isn't in config, infer it from hinge_in_dim by checking whether
-                        # subtracting 6*hinge_out yields a plausible feat_source base dim.
-                        if str(direct_pose_hinge_base_feat).strip().lower() in ("", "auto"):
-                            direct_pose_hinge_base_feat = "none"
-                        inferred_base_feat = None
-                        try:
-                            w_out = self.state_dict.get("direct_pose_hinge_head.2.weight", None)
-                            hinge_out = int(w_out.shape[0]) if torch.is_tensor(w_out) and w_out.ndim == 2 else 0
-                        except Exception:
-                            hinge_out = 0
-                        want_meas = str(direct_pose_meas_mode).strip().lower() == "concat"
-                        base_dim_raw = int(
-                            in_dim
-                            - int(self.contact_dim)
-                            - (int(self.contact_dim) if want_meas else 0)
-                            - int(direct_pose_time_pe_dim)
-                        )
-                        base_dim = int(base_dim_raw)
-                        if inferred_base_feat is None and hinge_out > 0:
-                            base_dim_rot6d = int(base_dim_raw - (6 * hinge_out))
-                            if base_dim_rot6d in (0, int(Dc), int(self.width), int(Dc + self.width)):
-                                inferred_base_feat = "rot6d"
-                                base_dim = int(base_dim_rot6d)
-                        if inferred_base_feat is not None:
-                            direct_pose_hinge_base_feat = str(inferred_base_feat)
-                        if base_dim == 0:
-                            direct_pose_hinge_feat_source = "none"
-                        elif base_dim == int(Dc):
-                            direct_pose_hinge_feat_source = "cond"
-                        elif base_dim == int(self.width):
-                            direct_pose_hinge_feat_source = "hidden"
-                        elif base_dim == int(Dc + self.width):
-                            direct_pose_hinge_feat_source = "cond+hidden"
-                except Exception:
-                    pass
-
         # ---- Direct leg residual head config (optional; stored in posttrain_cfg) ----
         # Needed to reconstruct checkpoints that include direct_pose_leg_head / joint_idx buffer.
         direct_pose_leg_enable = False
@@ -1745,22 +1555,6 @@ class FreeRunCycleRunner:
             direct_pose_leg_side_cue_tau=float(direct_pose_leg_side_cue_tau),
             direct_pose_leg_side_sign_gate=bool(direct_pose_leg_side_sign_gate),
             direct_pose_leg_side_rank1=bool(direct_pose_leg_side_rank1),
-            direct_pose_hinge_enable=bool(self.direct_pose_hinge_enable),
-            direct_pose_hinge_bones=str(self.direct_pose_hinge_bones),
-            direct_pose_hinge_axis=str(self.direct_pose_hinge_axis),
-            direct_pose_hinge_max_deg=float(self.direct_pose_hinge_max_deg),
-            direct_pose_hinge_hidden=int(direct_pose_hinge_hidden),
-            direct_pose_hinge_feat_source=direct_pose_hinge_feat_source,
-            direct_pose_hinge_base_feat=str(direct_pose_hinge_base_feat),
-            direct_pose_hinge_clean=bool(direct_pose_hinge_clean),
-            direct_pose_hinge_eps_max_deg=direct_pose_hinge_eps_max_deg,
-            direct_pose_hinge_eps_max_scale=float(direct_pose_hinge_eps_max_scale),
-            direct_pose_hinge_eps_hidden=direct_pose_hinge_eps_hidden,
-            direct_pose_hinge_eps_dropout=float(direct_pose_hinge_eps_dropout),
-            direct_pose_hinge_eps_source=str(direct_pose_hinge_eps_source),
-            direct_pose_hinge_gate_mode=str(direct_pose_hinge_gate_mode),
-            direct_pose_hinge_gate_source=str(direct_pose_hinge_gate_source),
-            direct_pose_hinge_gate_power=float(direct_pose_hinge_gate_power),
             lambda_fusion_enable=bool(lambda_fusion_enable),
             lambda_fusion_mode=str(lambda_fusion_mode),
             lambda_fusion_hidden=int(lambda_fusion_hidden),
@@ -1797,82 +1591,9 @@ class FreeRunCycleRunner:
         # Attach frozen motion encoder BEFORE loading weights (period_dim/period_encoder may be created here).
         if self.encoder_bundle_path and self.encoder_bundle_path.is_file():
             model.attach_motion_encoder(torch.load(str(self.encoder_bundle_path), map_location="cpu"))
-        # If the user overrides hinge bones vs the checkpoint, hinge head tensors may:
-        #   (1) have incompatible shapes (K changes due to multi-bone hinge), and/or
-        #   (2) become semantically wrong even if shapes match (same K but different bone order).
-        # In that case, drop direct_pose_hinge_* tensors and rely on safe-zero init / oracle deltas.
-        try:
-            def _norm_bones(v: Any) -> List[str]:
-                if v is None:
-                    return []
-                if isinstance(v, (list, tuple)):
-                    items = [str(x).strip() for x in v]
-                else:
-                    items = [s.strip() for s in str(v).split(",") if s.strip()]
-                return [x for x in items if x]
-
-            ckpt_bones_raw = None
-            if isinstance(getattr(self, "_ckpt_posttrain_cfg", None), dict):
-                ckpt_bones_raw = self._ckpt_posttrain_cfg.get("direct_pose_hinge_bones", None)
-            req_bones = _norm_bones(getattr(self, "direct_pose_hinge_bones", None))
-            ckpt_bones = _norm_bones(ckpt_bones_raw)
-
-            hinge_prefixes = (
-                "direct_pose_hinge_head.",
-                "direct_pose_hinge_nonhidden_head.",
-                "direct_pose_hinge_eps_head.",
-                "direct_pose_hinge_gate_head.",
-                "direct_pose_hinge_gate_head_clean.",
-            )
-
-            removed: List[str] = []
-            if bool(getattr(self, "direct_pose_hinge_enable", False)) and req_bones and ckpt_bones and (req_bones != ckpt_bones):
-                for k in list(self.state_dict.keys()):
-                    if any(str(k).startswith(p) for p in hinge_prefixes):
-                        removed.append(str(k))
-                        self.state_dict.pop(k, None)
-                if removed:
-                    print(
-                        f"[FreeRun][INFO] direct_pose_hinge_bones override: ckpt={ckpt_bones} req={req_bones}; "
-                        f"dropped {len(removed)} direct_pose_hinge_* tensors (will re-init hinge heads)."
-                    )
-
-            # Fallback: even when ckpt doesn't store bones metadata, guard against size mismatches.
-            model_sd = model.state_dict()
-            removed_shape: List[str] = []
-            for k in list(self.state_dict.keys()):
-                if not any(str(k).startswith(p) for p in hinge_prefixes):
-                    continue
-                v = self.state_dict.get(k, None)
-                vv = model_sd.get(k, None)
-                if torch.is_tensor(v) and torch.is_tensor(vv) and tuple(v.shape) != tuple(vv.shape):
-                    removed_shape.append(str(k))
-                    self.state_dict.pop(k, None)
-            if removed_shape:
-                print(
-                    f"[FreeRun][INFO] dropped {len(removed_shape)} direct_pose_hinge_* tensors due to shape mismatch "
-                    "(likely hinge_bones K changed)."
-                )
-        except Exception:
-            pass
         missing, unexpected = model.load_state_dict(self.state_dict, strict=False)
         if missing or unexpected:
             print(f"[FreeRun][WARN] state_dict mismatch: missing={missing}, unexpected={unexpected}")
-        # Common pitfall: the checkpoint contains hinge head weights but the model was instantiated with hinge disabled,
-        # so those weights get dropped as "unexpected" and hinge silently becomes a no-op.
-        try:
-            if (
-                (not bool(getattr(self, "direct_pose_hinge_enable", False)))
-                and isinstance(unexpected, list)
-                and any("direct_pose_hinge" in str(k) for k in unexpected)
-            ):
-                print(
-                    "[FreeRun][WARN] ckpt contains direct_pose_hinge_* weights but hinge is disabled, so they will be ignored. "
-                    "If you intended to use hinge, pass --direct_pose_hinge_enable (and matching hinge args). "
-                    "If this is an ablation, you can ignore this warning."
-                )
-        except Exception:
-            pass
         # Eval-time ablations for diagnosing "baseline direction capability".
         try:
             setattr(model, "direct_pose_leg_cross_leg_ablate", str(getattr(self, "direct_pose_leg_cross_leg_ablate", "none") or "none"))
@@ -1924,17 +1645,6 @@ class FreeRunCycleRunner:
             accum_steps=1,
             pin_memory=False,
         )
-        try:
-            hinge_idx = getattr(model, "direct_pose_hinge_joint_idx", None)
-            if hinge_idx:
-                trainer.direct_pose_hinge_joint_idx = list(hinge_idx)
-                trainer.direct_pose_hinge_axis = str(getattr(model, "direct_pose_hinge_axis", "Z") or "Z")
-                trainer.direct_pose_hinge_max_rad = getattr(model, "direct_pose_hinge_max_rad", None)
-                loss_fn.direct_pose_hinge_joint_idx = list(hinge_idx)
-                loss_fn.direct_pose_hinge_axis = str(getattr(model, "direct_pose_hinge_axis", "Z") or "Z")
-                loss_fn.direct_pose_hinge_max_rad = getattr(model, "direct_pose_hinge_max_rad", None)
-        except Exception:
-            pass
         trainer.so3_corr_apply = bool(self.so3_corr_apply)
         trainer.so3_corr_max_deg = float(self.so3_corr_max_deg)
         trainer.so3_corr_gate_force = self.so3_corr_gate_force
@@ -2164,7 +1874,6 @@ class FreeRunCycleRunner:
             keybone_omega_series_axis=str(getattr(self.args, "keybone_omega_series_axis", "z") or "z"),
             export_plan_state_series=bool(getattr(self.args, "export_plan_state_series", False)),
             export_contact_meas_head_swap=bool(getattr(self.args, "export_contact_meas_head_swap", False)),
-            export_direct_hinge_series=bool(getattr(self.args, "export_direct_hinge_series", False)),
             export_direct_leg_omega_series=bool(getattr(self.args, "export_direct_leg_omega_series", False)),
             export_direct_leg_head_io=bool(getattr(self.args, "export_direct_leg_head_io", False)),
             export_direct_nonleg_probe=bool(getattr(self.args, "export_direct_nonleg_probe", False)),
@@ -2215,7 +1924,6 @@ class FreeRunCycleRunner:
             direct_pose_leg_contact_flip_phase_window_deg=float(getattr(self.args, "direct_pose_leg_contact_flip_phase_window_deg", 30.0) or 30.0),
             direct_pose_leg_contact_flip_delta_thr=float(getattr(self.args, "direct_pose_leg_contact_flip_delta_thr", 0.0) or 0.0),
             direct_pose_leg_contact_flip_joints=str(getattr(self.args, "direct_pose_leg_contact_flip_joints", "foot_r,foot_l") or "foot_r,foot_l"),
-            direct_pose_hinge_oracle_delta=bool(getattr(self.args, "direct_pose_hinge_oracle_delta", False)),
             export_keybone_state_series=bool(getattr(self.args, "export_keybone_state_series", False)),
             keybone_state_series_bones=str(
                 getattr(self.args, "keybone_state_series_bones", "calf_l,calf_r,lowerarm_l") or ""
@@ -2365,12 +2073,6 @@ class FreeRunCycleRunner:
             "direct_pose_plan_source": str(getattr(self, "direct_pose_plan_source", "model") or "model"),
             "direct_pose_softgt_stats_spec": getattr(self, "direct_pose_softgt_stats_spec", None),
             "direct_pose_softgt_stats": getattr(self, "direct_pose_softgt_stats", None),
-            "direct_pose_hinge_enable": bool(getattr(self, "direct_pose_hinge_enable", False)),
-            "direct_pose_hinge_bones": str(getattr(self, "direct_pose_hinge_bones", "") or ""),
-            "direct_pose_hinge_axis": str(getattr(self, "direct_pose_hinge_axis", "z") or "z"),
-            "direct_pose_hinge_max_deg": float(getattr(self, "direct_pose_hinge_max_deg", 45.0) or 45.0),
-            "direct_pose_hinge_hidden": int(getattr(self, "direct_pose_hinge_hidden", 0) or 0),
-            "direct_pose_hinge_oracle_delta": bool(getattr(self, "direct_pose_hinge_oracle_delta", False)),
             "direct_pose_leg_noapply": bool(getattr(self.args, "direct_pose_leg_noapply", False)),
             "direct_pose_leg_cross_leg_ablate": str(getattr(self, "direct_pose_leg_cross_leg_ablate", "none") or "none"),
             "direct_pose_leg_side_plan_other_ablate": str(
@@ -2532,7 +2234,6 @@ def _run_freerun_cycles(
     keybone_omega_series_axis: str = "z",
     export_plan_state_series: bool = False,
     export_contact_meas_head_swap: bool = False,
-    export_direct_hinge_series: bool = False,
     export_direct_leg_omega_series: bool = False,
     export_direct_leg_head_io: bool = False,
     export_direct_nonleg_probe: bool = False,
@@ -2569,7 +2270,6 @@ def _run_freerun_cycles(
     direct_pose_leg_contact_flip_phase_window_deg: float = 30.0,
     direct_pose_leg_contact_flip_delta_thr: float = 0.0,
     direct_pose_leg_contact_flip_joints: str = "foot_r,foot_l",
-    direct_pose_hinge_oracle_delta: bool = False,
     export_keybone_state_series: bool = False,
     keybone_state_series_bones: str = "calf_l,calf_r,lowerarm_l",
     keybone_state_series_branches: str = "inc,direct,blend",
@@ -2796,11 +2496,6 @@ def _run_freerun_cycles(
     plan_z_in_log: List[Optional[List[float]]] = []
     phase_z_in_log: List[Optional[List[float]]] = []
     phase_event_age_in_log: List[Optional[List[float]]] = []
-    direct_hinge_step_log: List[Optional[List[float]]] = []
-    direct_hinge_raw_step_log: List[Optional[List[float]]] = []
-    direct_hinge_base_raw_step_log: List[Optional[List[float]]] = []
-    direct_hinge_eps_raw_step_log: List[Optional[List[float]]] = []
-    direct_hinge_gate_step_log: List[Optional[List[float]]] = []
     # direct_leg_omega: (B,K,3) axis-angle residual in rad (already tanh-bounded by max_deg in the model).
     # We store mean-over-batch per step for offline phase-locked spike inspection.
     direct_leg_omega_step_log: List[Optional[List[List[float]]]] = []
@@ -5126,57 +4821,6 @@ def _run_freerun_cycles(
                     direct_leg_scale_log_raw_step = scale_out
         except Exception:
             direct_leg_scale_log_raw_step = None
-        direct_hinge_step = None
-        direct_hinge_raw_step = None
-        direct_hinge_base_raw_step = None
-        direct_hinge_eps_raw_step = None
-        direct_hinge_gate_step = None
-        try:
-            hinge_out = ret.get("direct_hinge_delta", None)
-            if torch.is_tensor(hinge_out):
-                if hinge_out.dim() == 3 and hinge_out.size(1) == 1:
-                    hinge_out = hinge_out[:, 0]
-                if hinge_out.dim() == 2 and hinge_out.shape[0] == motion.shape[0]:
-                    direct_hinge_step = hinge_out
-        except Exception:
-            direct_hinge_step = None
-        try:
-            hinge_out = ret.get("direct_hinge_delta_raw", None)
-            if torch.is_tensor(hinge_out):
-                if hinge_out.dim() == 3 and hinge_out.size(1) == 1:
-                    hinge_out = hinge_out[:, 0]
-                if hinge_out.dim() == 2 and hinge_out.shape[0] == motion.shape[0]:
-                    direct_hinge_raw_step = hinge_out
-        except Exception:
-            direct_hinge_raw_step = None
-        try:
-            hinge_out = ret.get("direct_hinge_delta_base_raw", None)
-            if torch.is_tensor(hinge_out):
-                if hinge_out.dim() == 3 and hinge_out.size(1) == 1:
-                    hinge_out = hinge_out[:, 0]
-                if hinge_out.dim() == 2 and hinge_out.shape[0] == motion.shape[0]:
-                    direct_hinge_base_raw_step = hinge_out
-        except Exception:
-            direct_hinge_base_raw_step = None
-        try:
-            hinge_out = ret.get("direct_hinge_delta_eps_raw", None)
-            if torch.is_tensor(hinge_out):
-                if hinge_out.dim() == 3 and hinge_out.size(1) == 1:
-                    hinge_out = hinge_out[:, 0]
-                if hinge_out.dim() == 2 and hinge_out.shape[0] == motion.shape[0]:
-                    direct_hinge_eps_raw_step = hinge_out
-        except Exception:
-            direct_hinge_eps_raw_step = None
-        try:
-            gate_out = ret.get("direct_hinge_gate", None)
-            if torch.is_tensor(gate_out):
-                if gate_out.dim() == 3 and gate_out.size(1) == 1:
-                    gate_out = gate_out[:, 0]
-                if gate_out.dim() == 2 and gate_out.shape[0] == motion.shape[0]:
-                    direct_hinge_gate_step = gate_out
-        except Exception:
-            direct_hinge_gate_step = None
-
         if bool(export_direct_leg_omega_series):
             if torch.is_tensor(direct_leg_omega_step):
                 try:
@@ -5244,134 +4888,6 @@ def _run_freerun_cycles(
                     direct_leg_scale_log_raw_step_log.append(None)
             else:
                 direct_leg_scale_log_raw_step_log.append(None)
-
-        # Diagnostics: compute an axis-oracle hinge delta from GT and use it instead of the hinge head output.
-        # This intentionally uses GT (information leak) and is ONLY for debugging apply/target consistency.
-        if bool(direct_pose_hinge_oracle_delta) and torch.is_tensor(direct_norm_step):
-            try:
-                import math
-
-                hinge_idx = getattr(trainer, "direct_pose_hinge_joint_idx", None)
-                if isinstance(hinge_idx, (list, tuple)) and hinge_idx:
-                    hinge_idx = [int(i) for i in hinge_idx]
-                else:
-                    hinge_idx = []
-
-                rot_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
-                if isinstance(rot_slice, slice) and hinge_idx and gt_seq is not None and gt_seq.dim() == 3:
-                    with torch.no_grad():
-                        gt_norm_step = gt_seq[:, t]
-                        direct_raw_base = trainer._denorm(direct_norm_step)
-                        gt_raw_step = trainer._denorm(gt_norm_step)
-
-                        rot_len = int(rot_slice.stop - rot_slice.start)
-                        if rot_len > 0 and (rot_len % 6) == 0:
-                            J_full = int(rot_len // 6)
-                            if max(hinge_idx) < int(J_full):
-                                base6 = reproject_rot6d(direct_raw_base[..., rot_slice]).view(B, J_full, 6)
-                                gt6 = reproject_rot6d(gt_raw_step[..., rot_slice]).view(B, J_full, 6)
-                                R_base = rot6d_to_matrix(base6, columns=cols)
-                                R_gt = rot6d_to_matrix(gt6, columns=cols)
-                                # R_gt ≈ R_base @ R_err  =>  R_err = R_base^T @ R_gt
-                                R_err = torch.matmul(R_base.transpose(-1, -2), R_gt)
-                                R_h = R_err[:, hinge_idx]  # (B,K,3,3)
-
-                                axis = str(getattr(trainer, "direct_pose_hinge_axis", "Z") or "Z").strip().upper()
-                                axis_i = {"X": 0, "Y": 1, "Z": 2}.get(axis, 2)
-                                if int(axis_i) == 0:  # X
-                                    delta_tgt = torch.atan2(
-                                        R_h[..., 2, 1] - R_h[..., 1, 2],
-                                        R_h[..., 1, 1] + R_h[..., 2, 2],
-                                    )
-                                elif int(axis_i) == 1:  # Y
-                                    delta_tgt = torch.atan2(
-                                        R_h[..., 0, 2] - R_h[..., 2, 0],
-                                        R_h[..., 0, 0] + R_h[..., 2, 2],
-                                    )
-                                else:  # Z
-                                    delta_tgt = torch.atan2(
-                                        R_h[..., 1, 0] - R_h[..., 0, 1],
-                                        R_h[..., 0, 0] + R_h[..., 1, 1],
-                                    )
-
-                                max_rad = getattr(trainer, "direct_pose_hinge_max_rad", None)
-                                try:
-                                    max_rad = float(max_rad) if max_rad is not None else None
-                                except Exception:
-                                    max_rad = None
-                                if max_rad is not None and max_rad > 0.0 and math.isfinite(max_rad):
-                                    delta_tgt = delta_tgt.clamp(-max_rad, max_rad)
-
-                                direct_hinge_step = delta_tgt
-            except Exception:
-                # Keep baseline behavior on any failure.
-                pass
-        if bool(export_direct_hinge_series):
-            if torch.is_tensor(direct_hinge_step):
-                try:
-                    v = direct_hinge_step.detach()
-                    if v.ndim == 2:
-                        v = v.mean(dim=0)
-                    elif v.ndim > 2:
-                        v = v.reshape(-1)
-                    direct_hinge_step_log.append([float(x) for x in v.cpu().tolist()])
-                except Exception:
-                    direct_hinge_step_log.append(None)
-            else:
-                direct_hinge_step_log.append(None)
-            if torch.is_tensor(direct_hinge_raw_step):
-                try:
-                    v = direct_hinge_raw_step.detach()
-                    if v.ndim == 2:
-                        v = v.mean(dim=0)
-                    elif v.ndim > 2:
-                        v = v.reshape(-1)
-                    direct_hinge_raw_step_log.append([float(x) for x in v.cpu().tolist()])
-                except Exception:
-                    direct_hinge_raw_step_log.append(None)
-            else:
-                direct_hinge_raw_step_log.append(None)
-            if torch.is_tensor(direct_hinge_base_raw_step):
-                try:
-                    v = direct_hinge_base_raw_step.detach()
-                    if v.ndim == 2:
-                        v = v.mean(dim=0)
-                    elif v.ndim > 2:
-                        v = v.reshape(-1)
-                    direct_hinge_base_raw_step_log.append([float(x) for x in v.cpu().tolist()])
-                except Exception:
-                    direct_hinge_base_raw_step_log.append(None)
-            else:
-                direct_hinge_base_raw_step_log.append(None)
-            if torch.is_tensor(direct_hinge_eps_raw_step):
-                try:
-                    v = direct_hinge_eps_raw_step.detach()
-                    if v.ndim == 2:
-                        v = v.mean(dim=0)
-                    elif v.ndim > 2:
-                        v = v.reshape(-1)
-                    direct_hinge_eps_raw_step_log.append([float(x) for x in v.cpu().tolist()])
-                except Exception:
-                    direct_hinge_eps_raw_step_log.append(None)
-            else:
-                direct_hinge_eps_raw_step_log.append(None)
-            if torch.is_tensor(direct_hinge_gate_step):
-                try:
-                    v = direct_hinge_gate_step.detach()
-                    if v.ndim == 2:
-                        v = v.mean(dim=0)
-                    elif v.ndim > 2:
-                        v = v.reshape(-1)
-                    direct_hinge_gate_step_log.append([float(x) for x in v.cpu().tolist()])
-                except Exception:
-                    direct_hinge_gate_step_log.append(None)
-            else:
-                direct_hinge_gate_step_log.append(None)
-        if torch.is_tensor(direct_norm_step) and torch.is_tensor(direct_hinge_step):
-            try:
-                direct_norm_step = trainer._apply_direct_hinge_correction_norm(direct_norm_step, direct_hinge_step)
-            except Exception:
-                pass
 
         if bool(direct_nonleg_probe_enabled):
             try:
@@ -7300,121 +6816,6 @@ def _run_freerun_cycles(
                 "phase_event_age_in": _pack_series(phase_event_age_in_log, int(age_dim)),
             },
         }
-
-    # Optional: export per-step direct hinge head output delta (rad/deg).
-    if bool(export_direct_hinge_series):
-        try:
-            hinge_names = list(getattr(model, "direct_pose_hinge_joint_names", None) or [])
-        except Exception:
-            hinge_names = []
-        try:
-            hinge_idx = [int(i) for i in (getattr(model, "direct_pose_hinge_joint_idx", None) or [])]
-        except Exception:
-            hinge_idx = []
-
-        H = 0
-        if hinge_names:
-            H = int(len(hinge_names))
-        else:
-            for v in direct_hinge_step_log:
-                if isinstance(v, list) and v:
-                    H = int(len(v))
-                    break
-        if H > 0:
-            if not hinge_names or len(hinge_names) != H:
-                hinge_names = [f"hinge_{i}" for i in range(H)]
-
-            deg = 180.0 / float(np.pi)
-            delta_rad: Dict[str, List[float]] = {str(n): [] for n in hinge_names}
-            delta_deg: Dict[str, List[float]] = {str(n): [] for n in hinge_names}
-            delta_raw_rad: Dict[str, List[float]] = {str(n): [] for n in hinge_names}
-            delta_raw_deg: Dict[str, List[float]] = {str(n): [] for n in hinge_names}
-            gate_series: Dict[str, List[float]] = {str(n): [] for n in hinge_names}
-            have_base_raw = any(
-                isinstance(v, list) and int(len(v)) == int(H) for v in direct_hinge_base_raw_step_log
-            )
-            have_eps_raw = any(
-                isinstance(v, list) and int(len(v)) == int(H) for v in direct_hinge_eps_raw_step_log
-            )
-            delta_base_raw_rad: Dict[str, List[float]] = {str(n): [] for n in hinge_names} if have_base_raw else {}
-            delta_base_raw_deg: Dict[str, List[float]] = {str(n): [] for n in hinge_names} if have_base_raw else {}
-            delta_eps_raw_rad: Dict[str, List[float]] = {str(n): [] for n in hinge_names} if have_eps_raw else {}
-            delta_eps_raw_deg: Dict[str, List[float]] = {str(n): [] for n in hinge_names} if have_eps_raw else {}
-            valid: List[int] = []
-            valid_raw: List[int] = []
-            valid_gate: List[int] = []
-            valid_base_raw: List[int] = []
-            valid_eps_raw: List[int] = []
-            for t in range(int(free_steps)):
-                v = direct_hinge_step_log[t] if t < len(direct_hinge_step_log) else None
-                ok = isinstance(v, list) and int(len(v)) == int(H)
-                valid.append(1 if ok else 0)
-                v_raw = direct_hinge_raw_step_log[t] if t < len(direct_hinge_raw_step_log) else None
-                ok_raw = isinstance(v_raw, list) and int(len(v_raw)) == int(H)
-                valid_raw.append(1 if ok_raw else 0)
-                v_base = direct_hinge_base_raw_step_log[t] if t < len(direct_hinge_base_raw_step_log) else None
-                ok_base = isinstance(v_base, list) and int(len(v_base)) == int(H)
-                if have_base_raw:
-                    valid_base_raw.append(1 if ok_base else 0)
-                v_eps = direct_hinge_eps_raw_step_log[t] if t < len(direct_hinge_eps_raw_step_log) else None
-                ok_eps = isinstance(v_eps, list) and int(len(v_eps)) == int(H)
-                if have_eps_raw:
-                    valid_eps_raw.append(1 if ok_eps else 0)
-                v_gate = direct_hinge_gate_step_log[t] if t < len(direct_hinge_gate_step_log) else None
-                ok_gate = isinstance(v_gate, list) and int(len(v_gate)) == int(H)
-                valid_gate.append(1 if ok_gate else 0)
-                for i, name in enumerate(hinge_names):
-                    x = float(v[i]) if ok else 0.0
-                    delta_rad[str(name)].append(float(x))
-                    delta_deg[str(name)].append(float(x * deg))
-                    xr = float(v_raw[i]) if ok_raw else 0.0
-                    delta_raw_rad[str(name)].append(float(xr))
-                    delta_raw_deg[str(name)].append(float(xr * deg))
-                    if have_base_raw:
-                        xb = float(v_base[i]) if ok_base else 0.0
-                        delta_base_raw_rad[str(name)].append(float(xb))
-                        delta_base_raw_deg[str(name)].append(float(xb * deg))
-                    if have_eps_raw:
-                        xe = float(v_eps[i]) if ok_eps else 0.0
-                        delta_eps_raw_rad[str(name)].append(float(xe))
-                        delta_eps_raw_deg[str(name)].append(float(xe * deg))
-                    g = float(v_gate[i]) if ok_gate else 0.0
-                    gate_series[str(name)].append(float(g))
-
-            series: Dict[str, Any] = {
-                "delta_rad": delta_rad,
-                "delta_deg": delta_deg,
-                "valid": valid,
-                "delta_raw_rad": delta_raw_rad,
-                "delta_raw_deg": delta_raw_deg,
-                "valid_raw": valid_raw,
-                "gate": gate_series,
-                "valid_gate": valid_gate,
-            }
-            if have_base_raw:
-                series["delta_base_raw_rad"] = delta_base_raw_rad
-                series["delta_base_raw_deg"] = delta_base_raw_deg
-                series["valid_base_raw"] = valid_base_raw
-            if have_eps_raw:
-                series["delta_eps_raw_rad"] = delta_eps_raw_rad
-                series["delta_eps_raw_deg"] = delta_eps_raw_deg
-                series["valid_eps_raw"] = valid_eps_raw
-
-            extra["direct_hinge_series"] = {
-                "axis": str(getattr(model, "direct_pose_hinge_axis", "Z") or "Z"),
-                "max_deg": float(getattr(model, "direct_pose_hinge_max_deg", 0.0) or 0.0),
-                "joint_idx": hinge_idx,
-                "bones": [str(n) for n in hinge_names],
-                "units": {"delta_rad": "rad", "delta_deg": "deg", "gate": "unitless"},
-                "note": (
-                    "direct_hinge_delta is the model's predicted 1D correction δ on the configured hinge axis (joint-local).\n"
-                    "- delta_rad/deg: effective delta applied to direct (may include contact-based gating).\n"
-                    "- delta_raw_rad/deg: raw hinge head output before gating (if available).\n"
-                    "- gate: per-hinge gating factor in [0,1] (if available).\n"
-                    "All series are mean-over-batch per step. Missing values are zero-filled with valid masks."
-                ),
-                "series": series,
-            }
 
     # Optional: export per-step direct leg SO(3) residual omega (axis-angle), plus ||omega|| diagnostics.
     if bool(export_direct_leg_omega_series):
@@ -11001,14 +10402,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--export_direct_hinge_series",
-        action="store_true",
-        help=(
-            "Export per-step direct hinge head output (direct_hinge_delta) into output JSON under 'direct_hinge_series'. "
-            "This is the model's predicted δ (rad/deg) before any oracle fitting."
-        ),
-    )
-    parser.add_argument(
         "--export_direct_leg_omega_series",
         action="store_true",
         help=(
@@ -11543,44 +10936,6 @@ def parse_args() -> argparse.Namespace:
             '  \"meas\": {\"scale\": [..], \"bias\": [..]}\n'
             "}\n"
             "Mapping: p_soft = sigmoid(bias + scale * logit(clamp(p_gt)))."
-        ),
-    )
-    parser.add_argument(
-        "--direct_pose_hinge_enable",
-        action="store_true",
-        help="Enable hinge-style 1D correction for direct head (joint-local axis twist).",
-    )
-    parser.add_argument(
-        "--direct_pose_hinge_bones",
-        type=str,
-        default="calf_r",
-        help="Comma-separated bone names/indices for hinge correction (default: calf_r).",
-    )
-    parser.add_argument(
-        "--direct_pose_hinge_axis",
-        type=str,
-        default="z",
-        choices=("x", "y", "z"),
-        help="Local axis for hinge correction (default: z).",
-    )
-    parser.add_argument(
-        "--direct_pose_hinge_max_deg",
-        type=float,
-        default=45.0,
-        help="Max hinge correction magnitude in degrees (tanh-scaled).",
-    )
-    parser.add_argument(
-        "--direct_pose_hinge_hidden",
-        type=int,
-        default=0,
-        help="Hidden dim for hinge head (0=auto).",
-    )
-    parser.add_argument(
-        "--direct_pose_hinge_oracle_delta",
-        action="store_true",
-        help=(
-            "Diagnostics: override hinge head output with an axis-oracle delta computed from GT at each step, "
-            "then apply it via the normal hinge correction path (useful to verify apply/target consistency)."
         ),
     )
     parser.add_argument(

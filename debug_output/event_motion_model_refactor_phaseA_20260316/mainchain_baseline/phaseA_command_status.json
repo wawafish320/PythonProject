@@ -1,0 +1,35 @@
+{
+  "generated_on": "2026-03-17T00:34:26.814010+08:00",
+  "commands": [
+    {
+      "label": "py_compile",
+      "command": "python -m py_compile train/models.py",
+      "expected": "pass",
+      "note": "roadmap Phase A required baseline command",
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "log_path": "debug_output/event_motion_model_refactor_phaseA_20260316/mainchain_baseline/py_compile.log"
+    },
+    {
+      "label": "debug_contact_loop_script_path",
+      "command": "python train/debug_contact_loop.py",
+      "expected": "frozen_failure",
+      "note": "exact roadmap spelling; frozen as-is even though package import fails from repo root",
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "Traceback (most recent call last):\n  File \"/Users/xingzhaorui/PycharmProjects/PythonProject/train/debug_contact_loop.py\", line 11, in <module>\n    from train.models import EventMotionModel\nModuleNotFoundError: No module named 'train'\n",
+      "log_path": "debug_output/event_motion_model_refactor_phaseA_20260316/mainchain_baseline/debug_contact_loop_script_path.log"
+    },
+    {
+      "label": "debug_contact_loop_module_path",
+      "command": "python -m train.debug_contact_loop",
+      "expected": "pass",
+      "note": "package-form replay command used as working smoke equivalent for post-refactor comparison",
+      "exit_code": 0,
+      "stdout": "[OK] debug_contact_loop: forward/backward finite, shapes OK\n",
+      "stderr": "",
+      "log_path": "debug_output/event_motion_model_refactor_phaseA_20260316/mainchain_baseline/debug_contact_loop_module_path.log"
+    }
+  ]
+}

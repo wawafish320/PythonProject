@@ -1909,18 +1909,19 @@ def main():
 
     def _gather_state() -> dict:
         meta_payload = {
-                "input_dim": in_dim,
-                "pose_dim": pose_dim,
-                "ang_dim": ang_dim,
-                "period_dim": period_latent_dim,
-                "period_hint_mode": "contacts_tanh",
-                "period_hint_dim": 2,
-                "hidden_dim": args.hidden_dim,
-                "z_dim": args.z_dim,
-                "mlp_layers": args.encoder_layers,
-                "mlp_dropout": args.encoder_dropout,
-                "amp_share_encoder": bool(args.amp_share_encoder),
-                "amp_linear_equiv": True,
+            "input_dim": in_dim,
+            "pose_dim": pose_dim,
+            "ang_dim": ang_dim,
+            "period_dim": period_latent_dim,
+            "period_hint_mode": "contacts_tanh",
+            "period_hint_dim": 2,
+            "hidden_dim": args.hidden_dim,
+            "z_dim": args.z_dim,
+            "mlp_layers": args.encoder_layers,
+            "mlp_dropout": args.encoder_dropout,
+            "amp_share_encoder": bool(args.amp_share_encoder),
+            "amp_linear_equiv": True,
+            "bidirectional": False,
         }
         extra_meta = getattr(train_ds, "dataset_meta", None)
         if isinstance(extra_meta, dict) and extra_meta:
@@ -1928,7 +1929,7 @@ def main():
                 if key in extra_meta and key not in meta_payload:
                     meta_payload[key] = extra_meta[key]
             meta_payload["dataset_meta"] = extra_meta
-        return {
+        bundle = {
             "encoder": enc.state_dict(),
             "encoder_amp": enc.state_dict() if enc_amp is enc else enc_amp.state_dict(),
             "period_head": period_head.state_dict(),
@@ -1938,6 +1939,8 @@ def main():
             "decoder_ang": decoder_ang.state_dict(),
             "meta": meta_payload,
         }
+        stamp_standard_rotvec_spec(bundle, asset_kind="motion_encoder_bundle", source="pretrain_mpl_min")
+        return bundle
 
     def _save_checkpoint(path: Optional[str]) -> None:
         if not path:

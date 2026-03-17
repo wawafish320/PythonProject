@@ -1,0 +1,9 @@
+$ python train/debug_contact_loop.py
+exit_code: 1
+note: exact roadmap spelling; frozen as-is even though package import fails from repo root
+
+[stderr]
+Traceback (most recent call last):
+  File "/Users/xingzhaorui/PycharmProjects/PythonProject/train/debug_contact_loop.py", line 11, in <module>
+    from train.models import EventMotionModel
+ModuleNotFoundError: No module named 'train'

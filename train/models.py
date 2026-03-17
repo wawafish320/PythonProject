@@ -1478,13 +1478,10 @@ class EventMotionModel(nn.Module):
                             f"out_motion_dim={int(self.out_motion_dim)}"
                         )
                     # Shared trunk stays compatible with the legacy head's first two Linear layers.
-                    self.direct_pose_head = nn.Sequential(
-                        nn.Linear(in_dim, hid),
-                        nn.ReLU(),
-                        nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                        nn.Linear(hid, hid),
-                        nn.ReLU(),
-                        nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                    self.direct_pose_head = self._build_direct_pose_trunk(
+                        in_dim=in_dim,
+                        hidden_dim=hid,
+                        dropout=drop,
                     )
                     self.direct_pose_out_leg, _ = self._build_split_head_branch(trunk_dim=hid, out_dim=leg_out_dim)
                     if bool(split_state["arm_split"]):
@@ -1513,14 +1510,11 @@ class EventMotionModel(nn.Module):
                     out_dim = int(self.out_motion_dim)
                     if self.direct_pose_meas_mode == "mode_select":
                         out_dim = int(out_dim) * 2
-                    self.direct_pose_head = nn.Sequential(
-                        nn.Linear(in_dim, hid),
-                        nn.ReLU(),
-                        nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                        nn.Linear(hid, hid),
-                        nn.ReLU(),
-                        nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                        nn.Linear(hid, int(out_dim)),
+                    self.direct_pose_head = self._build_direct_pose_head(
+                        in_dim=in_dim,
+                        hidden_dim=hid,
+                        out_dim=int(out_dim),
+                        dropout=drop,
                     )
                 # Optional: leg residual head (extra capacity for selected joints only).
                 # - rot6d_add: predicts 6D residuals (added in parameter space; legacy)
@@ -1530,53 +1524,26 @@ class EventMotionModel(nn.Module):
                     leg_mode = str(getattr(self, "direct_pose_leg_mode", "rot6d_add") or "rot6d_add").lower().strip()
                     leg_out = (3 if leg_mode == "so3" else 6) * int(leg_k)
                     if leg_out > 0:
-                        self.direct_pose_leg_head = nn.Sequential(
-                            nn.Linear(in_dim, hid),
-                            nn.ReLU(),
-                            nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                            nn.Linear(hid, hid),
-                            nn.ReLU(),
-                            nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                            nn.Linear(hid, int(leg_out)),
+                        self.direct_pose_leg_head = self._build_direct_pose_head(
+                            in_dim=in_dim,
+                            hidden_dim=hid,
+                            out_dim=int(leg_out),
+                            dropout=drop,
+                            zero_last=True,
                         )
-                        # Safe init: start with zero residual so behavior matches baseline ckpts.
-                        try:
-                            last = self.direct_pose_leg_head[-1]
-                            if isinstance(last, nn.Linear):
-                                with torch.no_grad():
-                                    last.weight.zero_()
-                                    if last.bias is not None:
-                                        last.bias.zero_()
-                        except Exception:
-                            pass
                         # Optional: learned gate/scale head (predicts per-joint logits; applied in forward).
                         gm_leg = str(getattr(self, "direct_pose_leg_gate_mode", "none") or "none").lower().strip()
                         if gm_leg in ("learned", "scale"):
                             gate_out = int(leg_k)
-                            self.direct_pose_leg_gate_head = nn.Sequential(
-                                nn.Linear(in_dim, hid),
-                                nn.ReLU(),
-                                nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                                nn.Linear(hid, hid),
-                                nn.ReLU(),
-                                nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                                nn.Linear(hid, int(gate_out)),
+                            gate_bias = 2.0 if gm_leg == "learned" else 0.0
+                            self.direct_pose_leg_gate_head = self._build_direct_pose_head(
+                                in_dim=in_dim,
+                                hidden_dim=hid,
+                                out_dim=int(gate_out),
+                                dropout=drop,
+                                zero_last=True,
+                                last_bias=gate_bias,
                             )
-                            # Safe init:
-                            # - learned gate: start mostly "open" but not fully saturated (sigmoid(2)≈0.881)
-                            # - scale: start as identity scaling (exp(0)=1)
-                            try:
-                                last = self.direct_pose_leg_gate_head[-1]
-                                if isinstance(last, nn.Linear):
-                                    with torch.no_grad():
-                                        last.weight.zero_()
-                                        if last.bias is not None:
-                                            if gm_leg == "learned":
-                                                last.bias.fill_(2.0)
-                                            else:
-                                                last.bias.zero_()
-                            except Exception:
-                                pass
                     # Optional: shared-weight, per-side routed leg head (SO(3) only).
                     # - Input: [direct_feat(+time_pe), plan_side, meas_side, phase_side(2D), (optional side_emb)]
                     # - Output: omega for one side only, then scatter back to K joints.
@@ -1611,51 +1578,26 @@ class EventMotionModel(nn.Module):
                         else:
                             leg_out_side = 3 * int(leg_side_k)  # so3 only
                         if leg_in_dim > 0 and leg_out_side > 0:
-                            self.direct_pose_leg_head_shared = nn.Sequential(
-                                nn.Linear(leg_in_dim, hid),
-                                nn.ReLU(),
-                                nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                                nn.Linear(hid, hid),
-                                nn.ReLU(),
-                                nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                                nn.Linear(hid, int(leg_out_side)),
+                            self.direct_pose_leg_head_shared = self._build_direct_pose_head(
+                                in_dim=leg_in_dim,
+                                hidden_dim=hid,
+                                out_dim=int(leg_out_side),
+                                dropout=drop,
+                                zero_last=True,
                             )
-                            # Safe init: start with zero residual so behavior is controllable for finetune.
-                            try:
-                                last = self.direct_pose_leg_head_shared[-1]
-                                if isinstance(last, nn.Linear):
-                                    with torch.no_grad():
-                                        last.weight.zero_()
-                                        if last.bias is not None:
-                                            last.bias.zero_()
-                            except Exception:
-                                pass
                             # Optional: learned gate/scale head for routed shared leg omega (per-joint logits per side).
                             gm_leg = str(getattr(self, "direct_pose_leg_gate_mode", "none") or "none").lower().strip()
                             if gm_leg in ("learned", "scale"):
                                 gate_out = int(leg_side_k)
-                                self.direct_pose_leg_gate_head_shared = nn.Sequential(
-                                    nn.Linear(leg_in_dim, hid),
-                                    nn.ReLU(),
-                                    nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                                    nn.Linear(hid, hid),
-                                    nn.ReLU(),
-                                    nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                                    nn.Linear(hid, int(gate_out)),
+                                gate_bias = 2.0 if gm_leg == "learned" else 0.0
+                                self.direct_pose_leg_gate_head_shared = self._build_direct_pose_head(
+                                    in_dim=leg_in_dim,
+                                    hidden_dim=hid,
+                                    out_dim=int(gate_out),
+                                    dropout=drop,
+                                    zero_last=True,
+                                    last_bias=gate_bias,
                                 )
-                                # Safe init: same semantics as direct_pose_leg_gate_head.
-                                try:
-                                    last = self.direct_pose_leg_gate_head_shared[-1]
-                                    if isinstance(last, nn.Linear):
-                                        with torch.no_grad():
-                                            last.weight.zero_()
-                                            if last.bias is not None:
-                                                if gm_leg == "learned":
-                                                    last.bias.fill_(2.0)
-                                                else:
-                                                    last.bias.zero_()
-                                except Exception:
-                                    pass
                             # Optional: per-side sign gate head (shared weights; run twice for R/L).
                             if bool(getattr(self, "direct_pose_leg_side_sign_gate", False)):
                                 h_gate = max(8, int(hid // 4))
@@ -1666,27 +1608,19 @@ class EventMotionModel(nn.Module):
                                 )
                                 # Safe init: start near +1 (identity) so existing ckpts behave the same.
                                 # (omega head is zero-initialized anyway; this just avoids weird scaling when it learns.)
-                                try:
-                                    last = self.direct_pose_leg_side_sign_gate_head[-1]
-                                    if isinstance(last, nn.Linear):
-                                        with torch.no_grad():
-                                            last.weight.zero_()
-                                            if last.bias is not None:
-                                                last.bias.fill_(2.0)  # tanh(2)≈0.964
-                                except Exception:
-                                    pass
+                                self._init_last_linear(
+                                    self.direct_pose_leg_side_sign_gate_head[-1],
+                                    zero_weight=True,
+                                    bias_value=2.0,
+                                )
 
         if self.lambda_fusion_enable:
             try:
                 rot_sl = None
                 if isinstance(output_layout, dict):
                     rot_sl = parse_layout_entry(output_layout.get("BoneRotations6D"), "BoneRotations6D", self.out_motion_dim)
-                if rot_sl is not None:
-                    rot_dim = int(rot_sl.stop - rot_sl.start)
-                    if rot_dim > 0 and rot_dim % 6 == 0:
-                        self.lambda_fusion_joint_count = int(rot_dim // 6)
-                elif bone_names is not None and len(bone_names) > 0 and (self.out_motion_dim // 6) > 0:
-                    self.lambda_fusion_joint_count = int(len(bone_names))
+                fallback_bones = bone_names if (self.out_motion_dim // 6) > 0 else None
+                self.lambda_fusion_joint_count = _resolve_rot6d_joint_count(rot_sl, fallback_bones)
             except Exception:
                 self.lambda_fusion_joint_count = 0
 
@@ -1726,12 +1660,8 @@ class EventMotionModel(nn.Module):
             rot_sl = None
             if isinstance(output_layout, dict):
                 rot_sl = parse_layout_entry(output_layout.get("BoneRotations6D"), "BoneRotations6D", self.out_motion_dim)
-            if rot_sl is not None:
-                rot_dim = int(rot_sl.stop - rot_sl.start)
-                if rot_dim > 0 and rot_dim % 6 == 0:
-                    self.so3_corr_joint_count = int(rot_dim // 6)
-            elif bone_names is not None and len(bone_names) > 0 and (self.out_motion_dim // 6) > 0:
-                self.so3_corr_joint_count = int(len(bone_names))
+            fallback_bones = bone_names if (self.out_motion_dim // 6) > 0 else None
+            self.so3_corr_joint_count = _resolve_rot6d_joint_count(rot_sl, fallback_bones)
         except Exception:
             self.so3_corr_joint_count = 0
         if self.so3_corr_joint_count > 0:
@@ -1815,6 +1745,87 @@ class EventMotionModel(nn.Module):
         return None
 
     @staticmethod
+    def _direct_pose_trunk_layers(
+        *,
+        in_dim: int,
+        hidden_dim: int,
+        dropout: float,
+    ) -> list[nn.Module]:
+        in_dim = int(in_dim)
+        hidden_dim = int(hidden_dim)
+        drop = float(dropout)
+        return [
+            nn.Linear(in_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(drop) if drop > 0 else nn.Identity(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(drop) if drop > 0 else nn.Identity(),
+        ]
+
+    @staticmethod
+    def _init_last_linear(
+        module: Any,
+        *,
+        zero_weight: bool = False,
+        bias_value: Optional[float] = None,
+    ) -> None:
+        if not isinstance(module, nn.Linear):
+            return
+        try:
+            with torch.no_grad():
+                if zero_weight:
+                    module.weight.zero_()
+                if module.bias is not None:
+                    if bias_value is None:
+                        if zero_weight:
+                            module.bias.zero_()
+                    else:
+                        module.bias.fill_(float(bias_value))
+        except Exception:
+            pass
+
+    @classmethod
+    def _build_direct_pose_trunk(
+        cls,
+        *,
+        in_dim: int,
+        hidden_dim: int,
+        dropout: float,
+    ) -> nn.Sequential:
+        return nn.Sequential(*cls._direct_pose_trunk_layers(
+            in_dim=in_dim,
+            hidden_dim=hidden_dim,
+            dropout=dropout,
+        ))
+
+    @classmethod
+    def _build_direct_pose_head(
+        cls,
+        *,
+        in_dim: int,
+        hidden_dim: int,
+        out_dim: int,
+        dropout: float,
+        zero_last: bool = False,
+        last_bias: Optional[float] = None,
+    ) -> nn.Sequential:
+        head = nn.Sequential(
+            *cls._direct_pose_trunk_layers(
+                in_dim=in_dim,
+                hidden_dim=hidden_dim,
+                dropout=dropout,
+            ),
+            nn.Linear(int(hidden_dim), int(out_dim)),
+        )
+        cls._init_last_linear(
+            head[-1],
+            zero_weight=bool(zero_last),
+            bias_value=last_bias,
+        )
+        return head
+
+    @staticmethod
     def _build_split_head_branch(
         *,
         trunk_dim: int,
@@ -1826,6 +1837,348 @@ class EventMotionModel(nn.Module):
             proj = nn.Sequential(nn.Linear(int(trunk_dim), proj_dim), nn.ReLU())
             return nn.Linear(proj_dim, int(out_dim)), proj
         return nn.Linear(int(trunk_dim), int(out_dim)), None
+
+    @staticmethod
+    def _match_last_dim(x: torch.Tensor, target_dim: int) -> torch.Tensor:
+        target_dim = max(0, int(target_dim))
+        if x.shape[-1] == target_dim:
+            return x
+        if x.shape[-1] > target_dim:
+            return x[..., :target_dim]
+        return F.pad(x, (0, target_dim - x.shape[-1]))
+
+    @staticmethod
+    def _canonicalize_contact_seq_tensor(
+        value: Optional[torch.Tensor],
+        *,
+        batch_size: int,
+        steps: int,
+        channels: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        allow_1d: bool = True,
+    ) -> Optional[torch.Tensor]:
+        if not torch.is_tensor(value):
+            return None
+        try:
+            out = value.to(device=device, dtype=dtype)
+            if out.ndim == 1:
+                if not allow_1d:
+                    return None
+                out = out.view(1, 1, -1)
+            elif out.ndim == 2:
+                out = out.unsqueeze(1)
+            if out.ndim != 3:
+                return None
+            if out.shape[0] == 1 and batch_size > 1:
+                out = out.expand(batch_size, -1, -1)
+            if out.shape[1] == 1 and steps > 1:
+                out = out.expand(-1, steps, -1)
+            return EventMotionModel._match_last_dim(out, channels)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _canonicalize_contact_step_tensor(
+        value: Optional[torch.Tensor],
+        *,
+        batch_size: int,
+        channels: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[torch.Tensor]:
+        if not torch.is_tensor(value):
+            return None
+        try:
+            out = value.to(device=device, dtype=dtype)
+            if out.ndim == 3 and out.size(1) == 1:
+                out = out[:, 0]
+            if out.ndim == 2:
+                pass
+            elif out.ndim == 1:
+                out = out.view(1, -1)
+            else:
+                out = out.reshape(batch_size, -1)
+            if out.shape[0] == 1 and batch_size > 1:
+                out = out.expand(batch_size, -1)
+            return EventMotionModel._match_last_dim(out, channels)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _canonicalize_phase_z_input(
+        value: Optional[torch.Tensor],
+        *,
+        batch_size: int,
+        contact_dim: int,
+        phase_dim: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[torch.Tensor]:
+        if not torch.is_tensor(value):
+            return None
+        try:
+            out = value.to(device=device, dtype=dtype)
+            if out.ndim == 3 and out.size(1) == 1:
+                out = out[:, 0]
+            if out.ndim == 3 and out.shape[0] == batch_size and out.shape[1] == contact_dim and out.shape[2] == 2:
+                return out.reshape(batch_size, -1)
+            if out.ndim == 2:
+                if out.shape[0] == 1 and batch_size > 1 and out.shape[-1] == phase_dim:
+                    return out.expand(batch_size, -1)
+                if out.shape[0] == batch_size and out.shape[-1] == phase_dim:
+                    return out
+                if out.shape[0] == contact_dim and out.shape[1] == 2:
+                    return out.reshape(1, -1).expand(batch_size, -1)
+            if out.ndim == 1 and int(out.numel()) == int(phase_dim):
+                return out.reshape(1, -1).expand(batch_size, -1)
+        except Exception:
+            return None
+        return None
+
+    def _init_phase_state(
+        self,
+        *,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        phase_dim: int,
+        phase_z: Optional[torch.Tensor],
+        phase_event_age: Optional[torch.Tensor],
+        contacts_meas_obs: Optional[torch.Tensor],
+        meas_prev_t: Optional[torch.Tensor],
+        leg_side_cue_mode: str,
+    ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        if phase_dim <= 0 or int(self.contact_dim) <= 0:
+            return None, None, None, None
+
+        contact_dim = int(self.contact_dim)
+        phase_anchor = torch.zeros((1, contact_dim, 2), device=device, dtype=dtype)
+        phase_anchor[..., 1] = 1.0
+
+        phase_z_t = self._canonicalize_phase_z_input(
+            phase_z,
+            batch_size=batch_size,
+            contact_dim=contact_dim,
+            phase_dim=phase_dim,
+            device=device,
+            dtype=dtype,
+        )
+        init_mode = str(getattr(self, "contact_phase_state_init_mode", "obs") or "obs").lower().strip()
+        if phase_z_t is None:
+            if init_mode == "zeros":
+                phase_z_t = phase_anchor.reshape(1, -1).expand(batch_size, -1)
+            elif init_mode in ("obs", "learnable+obs") and torch.is_tensor(contacts_meas_obs) and contacts_meas_obs.numel() > 0:
+                thr = float(getattr(self, "contact_phase_state_event_thr", 0.5) or 0.5)
+                c0 = contacts_meas_obs[:, 0].to(device=device, dtype=dtype)
+                stance = (c0 >= thr).to(dtype=dtype).unsqueeze(-1)
+                anchor0 = phase_anchor.expand(batch_size, -1, -1)
+                anchor_pi = anchor0.clone()
+                anchor_pi[..., 1] = -1.0
+                phase0 = anchor0 * stance + anchor_pi * (1.0 - stance)
+                phase_z_t = phase0.reshape(batch_size, -1)
+                if init_mode == "learnable+obs":
+                    init_vec = getattr(self, "contact_phase_state_init", None)
+                    if torch.is_tensor(init_vec) and int(init_vec.numel()) == int(phase_dim):
+                        phase_z_t = phase_z_t + init_vec.to(device=device, dtype=dtype).view(1, -1)
+            else:
+                init_vec = getattr(self, "contact_phase_state_init", None)
+                if torch.is_tensor(init_vec) and int(init_vec.numel()) == int(phase_dim):
+                    phase_z_t = init_vec.to(device=device, dtype=dtype).view(1, -1).expand(batch_size, -1)
+                else:
+                    phase_z_t = phase_anchor.reshape(1, -1).expand(batch_size, -1)
+
+        try:
+            phase_view = phase_z_t.view(batch_size, contact_dim, 2)
+            phase_z_t = (phase_view / phase_view.norm(dim=-1, keepdim=True).clamp_min(1e-6)).reshape(batch_size, -1)
+        except Exception:
+            phase_z_t = phase_anchor.reshape(1, -1).expand(batch_size, -1)
+
+        phase_meas_prev_t = None
+        if torch.is_tensor(meas_prev_t):
+            try:
+                prev_prob = meas_prev_t.to(device=device, dtype=dtype)
+                if prev_prob.ndim == 2 and prev_prob.shape[0] == 1 and batch_size > 1:
+                    prev_prob = prev_prob.expand(batch_size, -1)
+                if prev_prob.ndim == 2 and prev_prob.shape[1] == contact_dim:
+                    phase_meas_prev_t = prev_prob
+            except Exception:
+                phase_meas_prev_t = None
+        if phase_meas_prev_t is None and torch.is_tensor(contacts_meas_obs) and contacts_meas_obs.numel() > 0:
+            phase_meas_prev_t = contacts_meas_obs[:, 0].to(device=device, dtype=dtype)
+
+        phase_event_age_t = self._canonicalize_contact_step_tensor(
+            phase_event_age,
+            batch_size=batch_size,
+            channels=contact_dim,
+            device=device,
+            dtype=dtype,
+        )
+        if phase_event_age_t is not None:
+            phase_event_age_t = phase_event_age_t.clamp_min(0.0)
+
+        min_interval = int(getattr(self, "contact_phase_state_event_min_interval", 0) or 0)
+        if phase_event_age_t is None and min_interval > 0:
+            phase_event_age_t = torch.full((batch_size, contact_dim), float(min_interval), device=device, dtype=dtype)
+        if phase_event_age_t is None and leg_side_cue_mode == "phase_event_age":
+            phase_event_age_t = torch.zeros((batch_size, contact_dim), device=device, dtype=dtype)
+
+        return phase_z_t, phase_meas_prev_t, phase_event_age_t, phase_anchor
+
+    def _prepare_contact_plan_observations(
+        self,
+        *,
+        contacts_input: Optional[torch.Tensor],
+        meas_logits_prev: Optional[torch.Tensor],
+        batch_size: int,
+        steps: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
+        contact_dim = int(self.contact_dim)
+        contacts_meas = self._canonicalize_contact_seq_tensor(
+            contacts_input,
+            batch_size=batch_size,
+            steps=steps,
+            channels=contact_dim,
+            device=device,
+            dtype=dtype,
+        )
+        if contacts_meas is None:
+            contacts_meas = torch.zeros((batch_size, steps, contact_dim), device=device, dtype=dtype)
+
+        meas_prev_t = self._canonicalize_contact_step_tensor(
+            meas_logits_prev,
+            batch_size=batch_size,
+            channels=contact_dim,
+            device=device,
+            dtype=dtype,
+        )
+
+        delta_meas = torch.zeros_like(contacts_meas)
+        if steps > 1:
+            delta_meas[:, 1:] = contacts_meas[:, 1:] - contacts_meas[:, :-1]
+        if meas_prev_t is not None and steps > 0:
+            delta_meas[:, 0] = contacts_meas[:, 0] - meas_prev_t
+
+        lr_diff = torch.zeros((batch_size, steps, 1), device=device, dtype=dtype)
+        if contact_dim >= 2:
+            lr_diff = (contacts_meas[..., 0:1] - contacts_meas[..., 1:2]).abs()
+
+        contacts_meas_obs = contacts_meas.detach()
+        delta_meas_obs = delta_meas.detach()
+        lr_diff_obs = lr_diff.detach()
+        return contacts_meas, meas_prev_t, contacts_meas_obs, delta_meas_obs, lr_diff_obs
+
+    @staticmethod
+    def _capture_direct_pose_aux_step(
+        *,
+        phase_in_direct_seq: Optional[list[torch.Tensor]],
+        phase_in_direct_zero: Optional[torch.Tensor],
+        phase_z_t: Optional[torch.Tensor],
+        leg_side_cue_seq: Optional[list[torch.Tensor]],
+        leg_side_cue_zero: Optional[torch.Tensor],
+        leg_side_cue_mode: str,
+        phase_event_age_t: Optional[torch.Tensor],
+    ) -> None:
+        if phase_in_direct_seq is not None and phase_in_direct_zero is not None:
+            try:
+                phase_in_direct_seq.append(phase_z_t if torch.is_tensor(phase_z_t) else phase_in_direct_zero)
+            except Exception:
+                pass
+        if leg_side_cue_seq is not None and leg_side_cue_zero is not None:
+            try:
+                if leg_side_cue_mode == "phase_event_age" and torch.is_tensor(phase_event_age_t):
+                    leg_side_cue_seq.append(phase_event_age_t)
+                else:
+                    leg_side_cue_seq.append(leg_side_cue_zero)
+            except Exception:
+                pass
+
+    def _update_phase_state_step(
+        self,
+        *,
+        cond_t: torch.Tensor,
+        meas_t: Optional[torch.Tensor],
+        delta_meas_t: Optional[torch.Tensor],
+        batch_size: int,
+        phase_dim: int,
+        phase_reset_source: str,
+        phase_z_t: Optional[torch.Tensor],
+        phase_meas_prev_t: Optional[torch.Tensor],
+        phase_event_age_t: Optional[torch.Tensor],
+        phase_anchor: Optional[torch.Tensor],
+    ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        if (
+            phase_dim <= 0
+            or phase_z_t is None
+            or self.contact_phase_state_delta_head is None
+            or phase_anchor is None
+            or (not torch.is_tensor(meas_t))
+            or (not torch.is_tensor(delta_meas_t))
+        ):
+            return phase_z_t, phase_meas_prev_t, phase_event_age_t
+
+        phase_z_next = phase_z_t
+        phase_meas_prev_next = phase_meas_prev_t
+        phase_event_age_next = phase_event_age_t
+        try:
+            phi_in = torch.cat([cond_t, meas_t, delta_meas_t, phase_z_t], dim=-1)
+            delta_raw = self.contact_phase_state_delta_head(phi_in)
+            mx = float(getattr(self, "contact_phase_state_delta_max", 0.5) or 0.5)
+            delta_phi = torch.tanh(delta_raw) * mx
+
+            contact_dim = int(self.contact_dim)
+            v_prev = phase_z_t.view(batch_size, contact_dim, 2)
+            sin_prev = v_prev[..., 0]
+            cos_prev = v_prev[..., 1]
+            sin_d = torch.sin(delta_phi)
+            cos_d = torch.cos(delta_phi)
+            sin_next = sin_prev * cos_d + cos_prev * sin_d
+            cos_next = cos_prev * cos_d - sin_prev * sin_d
+            v_next = torch.stack([sin_next, cos_next], dim=-1)
+
+            if phase_reset_source == "contacts_meas":
+                kind = str(getattr(self, "contact_phase_state_event_kind", "touchdown") or "touchdown").lower().strip()
+                if kind != "none":
+                    thr = float(getattr(self, "contact_phase_state_event_thr", 0.5) or 0.5)
+                    hyst = float(getattr(self, "contact_phase_state_event_hyst", 0.0) or 0.0)
+                    if not _math.isfinite(hyst):
+                        hyst = 0.0
+                    hyst = max(0.0, min(0.49, hyst))
+                    thr_low = max(0.0, thr - hyst)
+                    thr_high = min(1.0, thr + hyst)
+                    prev_m = phase_meas_prev_t if torch.is_tensor(phase_meas_prev_t) else meas_t
+                    if kind == "touchdown":
+                        m = (prev_m < thr_low) & (meas_t >= thr)
+                    elif kind == "liftoff":
+                        m = (prev_m >= thr_high) & (meas_t < thr)
+                    else:
+                        m = ((prev_m < thr_low) & (meas_t >= thr)) | ((prev_m >= thr_high) & (meas_t < thr))
+                    min_interval = int(getattr(self, "contact_phase_state_event_min_interval", 0) or 0)
+                    if phase_event_age_t is not None and min_interval > 0:
+                        try:
+                            m = m & (phase_event_age_t >= float(min_interval))
+                        except Exception:
+                            pass
+                    mask = m.to(dtype=v_next.dtype).unsqueeze(-1)
+                    v_next = v_next * (1.0 - mask) + phase_anchor.expand_as(v_next) * mask
+                    phase_meas_prev_next = meas_t
+                    if phase_event_age_t is not None:
+                        try:
+                            phase_event_age_next = torch.where(
+                                m,
+                                torch.zeros_like(phase_event_age_t),
+                                phase_event_age_t + 1.0,
+                            )
+                        except Exception:
+                            phase_event_age_next = phase_event_age_t
+
+            n = v_next.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+            phase_z_next = (v_next / n).reshape(batch_size, -1)
+        except Exception:
+            return phase_z_t, phase_meas_prev_t, phase_event_age_t
+        return phase_z_next, phase_meas_prev_next, phase_event_age_next
 
     @staticmethod
     def _direct_pose_local_index(parent_idx: torch.Tensor, child_idx: torch.Tensor, *, device: torch.device) -> Optional[torch.Tensor]:
@@ -1953,6 +2306,294 @@ class EventMotionModel(nn.Module):
         idx_nonleg_use = idx_nonleg.to(device=out_flat.device)
         out_flat = out_flat.index_copy(1, idx_nonleg_use, nonleg_out)
         return out_flat.view(B, Tq, -1)
+
+    def _prepare_direct_pose_seq_input(
+        self,
+        value: Optional[torch.Tensor],
+        *,
+        batch_size: int,
+        steps: int,
+        channels: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        fallback: Optional[torch.Tensor] = None,
+        override: Any = None,
+        detach_base: bool = False,
+        detach_override: bool = False,
+        drop_prob: float = 0.0,
+        noise_std: float = 0.0,
+        clamp_range: bool = False,
+        ignore_policy: str = "keep",
+    ) -> Optional[torch.Tensor]:
+        base = value
+        if detach_base and torch.is_tensor(base):
+            base = base.detach()
+
+        out = self._canonicalize_contact_seq_tensor(
+            base,
+            batch_size=batch_size,
+            steps=steps,
+            channels=channels,
+            device=device,
+            dtype=dtype,
+        )
+        if out is None and torch.is_tensor(fallback):
+            out = self._canonicalize_contact_seq_tensor(
+                fallback,
+                batch_size=batch_size,
+                steps=steps,
+                channels=channels,
+                device=device,
+                dtype=dtype,
+            )
+
+        if out is not None and self.training:
+            p = max(0.0, min(1.0, float(drop_prob or 0.0)))
+            if p > 0.0:
+                mask = (torch.rand(out.shape[:-1] + (1,), device=out.device) < p).to(out.dtype)
+                out = out * (1.0 - mask)
+            noise = float(noise_std or 0.0)
+            if noise > 0.0 and _math.isfinite(noise):
+                out = out + torch.randn_like(out) * noise
+        if out is not None and clamp_range:
+            out = out.clamp(0.0, 1.0)
+
+        try:
+            if isinstance(override, str):
+                s = override.strip().lower()
+                if s in ("ignore", "zero", "none", "null"):
+                    if ignore_policy == "none":
+                        return None
+                    if ignore_policy == "zeros":
+                        ref = out
+                        if ref is None:
+                            ref = torch.zeros((batch_size, steps, channels), device=device, dtype=dtype)
+                        return torch.zeros_like(ref)
+                override = None
+            if torch.is_tensor(override):
+                source = override.detach() if detach_override else override
+                ov = self._canonicalize_contact_seq_tensor(
+                    source,
+                    batch_size=batch_size,
+                    steps=steps,
+                    channels=channels,
+                    device=device,
+                    dtype=dtype,
+                )
+                if ov is not None:
+                    out = ov.clamp(0.0, 1.0) if clamp_range else ov
+        except Exception:
+            pass
+        return out
+
+    def _prepare_direct_pose_features(
+        self,
+        *,
+        cond: torch.Tensor,
+        h_final: torch.Tensor,
+        h_temporal: torch.Tensor,
+        time_pe_direct: Optional[torch.Tensor],
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        direct_feat = cond
+        try:
+            src = str(getattr(self, "direct_pose_feat_source", "cond") or "cond").lower().strip()
+        except Exception:
+            src = "cond"
+        if src == "hidden":
+            direct_feat = h_final
+        elif src == "hidden_pre":
+            direct_feat = h_temporal
+        elif src == "cond+hidden":
+            direct_feat = torch.cat([cond, h_final], dim=-1)
+        elif src == "cond+hidden_pre":
+            direct_feat = torch.cat([cond, h_temporal], dim=-1)
+        else:
+            direct_feat = cond
+        if torch.is_tensor(time_pe_direct):
+            try:
+                direct_feat = torch.cat([direct_feat, time_pe_direct.to(device=device, dtype=dtype)], dim=-1)
+            except Exception:
+                pass
+        return direct_feat
+
+    @staticmethod
+    def _blend_direct_pose_mode_outputs(
+        modes: torch.Tensor,
+        *,
+        meas_in: Optional[torch.Tensor],
+        out_dim: int,
+    ) -> torch.Tensor:
+        Dy = int(out_dim)
+        if int(modes.shape[-1]) != int(Dy * 2):
+            return modes
+        y_left, y_right = modes[..., :Dy], modes[..., Dy:]
+        if meas_in is None:
+            w_left = w_right = None
+        elif meas_in.shape[-1] >= 2:
+            w_left = meas_in[..., :1]
+            w_right = meas_in[..., 1:2]
+        elif meas_in.shape[-1] == 1:
+            w_left = meas_in[..., :1]
+            w_right = 1.0 - w_left
+        else:
+            w_left = w_right = None
+        if w_left is None or w_right is None:
+            base = meas_in if torch.is_tensor(meas_in) else y_left
+            w_left = base.new_full(y_left.shape[:-1] + (1,), 0.5)
+            w_right = 1.0 - w_left
+        denom = (w_left + w_right).clamp_min(1e-6)
+        w_left = (w_left / denom).clamp(0.0, 1.0)
+        w_right = (w_right / denom).clamp(0.0, 1.0)
+        return w_left * y_left + w_right * y_right
+
+    def _forward_direct_pose_main(
+        self,
+        *,
+        direct_feat: torch.Tensor,
+        plan_in: torch.Tensor,
+        meas_in: Optional[torch.Tensor],
+        phase_in_direct: Optional[torch.Tensor],
+        mode: str,
+        batch_size: int,
+        steps: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        plan_t = plan_in.to(device=device, dtype=dtype)
+        meas_t = meas_in.to(device=device, dtype=dtype) if torch.is_tensor(meas_in) else None
+        phase_t = phase_in_direct.to(device=device, dtype=dtype) if torch.is_tensor(phase_in_direct) else None
+
+        if mode == "concat":
+            phase_mode = str(getattr(self, "direct_pose_phase_z_mode", "concat") or "concat").strip().lower()
+            if phase_mode == "replace_contacts":
+                hint = phase_t
+                if hint is None:
+                    phase_dim = int(getattr(self, "_direct_pose_phase_dim", 0) or 0)
+                    hint = torch.zeros((batch_size, steps, phase_dim), device=device, dtype=dtype)
+                direct_in = torch.cat([direct_feat, hint], dim=-1)
+            else:
+                parts = [direct_feat, plan_t]
+                if torch.is_tensor(meas_t):
+                    parts.append(meas_t)
+                if torch.is_tensor(phase_t):
+                    parts.append(phase_t)
+                direct_in = torch.cat(parts, dim=-1)
+            direct_flat = direct_in.reshape(-1, direct_in.shape[-1])
+            return direct_flat, self._forward_direct_pose_readout(direct_flat, B=batch_size, Tq=steps)
+
+        if mode == "mode_select":
+            parts = [direct_feat, plan_t]
+            if torch.is_tensor(phase_t):
+                parts.append(phase_t)
+            direct_in = torch.cat(parts, dim=-1)
+            direct_flat = direct_in.reshape(-1, direct_in.shape[-1])
+            modes = self.direct_pose_head(direct_flat).view(batch_size, steps, -1)
+            direct_out = self._blend_direct_pose_mode_outputs(
+                modes,
+                meas_in=meas_t,
+                out_dim=int(self.out_motion_dim),
+            )
+            return direct_flat, direct_out
+
+        parts = [direct_feat, plan_t]
+        if torch.is_tensor(meas_t):
+            parts.append(meas_t)
+        if torch.is_tensor(phase_t):
+            parts.append(phase_t)
+        direct_in = torch.cat(parts, dim=-1)
+        direct_flat = direct_in.reshape(-1, direct_in.shape[-1])
+        return direct_flat, self._forward_direct_pose_readout(direct_flat, B=batch_size, Tq=steps)
+
+    @staticmethod
+    def _resolve_direct_pose_contact_layout(
+        *,
+        total_dim: int,
+        direct_dim: int,
+        plan_dim: int,
+        meas_dim_raw: int,
+        phase_dim: int,
+        contact_dim: int,
+    ) -> Optional[dict[str, Optional[slice]]]:
+        total_dim = int(total_dim)
+        direct_dim = int(direct_dim)
+        plan_dim = int(plan_dim)
+        meas_dim_raw = int(meas_dim_raw)
+        phase_dim = int(phase_dim)
+        contact_dim = int(contact_dim)
+        if direct_dim <= 0 or contact_dim <= 0:
+            return None
+
+        if plan_dim == contact_dim:
+            total_with_meas = direct_dim + plan_dim + meas_dim_raw + phase_dim
+            total_no_meas = direct_dim + plan_dim + phase_dim
+            if total_dim == total_with_meas:
+                meas_dim = meas_dim_raw
+            elif total_dim == total_no_meas:
+                meas_dim = 0
+            else:
+                meas_dim = -1
+            if meas_dim >= 0:
+                off_plan = direct_dim
+                off_meas = off_plan + plan_dim
+                off_phase = off_meas + max(0, meas_dim)
+                return {
+                    "plan": slice(off_plan, off_plan + plan_dim),
+                    "meas": slice(off_meas, off_meas + meas_dim) if meas_dim > 0 else None,
+                    "phase": slice(off_phase, off_phase + phase_dim) if phase_dim == (2 * contact_dim) else None,
+                }
+
+        if phase_dim == (2 * contact_dim) and total_dim == (direct_dim + phase_dim):
+            return {
+                "plan": None,
+                "meas": None,
+                "phase": slice(direct_dim, direct_dim + phase_dim),
+            }
+        return None
+
+    @staticmethod
+    def _ablate_direct_pose_contact_channel(
+        seq: torch.Tensor,
+        *,
+        ablation: str,
+        channel: int,
+        batch_size: int,
+        steps: int,
+        plan_slice: Optional[slice],
+        meas_slice: Optional[slice],
+        phase_slice: Optional[slice],
+    ) -> None:
+        def region_start(region: Optional[slice]) -> Optional[int]:
+            if (not isinstance(region, slice)) or region.start is None:
+                return None
+            return int(region.start)
+
+        regions: list[slice] = []
+        plan_start = region_start(plan_slice)
+        meas_start = region_start(meas_slice)
+        phase_start = region_start(phase_slice)
+        ch = max(0, int(channel))
+        if plan_start is not None:
+            regions.append(slice(plan_start + ch, plan_start + ch + 1))
+        if meas_start is not None:
+            regions.append(slice(meas_start + ch, meas_start + ch + 1))
+        if phase_start is not None:
+            regions.append(slice(phase_start + (2 * ch), phase_start + (2 * ch) + 2))
+        if not regions:
+            return
+
+        if ablation in ("0", "zero", "zeros"):
+            for region in regions:
+                seq[..., region] = 0.0
+            return
+        if ablation in ("roll", "roll_batch", "shift", "shift_batch") and int(batch_size) > 1:
+            for region in regions:
+                seq[..., region] = seq[..., region].roll(shifts=1, dims=0)
+            return
+        if ablation in ("roll_time", "shift_time") and int(steps) > 1:
+            for region in regions:
+                seq[..., region] = seq[..., region].roll(shifts=1, dims=1)
 
     def _maybe_upgrade_direct_pose_split_state_dict(self, state_dict: Dict[str, Any]) -> bool:
         split_state = self._direct_pose_split_state()
@@ -2554,259 +3195,121 @@ class EventMotionModel(nn.Module):
             ):
                 leg_side_cue_seq = []
                 leg_side_cue_zero = torch.zeros((B, int(self.contact_dim)), device=device, dtype=dtype)
+            event_clock_enabled = bool(
+                self.use_event_clock
+                and self.event_clock_gate is not None
+                and self.event_clock_corrector is not None
+            )
+            meas_prev_t: Optional[torch.Tensor] = None
+            lr_diff_obs: Optional[torch.Tensor] = None
+            period_feat = None
 
-            if self.use_event_clock and self.event_clock_gate is not None and self.event_clock_corrector is not None:
-                # ---- Layer1: contacts_meas + delta_meas + lr_diff (computed before GRU loop) ----
-                # Apply adaptive-history once so meas/period use the same pose_history as downstream heads.
-                if (not _pose_hist_processed) and self.adaptive_history_module is not None and pose_history is not None and pose_history.size(-1) > 0:
-                    try:
-                        pose_hist_for_module = pose_history
-                        if pose_hist_for_module.dim() == 3 and pose_hist_for_module.size(1) == 1:
-                            pose_hist_for_module = pose_hist_for_module[:, 0]
-                        hist_device = self._adaptive_history_device or pose_hist_for_module.device
-                        context_feat = state.mean(dim=1).to(hist_device)
-                        pose_hist_for_module = pose_hist_for_module.to(hist_device)
-                        pose_hist_flat, _ = self.adaptive_history_module(
-                            pose_hist_for_module,
-                            context=context_feat,
-                        )
-                        pose_history = pose_hist_flat.to(device).unsqueeze(1)
-                        _pose_hist_processed = True
-                    except Exception:
-                        pass
+            if (
+                event_clock_enabled
+                and (not _pose_hist_processed)
+                and self.adaptive_history_module is not None
+                and pose_history is not None
+                and pose_history.size(-1) > 0
+            ):
+                try:
+                    pose_hist_for_module = pose_history
+                    if pose_hist_for_module.dim() == 3 and pose_hist_for_module.size(1) == 1:
+                        pose_hist_for_module = pose_hist_for_module[:, 0]
+                    hist_device = self._adaptive_history_device or pose_hist_for_module.device
+                    context_feat = state.mean(dim=1).to(hist_device)
+                    pose_hist_for_module = pose_hist_for_module.to(hist_device)
+                    pose_hist_flat, _ = self.adaptive_history_module(
+                        pose_hist_for_module,
+                        context=context_feat,
+                    )
+                    pose_history = pose_hist_flat.to(device).unsqueeze(1)
+                    _pose_hist_processed = True
+                except Exception:
+                    pass
 
-                # contacts_meas: external override only.
-                if contacts_input is not None:
-                    try:
-                        meas = contacts_input.to(device=device, dtype=dtype)
-                        if meas.ndim == 1:
-                            meas = meas.view(1, 1, -1)
-                        elif meas.ndim == 2:
-                            meas = meas.unsqueeze(1)
-                        if meas.ndim == 3:
-                            if meas.shape[0] == 1 and B > 1:
-                                meas = meas.expand(B, -1, -1)
-                            if meas.shape[1] == 1 and Tq > 1:
-                                meas = meas.expand(-1, Tq, -1)
-                            if meas.shape[-1] != int(self.contact_dim):
-                                if meas.shape[-1] > int(self.contact_dim):
-                                    meas = meas[..., : int(self.contact_dim)]
-                                else:
-                                    meas = F.pad(meas, (0, int(self.contact_dim) - meas.shape[-1]))
-                            contacts_meas = meas
-                    except Exception:
-                        contacts_meas = None
+            if event_clock_enabled or phase_enabled:
+                (
+                    contacts_meas,
+                    meas_prev_t,
+                    contacts_meas_obs,
+                    delta_meas_obs,
+                    lr_diff_obs,
+                ) = self._prepare_contact_plan_observations(
+                    contacts_input=contacts_input,
+                    meas_logits_prev=meas_logits_prev,
+                    batch_size=B,
+                    steps=Tq,
+                    device=device,
+                    dtype=dtype,
+                )
+                if event_clock_enabled:
+                    event_clock_delta_meas = delta_meas_obs
+                    event_clock_lr_diff = lr_diff_obs
+                if phase_enabled and phase_dim > 0:
+                    phase_z_t, phase_meas_prev_t, phase_event_age_t, phase_anchor = self._init_phase_state(
+                        batch_size=B,
+                        device=device,
+                        dtype=dtype,
+                        phase_dim=phase_dim,
+                        phase_z=phase_z,
+                        phase_event_age=phase_event_age,
+                        contacts_meas_obs=contacts_meas_obs,
+                        meas_prev_t=meas_prev_t,
+                        leg_side_cue_mode=leg_side_cue_mode,
+                    )
 
-                if contacts_meas is None:
-                    contacts_meas = torch.zeros((B, Tq, int(self.contact_dim)), device=device, dtype=dtype)
+            if event_clock_enabled and self.period_dim > 0 and self.frozen_encoder is not None and self.frozen_period_head is not None:
+                try:
+                    enc_feats = []
+                    if contacts_meas_obs is not None and contacts_meas_obs.size(-1) > 0:
+                        enc_feats.append(contacts_meas_obs)
+                    if angvel is not None and angvel.size(-1) > 0:
+                        enc_feats.append(angvel)
+                    if pose_history is not None and pose_history.size(-1) > 0:
+                        enc_feats.append(pose_history)
+                    enc_in = torch.cat(enc_feats, dim=-1) if enc_feats else None
+                    if enc_in is not None and enc_in.size(-1) == self.encoder_input_dim:
+                        with torch.no_grad():
+                            enc_hidden = self.frozen_encoder(enc_in, return_summary=False)
+                            if isinstance(enc_hidden, tuple):
+                                enc_hidden = enc_hidden[-1]
+                            if enc_hidden is not None:
+                                period_feat = torch.tanh(self.frozen_period_head(enc_hidden))
+                                soft_period = period_feat
+                except Exception:
+                    period_feat = None
 
-                # Canonicalize meas_prev to (B, C) (logits if available else probs).
-                meas_prev_t = None
-                if torch.is_tensor(meas_logits_prev):
-                    try:
-                        prev = meas_logits_prev.to(device=device, dtype=dtype)
-                        if prev.ndim == 3 and prev.size(1) == 1:
-                            prev = prev[:, 0]
-                        if prev.ndim == 2:
-                            pass
-                        elif prev.ndim == 1:
-                            prev = prev.view(1, -1)
-                        else:
-                            prev = prev.reshape(B, -1)
-                        if prev.shape[0] == 1 and B > 1:
-                            prev = prev.expand(B, -1)
-                        if prev.shape[-1] != int(self.contact_dim):
-                            if prev.shape[-1] > int(self.contact_dim):
-                                prev = prev[..., : int(self.contact_dim)]
-                            else:
-                                prev = F.pad(prev, (0, int(self.contact_dim) - prev.shape[-1]))
-                        meas_prev_t = prev
-                    except Exception:
-                        meas_prev_t = None
+            lambda_corr_seq: list[torch.Tensor] = []
+            lambda_logit_seq: list[torch.Tensor] = []
+            dyn_prior_seq: list[torch.Tensor] = []
+            delta_z_seq: list[torch.Tensor] = []
+            for _t in range(Tq):
+                self._capture_direct_pose_aux_step(
+                    phase_in_direct_seq=phase_in_direct_seq,
+                    phase_in_direct_zero=phase_in_direct_zero,
+                    phase_z_t=phase_z_t,
+                    leg_side_cue_seq=leg_side_cue_seq,
+                    leg_side_cue_zero=leg_side_cue_zero,
+                    leg_side_cue_mode=leg_side_cue_mode,
+                    phase_event_age_t=phase_event_age_t,
+                )
 
-                delta_meas = torch.zeros_like(contacts_meas)
-                if Tq > 1:
-                    delta_meas[:, 1:] = contacts_meas[:, 1:] - contacts_meas[:, :-1]
-                if meas_prev_t is not None and Tq > 0:
-                    delta_meas[:, 0] = contacts_meas[:, 0] - meas_prev_t
+                plan_in_t = cond_seq[:, _t]
+                plan_z_raw = self.contact_plan_cell(plan_in_t, plan_z_t)
+                logits_raw = None
+                lam_corr_t = None
+                lam_logit_t = None
+                dyn_prior_t = None
+                delta_z_t = None
+                meas_t = contacts_meas_obs[:, _t] if torch.is_tensor(contacts_meas_obs) else None
+                delta_meas_t = delta_meas_obs[:, _t] if torch.is_tensor(delta_meas_obs) else None
 
-                lr_diff = torch.zeros((B, Tq, 1), device=device, dtype=dtype)
-                if int(self.contact_dim) >= 2:
-                    lr_diff = (contacts_meas[..., 0:1] - contacts_meas[..., 1:2]).abs()
-
-                # Detach observation signals to avoid co-adaptation between meas head and correction/gate.
-                contacts_meas_obs = contacts_meas.detach()
-                delta_meas_obs = delta_meas.detach()
-                lr_diff_obs = lr_diff.detach()
-
-                event_clock_delta_meas = delta_meas_obs
-                event_clock_lr_diff = lr_diff_obs
-
-                # ---- Phase state init (prev_phase_vec) ----
-                if phase_enabled and phase_z_t is None and phase_dim > 0:
-                    Cc = int(self.contact_dim)
-                    # Anchor: phase=0 -> [sin=0, cos=1]
-                    phase_anchor = torch.zeros((1, Cc, 2), device=device, dtype=dtype)
-                    phase_anchor[..., 1] = 1.0
-
-                    # Canonicalize external phase_z to (B, 2*C).
-                    if phase_z is not None:
-                        try:
-                            p_in = phase_z.to(device=device, dtype=dtype)
-                            if p_in.ndim == 3 and p_in.size(1) == 1:
-                                p_in = p_in[:, 0]
-                            if p_in.ndim == 3 and p_in.shape[0] == B and p_in.shape[1] == Cc and p_in.shape[2] == 2:
-                                phase_z_t = p_in.reshape(B, -1)
-                            elif p_in.ndim == 2:
-                                if p_in.shape[0] == 1 and B > 1 and p_in.shape[-1] == phase_dim:
-                                    phase_z_t = p_in.expand(B, -1)
-                                elif p_in.shape[0] == B and p_in.shape[-1] == phase_dim:
-                                    phase_z_t = p_in
-                                elif p_in.shape[0] == Cc and p_in.shape[1] == 2:
-                                    phase_z_t = p_in.reshape(1, -1).expand(B, -1)
-                            elif p_in.ndim == 1 and int(p_in.numel()) == int(phase_dim):
-                                phase_z_t = p_in.reshape(1, -1).expand(B, -1)
-                        except Exception:
-                            phase_z_t = None
-
-                    init_mode_p = str(getattr(self, "contact_phase_state_init_mode", "obs") or "obs").lower().strip()
-                    if phase_z_t is None:
-                        if init_mode_p == "zeros":
-                            phase_z_t = phase_anchor.reshape(1, -1).expand(B, -1)
-                        elif init_mode_p in ("obs", "learnable+obs") and torch.is_tensor(contacts_meas_obs) and contacts_meas_obs.numel() > 0:
-                            thr = float(getattr(self, "contact_phase_state_event_thr", 0.5) or 0.5)
-                            c0 = contacts_meas_obs[:, 0].to(device=device, dtype=dtype)
-                            stance = (c0 >= thr).to(dtype=dtype).unsqueeze(-1)  # (B,C,1)
-                            anchor0 = phase_anchor.expand(B, -1, -1)
-                            anchor_pi = anchor0.clone()
-                            anchor_pi[..., 1] = -1.0  # cos(pi)=-1
-                            phase0 = anchor0 * stance + anchor_pi * (1.0 - stance)
-                            phase_z_t = phase0.reshape(B, -1)
-                            if init_mode_p == "learnable+obs":
-                                init_vec = getattr(self, "contact_phase_state_init", None)
-                                if torch.is_tensor(init_vec) and int(init_vec.numel()) == int(phase_dim):
-                                    phase_z_t = phase_z_t + init_vec.to(device=device, dtype=dtype).view(1, -1)
-                        else:
-                            init_vec = getattr(self, "contact_phase_state_init", None)
-                            if torch.is_tensor(init_vec) and int(init_vec.numel()) == int(phase_dim):
-                                phase_z_t = init_vec.to(device=device, dtype=dtype).view(1, -1).expand(B, -1)
-                            else:
-                                phase_z_t = phase_anchor.reshape(1, -1).expand(B, -1)
-
-                    # Normalize per-foot to unit circle (avoid drift / NaNs).
-                    try:
-                        v = phase_z_t.view(B, Cc, 2)
-                        n = v.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-                        phase_z_t = (v / n).reshape(B, -1)
-                    except Exception:
-                        phase_z_t = phase_anchor.reshape(1, -1).expand(B, -1)
-
-                    # For event reset at step0: use prev meas from caller if available, else current meas0.
-                    if torch.is_tensor(meas_prev_t):
-                        try:
-                            prev_prob = meas_prev_t
-                            prev_prob = prev_prob.to(device=device, dtype=dtype)
-                            if prev_prob.ndim == 2 and prev_prob.shape[0] == 1 and B > 1:
-                                prev_prob = prev_prob.expand(B, -1)
-                            if prev_prob.ndim == 2 and prev_prob.shape[1] == Cc:
-                                phase_meas_prev_t = prev_prob
-                        except Exception:
-                            phase_meas_prev_t = None
-                    if phase_meas_prev_t is None and torch.is_tensor(contacts_meas_obs) and contacts_meas_obs.numel() > 0:
-                        phase_meas_prev_t = contacts_meas_obs[:, 0].to(device=device, dtype=dtype)
-
-                    # Phase event cooldown state (per foot): frames since last accepted event.
-                    min_interval = int(getattr(self, "contact_phase_state_event_min_interval", 0) or 0)
-                    if torch.is_tensor(phase_event_age):
-                        try:
-                            age = phase_event_age.to(device=device, dtype=dtype)
-                            if age.ndim == 3 and age.size(1) == 1:
-                                age = age[:, 0]
-                            if age.ndim == 2:
-                                pass
-                            elif age.ndim == 1:
-                                age = age.view(1, -1)
-                            else:
-                                age = age.reshape(B, -1)
-                            if age.shape[0] == 1 and B > 1:
-                                age = age.expand(B, -1)
-                            if age.shape[-1] != Cc:
-                                if age.shape[-1] > Cc:
-                                    age = age[..., :Cc]
-                                else:
-                                    age = F.pad(age, (0, Cc - age.shape[-1]))
-                            phase_event_age_t = age.clamp_min(0.0)
-                        except Exception:
-                            phase_event_age_t = None
-                    if phase_event_age_t is None and min_interval > 0:
-                        # Default: allow the first event immediately (age>=min_interval).
-                        phase_event_age_t = torch.full((B, Cc), float(min_interval), device=device, dtype=dtype)
-                    # When using phase_event_age as a cue (or as an exported diagnostic), keep it stateful even
-                    # when min_interval==0 and no external age is provided.
-                    if phase_event_age_t is None and leg_side_cue_mode == "phase_event_age":
-                        phase_event_age_t = torch.zeros((B, Cc), device=device, dtype=dtype)
-
-                # ---- Layer1b: independent period feature (meas/pose_hist/angvel, not plan) ----
-                period_feat = None
-                if self.period_dim > 0 and self.frozen_encoder is not None and self.frozen_period_head is not None:
-                    try:
-                        enc_feats = []
-                        if contacts_meas_obs is not None and contacts_meas_obs.size(-1) > 0:
-                            enc_feats.append(contacts_meas_obs)
-                        if angvel is not None and angvel.size(-1) > 0:
-                            enc_feats.append(angvel)
-                        if pose_history is not None and pose_history.size(-1) > 0:
-                            enc_feats.append(pose_history)
-                        enc_in = torch.cat(enc_feats, dim=-1) if enc_feats else None
-                        if enc_in is not None and enc_in.size(-1) == self.encoder_input_dim:
-                            with torch.no_grad():
-                                enc_hidden = self.frozen_encoder(enc_in, return_summary=False)
-                                if isinstance(enc_hidden, tuple):
-                                    enc_hidden = enc_hidden[-1]
-                                if enc_hidden is not None:
-                                    period_feat = torch.tanh(self.frozen_period_head(enc_hidden))
-                                    soft_period = period_feat
-                    except Exception:
-                        period_feat = None
-
-                # ---- Layer2+3: gated residual correction inside GRU loop ----
-                lambda_corr_seq: list[torch.Tensor] = []
-                lambda_logit_seq: list[torch.Tensor] = []
-                dyn_prior_seq: list[torch.Tensor] = []
-                delta_z_seq: list[torch.Tensor] = []
-                for _t in range(Tq):
-                    if phase_in_direct_seq is not None:
-                        try:
-                            if phase_z_t is None:
-                                phase_in_direct_seq.append(phase_in_direct_zero)
-                            else:
-                                phase_in_direct_seq.append(phase_z_t)
-                        except Exception:
-                            pass
-                    if leg_side_cue_seq is not None and leg_side_cue_zero is not None:
-                        try:
-                            if leg_side_cue_mode == "phase_event_age":
-                                leg_side_cue_seq.append(
-                                    phase_event_age_t if torch.is_tensor(phase_event_age_t) else leg_side_cue_zero
-                                )
-                            else:
-                                leg_side_cue_seq.append(leg_side_cue_zero)
-                        except Exception:
-                            pass
-                    plan_in_t = cond_seq[:, _t]
-                    plan_z_raw = self.contact_plan_cell(plan_in_t, plan_z_t)
-
+                if event_clock_enabled:
                     logits_raw = self.contact_plan_head(plan_z_raw)
-                    if plan_logits_raw_seq is not None:
-                        plan_logits_raw_seq.append(logits_raw)
                     plan_raw = torch.sigmoid(logits_raw)
-                    meas_t = contacts_meas_obs[:, _t]
                     err_raw = plan_raw - meas_t
-
-                    delta_meas_t = delta_meas_obs[:, _t]
-                    lr_diff_t = lr_diff_obs[:, _t]
+                    lr_diff_t = lr_diff_obs[:, _t] if torch.is_tensor(lr_diff_obs) else torch.zeros((B, 1), device=device, dtype=dtype)
                     period_t = period_feat[:, _t] if (period_feat is not None and period_feat.ndim == 3) else None
-
                     lam_corr_t, lam_logit_t, dyn_prior_t = self.event_clock_gate(
                         err_raw=err_raw,
                         delta_meas=delta_meas_t,
@@ -2821,403 +3324,73 @@ class EventMotionModel(nn.Module):
                         period_feat=period_t,
                         lambda_corr=lam_corr_t,
                     )
-                    if plan_z_seq is not None:
-                        plan_z_seq.append(plan_z_t)
-
-                    logits_base = self.contact_plan_head(plan_z_t)
-                    phase_term = None
-                    if phase_enabled and self.contact_plan_phase_head is not None and phase_z_t is not None:
-                        try:
-                            phase_term = self.contact_plan_phase_head(phase_z_t)
-                        except Exception:
-                            phase_term = None
-                    if plan_logits_phase_seq is not None:
-                        plan_logits_phase_seq.append(
-                            phase_term if torch.is_tensor(phase_term) else logits_base.new_zeros(logits_base.shape)
-                        )
-                    time_term = None
-                    if time_pe is not None and self.contact_plan_time_head is not None:
-                        try:
-                            time_bias = self.contact_plan_time_head(time_pe[:, _t])
-                            time_term = lam_corr_t * (time_bias * time_bias_scale)
-                        except Exception:
-                            time_term = None
-                    logits = logits_base
-                    if torch.is_tensor(phase_term):
-                        logits = logits + phase_term
-                    if time_term is None:
-                        if plan_logits_time_seq is not None:
-                            plan_logits_time_seq.append(logits_base.new_zeros(logits_base.shape))
-                    else:
-                        logits = logits + time_term
-                        if plan_logits_time_seq is not None:
-                            plan_logits_time_seq.append(time_term)
-                    if plan_logits_base_seq is not None:
-                        plan_logits_base_seq.append(logits_base)
-                    plan_logits.append(logits)
-                    plan_probs.append(torch.sigmoid(logits))
-
                     lambda_corr_seq.append(lam_corr_t)
                     lambda_logit_seq.append(lam_logit_t)
                     dyn_prior_seq.append(dyn_prior_t)
                     delta_z_seq.append(delta_z_t)
+                else:
+                    plan_z_t = plan_z_raw
 
-                    # Phase state update: phase_z_{t} <- advance(phase_z_{t-1}, Δφ) then optional reset by contact event.
-                    if (
-                        phase_enabled
-                        and phase_z_t is not None
-                        and self.contact_phase_state_delta_head is not None
-                        and phase_anchor is not None
-                        and torch.is_tensor(meas_t)
-                        and torch.is_tensor(delta_meas_t)
-                        and phase_dim > 0
-                    ):
-                        try:
-                            phi_in = torch.cat([cond_seq[:, _t], meas_t, delta_meas_t, phase_z_t], dim=-1)
-                            delta_raw = self.contact_phase_state_delta_head(phi_in)  # (B,C)
-                            mx = float(getattr(self, "contact_phase_state_delta_max", 0.5) or 0.5)
-                            delta_phi = torch.tanh(delta_raw) * mx
+                if plan_z_seq is not None:
+                    plan_z_seq.append(plan_z_t)
 
-                            Cc = int(self.contact_dim)
-                            v_prev = phase_z_t.view(B, Cc, 2)
-                            sin_prev = v_prev[..., 0]
-                            cos_prev = v_prev[..., 1]
-                            sin_d = torch.sin(delta_phi)
-                            cos_d = torch.cos(delta_phi)
-                            sin_next = sin_prev * cos_d + cos_prev * sin_d
-                            cos_next = cos_prev * cos_d - sin_prev * sin_d
-                            v_next = torch.stack([sin_next, cos_next], dim=-1)
+                logits_base = self.contact_plan_head(plan_z_t)
+                if plan_logits_raw_seq is not None:
+                    plan_logits_raw_seq.append(logits_raw if torch.is_tensor(logits_raw) else logits_base)
+                phase_term = None
+                if phase_enabled and self.contact_plan_phase_head is not None and phase_z_t is not None:
+                    try:
+                        phase_term = self.contact_plan_phase_head(phase_z_t)
+                    except Exception:
+                        phase_term = None
+                if plan_logits_phase_seq is not None:
+                    plan_logits_phase_seq.append(
+                        phase_term if torch.is_tensor(phase_term) else logits_base.new_zeros(logits_base.shape)
+                    )
+                time_term = None
+                if time_pe is not None and self.contact_plan_time_head is not None:
+                    try:
+                        time_bias = self.contact_plan_time_head(time_pe[:, _t]) * time_bias_scale
+                        if event_clock_enabled and torch.is_tensor(lam_corr_t):
+                            time_term = lam_corr_t * time_bias
+                        else:
+                            time_term = time_bias
+                    except Exception:
+                        time_term = None
+                logits = logits_base
+                if torch.is_tensor(phase_term):
+                    logits = logits + phase_term
+                if time_term is None:
+                    if plan_logits_time_seq is not None:
+                        plan_logits_time_seq.append(logits_base.new_zeros(logits_base.shape))
+                else:
+                    logits = logits + time_term
+                    if plan_logits_time_seq is not None:
+                        plan_logits_time_seq.append(time_term)
+                if plan_logits_base_seq is not None:
+                    plan_logits_base_seq.append(logits_base)
+                plan_logits.append(logits)
+                plan_probs.append(torch.sigmoid(logits))
 
-                            if phase_reset_source == "contacts_meas":
-                                kind = str(getattr(self, "contact_phase_state_event_kind", "touchdown") or "touchdown").lower().strip()
-                                if kind != "none":
-                                    thr = float(getattr(self, "contact_phase_state_event_thr", 0.5) or 0.5)
-                                    hyst = float(getattr(self, "contact_phase_state_event_hyst", 0.0) or 0.0)
-                                    if not _math.isfinite(hyst):
-                                        hyst = 0.0
-                                    hyst = max(0.0, min(0.49, hyst))
-                                    thr_low = max(0.0, thr - hyst)
-                                    thr_high = min(1.0, thr + hyst)
-                                    prev_m = phase_meas_prev_t if torch.is_tensor(phase_meas_prev_t) else meas_t
-                                    if kind == "touchdown":
-                                        m = (prev_m < thr_low) & (meas_t >= thr)
-                                    elif kind == "liftoff":
-                                        m = (prev_m >= thr_high) & (meas_t < thr)
-                                    else:
-                                        m = ((prev_m < thr_low) & (meas_t >= thr)) | ((prev_m >= thr_high) & (meas_t < thr))
-                                    min_interval = int(getattr(self, "contact_phase_state_event_min_interval", 0) or 0)
-                                    if phase_event_age_t is not None and min_interval > 0:
-                                        try:
-                                            m = m & (phase_event_age_t >= float(min_interval))
-                                        except Exception:
-                                            pass
-                                    mask = m.to(dtype=v_next.dtype).unsqueeze(-1)
-                                    v_next = v_next * (1.0 - mask) + phase_anchor.expand_as(v_next) * mask
-                                    phase_meas_prev_t = meas_t
-                                    if phase_event_age_t is not None:
-                                        try:
-                                            phase_event_age_t = torch.where(
-                                                m,
-                                                torch.zeros_like(phase_event_age_t),
-                                                phase_event_age_t + 1.0,
-                                            )
-                                        except Exception:
-                                            pass
-
-                            n = v_next.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-                            phase_z_t = (v_next / n).reshape(B, -1)
-                        except Exception:
-                            pass
-
-                if lambda_corr_seq:
-                    event_clock_lambda_corr = torch.stack(lambda_corr_seq, dim=1)
-                    event_clock_lambda_logit = torch.stack(lambda_logit_seq, dim=1)
-                    event_clock_dynamic_prior = torch.stack(dyn_prior_seq, dim=1)
-                    event_clock_delta_z = torch.stack(delta_z_seq, dim=1)
-            else:
-                # Event-Clock off: still support explicit phase state + logit residual injection.
                 if phase_enabled:
-                    Cc = int(self.contact_dim)
-                    # contacts_meas: external override only; otherwise zeros.
-                    if contacts_input is not None:
-                        try:
-                            meas = contacts_input.to(device=device, dtype=dtype)
-                            if meas.ndim == 1:
-                                meas = meas.view(1, 1, -1)
-                            elif meas.ndim == 2:
-                                meas = meas.unsqueeze(1)
-                            if meas.ndim == 3:
-                                if meas.shape[0] == 1 and B > 1:
-                                    meas = meas.expand(B, -1, -1)
-                                if meas.shape[1] == 1 and Tq > 1:
-                                    meas = meas.expand(-1, Tq, -1)
-                                if meas.shape[-1] != Cc:
-                                    if meas.shape[-1] > Cc:
-                                        meas = meas[..., :Cc]
-                                    else:
-                                        meas = F.pad(meas, (0, Cc - meas.shape[-1]))
-                                contacts_meas = meas
-                        except Exception:
-                            contacts_meas = None
+                    phase_z_t, phase_meas_prev_t, phase_event_age_t = self._update_phase_state_step(
+                        cond_t=plan_in_t,
+                        meas_t=meas_t,
+                        delta_meas_t=delta_meas_t,
+                        batch_size=B,
+                        phase_dim=phase_dim,
+                        phase_reset_source=phase_reset_source,
+                        phase_z_t=phase_z_t,
+                        phase_meas_prev_t=phase_meas_prev_t,
+                        phase_event_age_t=phase_event_age_t,
+                        phase_anchor=phase_anchor,
+                    )
 
-                    if contacts_meas is None:
-                        contacts_meas = torch.zeros((B, Tq, Cc), device=device, dtype=dtype)
-
-                    # Canonicalize meas_prev to (B, C) (logits if available else probs).
-                    meas_prev_t = None
-                    if torch.is_tensor(meas_logits_prev):
-                        try:
-                            prev = meas_logits_prev.to(device=device, dtype=dtype)
-                            if prev.ndim == 3 and prev.size(1) == 1:
-                                prev = prev[:, 0]
-                            if prev.ndim == 2:
-                                pass
-                            elif prev.ndim == 1:
-                                prev = prev.view(1, -1)
-                            else:
-                                prev = prev.reshape(B, -1)
-                            if prev.shape[0] == 1 and B > 1:
-                                prev = prev.expand(B, -1)
-                            if prev.shape[-1] != Cc:
-                                if prev.shape[-1] > Cc:
-                                    prev = prev[..., :Cc]
-                                else:
-                                    prev = F.pad(prev, (0, Cc - prev.shape[-1]))
-                            meas_prev_t = prev
-                        except Exception:
-                            meas_prev_t = None
-
-                    delta_meas = torch.zeros_like(contacts_meas)
-                    if Tq > 1:
-                        delta_meas[:, 1:] = contacts_meas[:, 1:] - contacts_meas[:, :-1]
-                    if meas_prev_t is not None and Tq > 0:
-                        delta_meas[:, 0] = contacts_meas[:, 0] - meas_prev_t
-
-                    # Detach observation signals (avoid co-adaptation).
-                    contacts_meas_obs = contacts_meas.detach()
-                    delta_meas_obs = delta_meas.detach()
-
-                    # Phase state init (prev_phase_vec)
-                    if phase_z_t is None and phase_dim > 0:
-                        phase_anchor = torch.zeros((1, Cc, 2), device=device, dtype=dtype)
-                        phase_anchor[..., 1] = 1.0
-
-                        if phase_z is not None:
-                            try:
-                                p_in = phase_z.to(device=device, dtype=dtype)
-                                if p_in.ndim == 3 and p_in.size(1) == 1:
-                                    p_in = p_in[:, 0]
-                                if p_in.ndim == 3 and p_in.shape[0] == B and p_in.shape[1] == Cc and p_in.shape[2] == 2:
-                                    phase_z_t = p_in.reshape(B, -1)
-                                elif p_in.ndim == 2:
-                                    if p_in.shape[0] == 1 and B > 1 and p_in.shape[-1] == phase_dim:
-                                        phase_z_t = p_in.expand(B, -1)
-                                    elif p_in.shape[0] == B and p_in.shape[-1] == phase_dim:
-                                        phase_z_t = p_in
-                                    elif p_in.shape[0] == Cc and p_in.shape[1] == 2:
-                                        phase_z_t = p_in.reshape(1, -1).expand(B, -1)
-                                elif p_in.ndim == 1 and int(p_in.numel()) == int(phase_dim):
-                                    phase_z_t = p_in.reshape(1, -1).expand(B, -1)
-                            except Exception:
-                                phase_z_t = None
-
-                        init_mode_p = str(getattr(self, "contact_phase_state_init_mode", "obs") or "obs").lower().strip()
-                        if phase_z_t is None:
-                            if init_mode_p == "zeros":
-                                phase_z_t = phase_anchor.reshape(1, -1).expand(B, -1)
-                            elif init_mode_p in ("obs", "learnable+obs") and torch.is_tensor(contacts_meas_obs) and contacts_meas_obs.numel() > 0:
-                                thr = float(getattr(self, "contact_phase_state_event_thr", 0.5) or 0.5)
-                                c0 = contacts_meas_obs[:, 0].to(device=device, dtype=dtype)
-                                stance = (c0 >= thr).to(dtype=dtype).unsqueeze(-1)
-                                anchor0 = phase_anchor.expand(B, -1, -1)
-                                anchor_pi = anchor0.clone()
-                                anchor_pi[..., 1] = -1.0
-                                phase0 = anchor0 * stance + anchor_pi * (1.0 - stance)
-                                phase_z_t = phase0.reshape(B, -1)
-                                if init_mode_p == "learnable+obs":
-                                    init_vec = getattr(self, "contact_phase_state_init", None)
-                                    if torch.is_tensor(init_vec) and int(init_vec.numel()) == int(phase_dim):
-                                        phase_z_t = phase_z_t + init_vec.to(device=device, dtype=dtype).view(1, -1)
-                            else:
-                                init_vec = getattr(self, "contact_phase_state_init", None)
-                                if torch.is_tensor(init_vec) and int(init_vec.numel()) == int(phase_dim):
-                                    phase_z_t = init_vec.to(device=device, dtype=dtype).view(1, -1).expand(B, -1)
-                                else:
-                                    phase_z_t = phase_anchor.reshape(1, -1).expand(B, -1)
-
-                        try:
-                            v = phase_z_t.view(B, Cc, 2)
-                            n = v.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-                            phase_z_t = (v / n).reshape(B, -1)
-                        except Exception:
-                            phase_z_t = phase_anchor.reshape(1, -1).expand(B, -1)
-
-                        if torch.is_tensor(meas_prev_t):
-                            try:
-                                prev_prob = meas_prev_t
-                                prev_prob = prev_prob.to(device=device, dtype=dtype)
-                                if prev_prob.ndim == 2 and prev_prob.shape[0] == 1 and B > 1:
-                                    prev_prob = prev_prob.expand(B, -1)
-                                if prev_prob.ndim == 2 and prev_prob.shape[1] == Cc:
-                                    phase_meas_prev_t = prev_prob
-                            except Exception:
-                                phase_meas_prev_t = None
-                        if phase_meas_prev_t is None and torch.is_tensor(contacts_meas_obs) and contacts_meas_obs.numel() > 0:
-                            phase_meas_prev_t = contacts_meas_obs[:, 0].to(device=device, dtype=dtype)
-
-                        # Phase event cooldown state (per foot): frames since last accepted event.
-                        min_interval = int(getattr(self, "contact_phase_state_event_min_interval", 0) or 0)
-                        if torch.is_tensor(phase_event_age):
-                            try:
-                                age = phase_event_age.to(device=device, dtype=dtype)
-                                if age.ndim == 3 and age.size(1) == 1:
-                                    age = age[:, 0]
-                                if age.ndim == 2:
-                                    pass
-                                elif age.ndim == 1:
-                                    age = age.view(1, -1)
-                                else:
-                                    age = age.reshape(B, -1)
-                                if age.shape[0] == 1 and B > 1:
-                                    age = age.expand(B, -1)
-                                if age.shape[-1] != Cc:
-                                    if age.shape[-1] > Cc:
-                                        age = age[..., :Cc]
-                                    else:
-                                        age = F.pad(age, (0, Cc - age.shape[-1]))
-                                phase_event_age_t = age.clamp_min(0.0)
-                            except Exception:
-                                phase_event_age_t = None
-                        if phase_event_age_t is None and min_interval > 0:
-                            # Default: allow the first event immediately (age>=min_interval).
-                            phase_event_age_t = torch.full((B, Cc), float(min_interval), device=device, dtype=dtype)
-                        if phase_event_age_t is None and leg_side_cue_mode == "phase_event_age":
-                            phase_event_age_t = torch.zeros((B, Cc), device=device, dtype=dtype)
-
-                for _t in range(Tq):
-                    if phase_in_direct_seq is not None:
-                        try:
-                            if phase_z_t is None:
-                                phase_in_direct_seq.append(phase_in_direct_zero)
-                            else:
-                                phase_in_direct_seq.append(phase_z_t)
-                        except Exception:
-                            pass
-                    if leg_side_cue_seq is not None and leg_side_cue_zero is not None:
-                        try:
-                            if leg_side_cue_mode == "phase_event_age":
-                                leg_side_cue_seq.append(
-                                    phase_event_age_t if torch.is_tensor(phase_event_age_t) else leg_side_cue_zero
-                                )
-                            else:
-                                leg_side_cue_seq.append(leg_side_cue_zero)
-                        except Exception:
-                            pass
-                    plan_in_t = cond_seq[:, _t]
-                    plan_z_t = self.contact_plan_cell(plan_in_t, plan_z_t)
-                    if plan_z_seq is not None:
-                        plan_z_seq.append(plan_z_t)
-                    logits_base = self.contact_plan_head(plan_z_t)
-                    if plan_logits_raw_seq is not None:
-                        plan_logits_raw_seq.append(logits_base)
-                    phase_term = None
-                    if phase_enabled and self.contact_plan_phase_head is not None and phase_z_t is not None:
-                        try:
-                            phase_term = self.contact_plan_phase_head(phase_z_t)
-                        except Exception:
-                            phase_term = None
-                    if plan_logits_phase_seq is not None:
-                        plan_logits_phase_seq.append(
-                            phase_term if torch.is_tensor(phase_term) else logits_base.new_zeros(logits_base.shape)
-                        )
-                    time_term = None
-                    if time_pe is not None and self.contact_plan_time_head is not None:
-                        try:
-                            time_term = self.contact_plan_time_head(time_pe[:, _t]) * time_bias_scale
-                        except Exception:
-                            time_term = None
-                    logits = logits_base
-                    if torch.is_tensor(phase_term):
-                        logits = logits + phase_term
-                    if time_term is None:
-                        if plan_logits_time_seq is not None:
-                            plan_logits_time_seq.append(logits_base.new_zeros(logits_base.shape))
-                    else:
-                        logits = logits + time_term
-                        if plan_logits_time_seq is not None:
-                            plan_logits_time_seq.append(time_term)
-                    if plan_logits_base_seq is not None:
-                        plan_logits_base_seq.append(logits_base)
-                    plan_logits.append(logits)
-                    plan_probs.append(torch.sigmoid(logits))
-
-                    # Phase state update (same as Event-Clock path, but using detached meas/delta inputs).
-                    if (
-                        phase_enabled
-                        and phase_z_t is not None
-                        and self.contact_phase_state_delta_head is not None
-                        and phase_anchor is not None
-                        and torch.is_tensor(contacts_meas_obs)
-                        and torch.is_tensor(delta_meas_obs)
-                        and phase_dim > 0
-                    ):
-                        try:
-                            meas_t = contacts_meas_obs[:, _t]
-                            delta_meas_t = delta_meas_obs[:, _t]
-                            phi_in = torch.cat([cond_seq[:, _t], meas_t, delta_meas_t, phase_z_t], dim=-1)
-                            delta_raw = self.contact_phase_state_delta_head(phi_in)
-                            mx = float(getattr(self, "contact_phase_state_delta_max", 0.5) or 0.5)
-                            delta_phi = torch.tanh(delta_raw) * mx
-
-                            v_prev = phase_z_t.view(B, Cc, 2)
-                            sin_prev = v_prev[..., 0]
-                            cos_prev = v_prev[..., 1]
-                            sin_d = torch.sin(delta_phi)
-                            cos_d = torch.cos(delta_phi)
-                            sin_next = sin_prev * cos_d + cos_prev * sin_d
-                            cos_next = cos_prev * cos_d - sin_prev * sin_d
-                            v_next = torch.stack([sin_next, cos_next], dim=-1)
-
-                            if phase_reset_source == "contacts_meas":
-                                kind = str(getattr(self, "contact_phase_state_event_kind", "touchdown") or "touchdown").lower().strip()
-                                if kind != "none":
-                                    thr = float(getattr(self, "contact_phase_state_event_thr", 0.5) or 0.5)
-                                    hyst = float(getattr(self, "contact_phase_state_event_hyst", 0.0) or 0.0)
-                                    if not _math.isfinite(hyst):
-                                        hyst = 0.0
-                                    hyst = max(0.0, min(0.49, hyst))
-                                    thr_low = max(0.0, thr - hyst)
-                                    thr_high = min(1.0, thr + hyst)
-                                    prev_m = phase_meas_prev_t if torch.is_tensor(phase_meas_prev_t) else meas_t
-                                    if kind == "touchdown":
-                                        m = (prev_m < thr_low) & (meas_t >= thr)
-                                    elif kind == "liftoff":
-                                        m = (prev_m >= thr_high) & (meas_t < thr)
-                                    else:
-                                        m = ((prev_m < thr_low) & (meas_t >= thr)) | ((prev_m >= thr_high) & (meas_t < thr))
-                                    min_interval = int(getattr(self, "contact_phase_state_event_min_interval", 0) or 0)
-                                    if phase_event_age_t is not None and min_interval > 0:
-                                        try:
-                                            m = m & (phase_event_age_t >= float(min_interval))
-                                        except Exception:
-                                            pass
-                                    mask = m.to(dtype=v_next.dtype).unsqueeze(-1)
-                                    v_next = v_next * (1.0 - mask) + phase_anchor.expand_as(v_next) * mask
-                                    phase_meas_prev_t = meas_t
-                                    if phase_event_age_t is not None:
-                                        try:
-                                            phase_event_age_t = torch.where(
-                                                m,
-                                                torch.zeros_like(phase_event_age_t),
-                                                phase_event_age_t + 1.0,
-                                            )
-                                        except Exception:
-                                            pass
-
-                            n = v_next.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-                            phase_z_t = (v_next / n).reshape(B, -1)
-                        except Exception:
-                            pass
+            if event_clock_enabled and lambda_corr_seq:
+                event_clock_lambda_corr = torch.stack(lambda_corr_seq, dim=1)
+                event_clock_lambda_logit = torch.stack(lambda_logit_seq, dim=1)
+                event_clock_dynamic_prior = torch.stack(dyn_prior_seq, dim=1)
+                event_clock_delta_z = torch.stack(delta_z_seq, dim=1)
             contacts_plan = torch.stack(plan_probs, dim=1)  # (B,T,C)
             if phase_in_direct_seq is not None:
                 try:
@@ -3415,11 +3588,18 @@ class EventMotionModel(nn.Module):
         e_t = None
         if contacts_meas is None:
             if contacts_input is not None:
-                contacts_meas = contacts_input.to(device=device, dtype=dtype)
-                if contacts_meas.ndim == 2:
-                    contacts_meas = contacts_meas.unsqueeze(1)
-                elif contacts_meas.ndim != 3:
-                    raise ValueError(f"contacts expects shape (B,C) or (B,T,C), got {tuple(contacts_meas.shape)}")
+                contacts_meas = self._canonicalize_contact_seq_tensor(
+                    contacts_input,
+                    batch_size=B,
+                    steps=Tq,
+                    channels=int(self.contact_dim),
+                    device=device,
+                    dtype=dtype,
+                    allow_1d=False,
+                )
+                if contacts_meas is None:
+                    shape = tuple(contacts_input.shape) if torch.is_tensor(contacts_input) else str(type(contacts_input))
+                    raise ValueError(f"contacts expects shape (B,C) or (B,T,C), got {shape}")
         if contacts_meas is None:
             if contacts_plan is not None:
                 contacts_meas = torch.zeros_like(contacts_plan)
@@ -3479,196 +3659,74 @@ class EventMotionModel(nn.Module):
         # ---- Direct pose head (bridge: add phase-hint contacts_meas) ----
         if self.direct_pose_head is not None and contacts_plan is not None:
             try:
-                plan_in = contacts_plan.detach() if self.direct_pose_detach_plan else contacts_plan
-                if self.training and float(getattr(self, "direct_pose_plan_drop_prob", 0.0) or 0.0) > 0.0:
-                    p = float(getattr(self, "direct_pose_plan_drop_prob", 0.0) or 0.0)
-                    p = max(0.0, min(1.0, p))
-                    if p > 0.0:
-                        m = (torch.rand(plan_in.shape[:-1] + (1,), device=plan_in.device) < p).to(plan_in.dtype)
-                        plan_in = plan_in * (1.0 - m)
-                # Optional per-call override (debug): force a specific plan source for *direct* only.
-                # - tensor: used as plan_in (after clamp); supports (B,C) / (B,T,C) / (C,)
-                # - "ignore"/"zero": replace with zeros (keeps shape)
-                try:
-                    override = getattr(self, "direct_pose_plan_override", None)
-                    if isinstance(override, str):
-                        s = override.strip().lower()
-                        if s in ("ignore", "zero", "none", "null"):
-                            plan_in = torch.zeros_like(plan_in)
-                            override = None
-                    if torch.is_tensor(override):
-                        ov = override.detach()
-                        # Canonicalize to (B,T,C)
-                        if ov.ndim == 1:
-                            ov = ov.view(1, 1, -1)
-                        elif ov.ndim == 2:
-                            ov = ov.unsqueeze(1)
-                        if ov.ndim == 3:
-                            if ov.shape[0] == 1 and B > 1:
-                                ov = ov.expand(B, -1, -1)
-                            if ov.shape[1] == 1 and Tq > 1:
-                                ov = ov.expand(-1, Tq, -1)
-                            # Match contact dim (pad/trim) to avoid concat shape mismatch.
-                            target_c = int(plan_in.shape[-1]) if torch.is_tensor(plan_in) else int(self.contact_dim)
-                            if target_c > 0 and ov.shape[-1] != target_c:
-                                if ov.shape[-1] > target_c:
-                                    ov = ov[..., :target_c]
-                                else:
-                                    ov = F.pad(ov, (0, target_c - ov.shape[-1]))
-                            plan_in = ov.to(device=device, dtype=dtype).clamp(0.0, 1.0)
-                except Exception:
-                    pass
-
                 mode = str(getattr(self, "direct_pose_meas_mode", "concat") or "concat").lower().strip()
+                plan_in = self._prepare_direct_pose_seq_input(
+                    contacts_plan,
+                    batch_size=B,
+                    steps=Tq,
+                    channels=int(self.contact_dim),
+                    device=device,
+                    dtype=dtype,
+                    override=getattr(self, "direct_pose_plan_override", None),
+                    detach_base=bool(self.direct_pose_detach_plan),
+                    detach_override=True,
+                    drop_prob=float(getattr(self, "direct_pose_plan_drop_prob", 0.0) or 0.0),
+                    ignore_policy="zeros",
+                )
+                if plan_in is None:
+                    plan_in = torch.zeros((B, Tq, int(self.contact_dim)), device=device, dtype=dtype)
+
+                meas_fallback = torch.zeros_like(contacts_plan) if mode == "concat" else None
                 meas_in = None
                 if mode in ("concat", "mode_select"):
-                    meas_in = contacts_meas
-                    if meas_in is None and mode == "concat" and int(self.contact_dim) > 0:
-                        meas_in = torch.zeros_like(contacts_plan)
-                    if meas_in is not None and meas_in.ndim == 2:
-                        meas_in = meas_in.unsqueeze(1)
-                    if meas_in is not None:
-                        meas_in = meas_in.to(device=device, dtype=dtype)
-                        if self.training:
-                            drop_p = float(getattr(self, "direct_pose_meas_drop_prob", 0.0) or 0.0)
-                            drop_p = max(0.0, min(1.0, drop_p))
-                            if drop_p > 0.0:
-                                m = (torch.rand(meas_in.shape[:-1] + (1,), device=meas_in.device) < drop_p).to(
-                                    meas_in.dtype
-                                )
-                                meas_in = meas_in * (1.0 - m)
-                            noise_std = float(getattr(self, "direct_pose_meas_noise_std", 0.0) or 0.0)
-                            if noise_std > 0.0 and _math.isfinite(noise_std):
-                                meas_in = meas_in + torch.randn_like(meas_in) * noise_std
-                        meas_in = meas_in.clamp(0.0, 1.0)
-                    # Optional per-call override (debug): force a specific meas hint source for *direct* only.
-                    # - tensor: used as meas_in (after clamp); supports (B,C) / (B,T,C) / (C,)
-                    # - "ignore"/"zero": treat as missing (concat->zeros, mode_select->uniform)
-                    try:
-                        override = getattr(self, "direct_pose_meas_override", None)
-                        if isinstance(override, str):
-                            s = override.strip().lower()
-                            if s in ("ignore", "zero", "none", "null"):
-                                if mode == "concat":
-                                    meas_in = torch.zeros_like(plan_in)
-                                elif mode == "mode_select":
-                                    meas_in = None
-                            else:
-                                override = None
-                        if torch.is_tensor(override):
-                            ov = override
-                            # Canonicalize to (B,T,C)
-                            if ov.ndim == 1:
-                                ov = ov.view(1, 1, -1)
-                            elif ov.ndim == 2:
-                                ov = ov.unsqueeze(1)
-                            if ov.ndim == 3:
-                                if ov.shape[0] == 1 and B > 1:
-                                    ov = ov.expand(B, -1, -1)
-                                if ov.shape[1] == 1 and Tq > 1:
-                                    ov = ov.expand(-1, Tq, -1)
-                                # Match contact dim (pad/trim) to avoid concat shape mismatch.
-                                target_c = int(plan_in.shape[-1]) if torch.is_tensor(plan_in) else int(self.contact_dim)
-                                if target_c > 0 and ov.shape[-1] != target_c:
-                                    if ov.shape[-1] > target_c:
-                                        ov = ov[..., :target_c]
-                                    else:
-                                        ov = F.pad(ov, (0, target_c - ov.shape[-1]))
-                                meas_in = ov.to(device=device, dtype=dtype).clamp(0.0, 1.0)
-                    except Exception:
-                        pass
+                    meas_in = self._prepare_direct_pose_seq_input(
+                        contacts_meas,
+                        batch_size=B,
+                        steps=Tq,
+                        channels=int(plan_in.shape[-1]),
+                        device=device,
+                        dtype=dtype,
+                        fallback=meas_fallback,
+                        override=getattr(self, "direct_pose_meas_override", None),
+                        drop_prob=float(getattr(self, "direct_pose_meas_drop_prob", 0.0) or 0.0),
+                        noise_std=float(getattr(self, "direct_pose_meas_noise_std", 0.0) or 0.0),
+                        clamp_range=True,
+                        ignore_policy="zeros" if mode == "concat" else "none",
+                    )
 
-                # Choose which features feed the direct head.
-                direct_feat = cond
-                try:
-                    src = str(getattr(self, "direct_pose_feat_source", "cond") or "cond").lower().strip()
-                except Exception:
-                    src = "cond"
-                if src == "hidden":
-                    direct_feat = h_final
-                elif src == "hidden_pre":
-                    direct_feat = h_temporal
-                elif src == "cond+hidden":
-                    direct_feat = torch.cat([cond, h_final], dim=-1)
-                elif src == "cond+hidden_pre":
-                    direct_feat = torch.cat([cond, h_temporal], dim=-1)
-                else:
-                    direct_feat = cond
-                if torch.is_tensor(time_pe_direct):
-                    try:
-                        direct_feat = torch.cat([direct_feat, time_pe_direct.to(device=device, dtype=dtype)], dim=-1)
-                    except Exception:
-                        pass
+                direct_feat = self._prepare_direct_pose_features(
+                    cond=cond,
+                    h_final=h_final,
+                    h_temporal=h_temporal,
+                    time_pe_direct=time_pe_direct,
+                    device=device,
+                    dtype=dtype,
+                )
                 phase_in_direct = None
-                if bool(getattr(self, "direct_pose_use_phase_z", False)) and int(getattr(self, "_direct_pose_phase_dim", 0) or 0) > 0:
-                    phase_in_direct = phase_z_in_direct
-                    if phase_in_direct is None:
-                        phase_in_direct = torch.zeros(
-                            (B, Tq, int(getattr(self, "_direct_pose_phase_dim", 0) or 0)), device=device, dtype=dtype
-                        )
-                    elif phase_in_direct.ndim == 2:
-                        phase_in_direct = phase_in_direct.unsqueeze(1)
-                    if phase_in_direct.ndim == 3 and phase_in_direct.shape[1] == 1 and Tq > 1:
-                        phase_in_direct = phase_in_direct.expand(-1, Tq, -1)
-                    if torch.is_tensor(phase_in_direct):
-                        phase_in_direct = phase_in_direct.to(device=device, dtype=dtype)
+                phase_dim_direct = int(getattr(self, "_direct_pose_phase_dim", 0) or 0)
+                if bool(getattr(self, "direct_pose_use_phase_z", False)) and phase_dim_direct > 0:
+                    phase_fallback = torch.zeros((B, Tq, phase_dim_direct), device=device, dtype=dtype)
+                    phase_in_direct = self._prepare_direct_pose_seq_input(
+                        phase_z_in_direct,
+                        batch_size=B,
+                        steps=Tq,
+                        channels=phase_dim_direct,
+                        device=device,
+                        dtype=dtype,
+                        fallback=phase_fallback,
+                    )
 
-                if mode == "concat":
-                    if str(getattr(self, "direct_pose_phase_z_mode", "concat") or "concat").strip().lower() == "replace_contacts":
-                        # Replace the low-bandwidth 2D contact hint (plan+meas) with the higher-bandwidth phase_z_in.
-                        if torch.is_tensor(phase_in_direct):
-                            hint = phase_in_direct
-                        else:
-                            hint = torch.zeros(
-                                (B, Tq, int(getattr(self, "_direct_pose_phase_dim", 0) or 0)), device=device, dtype=dtype
-                            )
-                        direct_in = torch.cat([direct_feat, hint], dim=-1)
-                    else:
-                        if torch.is_tensor(phase_in_direct):
-                            direct_in = torch.cat(
-                                [direct_feat, plan_in.to(device=device, dtype=dtype), meas_in, phase_in_direct], dim=-1
-                            )
-                        else:
-                            direct_in = torch.cat([direct_feat, plan_in.to(device=device, dtype=dtype), meas_in], dim=-1)
-                    direct_flat = direct_in.reshape(-1, direct_in.shape[-1])
-                    direct_out = self._forward_direct_pose_readout(direct_flat, B=B, Tq=Tq)
-                elif mode == "mode_select":
-                    if torch.is_tensor(phase_in_direct):
-                        direct_in = torch.cat([direct_feat, plan_in.to(device=device, dtype=dtype), phase_in_direct], dim=-1)
-                    else:
-                        direct_in = torch.cat([direct_feat, plan_in.to(device=device, dtype=dtype)], dim=-1)
-                    direct_flat = direct_in.reshape(-1, direct_in.shape[-1])
-                    modes = self.direct_pose_head(direct_flat).view(B, Tq, -1)
-                    Dy = int(self.out_motion_dim)
-                    if modes.shape[-1] == Dy * 2:
-                        y_left, y_right = modes[..., :Dy], modes[..., Dy:]
-                        if meas_in is None:
-                            w_left = w_right = None
-                        elif meas_in.shape[-1] >= 2:
-                            w_left = meas_in[..., :1]
-                            w_right = meas_in[..., 1:2]
-                        elif meas_in.shape[-1] == 1:
-                            w_left = meas_in[..., :1]
-                            w_right = 1.0 - w_left
-                        else:
-                            w_left = w_right = None
-                        if w_left is None or w_right is None:
-                            base = meas_in if torch.is_tensor(meas_in) else y_left
-                            w_left = base.new_full(y_left.shape[:-1] + (1,), 0.5)
-                            w_right = 1.0 - w_left
-                        denom = (w_left + w_right).clamp_min(1e-6)
-                        w_left = (w_left / denom).clamp(0.0, 1.0)
-                        w_right = (w_right / denom).clamp(0.0, 1.0)
-                        direct_out = w_left * y_left + w_right * y_right
-                    else:
-                        direct_out = modes
-                else:
-                    if torch.is_tensor(phase_in_direct):
-                        direct_in = torch.cat([direct_feat, plan_in.to(device=device, dtype=dtype), meas_in, phase_in_direct], dim=-1)
-                    else:
-                        direct_in = torch.cat([direct_feat, plan_in.to(device=device, dtype=dtype), meas_in], dim=-1)
-                    direct_flat = direct_in.reshape(-1, direct_in.shape[-1])
-                    direct_out = self._forward_direct_pose_readout(direct_flat, B=B, Tq=Tq)
+                direct_flat, direct_out = self._forward_direct_pose_main(
+                    direct_feat=direct_feat,
+                    plan_in=plan_in,
+                    meas_in=meas_in,
+                    phase_in_direct=phase_in_direct,
+                    mode=mode,
+                    batch_size=B,
+                    steps=Tq,
+                    device=device,
+                    dtype=dtype,
+                )
 
                 # Optional: leg-specific residual head output (kept separate from out_direct).
                 # NOTE: out_direct is in normalized Y space; do NOT apply SO(3) composition here.
@@ -4074,93 +4132,51 @@ class EventMotionModel(nn.Module):
                                             #   A) [direct_feat, plan(C), meas(C?), phase(2C?)]
                                             #   B) [direct_feat, phase_hint(2C)]   (direct_pose_phase_z_mode='replace_contacts')
                                             x = direct_flat.reshape(B, Tq, -1)
-                                            d_total = int(x.shape[-1])
                                             d_direct = int(direct_feat.shape[-1]) if torch.is_tensor(direct_feat) else 0
                                             d_plan = int(plan_in.shape[-1]) if torch.is_tensor(plan_in) else 0
                                             d_phase = int(phase_in_direct.shape[-1]) if torch.is_tensor(phase_in_direct) else 0
                                             d_meas_raw = int(meas_in.shape[-1]) if torch.is_tensor(meas_in) else 0
-                                            d_meas = 0
-                                            if d_total == (d_direct + d_plan + d_meas_raw + d_phase):
-                                                d_meas = d_meas_raw
-                                            elif d_total == (d_direct + d_plan + d_phase):
-                                                d_meas = 0
+                                            layout = self._resolve_direct_pose_contact_layout(
+                                                total_dim=int(x.shape[-1]),
+                                                direct_dim=d_direct,
+                                                plan_dim=d_plan,
+                                                meas_dim_raw=d_meas_raw,
+                                                phase_dim=d_phase,
+                                                contact_dim=Cc,
+                                            )
                                             # Channel mapping (default dataset order is [L,R]).
                                             ch_r = int(getattr(self, "direct_pose_leg_contact_ch_r", 1) or 0)
                                             ch_l = int(getattr(self, "direct_pose_leg_contact_ch_l", 0) or 0)
                                             ch_r = max(0, min(Cc - 1, ch_r))
                                             ch_l = max(0, min(Cc - 1, ch_l))
-
-                                            # Layout A: plan+meas(+phase) present in direct_flat.
-                                            if d_direct > 0 and d_plan == Cc and d_total == (d_direct + d_plan + d_meas + d_phase):
-                                                off_plan = d_direct
-                                                off_meas = off_plan + d_plan
-                                                off_phase = off_meas + d_meas
-
+                                            if layout is not None:
                                                 x_r = x.clone()
                                                 x_l = x.clone()
-
-                                                def _ablate(xx: torch.Tensor, ch: int) -> None:
-                                                    if ab in ("0", "zero", "zeros"):
-                                                        xx[..., off_plan + ch] = 0.0
-                                                        if d_meas > 0:
-                                                            xx[..., off_meas + ch] = 0.0
-                                                        # phase layout: [sin0,cos0,sin1,cos1,...] (dim=2*C)
-                                                        if d_phase == 2 * Cc:
-                                                            s = off_phase + 2 * ch
-                                                            xx[..., s : s + 2] = 0.0
-                                                    elif ab in ("roll", "roll_batch", "shift", "shift_batch"):
-                                                        if int(B) > 1:
-                                                            xx[..., off_plan + ch] = xx[..., off_plan + ch].roll(shifts=1, dims=0)
-                                                            if d_meas > 0:
-                                                                xx[..., off_meas + ch] = xx[..., off_meas + ch].roll(
-                                                                    shifts=1, dims=0
-                                                                )
-                                                            if d_phase == 2 * Cc:
-                                                                s = off_phase + 2 * ch
-                                                                xx[..., s : s + 2] = xx[..., s : s + 2].roll(
-                                                                    shifts=1, dims=0
-                                                                )
-                                                    elif ab in ("roll_time", "shift_time"):
-                                                        if int(Tq) > 1:
-                                                            xx[..., off_plan + ch] = xx[..., off_plan + ch].roll(shifts=1, dims=1)
-                                                            if d_meas > 0:
-                                                                xx[..., off_meas + ch] = xx[..., off_meas + ch].roll(
-                                                                    shifts=1, dims=1
-                                                                )
-                                                            if d_phase == 2 * Cc:
-                                                                s = off_phase + 2 * ch
-                                                                xx[..., s : s + 2] = xx[..., s : s + 2].roll(
-                                                                    shifts=1, dims=1
-                                                                )
-
-                                            # Layout B: phase-hint-only (replace_contacts): direct_flat = [direct_feat, phase(2C)].
-                                            elif d_direct > 0 and d_phase == 2 * Cc and d_total == (d_direct + d_phase):
-                                                off_phase = d_direct
-
-                                                x_r = x.clone()
-                                                x_l = x.clone()
-
-                                                def _ablate(xx: torch.Tensor, ch: int) -> None:
-                                                    # Only phase exists here.
-                                                    if d_phase != 2 * Cc:
-                                                        return
-                                                    s = off_phase + 2 * ch
-                                                    if ab in ("0", "zero", "zeros"):
-                                                        xx[..., s : s + 2] = 0.0
-                                                    elif ab in ("roll", "roll_batch", "shift", "shift_batch"):
-                                                        if int(B) > 1:
-                                                            xx[..., s : s + 2] = xx[..., s : s + 2].roll(shifts=1, dims=0)
-                                                    elif ab in ("roll_time", "shift_time"):
-                                                        if int(Tq) > 1:
-                                                            xx[..., s : s + 2] = xx[..., s : s + 2].roll(shifts=1, dims=1)
+                                                self._ablate_direct_pose_contact_channel(
+                                                    x_r,
+                                                    ablation=ab,
+                                                    channel=ch_l,
+                                                    batch_size=B,
+                                                    steps=Tq,
+                                                    plan_slice=layout["plan"],
+                                                    meas_slice=layout["meas"],
+                                                    phase_slice=layout["phase"],
+                                                )
+                                                self._ablate_direct_pose_contact_channel(
+                                                    x_l,
+                                                    ablation=ab,
+                                                    channel=ch_r,
+                                                    batch_size=B,
+                                                    steps=Tq,
+                                                    plan_slice=layout["plan"],
+                                                    meas_slice=layout["meas"],
+                                                    phase_slice=layout["phase"],
+                                                )
                                             else:
                                                 x_r = x_l = None
 
                                             if torch.is_tensor(x_r) and torch.is_tensor(x_l):
                                                 # For right-side outputs, ablate left-channel features; for left-side, ablate right-channel.
-                                                _ablate(x_r, ch_l)
-                                                _ablate(x_l, ch_r)
-
                                                 flat_r = x_r.reshape(-1, x_r.shape[-1])
                                                 flat_l = x_l.reshape(-1, x_l.shape[-1])
                                                 if bool(getattr(self, "direct_pose_leg_detach_feat", False)):
@@ -4658,7 +4674,6 @@ class MotionJointLoss(nn.Module):
         self._loss_group_totals: Dict[str, float] = {}
         self._loss_group_alias = {
             'attn': 'aux',
-            'rot_geo': 'core',
             'rot_ortho': 'core',
             'rot_local': 'core',
             'root_vel': 'core',
@@ -4814,7 +4829,7 @@ class MotionJointLoss(nn.Module):
                 return None
         return limb_mask, torso_mask
 
-    def _collect_limb_geo_stats(self, geo_tensor: torch.Tensor) -> Dict[str, float]:
+    def _collect_rot_local_stats(self, geo_tensor: torch.Tensor) -> Dict[str, float]:
         import torch, math
         if geo_tensor is None or geo_tensor.numel() == 0:
             return {}
@@ -4830,51 +4845,15 @@ class MotionJointLoss(nn.Module):
         limb_val = torso_val = None
         if limb_mask.any():
             limb_val = joint_mean[limb_mask].mean()
-            stats['rot_geo_limb_deg'] = float((limb_val * deg).detach().cpu())
-            stats['rot_geo_limb_count'] = int(limb_mask.sum().item())
+            stats['rot_local_limb_deg'] = float((limb_val * deg).detach().cpu())
+            stats['rot_local_limb_count'] = int(limb_mask.sum().item())
         if torso_mask.any():
             torso_val = joint_mean[torso_mask].mean()
-            stats['rot_geo_torso_deg'] = float((torso_val * deg).detach().cpu())
-            stats['rot_geo_torso_count'] = int(torso_mask.sum().item())
+            stats['rot_local_torso_deg'] = float((torso_val * deg).detach().cpu())
+            stats['rot_local_torso_count'] = int(torso_mask.sum().item())
         if limb_val is not None and torso_val is not None:
             ratio = limb_val / torso_val.clamp_min(1e-6)
-            stats['rot_geo_limb_over_torso'] = float(ratio.detach().cpu())
-        return stats
-
-    def _geo_weight_monitor(self, geo_tensor: torch.Tensor, weights: torch.Tensor) -> Dict[str, float]:
-        """Monitor whether low-weight bones are being ignored.
-
-        Reports mean geodesic error (deg) for low/high weight quartiles and the
-        current weight spread. Computed on detached tensors to keep overhead low.
-        """
-        import torch
-        stats: Dict[str, float] = {}
-        if geo_tensor is None or weights is None:
-            return stats
-        if geo_tensor.numel() == 0 or weights.numel() == 0:
-            return stats
-        # geo_tensor: (..., J), weights: (J,)
-        try:
-            joint_mean = torch.nanmean(geo_tensor.detach(), dim=tuple(range(geo_tensor.dim() - 1)))
-        except Exception:
-            return stats
-        w = weights.detach()
-        if w.numel() != joint_mean.numel():
-            return stats
-        try:
-            low_q = torch.quantile(w, 0.25)
-            high_q = torch.quantile(w, 0.75)
-        except Exception:
-            return stats
-        deg = 180.0 / _math.pi
-        low_mask = w <= low_q
-        high_mask = w >= high_q
-        if low_mask.any():
-            stats['rot_geo_lowW_deg'] = float((joint_mean[low_mask].mean() * deg).cpu())
-        if high_mask.any():
-            stats['rot_geo_highW_deg'] = float((joint_mean[high_mask].mean() * deg).cpu())
-        spread = (w.max() / w.min().clamp_min(1e-6)).item()
-        stats['rot_geo_weight_spread'] = float(spread)
+            stats['rot_local_limb_over_torso'] = float(ratio.detach().cpu())
         return stats
 
     def _parent_relative_matrices(self, R: torch.Tensor) -> torch.Tensor:
@@ -5097,33 +5076,14 @@ class MotionJointLoss(nn.Module):
         else:
             l_attn = gm.new_zeros(())
 
-        geo_payload = self.compute_rot6d_geo_loss(pm, gm, return_per_joint=True)
-        if isinstance(geo_payload, tuple):
-            l_geo = geo_payload[0]
-            geo_details = geo_payload[1] if len(geo_payload) > 1 else None
-            geo_weights = geo_payload[2] if len(geo_payload) > 2 else None
-        else:
-            l_geo = geo_payload
-            geo_details = None
-            geo_weights = None
-
         loss = self.w_attn_reg * l_attn
         self._accumulate_loss_contrib('attn', l_attn, self.w_attn_reg, group='aux')
 
         stats: Dict[str, float] = {
             'attn': float(l_attn.detach().cpu()),
-            'rot_geo': float(l_geo.detach().cpu()),
             'rot_ortho': 0.0,
             'rot_ortho_raw': 0.0,
         }
-        if geo_details is not None:
-            limb_stats = self._collect_limb_geo_stats(geo_details.detach())
-            if limb_stats:
-                stats.update(limb_stats)
-            if geo_weights is not None:
-                weight_stats = self._geo_weight_monitor(geo_details.detach(), geo_weights.detach())
-                if weight_stats:
-                    stats.update(weight_stats)
         return loss, stats
 
     def _slice_if_exists(self, name: str, X: torch.Tensor) -> Optional[torch.Tensor]:

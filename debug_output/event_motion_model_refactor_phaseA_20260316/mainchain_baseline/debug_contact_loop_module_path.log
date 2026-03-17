@@ -1,0 +1,6 @@
+$ python -m train.debug_contact_loop
+exit_code: 0
+note: package-form replay command used as working smoke equivalent for post-refactor comparison
+
+[stdout]
+[OK] debug_contact_loop: forward/backward finite, shapes OK

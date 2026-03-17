@@ -1,0 +1,24 @@
+[2026-03-16] EventMotionModel refactor Phase A baseline commands
+generated_on: 2026-03-17T00:34:26.815030+08:00
+
+[py_compile]
+cmd: python -m py_compile train/models.py
+expected: pass
+exit_code: 0
+note: roadmap Phase A required baseline command
+log: debug_output/event_motion_model_refactor_phaseA_20260316/mainchain_baseline/py_compile.log
+
+[debug_contact_loop_script_path]
+cmd: python train/debug_contact_loop.py
+expected: frozen_failure
+exit_code: 1
+note: exact roadmap spelling; frozen as-is even though package import fails from repo root
+log: debug_output/event_motion_model_refactor_phaseA_20260316/mainchain_baseline/debug_contact_loop_script_path.log
+
+[debug_contact_loop_module_path]
+cmd: python -m train.debug_contact_loop
+expected: pass
+exit_code: 0
+note: package-form replay command used as working smoke equivalent for post-refactor comparison
+log: debug_output/event_motion_model_refactor_phaseA_20260316/mainchain_baseline/debug_contact_loop_module_path.log
+

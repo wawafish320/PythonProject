@@ -1,0 +1,94 @@
+
+==============================================================================
+[Pretrain-PLAN-A] 预训练完全解耦启用
+[Pretrain-PLAN-A] 由预训练脚本负责（PT owns）: StepHead(PT-only), AuxHead(PT-only), hazard_losses_soft_only(PT-only), event_indices_from_LR(PT-only), window_starts_from_events(PT-only)
+[Pretrain-PLAN-A] 主训练可移除（若不消费事件）: 主训练中的事件头/损失/事件采样（若主训练不产出事件）
+[Pretrain-PLAN-A] 如需在主训练侧使用，可在主训练中包装一层调用本脚本等价实现。
+==============================================================================
+
+[SelfBuild] wrote pretrain template: /Users/xingzhaorui/PycharmProjects/PythonProject/models/pretrain_template.json | J=46 dim=138
+[ds] skipped 1 short/invalid clips: Walk_L_To_R.npz(T-1=49)
+[ds] N=4 clips | J=46 | input_dim=968 | pose_dim=276 | K=2 | tpl=<in-memory>
+[split] 使用全量数据进行训练（无验证集）。
+[Train][ep 1] amp_warm=1.0000 | contact_acc=0.5000 | loss=1.3506 | loss_amp_equiv=0.2161 | loss_amp_rank=0.6905 | loss_amp_rel=0.1858 | loss_contact=0.6900 | loss_hint=0.7028 | loss_period_inv=0.0000 | loss_pose=0.8918 | period_drift=0.0033 | pose_mae=0.7522 | pred_on_rate=0.4812 | rank_acc=0.5833 | scale_slope=-0.0012 | tgt_on_rate=0.4411
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to -0.0012
+[Train][ep 2] amp_warm=1.0000 | contact_acc=0.5000 | loss=1.9882 | loss_amp_equiv=0.8021 | loss_amp_rank=0.6807 | loss_amp_rel=0.2021 | loss_contact=0.6845 | loss_hint=0.6288 | loss_period_inv=0.0000 | loss_pose=0.9521 | period_drift=0.0039 | pose_mae=0.7803 | pred_on_rate=0.4806 | rank_acc=0.7083 | scale_slope=0.0013 | tgt_on_rate=0.4321
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.0013
+[Train][ep 3] amp_warm=1.0000 | contact_acc=0.5000 | loss=1.6119 | loss_amp_equiv=0.4462 | loss_amp_rank=0.6956 | loss_amp_rel=0.1968 | loss_contact=0.6791 | loss_hint=0.6114 | loss_period_inv=0.0000 | loss_pose=0.9348 | period_drift=0.0042 | pose_mae=0.7746 | pred_on_rate=0.4793 | rank_acc=0.6250 | scale_slope=0.0023 | tgt_on_rate=0.4376
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.0023
+[Train][ep 4] amp_warm=1.0000 | contact_acc=0.5225 | loss=1.6048 | loss_amp_equiv=0.4864 | loss_amp_rank=0.6949 | loss_amp_rel=0.1778 | loss_contact=0.6733 | loss_hint=0.5828 | loss_period_inv=0.0000 | loss_pose=0.8918 | period_drift=0.0038 | pose_mae=0.7520 | pred_on_rate=0.4775 | rank_acc=0.5417 | scale_slope=0.0078 | tgt_on_rate=0.4401
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.0078
+[Train][ep 5] amp_warm=1.0000 | contact_acc=0.6175 | loss=1.8028 | loss_amp_equiv=0.6236 | loss_amp_rank=0.6913 | loss_amp_rel=0.1895 | loss_contact=0.6664 | loss_hint=0.5274 | loss_period_inv=0.0000 | loss_pose=0.9599 | period_drift=0.0039 | pose_mae=0.7858 | pred_on_rate=0.4752 | rank_acc=0.6250 | scale_slope=0.0078 | tgt_on_rate=0.4354
+[Train][ep 6] amp_warm=1.0000 | contact_acc=0.6825 | loss=1.8640 | loss_amp_equiv=0.7550 | loss_amp_rank=0.6733 | loss_amp_rel=0.1866 | loss_contact=0.6594 | loss_hint=0.5063 | loss_period_inv=0.0001 | loss_pose=0.8935 | period_drift=0.0057 | pose_mae=0.7554 | pred_on_rate=0.4742 | rank_acc=0.7500 | scale_slope=0.0105 | tgt_on_rate=0.4521
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.0105
+[Train][ep 7] amp_warm=1.0000 | contact_acc=0.7075 | loss=1.8759 | loss_amp_equiv=0.7501 | loss_amp_rank=0.7084 | loss_amp_rel=0.2046 | loss_contact=0.6432 | loss_hint=0.4307 | loss_period_inv=0.0001 | loss_pose=0.9219 | period_drift=0.0059 | pose_mae=0.7653 | pred_on_rate=0.4715 | rank_acc=0.4583 | scale_slope=0.0105 | tgt_on_rate=0.4309
+[Train][ep 8] amp_warm=1.0000 | contact_acc=0.7050 | loss=1.4791 | loss_amp_equiv=0.3459 | loss_amp_rank=0.7279 | loss_amp_rel=0.2393 | loss_contact=0.6423 | loss_hint=0.4222 | loss_period_inv=0.0001 | loss_pose=0.9304 | period_drift=0.0068 | pose_mae=0.7720 | pred_on_rate=0.4698 | rank_acc=0.2500 | scale_slope=0.0044 | tgt_on_rate=0.4460
+[Train][ep 9] amp_warm=1.0000 | contact_acc=0.8125 | loss=1.8447 | loss_amp_equiv=0.7341 | loss_amp_rank=0.6903 | loss_amp_rel=0.1820 | loss_contact=0.6138 | loss_hint=0.3250 | loss_period_inv=0.0002 | loss_pose=0.9246 | period_drift=0.0089 | pose_mae=0.7685 | pred_on_rate=0.4657 | rank_acc=0.5000 | scale_slope=0.0182 | tgt_on_rate=0.4346
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.0182
+[Train][ep 10] amp_warm=1.0000 | contact_acc=0.7775 | loss=2.2825 | loss_amp_equiv=1.1450 | loss_amp_rank=0.7115 | loss_amp_rel=0.2163 | loss_contact=0.6053 | loss_hint=0.3096 | loss_period_inv=0.0003 | loss_pose=0.9552 | period_drift=0.0106 | pose_mae=0.7833 | pred_on_rate=0.4613 | rank_acc=0.5000 | scale_slope=0.0109 | tgt_on_rate=0.4399
+[Train][ep 11] amp_warm=1.0000 | contact_acc=0.8800 | loss=2.7261 | loss_amp_equiv=1.6307 | loss_amp_rank=0.7349 | loss_amp_rel=0.2222 | loss_contact=0.5745 | loss_hint=0.2472 | loss_period_inv=0.0003 | loss_pose=0.9269 | period_drift=0.0107 | pose_mae=0.7695 | pred_on_rate=0.4587 | rank_acc=0.5000 | scale_slope=0.0118 | tgt_on_rate=0.4334
+[Train][ep 12] amp_warm=1.0000 | contact_acc=0.8750 | loss=1.5157 | loss_amp_equiv=0.4373 | loss_amp_rank=0.7181 | loss_amp_rel=0.2026 | loss_contact=0.5479 | loss_hint=0.2172 | loss_period_inv=0.0004 | loss_pose=0.9197 | period_drift=0.0132 | pose_mae=0.7646 | pred_on_rate=0.4542 | rank_acc=0.5000 | scale_slope=0.0191 | tgt_on_rate=0.4309
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.0191
+[Train][ep 13] amp_warm=1.0000 | contact_acc=0.8425 | loss=1.6618 | loss_amp_equiv=0.5761 | loss_amp_rank=0.7030 | loss_amp_rel=0.1951 | loss_contact=0.5294 | loss_hint=0.2092 | loss_period_inv=0.0002 | loss_pose=0.9323 | period_drift=0.0095 | pose_mae=0.7739 | pred_on_rate=0.4507 | rank_acc=0.5417 | scale_slope=0.0431 | tgt_on_rate=0.4375
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.0431
+[Train][ep 14] amp_warm=1.0000 | contact_acc=0.8900 | loss=1.7090 | loss_amp_equiv=0.6624 | loss_amp_rank=0.6908 | loss_amp_rel=0.1826 | loss_contact=0.4925 | loss_hint=0.1562 | loss_period_inv=0.0008 | loss_pose=0.9077 | period_drift=0.0150 | pose_mae=0.7600 | pred_on_rate=0.4474 | rank_acc=0.5833 | scale_slope=0.0516 | tgt_on_rate=0.4325
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.0516
+[Train][ep 15] amp_warm=1.0000 | contact_acc=0.8800 | loss=1.2690 | loss_amp_equiv=0.1991 | loss_amp_rank=0.7317 | loss_amp_rel=0.2501 | loss_contact=0.4998 | loss_hint=0.2136 | loss_period_inv=0.0002 | loss_pose=0.9236 | period_drift=0.0103 | pose_mae=0.7690 | pred_on_rate=0.4469 | rank_acc=0.5000 | scale_slope=0.0361 | tgt_on_rate=0.4401
+[Train][ep 16] amp_warm=1.0000 | contact_acc=0.8925 | loss=1.6365 | loss_amp_equiv=0.5685 | loss_amp_rank=0.7381 | loss_amp_rel=0.2514 | loss_contact=0.4799 | loss_hint=0.1975 | loss_period_inv=0.0006 | loss_pose=0.9282 | period_drift=0.0143 | pose_mae=0.7711 | pred_on_rate=0.4460 | rank_acc=0.4583 | scale_slope=0.0407 | tgt_on_rate=0.4378
+[Train][ep 17] amp_warm=1.0000 | contact_acc=0.9450 | loss=2.1012 | loss_amp_equiv=1.0991 | loss_amp_rank=0.7295 | loss_amp_rel=0.1895 | loss_contact=0.4156 | loss_hint=0.1104 | loss_period_inv=0.0020 | loss_pose=0.8868 | period_drift=0.0278 | pose_mae=0.7514 | pred_on_rate=0.4467 | rank_acc=0.6250 | scale_slope=0.0404 | tgt_on_rate=0.4337
+[Train][ep 18] amp_warm=1.0000 | contact_acc=0.9250 | loss=1.7842 | loss_amp_equiv=0.7663 | loss_amp_rank=0.7031 | loss_amp_rel=0.2152 | loss_contact=0.4180 | loss_hint=0.1275 | loss_period_inv=0.0009 | loss_pose=0.9005 | period_drift=0.0171 | pose_mae=0.7562 | pred_on_rate=0.4430 | rank_acc=0.6250 | scale_slope=0.0601 | tgt_on_rate=0.4310
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.0601
+[Train][ep 19] amp_warm=1.0000 | contact_acc=0.9350 | loss=1.6628 | loss_amp_equiv=0.6707 | loss_amp_rank=0.7142 | loss_amp_rel=0.1948 | loss_contact=0.3896 | loss_hint=0.0998 | loss_period_inv=0.0016 | loss_pose=0.8844 | period_drift=0.0238 | pose_mae=0.7536 | pred_on_rate=0.4510 | rank_acc=0.5000 | scale_slope=0.0549 | tgt_on_rate=0.4522
+[Train][ep 20] amp_warm=1.0000 | contact_acc=0.9400 | loss=2.0595 | loss_amp_equiv=1.0347 | loss_amp_rank=0.7808 | loss_amp_rel=0.2438 | loss_contact=0.3943 | loss_hint=0.1043 | loss_period_inv=0.0017 | loss_pose=0.9155 | period_drift=0.0273 | pose_mae=0.7657 | pred_on_rate=0.4465 | rank_acc=0.6250 | scale_slope=0.0435 | tgt_on_rate=0.4354
+[Train][ep 21] amp_warm=1.0000 | contact_acc=0.9450 | loss=1.2601 | loss_amp_equiv=0.2409 | loss_amp_rank=0.8745 | loss_amp_rel=0.2202 | loss_contact=0.3764 | loss_hint=0.0944 | loss_period_inv=0.0013 | loss_pose=0.9153 | period_drift=0.0201 | pose_mae=0.7653 | pred_on_rate=0.4462 | rank_acc=0.4583 | scale_slope=0.0871 | tgt_on_rate=0.4324
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.0871
+[Train][ep 22] amp_warm=1.0000 | contact_acc=0.9525 | loss=1.6369 | loss_amp_equiv=0.6376 | loss_amp_rank=0.7308 | loss_amp_rel=0.2056 | loss_contact=0.3778 | loss_hint=0.0936 | loss_period_inv=0.0021 | loss_pose=0.8951 | period_drift=0.0271 | pose_mae=0.7557 | pred_on_rate=0.4522 | rank_acc=0.5417 | scale_slope=0.1428 | tgt_on_rate=0.4323
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.1428
+[Train][ep 23] amp_warm=1.0000 | contact_acc=0.9550 | loss=1.8805 | loss_amp_equiv=0.8720 | loss_amp_rank=0.9050 | loss_amp_rel=0.2334 | loss_contact=0.3621 | loss_hint=0.0809 | loss_period_inv=0.0024 | loss_pose=0.9094 | period_drift=0.0310 | pose_mae=0.7629 | pred_on_rate=0.4484 | rank_acc=0.5833 | scale_slope=0.0752 | tgt_on_rate=0.4334
+[Train][ep 24] amp_warm=1.0000 | contact_acc=0.9600 | loss=1.3009 | loss_amp_equiv=0.2977 | loss_amp_rank=1.0123 | loss_amp_rel=0.2638 | loss_contact=0.3531 | loss_hint=0.0686 | loss_period_inv=0.0019 | loss_pose=0.9077 | period_drift=0.0241 | pose_mae=0.7624 | pred_on_rate=0.4464 | rank_acc=0.6250 | scale_slope=0.1380 | tgt_on_rate=0.4348
+[Train][ep 25] amp_warm=1.0000 | contact_acc=0.9650 | loss=1.5094 | loss_amp_equiv=0.5674 | loss_amp_rank=0.8556 | loss_amp_rel=0.2252 | loss_contact=0.3250 | loss_hint=0.0639 | loss_period_inv=0.0024 | loss_pose=0.8539 | period_drift=0.0318 | pose_mae=0.7400 | pred_on_rate=0.4486 | rank_acc=0.5000 | scale_slope=0.1234 | tgt_on_rate=0.4545
+[Train][ep 26] amp_warm=1.0000 | contact_acc=0.9600 | loss=1.1896 | loss_amp_equiv=0.2519 | loss_amp_rank=0.8269 | loss_amp_rel=0.2667 | loss_contact=0.3424 | loss_hint=0.0672 | loss_period_inv=0.0025 | loss_pose=0.8449 | period_drift=0.0312 | pose_mae=0.7334 | pred_on_rate=0.4501 | rank_acc=0.5417 | scale_slope=0.1616 | tgt_on_rate=0.4548
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.1616
+[Train][ep 27] amp_warm=1.0000 | contact_acc=0.9650 | loss=1.7788 | loss_amp_equiv=0.8096 | loss_amp_rank=0.6511 | loss_amp_rel=0.2592 | loss_contact=0.3338 | loss_hint=0.0585 | loss_period_inv=0.0027 | loss_pose=0.8794 | period_drift=0.0352 | pose_mae=0.7497 | pred_on_rate=0.4463 | rank_acc=0.6667 | scale_slope=0.1971 | tgt_on_rate=0.4410
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.1971
+[Train][ep 28] amp_warm=1.0000 | contact_acc=0.9625 | loss=1.1804 | loss_amp_equiv=0.2250 | loss_amp_rank=0.6109 | loss_amp_rel=0.2823 | loss_contact=0.3519 | loss_hint=0.0661 | loss_period_inv=0.0024 | loss_pose=0.8603 | period_drift=0.0286 | pose_mae=0.7410 | pred_on_rate=0.4439 | rank_acc=0.7500 | scale_slope=0.3226 | tgt_on_rate=0.4417
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.3226
+[Train][ep 29] amp_warm=1.0000 | contact_acc=0.9600 | loss=1.7707 | loss_amp_equiv=0.8330 | loss_amp_rank=0.8786 | loss_amp_rel=0.2960 | loss_contact=0.3451 | loss_hint=0.0648 | loss_period_inv=0.0063 | loss_pose=0.8437 | period_drift=0.0529 | pose_mae=0.7343 | pred_on_rate=0.4371 | rank_acc=0.5417 | scale_slope=0.1373 | tgt_on_rate=0.4359
+[Train][ep 30] amp_warm=1.0000 | contact_acc=0.9575 | loss=1.5320 | loss_amp_equiv=0.5811 | loss_amp_rank=1.3772 | loss_amp_rel=0.3126 | loss_contact=0.3286 | loss_hint=0.0638 | loss_period_inv=0.0051 | loss_pose=0.8614 | period_drift=0.0365 | pose_mae=0.7393 | pred_on_rate=0.4277 | rank_acc=0.4583 | scale_slope=0.2015 | tgt_on_rate=0.4303
+[Train][ep 31] amp_warm=1.0000 | contact_acc=0.9500 | loss=1.3234 | loss_amp_equiv=0.3469 | loss_amp_rank=1.0855 | loss_amp_rel=0.3331 | loss_contact=0.3455 | loss_hint=0.0741 | loss_period_inv=0.0031 | loss_pose=0.8821 | period_drift=0.0314 | pose_mae=0.7519 | pred_on_rate=0.4238 | rank_acc=0.4583 | scale_slope=0.2329 | tgt_on_rate=0.4429
+[Train][ep 32] amp_warm=1.0000 | contact_acc=0.9650 | loss=1.6550 | loss_amp_equiv=0.7134 | loss_amp_rank=0.7625 | loss_amp_rel=0.3391 | loss_contact=0.3274 | loss_hint=0.0669 | loss_period_inv=0.0062 | loss_pose=0.8518 | period_drift=0.0385 | pose_mae=0.7351 | pred_on_rate=0.4147 | rank_acc=0.7500 | scale_slope=0.3522 | tgt_on_rate=0.4326
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.3522
+[Train][ep 33] amp_warm=1.0000 | contact_acc=0.9625 | loss=1.6988 | loss_amp_equiv=0.7534 | loss_amp_rank=1.6719 | loss_amp_rel=0.3657 | loss_contact=0.3106 | loss_hint=0.0467 | loss_period_inv=0.0039 | loss_pose=0.8624 | period_drift=0.0255 | pose_mae=0.7416 | pred_on_rate=0.4060 | rank_acc=0.4583 | scale_slope=0.3849 | tgt_on_rate=0.4328
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.3849
+[Train][ep 34] amp_warm=1.0000 | contact_acc=0.9650 | loss=1.3233 | loss_amp_equiv=0.4035 | loss_amp_rank=1.1913 | loss_amp_rel=0.3815 | loss_contact=0.3099 | loss_hint=0.0487 | loss_period_inv=0.0041 | loss_pose=0.8366 | period_drift=0.0327 | pose_mae=0.7299 | pred_on_rate=0.4029 | rank_acc=0.4583 | scale_slope=0.3145 | tgt_on_rate=0.4354
+[Train][ep 35] amp_warm=1.0000 | contact_acc=0.9650 | loss=1.1968 | loss_amp_equiv=0.2627 | loss_amp_rank=1.1684 | loss_amp_rel=0.3831 | loss_contact=0.3128 | loss_hint=0.0518 | loss_period_inv=0.0058 | loss_pose=0.8495 | period_drift=0.0367 | pose_mae=0.7335 | pred_on_rate=0.4023 | rank_acc=0.5833 | scale_slope=0.3593 | tgt_on_rate=0.4313
+[Train][ep 36] amp_warm=1.0000 | contact_acc=0.9625 | loss=1.2886 | loss_amp_equiv=0.3794 | loss_amp_rank=1.4144 | loss_amp_rel=0.3764 | loss_contact=0.3159 | loss_hint=0.0575 | loss_period_inv=0.0062 | loss_pose=0.8233 | period_drift=0.0427 | pose_mae=0.7203 | pred_on_rate=0.3930 | rank_acc=0.3750 | scale_slope=0.3733 | tgt_on_rate=0.4300
+[Train][ep 37] amp_warm=1.0000 | contact_acc=0.9650 | loss=1.4003 | loss_amp_equiv=0.5164 | loss_amp_rank=1.5559 | loss_amp_rel=0.4029 | loss_contact=0.3050 | loss_hint=0.0490 | loss_period_inv=0.0028 | loss_pose=0.8022 | period_drift=0.0234 | pose_mae=0.7134 | pred_on_rate=0.4028 | rank_acc=0.4583 | scale_slope=0.7320 | tgt_on_rate=0.4368
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.7320
+[Train][ep 38] amp_warm=1.0000 | contact_acc=0.9450 | loss=1.3637 | loss_amp_equiv=0.4546 | loss_amp_rank=1.8402 | loss_amp_rel=0.4850 | loss_contact=0.3302 | loss_hint=0.0629 | loss_period_inv=0.0057 | loss_pose=0.8191 | period_drift=0.0369 | pose_mae=0.7191 | pred_on_rate=0.4070 | rank_acc=0.3333 | scale_slope=0.4164 | tgt_on_rate=0.4422
+[Train][ep 39] amp_warm=1.0000 | contact_acc=0.9700 | loss=1.1612 | loss_amp_equiv=0.2953 | loss_amp_rank=0.9065 | loss_amp_rel=0.3076 | loss_contact=0.3212 | loss_hint=0.0588 | loss_period_inv=0.0057 | loss_pose=0.7785 | period_drift=0.0277 | pose_mae=0.6968 | pred_on_rate=0.3956 | rank_acc=0.6250 | scale_slope=0.8720 | tgt_on_rate=0.4336
+[checkpoint] saved -> models/motion_encoder_equiv_stageA_run1_20260317.pt.best.pt
+[best] scale_slope improved to 0.8720
+[Train][ep 40] amp_warm=1.0000 | contact_acc=0.9675 | loss=0.9666 | loss_amp_equiv=0.1332 | loss_amp_rank=1.3952 | loss_amp_rel=0.3881 | loss_contact=0.3018 | loss_hint=0.0498 | loss_period_inv=0.0063 | loss_pose=0.7517 | period_drift=0.0327 | pose_mae=0.6843 | pred_on_rate=0.4135 | rank_acc=0.5833 | scale_slope=0.5356 | tgt_on_rate=0.4460
+[OK] Saved MotionEncoder bundle -> models/motion_encoder_equiv_stageA_run1_20260317.pt (D_in=968, period_dim=32)
+[Eval] frames=200 | pose_mse=0.7723 | pose_mae=0.6962 | ang_mse=0.7252 | ang_mae=0.5497 | contact_acc=0.9700 | pred_on=0.4285 | tgt_on=0.4524 | period_hint_mse=0.0509 | period_abs_mean=0.7323 | period_rms=0.7908
+[EvalExt] amp_rank_acc=0.542 | rel_corr=0.058 | rel_NMAE=0.569 | rel_NRMSE=0.690 | scale_slope=0.582 | period_drift=0.0000
+[EvalExt] swing_gt=1.020 pred=1.720 | stance_gt=1.029 pred=1.627

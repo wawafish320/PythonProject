@@ -1739,42 +1739,6 @@ class Trainer:
         finally:
             self._commit_rollout_diag_update(mode=None, step=-1)
 
-    def _rot_geo_from_raw_seq(
-        self,
-        pred_raw: Optional[torch.Tensor],
-        gt_raw: Optional[torch.Tensor],
-    ) -> Optional[torch.Tensor]:
-        if pred_raw is None or gt_raw is None:
-            return None
-        rot_slice = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
-        if not isinstance(rot_slice, slice):
-            return None
-        pred = pred_raw
-        gt = gt_raw
-        if pred.dim() == 2:
-            pred = pred.unsqueeze(1)
-        if gt.dim() == 2:
-            gt = gt.unsqueeze(1)
-        if pred.shape != gt.shape:
-            return None
-        rot_dim = rot_slice.stop - rot_slice.start
-        if rot_dim <= 0 or rot_dim % 6 != 0:
-            return None
-        J = rot_dim // 6
-        try:
-            pred_chunk = pred[..., rot_slice].reshape(*pred.shape[:-1], J, 6)
-            gt_chunk = gt[..., rot_slice].reshape(*gt.shape[:-1], J, 6)
-            pred_block = reproject_rot6d(pred_chunk)
-            gt_block = reproject_rot6d(gt_chunk)
-            pred_m = rot6d_to_matrix(pred_block)
-            gt_m = rot6d_to_matrix(gt_block)
-            pred_rel = root_relative_matrices(pred_m)
-            gt_rel = root_relative_matrices(gt_m)
-            geo = geodesic_R(pred_rel, gt_rel)
-            return geo
-        except Exception:
-            return None
-
     @staticmethod
     def _module_grad_norm(module: Optional[torch.nn.Module]) -> float:
         if module is None:
@@ -1883,10 +1847,6 @@ class Trainer:
                 pred_flat = pred_raw[:, :steps, rot_slice].reshape(B * steps, J, 6)
                 gt_m = rot6d_to_matrix(reproject_rot6d(gt_flat)).view(B, steps, J, 3, 3)
                 pred_m = rot6d_to_matrix(reproject_rot6d(pred_flat)).view(B, steps, J, 3, 3)
-                geo = geodesic_R(pred_m, gt_m) * (180.0 / _math.pi)
-                geo_step = geo.mean(dim=(0, 2)).detach().cpu().tolist()
-                stats['rot_geo_mean_deg'] = float(geo.mean().item())
-                stats['rot_geo_step_deg'] = geo_step
                 pred_root = _root_relative_matrices(pred_m, root_idx)
                 gt_root = _root_relative_matrices(gt_m, root_idx)
                 joint_weights = self._joint_weights(pred_root, J)
@@ -1900,7 +1860,7 @@ class Trainer:
                 stats['_geo_local_rad'] = geo_local_rad.detach()
         geo_local_tensor_rad = stats.get('_geo_local_rad')
         limb_summary = {}
-        collect_fn = getattr(self.loss_fn, '_collect_limb_geo_stats', None)
+        collect_fn = getattr(self.loss_fn, '_collect_rot_local_stats', None)
         if geo_local_tensor_rad is not None and callable(collect_fn):
             try:
                 limb_summary = collect_fn(geo_local_tensor_rad)
@@ -1909,33 +1869,27 @@ class Trainer:
         try:
             if not stats:
                 return
-            geo_val = stats.get('rot_geo_mean_deg', float('nan'))
-            ang_val = stats.get('rot_local_mean_deg', float('nan'))
+            local_val = stats.get('rot_local_mean_deg', float('nan'))
             extra = ""
             if limb_summary:
-                limb_raw = limb_summary.get('rot_geo_limb_deg', float('nan'))
-                limb_weighted = limb_summary.get('rot_geo_limb_over_torso', float('nan'))
+                limb_raw = limb_summary.get('rot_local_limb_deg', float('nan'))
+                limb_weighted = limb_summary.get('rot_local_limb_over_torso', float('nan'))
                 if _math.isfinite(limb_raw):
                     extra += f" limb={limb_raw:.2f}°"
                 if _math.isfinite(limb_weighted):
                     extra += f" limb/torso={limb_weighted:.2f}"
-            local_val = stats.get('rot_local_mean_deg', float('nan'))
-            local_extra = ""
-            if isinstance(local_val, (float, int)) and _math.isfinite(local_val):
-                local_extra = f" local={local_val:.2f}°"
+            if not (isinstance(local_val, (float, int)) and _math.isfinite(local_val)):
+                return
             print(
                 "[HistDrift]"
                 f"[ep {int(epoch):03d}]"
                 f"[bi {int(batch_idx):04d}] "
-                f"rot_geo={geo_val:.2f}° ang_dir={ang_val:.2f}° steps={steps}{extra}{local_extra}"
+                f"rot_local={local_val:.2f}° steps={steps}{extra}"
             )
-            geo_curve = stats.get('rot_geo_step_deg')
             local_curve = stats.get('rot_local_step_deg')
             geo_local_tensor_rad = stats.get('_geo_local_rad')
-            if isinstance(geo_curve, list):
-                for idx, val in enumerate(geo_curve, start=1):
-                    ang_val_step = local_curve[idx - 1] if isinstance(local_curve, list) and idx - 1 < len(local_curve) else float('nan')
-                    local_val_step = ang_val_step
+            if isinstance(local_curve, list):
+                for idx, local_val_step in enumerate(local_curve, start=1):
                     summary_txt = ""
                     if isinstance(geo_local_tensor_rad, torch.Tensor) and geo_local_tensor_rad.shape[1] >= idx and callable(collect_fn):
                         try:
@@ -1945,21 +1899,18 @@ class Trainer:
                             print(f"[HistDrift][ERR] limb step summary failed (step={idx}): {exc}")
                             limb_step = None
                         if limb_step:
-                            limb_deg = limb_step.get('rot_geo_limb_deg', float('nan'))
-                            torso_deg = limb_step.get('rot_geo_torso_deg', float('nan'))
+                            limb_deg = limb_step.get('rot_local_limb_deg', float('nan'))
+                            torso_deg = limb_step.get('rot_local_torso_deg', float('nan'))
                             if _math.isfinite(limb_deg):
                                 summary_txt += f" limb={limb_deg:.2f}°"
                             if _math.isfinite(torso_deg):
                                 summary_txt += f" torso={torso_deg:.2f}°"
-                    if not _math.isnan(ang_val_step):
-                        extra_txt = ""
-                        if not (_math.isnan(local_val_step) or local_val_step in (float('inf'), float('-inf'))):
-                            extra_txt += f" local={local_val_step:.2f}°"
+                    if not _math.isnan(local_val_step):
                         print(
                             "[HistDrift]"
                             f"[ep {int(epoch):03d}]"
                             f"[bi {int(batch_idx):04d}]"
-                            f"[step {idx:02d}] rot_geo={val:.2f}° ang_dir={ang_val_step:.2f}°{extra_txt or ''}{summary_txt}"
+                            f"[step {idx:02d}] rot_local={local_val_step:.2f}°{summary_txt}"
                         )
         finally:
             stats.pop('_geo_local_rad', None)
@@ -4562,33 +4513,33 @@ def _compute_input_drift_metrics(
                 _record_diag_metric(
                     result,
                     cfg.diag_scope,
-                    'InputRotGeoDeg',
+                    'InputRotErrorDeg',
                     float((geo_in.mean() * cfg.deg).item()),
                     extra_scope_aliases=('FreeRun',),
                 )
                 if cfg.diag_input_stats:
-                    result['InputRotGeoDeg_max'] = float((geo_in.max() * cfg.deg).item())
-                    result['InputRotGeoDeg_std'] = float((geo_in.std() * cfg.deg).item())
+                    result['InputRotErrorDeg_max'] = float((geo_in.max() * cfg.deg).item())
+                    result['InputRotErrorDeg_std'] = float((geo_in.std() * cfg.deg).item())
                 try:
                     geo_in_deg = geo_in * cfg.deg
                     mean_curve = geo_in_deg.mean(dim=-1).mean(dim=0)
                     max_curve = geo_in_deg.max(dim=-1).values.max(dim=0).values
                     _record_optional_diag_curve(
                         result,
-                        metric_name='InputRotGeoDeg',
+                        metric_name='InputRotErrorDeg',
                         curve=mean_curve,
                         curve_max=max_curve,
                     )
                 except (RuntimeError, TypeError, ValueError) as exc:
                     _phasec_warn_once(
-                        "diag/input_rot_geo_curve",
-                        "failed to record InputRotGeoDeg curve payload",
+                        "diag/input_rot_error_curve",
+                        "failed to record InputRotErrorDeg curve payload",
                         exc,
                     )
         except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
             _phasec_warn_once(
-                "diag/input_rot_geo",
-                "failed to compute InputRotGeoDeg diagnostics",
+                "diag/input_rot_error",
+                "failed to compute InputRotErrorDeg diagnostics",
                 exc,
             )
 

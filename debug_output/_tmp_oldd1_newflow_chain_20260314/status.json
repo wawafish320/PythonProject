@@ -13,5 +13,5 @@
     "lambda": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_newflow_chain_20260314/lambda/ckpt_last_WalkF_stage7_lambda_from_oldd1_newflow_20260314.pth"
   },
   "warmstart_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_oldd1_newflow_chain_20260314/warmstart/ckpt_last_oldd1_70a_replacecontacts_zerophase_20260314.pth",
-  "completed_at": "2026-03-14 19:40:34"
+  "completed_at": "2026-03-16 23:11:21"
 }

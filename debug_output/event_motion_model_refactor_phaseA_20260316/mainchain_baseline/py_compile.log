@@ -1,0 +1,3 @@
+$ python -m py_compile train/models.py
+exit_code: 0
+note: roadmap Phase A required baseline command

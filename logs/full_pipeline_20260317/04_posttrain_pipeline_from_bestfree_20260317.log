@@ -1,0 +1,428 @@
+[2026-03-17 22:46:36] === stage6 ===
+[2026-03-17 22:46:36] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json --ckpt_in /Users/xingzhaorui/PycharmProjects/PythonProject/models/MLPL2_DirectBranch_v1_20260317/exp_phase_DirectBranch_v1_d1_20260317/ckpt_best_free_exp_phase_DirectBranch_v1_d1_20260317.pth --out_dir /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/stage6 --run_name WalkF_stage6_fromfresh_20260317 --posttrain_contacts_source pretrain_contact --posttrain_contacts_pretrain_clamp 1.0 --encoder_bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv_20260317.pt.best.pt --posttrain_contacts_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[posttrain][INFO] dropped 10 direct_pose_* tensors from checkpoint (reinit/override).
+[LR-DBG:init] arg_lr=1.00e-03 opt_pg0=1.00e-03
+[posttrain] mode=train_direct_pose
+[posttrain] trainable=20 params: direct_pose_head.0.weight, direct_pose_head.0.bias, direct_pose_head.3.weight, direct_pose_head.3.bias, direct_pose_out_leg.weight, direct_pose_out_leg.bias, direct_pose_out_arm.weight, direct_pose_out_arm.bias ...
+[posttrain][e1 i0/60] total=2.000000 dir=2.000000 blend=0.273066 inc=0.273066 λ=0.000±0.000 gnorm(L/N)=1.000/1.000 raw=1.000/1.000 ema=0.191/0.061 hit=0/0 g(trunk/leg/non)=9.643e-01/8.789e-01/6.457e-01 legω=4.832e+00 gr=0.735 grω=0.134 !grad_ratio_low_omega
+[posttrain][e1 i20/60] total=1.408353 dir=1.408353 blend=0.268430 inc=0.268430 λ=0.000±0.000 gnorm(L/N)=0.677/0.732 raw=0.677/0.732 ema=0.148/0.044 hit=0/0 g(trunk/leg/non)=1.394e+00/1.605e+00/1.111e+00 legω=2.926e+00 gr=0.692 grω=0.380
+[posttrain][e1 i40/60] total=1.076689 dir=1.076689 blend=0.271732 inc=0.271732 λ=0.000±0.000 gnorm(L/N)=0.573/0.504 raw=0.573/0.504 ema=0.097/0.028 hit=0/0 g(trunk/leg/non)=1.720e+00/1.324e+00/2.451e+00 legω=3.508e+00 gr=1.850 grω=0.699
+[posttrain][epoch 1] avg_total=1.218251 ok_steps=60 skipped=0
+[posttrain][e2 i0/60] total=1.007728 dir=1.007728 blend=0.270010 inc=0.270010 λ=0.000±0.000 gnorm(L/N)=0.502/0.506 raw=0.502/0.506 ema=0.062/0.018 hit=0/0 g(trunk/leg/non)=2.213e+00/2.864e+00/2.833e+00 legω=6.930e+00 gr=0.989 grω=0.409
+[posttrain][e2 i20/60] total=1.089927 dir=1.089927 blend=0.268465 inc=0.268465 λ=0.000±0.000 gnorm(L/N)=0.564/0.526 raw=0.564/0.526 ema=0.041/0.011 hit=0/0 g(trunk/leg/non)=5.229e+00/3.757e+00/3.448e+00 legω=7.950e+00 gr=0.918 grω=0.434
+[posttrain][e2 i40/60] total=1.411847 dir=1.411847 blend=0.259423 inc=0.259423 λ=0.000±0.000 gnorm(L/N)=0.762/0.650 raw=0.762/0.650 ema=0.029/0.008 hit=0/0 g(trunk/leg/non)=4.929e+00/5.875e+00/6.779e+00 legω=1.048e+01 gr=1.154 grω=0.647
+[posttrain][epoch 2] avg_total=1.353924 ok_steps=60 skipped=0
+[posttrain][e3 i0/60] total=1.559496 dir=1.559496 blend=0.264361 inc=0.264361 λ=0.000±0.000 gnorm(L/N)=0.829/0.731 raw=0.829/0.731 ema=0.024/0.007 hit=0/0 g(trunk/leg/non)=1.219e+01/9.103e+00/9.245e+00 legω=1.734e+01 gr=1.016 grω=0.533
+[posttrain][e3 i20/60] total=1.776296 dir=1.776296 blend=0.253204 inc=0.253204 λ=0.000±0.000 gnorm(L/N)=0.890/0.887 raw=0.890/0.887 ema=0.022/0.006 hit=0/0 g(trunk/leg/non)=1.088e+01/5.606e+00/1.005e+01 legω=1.178e+01 gr=1.793 grω=0.853
+[posttrain][e3 i40/60] total=1.624000 dir=1.624000 blend=0.276597 inc=0.276597 λ=0.000±0.000 gnorm(L/N)=0.836/0.788 raw=0.836/0.788 ema=0.021/0.006 hit=0/0 g(trunk/leg/non)=6.652e+00/8.307e+00/8.302e+00 legω=1.797e+01 gr=0.999 grω=0.462
+[posttrain][epoch 3] avg_total=1.791229 ok_steps=60 skipped=0
+[posttrain][e4 i0/60] total=2.258351 dir=2.258351 blend=0.264394 inc=0.264394 λ=0.000±0.000 gnorm(L/N)=1.381/0.877 raw=1.381/0.877 ema=0.018/0.005 hit=0/0 g(trunk/leg/non)=1.525e+01/1.218e+01/1.581e+01 legω=2.732e+01 gr=1.298 grω=0.579
+[posttrain][e4 i20/60] total=1.489456 dir=1.489456 blend=0.254113 inc=0.254113 λ=0.000±0.000 gnorm(L/N)=0.762/0.727 raw=0.762/0.727 ema=0.017/0.004 hit=0/0 g(trunk/leg/non)=5.746e+00/9.408e+00/1.434e+01 legω=1.638e+01 gr=1.524 grω=0.875
+[posttrain][e4 i40/60] total=1.659476 dir=1.659476 blend=0.263305 inc=0.263305 λ=0.000±0.000 gnorm(L/N)=0.846/0.813 raw=0.846/0.813 ema=0.018/0.005 hit=0/0 g(trunk/leg/non)=1.258e+01/1.085e+01/1.052e+01 legω=1.764e+01 gr=0.970 grω=0.596
+[posttrain][epoch 4] avg_total=2.044196 ok_steps=60 skipped=0
+[posttrain][e5 i0/60] total=2.003526 dir=2.003526 blend=0.267322 inc=0.267322 λ=0.000±0.000 gnorm(L/N)=1.018/0.985 raw=1.018/0.985 ema=0.018/0.005 hit=0/0 g(trunk/leg/non)=1.539e+01/9.261e+00/1.290e+01 legω=1.903e+01 gr=1.392 grω=0.678
+[posttrain][e5 i20/60] total=2.133743 dir=2.133743 blend=0.268504 inc=0.268504 λ=0.000±0.000 gnorm(L/N)=1.115/1.018 raw=1.115/1.018 ema=0.020/0.005 hit=0/0 g(trunk/leg/non)=1.311e+01/7.195e+00/1.248e+01 legω=1.389e+01 gr=1.735 grω=0.899
+[posttrain][e5 i40/60] total=1.547328 dir=1.547328 blend=0.267990 inc=0.267990 λ=0.000±0.000 gnorm(L/N)=0.767/0.780 raw=0.767/0.780 ema=0.018/0.005 hit=0/0 g(trunk/leg/non)=9.623e+00/7.953e+00/1.314e+01 legω=1.519e+01 gr=1.653 grω=0.865
+[posttrain][epoch 5] avg_total=1.930131 ok_steps=60 skipped=0
+[posttrain][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/stage6/ckpt_last_WalkF_stage6_fromfresh_20260317.pth
+[2026-03-17 23:13:22] === stage70a ===
+[2026-03-17 23:13:22] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_70a_splitB2_pe32h512_20260227_fromarmchain.json --ckpt_in /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/stage6/ckpt_last_WalkF_stage6_fromfresh_20260317.pth --out_dir /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/70a --run_name WalkF_stage7_70a_fromfresh_20260317 --posttrain_contacts_source pretrain_contact --posttrain_contacts_pretrain_clamp 1.0 --encoder_bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv_20260317.pt.best.pt --posttrain_contacts_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[LR-DBG:init] arg_lr=1.00e-03 opt_pg0=1.00e-03
+[posttrain] mode=train_direct_pose
+[posttrain] trainable=20 params: direct_pose_head.0.weight, direct_pose_head.0.bias, direct_pose_head.3.weight, direct_pose_head.3.bias, direct_pose_out_leg.weight, direct_pose_out_leg.bias, direct_pose_out_arm.weight, direct_pose_out_arm.bias ...
+[posttrain][e1 i0/60] total=2.000000 dir=2.000000 blend=0.273066 inc=0.273066 λ=0.000±0.000 gnorm(L/N)=1.000/1.000 raw=1.000/1.000 ema=0.016/0.004 hit=0/0
+[posttrain][e1 i20/60] total=1.694612 dir=1.694612 blend=0.268430 inc=0.268430 λ=0.000±0.000 gnorm(L/N)=0.820/0.875 raw=0.820/0.875 ema=0.018/0.005 hit=0/0
+[posttrain][e1 i40/60] total=2.007991 dir=2.007991 blend=0.271732 inc=0.271732 λ=0.000±0.000 gnorm(L/N)=1.047/0.961 raw=1.047/0.961 ema=0.015/0.004 hit=0/0
+[posttrain][epoch 1] avg_total=1.869054 ok_steps=60 skipped=0
+[posttrain][e2 i0/60] total=2.135956 dir=2.135956 blend=0.270010 inc=0.270010 λ=0.000±0.000 gnorm(L/N)=1.025/1.111 raw=1.025/1.111 ema=0.013/0.004 hit=0/0
+[posttrain][e2 i20/60] total=1.729340 dir=1.729340 blend=0.268465 inc=0.268465 λ=0.000±0.000 gnorm(L/N)=0.975/0.755 raw=0.975/0.755 ema=0.013/0.003 hit=0/0
+[posttrain][e2 i40/60] total=1.972468 dir=1.972468 blend=0.259423 inc=0.259423 λ=0.000±0.000 gnorm(L/N)=1.030/0.943 raw=1.030/0.943 ema=0.012/0.003 hit=0/0
+[posttrain][epoch 2] avg_total=1.908239 ok_steps=60 skipped=0
+[posttrain][e3 i0/60] total=1.607381 dir=1.607381 blend=0.264361 inc=0.264361 λ=0.000±0.000 gnorm(L/N)=0.779/0.829 raw=0.779/0.829 ema=0.012/0.003 hit=0/0
+[posttrain][e3 i20/60] total=1.816385 dir=1.816385 blend=0.253204 inc=0.253204 λ=0.000±0.000 gnorm(L/N)=0.783/1.034 raw=0.783/1.034 ema=0.012/0.003 hit=0/0
+[posttrain][e3 i40/60] total=1.785552 dir=1.785552 blend=0.276597 inc=0.276597 λ=0.000±0.000 gnorm(L/N)=1.030/0.756 raw=1.030/0.756 ema=0.012/0.004 hit=0/0
+[posttrain][epoch 3] avg_total=1.948067 ok_steps=60 skipped=0
+[posttrain][e4 i0/60] total=2.274160 dir=2.274160 blend=0.264394 inc=0.264394 λ=0.000±0.000 gnorm(L/N)=1.130/1.144 raw=1.130/1.144 ema=0.011/0.003 hit=0/0
+[posttrain][e4 i20/60] total=1.791269 dir=1.791269 blend=0.254113 inc=0.254113 λ=0.000±0.000 gnorm(L/N)=0.992/0.799 raw=0.992/0.799 ema=0.010/0.003 hit=0/0
+[posttrain][e4 i40/60] total=1.577917 dir=1.577917 blend=0.263305 inc=0.263305 λ=0.000±0.000 gnorm(L/N)=0.840/0.738 raw=0.840/0.738 ema=0.011/0.003 hit=0/0
+[posttrain][epoch 4] avg_total=2.051843 ok_steps=60 skipped=0
+[posttrain][e5 i0/60] total=1.947066 dir=1.947066 blend=0.267322 inc=0.267322 λ=0.000±0.000 gnorm(L/N)=1.038/0.909 raw=1.038/0.909 ema=0.011/0.003 hit=0/0
+[posttrain][e5 i20/60] total=1.948350 dir=1.948350 blend=0.268504 inc=0.268504 λ=0.000±0.000 gnorm(L/N)=0.983/0.965 raw=0.983/0.965 ema=0.012/0.003 hit=0/0
+[posttrain][e5 i40/60] total=1.677140 dir=1.677140 blend=0.267990 inc=0.267990 λ=0.000±0.000 gnorm(L/N)=0.758/0.919 raw=0.758/0.919 ema=0.011/0.003 hit=0/0
+[posttrain][epoch 5] avg_total=1.979930 ok_steps=60 skipped=0
+[posttrain][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/70a/ckpt_last_WalkF_stage7_70a_fromfresh_20260317.pth
+[2026-03-17 23:38:46] === 70a replace zerophase warmstart ===
+[2026-03-17 23:38:46] === new70b_replace_lowdrift ===
+[2026-03-17 23:38:46] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/configs/posttrain_70b_replace_lowdrift_fromfresh_20260317.json --ckpt_in /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/warmstart/ckpt_last_70a_replace_zerophase_20260317.pth --out_dir /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/70b_replace_lowdrift --run_name WalkF_stage7_70b_replace_lowdrift_fromfresh_20260317 --posttrain_contacts_source pretrain_contact --posttrain_contacts_pretrain_clamp 1.0 --encoder_bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv_20260317.pt.best.pt --posttrain_contacts_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[LR-DBG:init] arg_lr=3.00e-04 opt_pg0=3.00e-04
+[posttrain] mode=train_direct_pose
+[posttrain] trainable=20 params: direct_pose_head.0.weight, direct_pose_head.0.bias, direct_pose_head.3.weight, direct_pose_head.3.bias, direct_pose_out_leg.weight, direct_pose_out_leg.bias, direct_pose_out_arm.weight, direct_pose_out_arm.bias ...
+[posttrain][e1 i0/60] total=2.000000 dir=2.000000 blend=0.273066 inc=0.273066 λ=0.000±0.000 gnorm(L/N)=1.000/1.000 raw=1.000/1.000 ema=0.014/0.003 hit=0/0
+[posttrain][e1 i20/60] total=1.322624 dir=1.322624 blend=0.268430 inc=0.268430 λ=0.000±0.000 gnorm(L/N)=0.584/0.739 raw=0.584/0.739 ema=0.010/0.003 hit=0/0
+[posttrain][e1 i40/60] total=1.667477 dir=1.667477 blend=0.271732 inc=0.271732 λ=0.000±0.000 gnorm(L/N)=0.833/0.834 raw=0.833/0.834 ema=0.007/0.002 hit=0/0
+[posttrain][epoch 1] avg_total=1.452126 ok_steps=60 skipped=0
+[posttrain][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/70b_replace_lowdrift/ckpt_last_WalkF_stage7_70b_replace_lowdrift_fromfresh_20260317.pth
+[2026-03-17 23:43:31] === 70R promote full trunk ===
+[2026-03-17 23:43:31] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 /Users/xingzhaorui/PycharmProjects/PythonProject/tools/run_posttrain_nonleg_trunk_ablation.py --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/configs/posttrain_70R_fromfresh_20260317.json --trunk-mode full --out-dir /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/70R --run-name WalkF_stage7_70R_fromfresh_s180_20260317 --epochs 1 --steps-per-epoch 180 --save-step-ckpts 0,1,5,20,60,180
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[LR-DBG:init] arg_lr=3.00e-04 opt_pg0=3.00e-04
+[ablation] trunk_mode=full extra_trainable=4
+[ablation] extra=direct_pose_head.0.weight, direct_pose_head.0.bias, direct_pose_head.3.weight, direct_pose_head.3.bias
+[ablation] total_trainable=12
+[posttrain][e1 i0/180] total=2.001372 dir=2.000000 blend=0.273066 inc=0.273066 λ=0.000±0.000 leg_align=6.858e-05 w=20.000 frac=1.886 gnorm(L/N)=1.000/1.000 raw=1.000/1.000 ema=0.005/0.001 hit=0/0 g(trunk/leg/non)=7.488e+00/nan/3.514e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i20/180] total=1.997396 dir=1.996096 blend=0.268430 inc=0.268430 λ=0.000±0.000 leg_align=6.505e-05 w=20.000 frac=1.823 gnorm(L/N)=0.910/1.086 raw=0.910/1.086 ema=0.005/0.002 hit=0/0 g(trunk/leg/non)=8.416e+00/nan/2.266e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i40/180] total=1.986394 dir=1.985065 blend=0.271732 inc=0.271732 λ=0.000±0.000 leg_align=6.644e-05 w=20.000 frac=1.836 gnorm(L/N)=0.972/1.013 raw=0.972/1.013 ema=0.005/0.001 hit=0/0 g(trunk/leg/non)=9.698e+00/nan/2.935e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i60/180] total=2.118056 dir=2.115878 blend=0.270010 inc=0.270010 λ=0.000±0.000 leg_align=1.089e-04 w=20.000 frac=1.753 gnorm(L/N)=1.153/0.963 raw=1.153/0.963 ema=0.005/0.001 hit=0/0 g(trunk/leg/non)=1.171e+01/nan/3.969e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i80/180] total=1.881570 dir=1.879721 blend=0.268465 inc=0.268465 λ=0.000±0.000 leg_align=9.243e-05 w=20.000 frac=1.685 gnorm(L/N)=1.008/0.872 raw=1.008/0.872 ema=0.005/0.001 hit=0/0 g(trunk/leg/non)=1.872e+01/nan/3.351e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i100/180] total=2.009863 dir=2.008057 blend=0.259423 inc=0.259423 λ=0.000±0.000 leg_align=9.029e-05 w=20.000 frac=1.818 gnorm(L/N)=0.935/1.073 raw=0.935/1.073 ema=0.005/0.001 hit=0/0 g(trunk/leg/non)=2.853e+01/nan/4.630e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i120/180] total=1.909429 dir=1.907529 blend=0.264361 inc=0.264361 λ=0.000±0.000 leg_align=9.498e-05 w=20.000 frac=1.758 gnorm(L/N)=0.998/0.909 raw=0.998/0.909 ema=0.005/0.001 hit=0/0 g(trunk/leg/non)=3.217e+01/nan/3.166e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i140/180] total=1.823679 dir=1.822206 blend=0.253204 inc=0.253204 λ=0.000±0.000 leg_align=7.363e-05 w=20.000 frac=1.772 gnorm(L/N)=0.792/1.030 raw=0.792/1.030 ema=0.005/0.001 hit=0/0 g(trunk/leg/non)=2.551e+01/nan/3.460e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i160/180] total=2.203281 dir=2.200864 blend=0.276597 inc=0.276597 λ=0.000±0.000 leg_align=1.209e-04 w=20.000 frac=1.890 gnorm(L/N)=1.177/1.024 raw=1.177/1.024 ema=0.005/0.001 hit=0/0 g(trunk/leg/non)=1.552e+01/nan/3.713e+01 legω=nan gr=nan grω=nan
+[posttrain][epoch 1] avg_total=2.001228 ok_steps=180 skipped=0
+[ablation][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/70R/ckpt_last_WalkF_stage7_70R_fromfresh_s180_20260317.pth
+[2026-03-17 23:56:56] === 71 lr=3e-4 ===
+[2026-03-17 23:56:56] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/configs/posttrain_71_lr3e4_fromfresh_20260317.json --ckpt_in /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/70R/ckpt_last_WalkF_stage7_70R_fromfresh_s180_20260317.pth --out_dir /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/71_lr3e4 --run_name WalkF_stage7_71_lr3e4_fromfresh_20260317 --posttrain_contacts_source pretrain_contact --posttrain_contacts_pretrain_clamp 1.0 --encoder_bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv_20260317.pt.best.pt --posttrain_contacts_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[LR-DBG:init] arg_lr=3.00e-04 opt_pg0=3.00e-04
+[posttrain] mode=train_direct_pose
+[posttrain] trainable=6 params: direct_pose_leg_head.0.weight, direct_pose_leg_head.0.bias, direct_pose_leg_head.3.weight, direct_pose_leg_head.3.bias, direct_pose_leg_head.6.weight, direct_pose_leg_head.6.bias
+[posttrain][e1 i0/60] total=2.000000 dir=2.000000 blend=0.273066 inc=0.273066 λ=0.000±0.000 gnorm(L/N)=1.000/1.000 raw=1.000/1.000 ema=0.005/0.001 hit=0/0
+[posttrain][e1 i20/60] total=1.985433 dir=1.985433 blend=0.268430 inc=0.268430 λ=0.000±0.000 gnorm(L/N)=0.730/1.256 raw=0.730/1.256 ema=0.004/0.001 hit=0/0
+[posttrain][e1 i40/60] total=2.231733 dir=2.231733 blend=0.271732 inc=0.271732 λ=0.000±0.000 gnorm(L/N)=1.034/1.198 raw=1.034/1.198 ema=0.004/0.001 hit=0/0
+[posttrain][epoch 1] avg_total=1.836337 ok_steps=60 skipped=0
+[posttrain][e2 i0/60] total=2.133708 dir=2.133708 blend=0.270010 inc=0.270010 λ=0.000±0.000 gnorm(L/N)=1.109/1.025 raw=1.109/1.025 ema=0.003/0.001 hit=0/0
+[posttrain][e2 i20/60] total=1.857292 dir=1.857292 blend=0.268465 inc=0.268465 λ=0.000±0.000 gnorm(L/N)=0.889/0.968 raw=0.889/0.968 ema=0.003/0.001 hit=0/0
+[posttrain][e2 i40/60] total=1.837682 dir=1.837682 blend=0.259423 inc=0.259423 λ=0.000±0.000 gnorm(L/N)=0.849/0.988 raw=0.849/0.988 ema=0.003/0.001 hit=0/0
+[posttrain][epoch 2] avg_total=1.977817 ok_steps=60 skipped=0
+[posttrain][e3 i0/60] total=1.809273 dir=1.809273 blend=0.264361 inc=0.264361 λ=0.000±0.000 gnorm(L/N)=1.004/0.805 raw=1.004/0.805 ema=0.003/0.001 hit=0/0
+[posttrain][e3 i20/60] total=1.697627 dir=1.697627 blend=0.253204 inc=0.253204 λ=0.000±0.000 gnorm(L/N)=0.795/0.903 raw=0.795/0.903 ema=0.003/0.001 hit=0/0
+[posttrain][e3 i40/60] total=2.097986 dir=2.097986 blend=0.276597 inc=0.276597 λ=0.000±0.000 gnorm(L/N)=1.132/0.966 raw=1.132/0.966 ema=0.003/0.001 hit=0/0
+[posttrain][epoch 3] avg_total=1.958066 ok_steps=60 skipped=0
+[posttrain][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/71_lr3e4/ckpt_last_WalkF_stage7_71_lr3e4_fromfresh_20260317.pth
+[2026-03-18 00:10:46] === 72 lr=1e-4 ===
+[2026-03-18 00:10:46] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/configs/posttrain_72_lr1e4_fromfresh_20260317.json --ckpt_in /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/71_lr3e4/ckpt_last_WalkF_stage7_71_lr3e4_fromfresh_20260317.pth --out_dir /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/72_lr1e4 --run_name WalkF_stage7_72_lr1e4_fromfresh_20260317 --posttrain_contacts_source pretrain_contact --posttrain_contacts_pretrain_clamp 1.0 --encoder_bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv_20260317.pt.best.pt --posttrain_contacts_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[posttrain] mode=train_direct_pose
+[posttrain] trainable=6 params: direct_pose_leg_head.0.weight, direct_pose_leg_head.0.bias, direct_pose_leg_head.3.weight, direct_pose_leg_head.3.bias, direct_pose_leg_head.6.weight, direct_pose_leg_head.6.bias
+[posttrain][e1 i0/60] total=2.000673 dir=2.000000 blend=0.273066 inc=0.273066 λ=0.000±0.000 leg_align=3.365e-05 w=20.000 frac=1.879 gnorm(L/N)=1.000/1.000 raw=1.000/1.000 ema=0.003/0.001 hit=0/0
+[posttrain][e1 i20/60] total=2.386562 dir=2.385878 blend=0.268430 inc=0.268430 λ=0.000±0.000 leg_align=3.419e-05 w=20.000 frac=1.830 gnorm(L/N)=1.130/1.256 raw=1.130/1.256 ema=0.002/0.001 hit=0/0
+[posttrain][e1 i40/60] total=2.331325 dir=2.330825 blend=0.271732 inc=0.271732 λ=0.000±0.000 leg_align=2.498e-05 w=20.000 frac=1.842 gnorm(L/N)=1.133/1.198 raw=1.133/1.198 ema=0.002/0.001 hit=0/0
+[posttrain][epoch 1] avg_total=1.900098 ok_steps=60 skipped=0
+[posttrain][e2 i0/60] total=2.393668 dir=2.392818 blend=0.270010 inc=0.270010 λ=0.000±0.000 leg_align=4.251e-05 w=20.000 frac=1.754 gnorm(L/N)=1.368/1.025 raw=1.368/1.025 ema=0.002/0.001 hit=0/0
+[posttrain][e2 i20/60] total=1.914537 dir=1.914188 blend=0.268465 inc=0.268465 λ=0.000±0.000 leg_align=1.745e-05 w=20.000 frac=1.677 gnorm(L/N)=0.946/0.968 raw=0.946/0.968 ema=0.002/0.001 hit=0/0
+[posttrain][e2 i40/60] total=1.916023 dir=1.915705 blend=0.259423 inc=0.259423 λ=0.000±0.000 leg_align=1.589e-05 w=20.000 frac=1.814 gnorm(L/N)=0.927/0.988 raw=0.927/0.988 ema=0.002/0.001 hit=0/0
+[posttrain][epoch 2] avg_total=1.999066 ok_steps=60 skipped=0
+[posttrain][e3 i0/60] total=1.902514 dir=1.902061 blend=0.264361 inc=0.264361 λ=0.000±0.000 leg_align=2.266e-05 w=20.000 frac=1.769 gnorm(L/N)=1.097/0.805 raw=1.097/0.805 ema=0.002/0.001 hit=0/0
+[posttrain][e3 i20/60] total=1.765927 dir=1.765691 blend=0.253204 inc=0.253204 λ=0.000±0.000 leg_align=1.179e-05 w=20.000 frac=1.760 gnorm(L/N)=0.863/0.903 raw=0.863/0.903 ema=0.002/0.001 hit=0/0
+[posttrain][e3 i40/60] total=1.913183 dir=1.912871 blend=0.276597 inc=0.276597 λ=0.000±0.000 leg_align=1.561e-05 w=20.000 frac=1.888 gnorm(L/N)=0.946/0.966 raw=0.946/0.966 ema=0.002/0.001 hit=0/0
+[posttrain][epoch 3] avg_total=1.969416 ok_steps=60 skipped=0
+[posttrain][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/72_lr1e4/ckpt_last_WalkF_stage7_72_lr1e4_fromfresh_20260317.pth
+[2026-03-18 00:25:09] === lambda ===
+[2026-03-18 00:25:09] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/config/posttrain_WalkF_stage7_lambda_final_calib_20260227_fromarmchain_fullcompat.json --ckpt_in /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/72_lr1e4/ckpt_last_WalkF_stage7_72_lr1e4_fromfresh_20260317.pth --out_dir /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/lambda --run_name WalkF_stage7_lambda_fromfresh_20260317 --posttrain_contacts_source pretrain_contact --posttrain_contacts_pretrain_clamp 1.0 --encoder_bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv_20260317.pt.best.pt --posttrain_contacts_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[LR-DBG:init] arg_lr=2.00e-04 opt_pg0=2.00e-04
+[posttrain] mode=train_lambda_head
+[posttrain] trainable=6 params: lambda_fusion_head.0.weight, lambda_fusion_head.0.bias, lambda_fusion_head.1.weight, lambda_fusion_head.1.bias, lambda_fusion_head.4.weight, lambda_fusion_head.4.bias
+[posttrain][e1 i0/200] total=0.052150 blend=0.052150 λ=0.119±0.000 inc=0.058699 dir=0.004217 λ_eff=0.116±0.017 r=0.971
+[posttrain][e1 i20/200] total=0.032903 blend=0.032903 λ=0.199±0.016 inc=0.040282 dir=0.004224 λ_eff=0.193±0.032 r=0.971
+[posttrain][e1 i40/200] total=0.007170 blend=0.007170 λ=0.703±0.114 inc=0.015604 dir=0.004212 λ_eff=0.683±0.149 r=0.971
+[posttrain][e1 i60/200] total=0.004619 blend=0.004619 λ=0.933±0.162 inc=0.012774 dir=0.004211 λ_eff=0.906±0.206 r=0.971
+[posttrain][e1 i80/200] total=0.004775 blend=0.004775 λ=0.947±0.174 inc=0.012893 dir=0.004262 λ_eff=0.919±0.216 r=0.971
+[posttrain][e1 i100/200] total=0.004492 blend=0.004492 λ=0.951±0.168 inc=0.012613 dir=0.004173 λ_eff=0.924±0.211 r=0.971
+[posttrain][e1 i120/200] total=0.004711 blend=0.004711 λ=0.952±0.171 inc=0.012829 dir=0.004261 λ_eff=0.924±0.214 r=0.971
+[posttrain][e1 i140/200] total=0.004549 blend=0.004549 λ=0.954±0.164 inc=0.012624 dir=0.004207 λ_eff=0.927±0.209 r=0.971
+[posttrain][e1 i160/200] total=0.004588 blend=0.004588 λ=0.955±0.165 inc=0.012664 dir=0.004203 λ_eff=0.928±0.209 r=0.971
+[posttrain][e1 i180/200] total=0.004523 blend=0.004523 λ=0.957±0.159 inc=0.012641 dir=0.004196 λ_eff=0.929±0.206 r=0.971
+[posttrain][epoch 1] avg_total=0.010208 ok_steps=200 skipped=0
+[posttrain][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/lambda/ckpt_last_WalkF_stage7_lambda_fromfresh_20260317.pth
+[2026-03-18 00:30:21] === eval stage6 (model) ===
+[2026-03-18 00:30:21] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/stage6/ckpt_last_WalkF_stage6_fromfresh_20260317.pth --rounds 5 --depth 3 --time-index-mode cycle --event_clock auto --phase_reset_source none --contacts_meas_source model --lambda_fusion_apply --log_contacts --export_direct_arm_probe --export_joint_direct_geolocal_series --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/stage6 --force
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[FreeRun][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/stage6/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+[2026-03-18 00:30:27] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 /Users/xingzhaorui/PycharmProjects/PythonProject/tools/phasea_group_summary.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/stage6/Walk_F_freerun_cycles.json --cycle_gte 1 --drop_wrap --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/stage6_group_summary.json
+/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/stage6_group_summary.json
+[2026-03-18 00:30:29] === eval 70a (model) ===
+[2026-03-18 00:30:29] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/70a/ckpt_last_WalkF_stage7_70a_fromfresh_20260317.pth --rounds 5 --depth 3 --time-index-mode cycle --event_clock auto --phase_reset_source none --contacts_meas_source model --lambda_fusion_apply --log_contacts --export_direct_arm_probe --export_joint_direct_geolocal_series --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/70a --force
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[FreeRun][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/70a/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+[2026-03-18 00:30:36] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 /Users/xingzhaorui/PycharmProjects/PythonProject/tools/phasea_group_summary.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/70a/Walk_F_freerun_cycles.json --cycle_gte 1 --drop_wrap --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/70a_group_summary.json
+/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/70a_group_summary.json
+[2026-03-18 00:30:38] === eval new70b_replace_lowdrift (model) ===
+[2026-03-18 00:30:38] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/70b_replace_lowdrift/ckpt_last_WalkF_stage7_70b_replace_lowdrift_fromfresh_20260317.pth --rounds 5 --depth 3 --time-index-mode cycle --event_clock auto --phase_reset_source none --contacts_meas_source model --lambda_fusion_apply --log_contacts --export_direct_arm_probe --export_joint_direct_geolocal_series --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/new70b_replace_lowdrift --force
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[FreeRun][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/new70b_replace_lowdrift/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+[2026-03-18 00:30:45] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 /Users/xingzhaorui/PycharmProjects/PythonProject/tools/phasea_group_summary.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/new70b_replace_lowdrift/Walk_F_freerun_cycles.json --cycle_gte 1 --drop_wrap --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/new70b_replace_lowdrift_group_summary.json
+/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/new70b_replace_lowdrift_group_summary.json
+[2026-03-18 00:30:47] === eval 70R (model) ===
+[2026-03-18 00:30:47] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/70R/ckpt_last_WalkF_stage7_70R_fromfresh_s180_20260317.pth --rounds 5 --depth 3 --time-index-mode cycle --event_clock auto --phase_reset_source none --contacts_meas_source model --lambda_fusion_apply --log_contacts --export_direct_arm_probe --export_joint_direct_geolocal_series --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/70R --force
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[FreeRun][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/70R/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+[2026-03-18 00:30:53] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 /Users/xingzhaorui/PycharmProjects/PythonProject/tools/phasea_group_summary.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/70R/Walk_F_freerun_cycles.json --cycle_gte 1 --drop_wrap --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/70R_group_summary.json
+/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/70R_group_summary.json
+[2026-03-18 00:30:55] === eval 71_lr3e4 (model) ===
+[2026-03-18 00:30:55] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/71_lr3e4/ckpt_last_WalkF_stage7_71_lr3e4_fromfresh_20260317.pth --rounds 5 --depth 3 --time-index-mode cycle --event_clock auto --phase_reset_source none --contacts_meas_source model --lambda_fusion_apply --log_contacts --export_direct_arm_probe --export_joint_direct_geolocal_series --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/71_lr3e4 --force
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[FreeRun][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/71_lr3e4/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+[2026-03-18 00:31:01] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 /Users/xingzhaorui/PycharmProjects/PythonProject/tools/phasea_group_summary.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/71_lr3e4/Walk_F_freerun_cycles.json --cycle_gte 1 --drop_wrap --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/71_lr3e4_group_summary.json
+/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/71_lr3e4_group_summary.json
+[2026-03-18 00:31:03] === eval 72_lr1e4 (model) ===
+[2026-03-18 00:31:03] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/72_lr1e4/ckpt_last_WalkF_stage7_72_lr1e4_fromfresh_20260317.pth --rounds 5 --depth 3 --time-index-mode cycle --event_clock auto --phase_reset_source none --contacts_meas_source model --lambda_fusion_apply --log_contacts --export_direct_arm_probe --export_joint_direct_geolocal_series --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/72_lr1e4 --force
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[FreeRun][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/72_lr1e4/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+[2026-03-18 00:31:09] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 /Users/xingzhaorui/PycharmProjects/PythonProject/tools/phasea_group_summary.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/72_lr1e4/Walk_F_freerun_cycles.json --cycle_gte 1 --drop_wrap --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/72_lr1e4_group_summary.json
+/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/72_lr1e4_group_summary.json
+[2026-03-18 00:31:10] === eval lambda (model) ===
+[2026-03-18 00:31:10] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/lambda/ckpt_last_WalkF_stage7_lambda_fromfresh_20260317.pth --rounds 5 --depth 3 --time-index-mode cycle --event_clock auto --phase_reset_source none --contacts_meas_source model --lambda_fusion_apply --log_contacts --export_direct_arm_probe --export_joint_direct_geolocal_series --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/lambda --force
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[FreeRun][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/lambda/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+[2026-03-18 00:31:17] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 /Users/xingzhaorui/PycharmProjects/PythonProject/tools/phasea_group_summary.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/lambda/Walk_F_freerun_cycles.json --cycle_gte 1 --drop_wrap --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/lambda_group_summary.json
+/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_model_source/lambda_group_summary.json
+[2026-03-18 00:31:19] === eval lambda (pretrain_contact) ===
+[2026-03-18 00:31:19] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_posttrain_pipeline_from_bestfree_20260317/lambda/ckpt_last_WalkF_stage7_lambda_fromfresh_20260317.pth --rounds 5 --depth 3 --time-index-mode cycle --event_clock auto --phase_reset_source none --contacts_meas_source pretrain_contact --lambda_fusion_apply --log_contacts --export_direct_arm_probe --export_joint_direct_geolocal_series --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_pretrain_contact/lambda --force --contacts_meas_pretrain_clamp 1.0 --contacts_meas_pretrain_affine_stats /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json --encoder-bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv_20260317.pt.best.pt
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[FreeRun][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_pretrain_contact/lambda/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+[2026-03-18 00:31:25] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 /Users/xingzhaorui/PycharmProjects/PythonProject/tools/phasea_group_summary.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_pretrain_contact/lambda/Walk_F_freerun_cycles.json --cycle_gte 1 --drop_wrap --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_pretrain_contact/lambda_group_summary.json
+/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_posttrain_pipeline_from_bestfree_20260317/eval_pretrain_contact/lambda_group_summary.json
+[2026-03-18 00:31:27] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 /Users/xingzhaorui/PycharmProjects/PythonProject/tools/check_posttrain_newflow_active_configs.py
+[2026-03-18 00:31:27] RUN /Users/xingzhaorui/miniconda3/envs/train/bin/python3 /Users/xingzhaorui/PycharmProjects/PythonProject/tools/check_posttrain_legacy_code_guard.py
+[FAIL] posttrain legacy guard failed (144 issue(s)):
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:395: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:396: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:397: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:398: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:403: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:404: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:405: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:406: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:425: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:5632: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:5635: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:5638: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:5644: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:5646: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:5648: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:6243: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:6244: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:6245: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:6246: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:6247: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:6248: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:6249: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:6250: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:6251: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/training_MPL.py:6794: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:550: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:562: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:572: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:573: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:574: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:575: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:576: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:577: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:578: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:579: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:580: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:751: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:752: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:753: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:754: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:755: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:756: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:757: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:758: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:759: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:760: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:761: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:762: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:763: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:764: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:765: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:766: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:767: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:768: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:769: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:770: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:771: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:772: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:774: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:775: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:776: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:777: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:778: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:779: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:780: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:781: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:782: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:784: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:786: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:787: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1310: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1311: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1312: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1367: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1369: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1390: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1391: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1392: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1393: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1394: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1399: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1401: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1404: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1405: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1406: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1414: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1419: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1420: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1967: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1972: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1981: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:1985: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:2020: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:2115: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:2127: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:2128: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:2142: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:2144: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:2145: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:2158: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:3159: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:3160: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:3161: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/models.py:3164: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:145: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5231: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5234: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5235: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5238: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5241: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5251: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5252: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5305: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5306: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5307: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5308: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5309: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5310: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5311: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5312: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/posttrain.py:5313: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:1269: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:1270: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:1273: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:1276: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:1316: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:1508: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:1509: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:1510: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:1511: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:1512: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:1513: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:1514: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:1515: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:1516: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:3140: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:3150: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:3181: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:3182: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:3425: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:10101: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:10110: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:10119: forbidden token must not appear: `contact_phase_state`
+ - /Users/xingzhaorui/PycharmProjects/PythonProject/train/validate/run_freerun_cycles.py:10130: forbidden token must not appear: `contact_phase_state`
