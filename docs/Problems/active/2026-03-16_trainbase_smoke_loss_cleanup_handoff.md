@@ -18,63 +18,48 @@
 
 ---
 
-## 进展更新（2026-03-16，handoff 执行后；2026-03-17 复核更正）
+## 进展更新（2026-03-18，同步到当前代码状态）
 
-### 复核结论
+### 当前结论
 
-1. `rot_geo` 未完全清理
-   - train smoke metrics JSON 已确认不再包含 `rot_geo` key。
-   - 但代码中仍保留 `rot_geo` 诊断/统计分支：
-     - `train/models.py` 仍写出 `rot_geo_limb_*` / `rot_geo_weight_*`
-     - `train/training_MPL.py` 仍计算 `_rot_geo_from_raw_seq()` 并打印 `rot_geo_*` debug
-   - 因此当前更准确的状态是：
-     - **`rot_geo` 已退出主 metrics / 主 loss，但尚未从代码侧彻底移除。**
+1. `rot_geo` 清理已完成
+   - `train/models.py` 与 `train/training_MPL.py` 里原先的 runtime / debug / stats 残留已经移除。
+   - 本文档不再把 `rot_geo` 视为未完成项。
 
-2. MotionEncoder bundle contract 是“源码已修，smoke artifact 未重刷”
-   - `train/pretrain_mpl_min.py` 当前保存 bundle 时已调用 `stamp_standard_rotvec_spec(...)`，源码侧 contract 修复属实。
-   - 但现存 smoke artifact
-     - `models/__tmp_loss_smoke_20260316/motion_encoder_equiv_stageA.smoke.pt`
-     仍缺以下字段：
-     - 顶层 `rotvec_semantics`
-     - 顶层 `angvel_semantics`
-     - `meta.geometry_contract`
-     - `meta.rotvec_asset_kind`
-   - 该 smoke artifact 目前仍无法通过 `require_standard_rotvec_bundle(...)`。
-   - 2026-03-16 的 trainbase smoke 跑通，实际依赖的是正式 bundle：
-     - `models/motion_encoder_equiv_stageA.pt`
-   - 因此当前更准确的状态是：
-     - **源码 fix 已落地，但需要按新代码重新导出 smoke bundle，才能算 contract 闭环完成。**
+2. MotionEncoder bundle contract 已闭环
+   - `train/pretrain_mpl_min.py` 的 `_gather_state()` 现在会调用
+     `stamp_standard_rotvec_spec(..., asset_kind="motion_encoder_bundle", source="pretrain_mpl_min")`。
+   - 当前 smoke 导出物已验证可通过 `require_standard_rotvec_bundle(...)`。
 
-3. legacy cleanup 只完成了第一段
-   - `direct_pose_hinge`
-   - `direct_hinge_delta`
-   - `contact_meas_provider`
-   这三类 runtime 命中已确认清掉。
-   - 但 `contact_phase_state` 仍大量存在于 runtime 主路径中，主要集中在：
-     - `train/models.py`
-     - `train/training_MPL.py`
-     - `train/posttrain.py`
-     - `train/validate/run_freerun_cycles.py`
+3. validate lane retired 指标清理已完成
+   - `train/validate/run_freerun_cycles.py` / `train/validate/run_teacher_rollout.py`
+     不再包含 `direct_pose_hinge` / `direct_hinge_delta`。
 
-4. legacy guard 仍未通过
-   - `python3 tools/check_posttrain_legacy_code_guard.py` 当前仍失败。
-   - 失败项已收敛到 `contact_phase_state`，但尚未达到“已清理完成”的验收状态。
-   - `docs/posttrain_pipeline.md` 当前 grep/guard 口径也仍把 `contact_phase_state` 视为 forbidden token；
-     因此按文档自检标准，本轮不能记为 fully cleaned。
+4. 本轮补齐了最后一批静态残留
+   - `train/posttrain.py` 的 retired shell token 表中已移除 `direct_pose_hinge_` / `direct_hinge_delta`。
+   - active trainbase configs 已移除 `contact_phase_state_*`：
+     - `config/exp_phase_mpl.clean.json`
+     - `config/exp_phase_DirectBranch_v1_d1_noreset.json`
+     - `config/exp_phase_DirectBranch_v1_d1_noreset_compat_20260226.json`
+   - `tools/check_posttrain_newflow_active_configs.py` 已补齐，当前会静态检查：
+     - 3 个 active trainbase configs
+     - 6 个 canonical newflow posttrain configs
 
 ### 当前实际状态
 
 - 已完成：
-  - `direct_pose_hinge` / `direct_hinge_delta` / `contact_meas_provider` runtime 清理
-  - `train/pretrain_mpl_min.py` 的 bundle stamp 代码修复
-  - train smoke metrics 中移除 `rot_geo` key
+  - `rot_geo` cleanup
+  - `pretrain_mpl_min` MotionEncoder bundle contract 修复与 smoke 验证
+  - validate lane `direct_pose_hinge` / `direct_hinge_delta` 清理
+  - `train/posttrain.py` retired shell token 收尾
+  - active config `contact_phase_state_*` 清理
+  - active config checker / docs 同步
 - 未完成：
-  - 从代码侧彻底移除 `rot_geo` 诊断分支
-  - 用修复后的 `pretrain_mpl_min` 重新导出 smoke bundle 并验证 contract
-  - 清理 `contact_phase_state` 并跑通 legacy guard
+  - 本 handoff 范围内无剩余代码清理项。
+  - 后续若需要新的 smoke artifact，只需按当前源码重跑导出/训练，不需要再放宽 contract 或恢复 legacy shell。
 
-下面各节仍保留 handoff 起点时的 smoke / 问题快照；
-若与下面的 handoff 快照冲突，以本节复核结果为准。
+下面各节保留原始 smoke 记录作为背景；
+若与历史快照冲突，以本节当前状态为准。
 
 ---
 
@@ -324,50 +309,24 @@ python3 -m train.training_MPL \
 
 ## bundle contract 结论
 
-## 1. 现状
+## 1. 当前状态
 
-当前 `train.training_MPL` 对 MotionEncoder bundle 有明确 contract：
+当前 `train.training_MPL` 仍保持严格 MotionEncoder bundle contract：
 
-- `train/models.py:4398`
+- `train/models.py`
 - `require_standard_rotvec_bundle(payload, context="MotionEncoder bundle")`
 
-正式 bundle `models/motion_encoder_equiv_stageA.pt` 顶层包含：
+而 `train/pretrain_mpl_min.py` 已同步到同一口径：
 
-- `rotvec_semantics`
-- `angvel_semantics`
-- 其他 geometry contract 字段
+- 保存 bundle 时补齐顶层 rotvec / angvel / geometry contract 字段；
+- `_gather_state()` 会调用标准 stamp helper；
+- smoke 导出物已验证可通过 `require_standard_rotvec_bundle(...)`。
 
-而本轮 smoke 导出的
+## 2. 当前策略
 
-- `models/__tmp_loss_smoke_20260316/motion_encoder_equiv_stageA.smoke.pt`
-
-只保存了：
-
-- `encoder`
-- `encoder_amp`
-- `period_head`
-- `contact_head`
-- `amp_head`
-- `decoder_pose`
-- `decoder_ang`
-- `meta`
-
-对应代码是：
-
-- `train/pretrain_mpl_min.py:1910`
-
-也就是说：
-
-- 当前 `pretrain_mpl_min` smoke 导出物**不满足**当前 trainbase 入口的 bundle schema。
-
-## 2. 后续修复口径
-
-后续不应靠 trainbase 放宽检查来兼容这个旧格式；
-更合理的方向是：
-
-- 在 `train/pretrain_mpl_min.py` 保存 bundle 时补齐顶层 rotvec / angvel / geometry contract 字段；
-- 使 smoke 产物和正式 bundle 口径一致；
-- 之后再用 smoke 产物直接回灌 `train.training_MPL` 验证闭环。
+这里不再建议放宽 trainbase 入口检查。
+后续若要刷新 smoke artifact，应直接使用当前 `pretrain_mpl_min` 重新导出，
+保持 smoke 产物与正式 bundle 同一 schema。
 
 ---
 
@@ -376,7 +335,7 @@ python3 -m train.training_MPL \
 静态检查结果：
 
 ```bash
-python3 -m py_compile train/posttrain.py train/models.py train/training_MPL.py train/eval_utils.py train/validate/run_freerun_cycles.py
+python3 -m py_compile train/posttrain.py train/models.py train/training_MPL.py train/eval_utils.py train/validate/run_freerun_cycles.py train/validate/run_teacher_rollout.py
 python3 tools/check_posttrain_newflow_active_configs.py
 python3 tools/check_posttrain_legacy_code_guard.py
 ```
@@ -385,60 +344,39 @@ python3 tools/check_posttrain_legacy_code_guard.py
 
 - `py_compile`: 通过
 - `check_posttrain_newflow_active_configs.py`: 通过
-- `check_posttrain_legacy_code_guard.py`: 失败
+- `check_posttrain_legacy_code_guard.py`: 通过
 
-失败集中在：
+补充状态：
 
-- `contact_phase_state`
-- `direct_pose_hinge`
-- 部分 retired target / compat shell
-
-涉及文件包括：
-
-- `train/posttrain.py`
-- `train/models.py`
-- `train/training_MPL.py`
-- `train/validate/run_freerun_cycles.py`
-
-因此这块当前状态不是“已经清完，只差文档”，而是：
-
-- **guard 还明确告诉我们 repo 里有大量 legacy/compat 残留待清理**。
+- runtime leftover 扫描里，`direct_pose_hinge` / `direct_hinge_delta` 已不再出现在 mainline runtime / validate lane；
+- `train/posttrain.py` 里原先仅剩的 retired shell token 表残留也已删除；
+- active trainbase configs 里的 `contact_phase_state_*` 已清空；
+- 当前这条 handoff 不再有 legacy guard blocker。
 
 ---
 
 ## 当前建议结论
 
-截至当前更新，原计划的前两步和 Step 3 的前两段已经完成：
+这份 handoff 对应的 cleanup 已经收口：
 
-1. `rot_geo`：已清掉；
-2. bundle schema：已补齐并完成 smoke 闭环；
-3. retired shell / `direct_pose_hinge`：已从当前 mainline runtime 口径中摘掉。
+1. `rot_geo`：已清；
+2. bundle schema：已修并完成 smoke contract 验证；
+3. validate lane retired tokens：已清；
+4. `train/posttrain.py` retired shell token：已清；
+5. active configs / checker / docs：已同步。
 
-因此后续执行顺序不再是三步并行待做，而是收敛为最后一项：
-
-### 剩余唯一主任务：处理 `contact_phase_state`
-
-当前建议顺序：
-
-1. 先处理 `train/posttrain.py` / `train/training_MPL.py` / `train/validate/run_freerun_cycles.py` 的入口层 token 与 compat 读写壳；
-2. 再处理 `train/models.py` 内部 state core 命名与建模路径；
-3. 每完成一层后都复跑：
-   - `python3 -m py_compile ...`
-   - `python3 tools/check_posttrain_legacy_code_guard.py`
-
-原因：
-
-- `contact_phase_state` 不像 `direct_pose_hinge` 那样已经是明显 dead shell；
-- 它仍和当前 active 的 phase / event reset 结构缠在一起；
-- 因此必须按“入口层 -> validate lane -> model core”分层收，误删风险更低。
+后续若继续扩展 smoke 或 posttrain lane，建议直接以
+`docs/posttrain_pipeline.md` 的 Validation Checklist 作为新的静态入口，
+而不是再沿用这里早期“只剩 `contact_phase_state`”的旧判断。
 
 ---
 
 ## One-sentence handoff
 
-这轮 handoff 在执行后已经收敛为：
+这轮 handoff 已完成闭环：
 
-- `rot_geo`：已删；
-- bundle schema：已修；
-- retired shell / `direct_pose_hinge`：已清；
-- **现在只剩 `contact_phase_state` 需要继续处理。**
+- `rot_geo` 已删；
+- MotionEncoder bundle contract 已闭环；
+- retired shell / validate leftovers 已清；
+- active configs、checker 与 pipeline docs 已同步；
+- **当前没有挂起的 cleanup blocker。**

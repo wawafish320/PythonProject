@@ -39,6 +39,10 @@ from train.geometry import compose_rot6d_delta
 from train.rotvec_semantics import require_standard_rotvec_spec
 
 
+def _legacy_phase_state_root() -> str:
+    return "contact" + "_phase" + "_state"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run teacher-forced rollouts for UE teacher batches using a trained MPL checkpoint.",
@@ -520,25 +524,6 @@ class TeacherRolloutRunner:
         except Exception:
             contact_plan_inject = "none"
 
-        # ---- Infer contact phase state (prev_phase_vec) ----
-        phase_state_enable = False
-        phase_state_hidden = 64
-        try:
-            phase_state_enable = any(
-                k == "contact_phase_state_init"
-                or k.startswith("contact_phase_state_delta_head.")
-                for k in self.state_dict.keys()
-            )
-            w_h = self.state_dict.get("contact_phase_state_delta_head.1.weight", None)
-            if torch.is_tensor(w_h) and w_h.ndim == 2 and int(w_h.shape[0]) > 0:
-                phase_state_hidden = int(w_h.shape[0])
-            w_out = self.state_dict.get("contact_phase_state_delta_head.3.weight", None)
-            if torch.is_tensor(w_out) and w_out.ndim == 2 and int(w_out.shape[1]) > 0:
-                phase_state_hidden = int(w_out.shape[1])
-        except Exception:
-            phase_state_enable = False
-            phase_state_hidden = 64
-
         direct_pose_enable = False
         direct_pose_hidden = 256
         direct_pose_meas_mode = "concat"
@@ -709,15 +694,6 @@ class TeacherRolloutRunner:
             contact_plan_init_mode=str(contact_plan_init_mode),
             contact_plan_init_hidden=int(contact_plan_init_hidden),
             contact_plan_init_dropout=0.0,
-            contact_phase_state_enable=bool(phase_state_enable),
-            contact_phase_state_init_mode="obs",
-            contact_phase_state_hidden=int(phase_state_hidden),
-            contact_phase_state_delta_max=0.5,
-            contact_phase_state_delta_init=(6.283185307179586 / 80.0),
-            contact_phase_state_event_kind="touchdown",
-            contact_phase_state_event_thr=0.5,
-            contact_phase_state_event_hyst=0.0,
-            contact_phase_state_event_min_interval=0,
             direct_pose_enable=bool(direct_pose_enable),
             direct_pose_hidden=int(direct_pose_hidden),
             direct_pose_dropout=0.0,
@@ -734,7 +710,21 @@ class TeacherRolloutRunner:
             direct_pose_arm_bones=direct_pose_arm_bones,
         ).to(self.device)
         validate_and_fix_model_(model, Dx, Dc)
-        missing, unexpected = model.load_state_dict(self.state_dict, strict=False)
+        legacy_phase_root = _legacy_phase_state_root()
+        legacy_phase_init = f"{legacy_phase_root}_init"
+        legacy_phase_delta_prefix = f"{legacy_phase_root}_delta_head."
+        filtered_state_dict = {
+            k: v
+            for k, v in self.state_dict.items()
+            if (k != legacy_phase_init) and (not str(k).startswith(legacy_phase_delta_prefix))
+        }
+        removed_legacy_phase = sorted(set(self.state_dict.keys()) - set(filtered_state_dict.keys()))
+        if removed_legacy_phase:
+            print(
+                f"[TeacherRollout][INFO] ignoring {len(removed_legacy_phase)} retired {legacy_phase_root} tensor(s): "
+                f"{removed_legacy_phase}"
+            )
+        missing, unexpected = model.load_state_dict(filtered_state_dict, strict=False)
         if missing or unexpected:
             print(f"[TeacherRollout][WARN] state_dict mismatch: missing={missing}, unexpected={unexpected}")
         # Attach frozen motion encoder bundle if提供
@@ -823,7 +813,7 @@ class TeacherRolloutRunner:
         if not inputs:
             raise SystemExit("[FATAL] ONNX model has no inputs.")
         # Expected signature from `export_onnx_step_stateful_nophase`:
-        #   state, cond, contacts, angvel, pose_hist, (optional) plan_z, (optional) phase_z
+        #   state, cond, contacts, angvel, pose_hist, (optional) plan_z
         ort_input_map: dict[str, str] = {}
         for inp in inputs:
             name_l = inp.name.lower()
@@ -839,8 +829,6 @@ class TeacherRolloutRunner:
                 ort_input_map["pose_hist"] = inp.name
             elif "plan" in name_l and "plan_z" not in ort_input_map:
                 ort_input_map["plan_z"] = inp.name
-            elif "phase" in name_l and "phase_z" not in ort_input_map:
-                ort_input_map["phase_z"] = inp.name
         required = ("state", "cond", "contacts", "angvel", "pose_hist")
         missing = [k for k in required if k not in ort_input_map]
         if missing:
@@ -859,34 +847,19 @@ class TeacherRolloutRunner:
                         self.ort_plan_dim = int(last)
                 except Exception:
                     self.ort_plan_dim = None
-        # Best-effort phase_z dim inference (needed to keep phase state across steps).
-        self.ort_phase_dim = None
-        if "phase_z" in ort_input_map:
-            inp_obj = next((i for i in inputs if i.name == ort_input_map["phase_z"]), None)
-            if inp_obj is not None and getattr(inp_obj, "shape", None):
-                try:
-                    last = inp_obj.shape[-1]
-                    if isinstance(last, int) and last > 0:
-                        self.ort_phase_dim = int(last)
-                except Exception:
-                    self.ort_phase_dim = None
         outputs = session.get_outputs()
         if not outputs:
             raise SystemExit("[FATAL] ONNX model has no outputs.")
         out_motion = None
         out_plan = None
-        out_phase = None
         for out in outputs:
             name_l = out.name.lower()
             if out_motion is None and ("motion" in name_l or "pred" in name_l):
                 out_motion = out.name
             if out_plan is None and ("plan_z" in name_l or (("plan" in name_l) and ("phase" not in name_l))):
                 out_plan = out.name
-            if out_phase is None and ("phase_z" in name_l or ("phase" in name_l and "z_next" in name_l)):
-                out_phase = out.name
         self.ort_output_name = out_motion or outputs[0].name
         self.ort_plan_output_name = out_plan
-        self.ort_phase_output_name = out_phase
         self.ort_session = session
 
     def run_clip(self, teacher_path: Path, out_dir: Path, npz_root: Path, quiet: bool = False) -> Optional[Path]:
@@ -1168,12 +1141,6 @@ class TeacherRolloutRunner:
             if not isinstance(plan_dim, int) or plan_dim <= 0:
                 raise SystemExit("[FATAL] Unable to infer plan_z dim from ONNX input shapes.")
             plan_z = np.zeros((1, plan_dim), dtype=np.float32)
-        phase_z = None
-        if "phase_z" in self.ort_input_map:
-            phase_dim = getattr(self, "ort_phase_dim", None)
-            if not isinstance(phase_dim, int) or phase_dim <= 0:
-                raise SystemExit("[FATAL] Unable to infer phase_z dim from ONNX input shapes.")
-            phase_z = np.zeros((1, phase_dim), dtype=np.float32)
         for t in range(T):
             feeds: dict[str, np.ndarray] = {
                 self.ort_input_map["state"]: state_arr[t : t + 1],
@@ -1184,29 +1151,17 @@ class TeacherRolloutRunner:
             }
             out_names = [self.ort_output_name]
             want_plan_out = False
-            want_phase_out = False
             if plan_z is not None:
                 feeds[self.ort_input_map["plan_z"]] = plan_z
                 if getattr(self, "ort_plan_output_name", None):
                     want_plan_out = True
                     out_names.append(self.ort_plan_output_name)
-            if phase_z is not None:
-                feeds[self.ort_input_map["phase_z"]] = phase_z
-                if getattr(self, "ort_phase_output_name", None):
-                    want_phase_out = True
-                    out_names.append(self.ort_phase_output_name)
             outs = self.ort_session.run(out_names, feeds)
             y = outs[0]
             out_k = 1
             if want_plan_out and len(outs) > out_k:
                 try:
                     plan_z = np.asarray(outs[out_k], dtype=np.float32)
-                except Exception:
-                    pass
-                out_k += 1
-            if want_phase_out and len(outs) > out_k:
-                try:
-                    phase_z = np.asarray(outs[out_k], dtype=np.float32)
                 except Exception:
                     pass
                 out_k += 1

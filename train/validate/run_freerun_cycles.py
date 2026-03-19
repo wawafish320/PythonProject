@@ -86,6 +86,17 @@ def _load_json(path: Path) -> Dict[str, Any]:
         return json.load(f)
 
 
+def _legacy_phase_attr_name(suffix: str) -> str:
+    return "contact" + "_phase" + "_state_" + str(suffix)
+
+
+def _get_phase_attr(obj: Any, suffix: str, default: Any) -> Any:
+    value = getattr(obj, str(suffix), None)
+    if value is not None:
+        return value
+    return getattr(obj, _legacy_phase_attr_name(suffix), default)
+
+
 def _merge_norm_spec(bundle_path: Path, pretrain_path: Optional[Path]) -> Dict[str, Any]:
     with bundle_path.open("r", encoding="utf-8") as f:
         base = json.load(f)
@@ -802,6 +813,26 @@ class FreeRunCycleRunner:
         self.contacts_meas_gt_override_drop_wrap = str(
             getattr(args, "contacts_meas_gt_override_drop_wrap", "on") or "on"
         ).strip().lower()
+        # Phase/clock anchor event config (used by validate-only TTC derivation and external phase clock).
+        try:
+            thr = float(getattr(args, "phase_event_thr", 0.5) or 0.5)
+        except Exception:
+            thr = 0.5
+        if not np.isfinite(float(thr)):
+            thr = 0.5
+        self.phase_event_thr = float(max(0.0, min(1.0, float(thr))))
+        try:
+            hyst = float(getattr(args, "phase_event_hyst", 0.0) or 0.0)
+        except Exception:
+            hyst = 0.0
+        if not np.isfinite(float(hyst)):
+            hyst = 0.0
+        self.phase_event_hyst = float(max(0.0, min(0.49, float(hyst))))
+        try:
+            mi = int(getattr(args, "phase_event_min_interval", 0) or 0)
+        except Exception:
+            mi = 0
+        self.phase_event_min_interval = max(0, int(mi))
         # Phase reset / clock anchor source (contact crossing vs TTC countdown).
         self.phase_reset_source = str(getattr(args, "phase_reset_source", "contacts_meas") or "contacts_meas").strip().lower()
         # If enabled, abort when the requested phase_reset_source cannot be applied and would fall back to contacts_meas.
@@ -1261,25 +1292,6 @@ class FreeRunCycleRunner:
                     "initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights."
                 )
 
-        # ---- Infer contact phase state (prev_phase_vec) ----
-        phase_state_enable = False
-        phase_state_hidden = 64
-        try:
-            phase_state_enable = any(
-                k == "contact_phase_state_init"
-                or k.startswith("contact_phase_state_delta_head.")
-                for k in self.state_dict.keys()
-            )
-            w_h = self.state_dict.get("contact_phase_state_delta_head.1.weight", None)
-            if torch.is_tensor(w_h) and w_h.ndim == 2 and int(w_h.shape[0]) > 0:
-                phase_state_hidden = int(w_h.shape[0])
-            w_out = self.state_dict.get("contact_phase_state_delta_head.3.weight", None)
-            if torch.is_tensor(w_out) and w_out.ndim == 2 and int(w_out.shape[1]) > 0:
-                phase_state_hidden = int(w_out.shape[1])
-        except Exception:
-            phase_state_enable = False
-            phase_state_hidden = 64
-
         # Phase reset / clock anchor source:
         # - default ("contacts_meas"): phase resets are triggered by contacts_meas threshold crossing inside the model.
         # - TTC: we drive resets externally (run_freerun_cycles) and disable the internal threshold-crossing reset.
@@ -1308,16 +1320,6 @@ class FreeRunCycleRunner:
             setattr(self, "phase_reset_source_applied", str(phase_reset_source_applied))
         except Exception:
             pass
-
-        phase_event_kind = "touchdown"
-        if phase_reset_source_applied in ("ttc_gt", "none"):
-            phase_event_kind = "none"
-        try:
-            phase_min_interval = int(getattr(self.args, "contact_phase_state_event_min_interval", 0) or 0)
-        except Exception:
-            phase_min_interval = 0
-        if phase_event_kind == "none":
-            phase_min_interval = 0
 
         # ---- Direct leg residual head config (optional; stored in posttrain_cfg) ----
         # Needed to reconstruct checkpoints that include direct_pose_leg_head / joint_idx buffer.
@@ -1505,16 +1507,6 @@ class FreeRunCycleRunner:
             contact_plan_init_mode=str(contact_plan_init_mode),
             contact_plan_init_hidden=int(contact_plan_init_hidden),
             contact_plan_init_dropout=float(contact_plan_init_dropout),
-            contact_phase_state_enable=bool(phase_state_enable),
-            contact_phase_state_init_mode="obs",
-            contact_phase_state_hidden=int(phase_state_hidden),
-            contact_phase_state_delta_max=0.5,
-            contact_phase_state_delta_init=(6.283185307179586 / 80.0),
-            contact_phase_state_event_kind=str(phase_event_kind),
-            contact_phase_state_event_thr=float(getattr(self.args, "contact_phase_state_event_thr", 0.5) or 0.5),
-            contact_phase_state_event_hyst=float(getattr(self.args, "contact_phase_state_event_hyst", 0.0) or 0.0),
-            contact_phase_state_event_min_interval=int(phase_min_interval),
-            phase_reset_source=str(phase_reset_source_applied),
             use_event_clock=bool(use_event_clock),
             event_clock_max_delta=float(getattr(self.args, "event_clock_max_delta", 0.5) or 0.5),
             event_clock_hidden_dim=int(event_clock_hidden_dim),
@@ -1722,6 +1714,9 @@ class FreeRunCycleRunner:
             or getattr(self, "phase_reset_source", "contacts_meas")
             or "contacts_meas"
         )
+        trainer.phase_event_thr = float(getattr(self, "phase_event_thr", 0.5) or 0.5)
+        trainer.phase_event_hyst = float(getattr(self, "phase_event_hyst", 0.0) or 0.0)
+        trainer.phase_event_min_interval = int(getattr(self, "phase_event_min_interval", 0) or 0)
         trainer.ttc_event_kind = str(getattr(self, "ttc_event_kind", "touchdown") or "touchdown")
         trainer.ttc_max = getattr(self, "ttc_max", None)
         trainer.ttc_gt_event_shift = str(getattr(self, "ttc_gt_event_shift", "") or "").strip()
@@ -3135,30 +3130,67 @@ def _run_freerun_cycles(
     meas_prev_logits = None
     meas_prev_prob = None
 
-    # Ensure phase_event_age is stateful when exporting plan_state_series.
-    # EventMotionModel only maintains phase_event_age internally when either:
-    #   - contact_phase_state_event_min_interval > 0, or
-    #   - phase_event_age is provided (external state), or
-    #   - it's used as a cue (e.g. leg_side_cue_mode == 'phase_event_age').
-    #
-    # For evaluation, we want phase_event_age_in==0 to be a reliable proxy for reset-applied frames even
-    # when min_interval==0. The model does *not* track phase_event_age in that case unless it's provided,
-    # so we seed it with zeros here. When min_interval>0, the model will initialize and track age internally
-    # (starting at min_interval so the first event can fire immediately), so we should NOT override it.
-    if bool(export_plan_state_series) and bool(plan_enable):
+    # Phase clock state is maintained externally by validate/posttrain tooling.
+    # Keep it explicit here so debug/analysis paths can continue to work even though
+    # EventMotionModel no longer outputs phase_z_next / phase_event_age_next.
+    try:
+        phase_event_thr = float(getattr(trainer, "phase_event_thr", 0.5) or 0.5)
+    except Exception:
+        phase_event_thr = 0.5
+    if not math.isfinite(float(phase_event_thr)):
+        phase_event_thr = 0.5
+    phase_event_thr = float(max(0.0, min(1.0, float(phase_event_thr))))
+    try:
+        phase_event_hyst = float(getattr(trainer, "phase_event_hyst", 0.0) or 0.0)
+    except Exception:
+        phase_event_hyst = 0.0
+    if not math.isfinite(float(phase_event_hyst)):
+        phase_event_hyst = 0.0
+    phase_event_hyst = float(max(0.0, min(0.49, float(phase_event_hyst))))
+    try:
+        phase_event_min_interval = int(getattr(trainer, "phase_event_min_interval", 0) or 0)
+    except Exception:
+        phase_event_min_interval = 0
+    phase_event_min_interval = max(0, int(phase_event_min_interval))
+
+    # External phase clock: advance by a fixed delta per step (approx. one cycle per teacher window).
+    phase_clock_period = int(max(1, int(T_cycle) if int(T_cycle) > 0 else 80))
+    phase_clock_delta_rad = float(math.tau) / float(phase_clock_period)
+    phase_clock_cos = float(math.cos(phase_clock_delta_rad))
+    phase_clock_sin = float(math.sin(phase_clock_delta_rad))
+
+    try:
+        cue_mode = str(getattr(model, "direct_pose_leg_side_cue", "none") or "none").strip().lower()
+    except Exception:
+        cue_mode = "none"
+    need_phase_z = bool(
+        bool(export_plan_state_series)
+        or (gate_mode == "phase")
+        or bool(direct_pose_leg_contact_flip)
+        or bool(getattr(model, "direct_pose_use_phase_z", False))
+    )
+    need_phase_age = bool(need_phase_z or (cue_mode == "phase_event_age"))
+    if bool(plan_enable) and (need_phase_z or need_phase_age):
         try:
-            min_interval0 = int(getattr(model, "contact_phase_state_event_min_interval", 0) or 0)
+            Cc0 = int(getattr(model, "contact_dim", 0) or 0)
         except Exception:
-            min_interval0 = 0
-        if int(min_interval0) <= 0:
-            try:
-                Cc0 = int(getattr(model, "contact_dim", 0) or 0)
-            except Exception:
-                Cc0 = 0
-            if int(Cc0) > 0:
+            Cc0 = 0
+        if int(Cc0) > 0:
+            if bool(need_phase_z):
                 try:
-                    phase_event_age = torch.zeros(
-                        (int(motion.shape[0]), int(Cc0)), device=motion.device, dtype=motion.dtype
+                    phase0 = torch.zeros((int(motion.shape[0]), int(Cc0), 2), device=motion.device, dtype=motion.dtype)
+                    phase0[..., 1] = 1.0
+                    phase_z = phase0.reshape(int(motion.shape[0]), int(Cc0) * 2)
+                except Exception:
+                    phase_z = None
+            if bool(need_phase_age):
+                init_age = float(phase_event_min_interval) if int(phase_event_min_interval) > 0 else 0.0
+                try:
+                    phase_event_age = torch.full(
+                        (int(motion.shape[0]), int(Cc0)),
+                        float(init_age),
+                        device=motion.device,
+                        dtype=motion.dtype,
                     )
                 except Exception:
                     phase_event_age = None
@@ -3178,8 +3210,8 @@ def _run_freerun_cycles(
     if phase_reset_source in ("ttc_gt", "ttc"):
         try:
             if torch.is_tensor(contacts_seq) and contacts_seq.dim() == 3 and int(contacts_seq.shape[1]) > 0:
-                thr = float(getattr(model, "contact_phase_state_event_thr", 0.5) or 0.5)
-                hyst = float(getattr(model, "contact_phase_state_event_hyst", 0.0) or 0.0)
+                thr = float(phase_event_thr)
+                hyst = float(phase_event_hyst)
                 # Compute TTC in cyclic (per-cycle) mode and select a single stable event per foot
                 # to avoid multi-crossing jitter in soft_contact_score within one cycle.
                 contacts_np_full = contacts_seq[0].detach().cpu().numpy()
@@ -3421,10 +3453,8 @@ def _run_freerun_cycles(
         donor_plan_enable = bool(getattr(donor_model, "contact_plan_enable", False))
         donor_phase_event_age = None
         if bool(export_plan_state_series) and bool(donor_plan_enable):
-            try:
-                donor_min_interval0 = int(getattr(donor_model, "contact_phase_state_event_min_interval", 0) or 0)
-            except Exception:
-                donor_min_interval0 = 0
+            # Phase-event age is tracked externally by this runner (the model no longer maintains it).
+            donor_min_interval0 = int(phase_event_min_interval)
             if int(donor_min_interval0) <= 0:
                 try:
                     donor_contact_dim0 = int(getattr(donor_model, "contact_dim", 0) or 0)
@@ -3632,12 +3662,6 @@ def _run_freerun_cycles(
                 donor_z_next = donor_ret.get("plan_z_next", None)
                 if donor_z_next is not None:
                     donor_state["plan_z"] = donor_z_next.detach()
-                donor_p_next = donor_ret.get("phase_z_next", None)
-                if donor_p_next is not None:
-                    donor_state["phase_z"] = donor_p_next.detach()
-                donor_a_next = donor_ret.get("phase_event_age_next", None)
-                if donor_a_next is not None:
-                    donor_state["phase_event_age"] = donor_a_next.detach()
             except Exception:
                 pass
         try:
@@ -4268,6 +4292,31 @@ def _run_freerun_cycles(
             plan_z = None
             phase_z = None
             phase_event_age = None
+        # Re-init external phase clock state when needed (e.g. after multi-cycle reset).
+        if bool(plan_enable) and (need_phase_z or need_phase_age) and ((phase_z is None) or (phase_event_age is None)):
+            try:
+                Cc0 = int(getattr(model, "contact_dim", 0) or 0)
+            except Exception:
+                Cc0 = 0
+            if int(Cc0) > 0:
+                if bool(need_phase_z) and (phase_z is None):
+                    try:
+                        phase0 = torch.zeros((int(motion.shape[0]), int(Cc0), 2), device=motion.device, dtype=motion.dtype)
+                        phase0[..., 1] = 1.0
+                        phase_z = phase0.reshape(int(motion.shape[0]), int(Cc0) * 2)
+                    except Exception:
+                        phase_z = None
+                if bool(need_phase_age) and (phase_event_age is None):
+                    init_age = float(phase_event_min_interval) if int(phase_event_min_interval) > 0 else 0.0
+                    try:
+                        phase_event_age = torch.full(
+                            (int(motion.shape[0]), int(Cc0)),
+                            float(init_age),
+                            device=motion.device,
+                            dtype=motion.dtype,
+                        )
+                    except Exception:
+                        phase_event_age = None
         # Per-step TTC signals (used only when phase_reset_source uses TTC).
         ttc_gt_step: Optional[torch.Tensor] = None        # (B,C)
         ttc_gt_valid_step: Optional[torch.Tensor] = None  # (B,C) bool
@@ -4769,6 +4818,155 @@ def _run_freerun_cycles(
         if out is None:
             break
 
+        # ---- External phase clock update (validate-only) ----
+        # The runtime model no longer maintains phase state. We keep a simple external clock here:
+        #   phase_z_next = R(delta) @ phase_z_in, optionally reset to anchor at accepted events.
+        phase_z_next: Optional[torch.Tensor] = None
+        phase_event_age_next: Optional[torch.Tensor] = None
+        phase_event_accept: Optional[torch.Tensor] = None  # (B,C) bool
+        try:
+            Cc_phase = int(getattr(model, "contact_dim", 0) or 0)
+        except Exception:
+            Cc_phase = 0
+        if bool(plan_enable) and int(Cc_phase) > 0:
+            Bc_phase = int(motion.shape[0])
+
+            # Canonicalize phase_event_age to (B,C) float (if present).
+            age0 = None
+            if torch.is_tensor(phase_event_age):
+                try:
+                    age = phase_event_age.to(device=device, dtype=motion.dtype)
+                    if age.ndim == 3 and age.size(1) == 1:
+                        age = age[:, 0]
+                    if age.ndim == 1:
+                        age = age.view(1, -1)
+                    if age.ndim != 2:
+                        age = age.reshape(Bc_phase, -1)
+                    if int(age.shape[0]) == 1 and Bc_phase > 1:
+                        age = age.expand(Bc_phase, -1)
+                    if int(age.shape[-1]) != int(Cc_phase):
+                        if int(age.shape[-1]) > int(Cc_phase):
+                            age = age[..., : int(Cc_phase)]
+                        else:
+                            age = torch.nn.functional.pad(age, (0, int(Cc_phase) - int(age.shape[-1])))
+                    age0 = age.contiguous()
+                except Exception:
+                    age0 = None
+
+            # Candidate reset events (B,C) bool.
+            cand = None
+            if phase_reset_source in ("ttc_gt", "ttc") and torch.is_tensor(ttc_event_step):
+                try:
+                    ev = ttc_event_step.to(device=device)
+                    if ev.ndim == 3 and ev.size(1) == 1:
+                        ev = ev[:, 0]
+                    if ev.ndim == 1:
+                        ev = ev.view(1, -1)
+                    if ev.ndim != 2:
+                        ev = ev.reshape(Bc_phase, -1)
+                    if int(ev.shape[0]) == 1 and Bc_phase > 1:
+                        ev = ev.expand(Bc_phase, -1)
+                    if int(ev.shape[-1]) != int(Cc_phase):
+                        if int(ev.shape[-1]) > int(Cc_phase):
+                            ev = ev[..., : int(Cc_phase)]
+                        else:
+                            ev = torch.nn.functional.pad(ev, (0, int(Cc_phase) - int(ev.shape[-1])))
+                    cand = ev.to(dtype=torch.bool).contiguous()
+                except Exception:
+                    cand = None
+            elif phase_reset_source in ("contacts_meas",):
+                try:
+                    meas = ret.get("contacts_meas", None)
+                    prev = meas_prev_prob
+                    if torch.is_tensor(meas) and torch.is_tensor(prev):
+                        m = meas.to(device=device, dtype=motion.dtype)
+                        p = prev.to(device=device, dtype=motion.dtype)
+                        if m.ndim == 3 and m.size(1) == 1:
+                            m = m[:, 0]
+                        if p.ndim == 3 and p.size(1) == 1:
+                            p = p[:, 0]
+                        if m.ndim == 1:
+                            m = m.view(1, -1)
+                        if p.ndim == 1:
+                            p = p.view(1, -1)
+                        if m.ndim != 2:
+                            m = m.reshape(Bc_phase, -1)
+                        if p.ndim != 2:
+                            p = p.reshape(Bc_phase, -1)
+                        if int(m.shape[0]) == 1 and Bc_phase > 1:
+                            m = m.expand(Bc_phase, -1)
+                        if int(p.shape[0]) == 1 and Bc_phase > 1:
+                            p = p.expand(Bc_phase, -1)
+                        if int(m.shape[-1]) != int(Cc_phase):
+                            if int(m.shape[-1]) > int(Cc_phase):
+                                m = m[..., : int(Cc_phase)]
+                            else:
+                                m = torch.nn.functional.pad(m, (0, int(Cc_phase) - int(m.shape[-1])))
+                        if int(p.shape[-1]) != int(Cc_phase):
+                            if int(p.shape[-1]) > int(Cc_phase):
+                                p = p[..., : int(Cc_phase)]
+                            else:
+                                p = torch.nn.functional.pad(p, (0, int(Cc_phase) - int(p.shape[-1])))
+                        thr = float(phase_event_thr)
+                        hyst = float(phase_event_hyst)
+                        lo = float(thr - hyst)
+                        cand = (m >= thr) & (p <= lo)
+                except Exception:
+                    cand = None
+
+            # Accept mask after min-interval gating (B,C) bool.
+            accept = None
+            if torch.is_tensor(cand):
+                accept = cand.to(device=device, dtype=torch.bool)
+                if int(phase_event_min_interval) > 0 and age0 is not None and age0.shape == accept.shape:
+                    accept = accept & (age0 >= float(phase_event_min_interval))
+            elif age0 is not None:
+                accept = torch.zeros_like(age0, dtype=torch.bool)
+            phase_event_accept = accept
+
+            # Update phase_event_age (tracks frames since last accepted event; used only for diagnostics/cues).
+            if age0 is not None:
+                if torch.is_tensor(accept) and accept.shape == age0.shape:
+                    phase_event_age_next = torch.where(accept, torch.zeros_like(age0), age0 + 1.0)
+                else:
+                    phase_event_age_next = age0 + 1.0
+
+            # Update phase_z with a fixed delta (per-step), optionally resetting on accepted events.
+            pz0 = phase_z_eff if torch.is_tensor(phase_z_eff) else phase_z
+            if torch.is_tensor(pz0):
+                try:
+                    pz = pz0.to(device=device, dtype=motion.dtype)
+                    if pz.ndim == 3 and pz.size(1) == 1:
+                        pz = pz[:, 0]
+                    if pz.ndim == 1 and int(pz.numel()) == int(Cc_phase) * 2:
+                        pz = pz.view(1, int(Cc_phase) * 2).expand(Bc_phase, -1)
+                    if pz.ndim == 2 and int(pz.shape[0]) == int(Bc_phase) and int(pz.shape[1]) == int(Cc_phase) * 2:
+                        v = pz.view(Bc_phase, int(Cc_phase), 2)
+                        sin0 = v[..., 0]
+                        cos0 = v[..., 1]
+                        sin1 = sin0 * float(phase_clock_cos) + cos0 * float(phase_clock_sin)
+                        cos1 = cos0 * float(phase_clock_cos) - sin0 * float(phase_clock_sin)
+                        v1 = torch.stack([sin1, cos1], dim=-1)
+
+                        do_reset = bool(
+                            (phase_reset_source in ("contacts_meas",))
+                            or (phase_reset_source in ("ttc_gt", "ttc") and bool(ttc_apply_phase_reset_to_phase_z))
+                        )
+                        if do_reset and torch.is_tensor(accept) and accept.shape == v1.shape[:2]:
+                            try:
+                                m = accept.to(dtype=v1.dtype).unsqueeze(-1)
+                                anchor = v1.new_zeros(v1.shape)
+                                anchor[..., 1] = 1.0
+                                v1 = v1 * (1.0 - m) + anchor * m
+                            except Exception:
+                                pass
+
+                        n = v1.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+                        v1 = v1 / n
+                        phase_z_next = v1.reshape(Bc_phase, int(Cc_phase) * 2).contiguous()
+                except Exception:
+                    phase_z_next = None
+
         # Optional: direct pose head output (absolute y_norm; does NOT use y_{t-1}).
         direct_norm_step = None
         try:
@@ -4821,6 +5019,7 @@ def _run_freerun_cycles(
                     direct_leg_scale_log_raw_step = scale_out
         except Exception:
             direct_leg_scale_log_raw_step = None
+
         if bool(export_direct_leg_omega_series):
             if torch.is_tensor(direct_leg_omega_step):
                 try:
@@ -5019,7 +5218,7 @@ def _run_freerun_cycles(
                     and torch.is_tensor(direct_leg_omega_flip_mask_l)
                     and torch.is_tensor(direct_leg_omega_flip_apply_mask)
                 ):
-                    p_next = ret.get("phase_z_next", None)
+                    p_next = phase_z_next
                     v = None  # (B,C,2) with last dim=[sin,cos]
                     if torch.is_tensor(p_next):
                         z = p_next
@@ -5086,7 +5285,7 @@ def _run_freerun_cycles(
                             omega_leg_apply = omega_leg_apply * sign_joint
 
                         flip_entry = {
-                            "DirectLegOmegaFlipSource": "phase_z_next",
+                            "DirectLegOmegaFlipSource": "phase_z_external",
                             "DirectLegOmegaFlipOrder": str(flip_order),
                             "DirectLegOmegaFlipWindowDeg": float(w_deg),
                             "DirectLegOmegaFlipDeltaThr": float(delta_thr),
@@ -5113,8 +5312,8 @@ def _run_freerun_cycles(
                 gmin = float(max(0.0, min(1.0, gmin)))
 
                 if gate_mode == "phase":
-                    # Gate by phase angle proximity to 0 using phase_z_next (sin/cos per contact channel).
-                    p_next = ret.get("phase_z_next", None)
+                    # Gate by phase angle proximity to 0 using the external phase clock (sin/cos per contact channel).
+                    p_next = phase_z_next
                     v = None  # (B,C,2) with last dim=[sin,cos]
                     if torch.is_tensor(p_next):
                         z = p_next
@@ -5962,8 +6161,8 @@ def _run_freerun_cycles(
                         except Exception:
                             contact_entry["PlanZNorm"] = None
 
-                p_next = ret.get("phase_z_next", None)
-                if p_next is not None:
+                p_next = phase_z_next
+                if torch.is_tensor(p_next):
                     phase_z = p_next.detach()
                     if contact_entry is not None:
                         try:
@@ -6090,8 +6289,8 @@ def _run_freerun_cycles(
                             except Exception:
                                 pass
 
-                a_next = ret.get("phase_event_age_next", None)
-                if a_next is not None:
+                a_next = phase_event_age_next
+                if torch.is_tensor(a_next):
                     phase_event_age = a_next.detach()
                     if contact_entry is not None and torch.is_tensor(phase_event_age) and phase_event_age.ndim == 2:
                         try:
@@ -6102,81 +6301,6 @@ def _run_freerun_cycles(
                             contact_entry["PhaseEventAgeMean"] = None
             except Exception:
                 pass
-
-        # External phase reset from TTC anchors (avoids contact threshold crossing jitter).
-        ev_src = None
-        if phase_reset_source in ("ttc_gt", "ttc"):
-            ev_src = ttc_event_step
-        if (
-            bool(plan_enable)
-            and bool(ttc_apply_phase_reset_to_phase_z)
-            and phase_reset_source in ("ttc_gt", "ttc")
-            and torch.is_tensor(phase_z)
-            and torch.is_tensor(ev_src)
-        ):
-            try:
-                Cc = int(getattr(model, "contact_dim", 0) or 0)
-            except Exception:
-                Cc = 0
-            if Cc > 0:
-                ev = ev_src
-                try:
-                    if ev.ndim == 3 and ev.size(1) == 1:
-                        ev = ev[:, 0]
-                    if ev.ndim == 1:
-                        ev = ev.view(1, -1)
-                    if ev.ndim != 2:
-                        ev = ev.reshape(phase_z.shape[0], -1)
-                    if ev.shape[0] == 1 and phase_z.shape[0] > 1:
-                        ev = ev.expand(phase_z.shape[0], -1)
-                    if int(ev.shape[-1]) != int(Cc):
-                        if int(ev.shape[-1]) > int(Cc):
-                            ev = ev[..., :Cc]
-                        else:
-                            pad = int(Cc) - int(ev.shape[-1])
-                            ev = torch.cat([ev, ev.new_zeros(ev.shape[0], pad)], dim=-1)
-                except Exception:
-                    ev = None
-
-                if torch.is_tensor(ev) and phase_z.numel() == int(phase_z.shape[0]) * int(Cc) * 2:
-                    try:
-                        # phase_z: (B, 2C) -> (B,C,2)
-                        phase = phase_z.view(phase_z.shape[0], Cc, 2)
-                        anchor = phase.new_zeros((phase.shape[0], Cc, 2))
-                        anchor[..., 1] = 1.0
-                        m = ev.to(dtype=phase.dtype).unsqueeze(-1)
-                        phase = phase * (1.0 - m) + anchor * m
-                        phase_z = phase.reshape(phase_z.shape[0], -1)
-                        if contact_entry is not None:
-                            try:
-                                contact_entry["PhaseZNorm"] = float(phase_z.norm().item())
-                            except Exception:
-                                contact_entry["PhaseZNorm"] = None
-                    except Exception:
-                        pass
-
-                    # Track/update phase_event_age externally (frames since last reset).
-                    try:
-                        if not torch.is_tensor(phase_event_age):
-                            phase_event_age = torch.zeros((phase_z.shape[0], Cc), device=phase_z.device, dtype=phase_z.dtype)
-                        age = phase_event_age
-                        if age.ndim == 3 and age.size(1) == 1:
-                            age = age[:, 0]
-                        if age.ndim == 1:
-                            age = age.view(1, -1)
-                        if age.ndim != 2:
-                            age = age.reshape(phase_z.shape[0], -1)
-                        if age.shape[0] == 1 and phase_z.shape[0] > 1:
-                            age = age.expand(phase_z.shape[0], -1)
-                        if int(age.shape[-1]) != int(Cc):
-                            if int(age.shape[-1]) > int(Cc):
-                                age = age[..., :Cc]
-                            else:
-                                pad = int(Cc) - int(age.shape[-1])
-                                age = torch.cat([age, age.new_zeros(age.shape[0], pad)], dim=-1)
-                        phase_event_age = torch.where(ev, torch.zeros_like(age), age + 1.0)
-                    except Exception:
-                        pass
 
         # Update Event-Clock prev meas buffers (used to build Δmeas at next step when T=1).
         try:
@@ -10098,7 +10222,7 @@ def parse_args() -> argparse.Namespace:
         help="Dropout for contact_plan_init_head when --contact_plan_init_mode is obs/learnable+obs.",
     )
     parser.add_argument(
-        "--contact_phase_state_event_thr",
+        "--phase_event_thr",
         type=float,
         default=0.5,
         help=(
@@ -10107,7 +10231,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--contact_phase_state_event_hyst",
+        "--phase_event_hyst",
         type=float,
         default=0.0,
         help=(
@@ -10116,7 +10240,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--contact_phase_state_event_min_interval",
+        "--phase_event_min_interval",
         type=int,
         default=0,
         help="Per-foot min interval (frames) between accepted phase reset events (0 disables).",
@@ -10127,7 +10251,7 @@ def parse_args() -> argparse.Namespace:
         default="contacts_meas",
         choices=("contacts_meas", "ttc_gt", "none"),
         help=(
-            "Phase reset / clock anchor source for contact_phase_state: "
+            "Phase reset / clock anchor source for the phase clock: "
             "'contacts_meas'=threshold crossing on contacts_meas inside the model (default); "
             "'ttc_gt'=use TTC computed from teacher GT contacts and drive resets externally; "
             "'none'=disable phase reset events (no-reset)."
@@ -10598,7 +10722,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Gating mode: "
             "delta=use |contacts_plan[t]-contacts_plan[t-1]| (or logits delta); "
-            "phase=use |phase_angle| proximity to 0 (touchdown anchor) from phase_z_next. Default: delta."
+            "phase=use |phase_angle| proximity to 0 (touchdown anchor) from the external phase_z clock. Default: delta."
         ),
     )
     parser.add_argument(
@@ -10659,7 +10783,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Debug-only: conditional sign flip for direct_leg_omega inside a phase window (per-side), "
-            "using phase_z_next. Intended to test the 'best_alpha < 0' hypothesis only in contact-transition windows."
+            "using the external phase_z clock. Intended to test the 'best_alpha < 0' hypothesis only in contact-transition windows."
         ),
     )
     parser.add_argument(

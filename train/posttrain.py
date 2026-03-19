@@ -142,7 +142,7 @@ class PostTrainConfig:
     # - auto  : cycle when rollout_cycles>1 else global
     # - none  : disable time_index (no time-PE bias)
     time_index_mode: str
-    # Internal phase reset source for contact_phase_state (train/infer consistency):
+    # Internal clock-reset source for train/infer consistency:
     # - contacts_meas: threshold-crossing event from contacts_meas
     # - none         : disable event resets
     phase_reset_source: str
@@ -373,25 +373,19 @@ class PostTrainConfig:
     seed: int
 
 
-def _merge_key_parts(*parts: str) -> str:
-    return "".join(str(part) for part in parts)
-
-
-_REMOVED_POSTTRAIN_TARGET_KEYS: tuple[str, ...] = (
+_REMOVED_MAINLINE_TARGET_KEYS: tuple[str, ...] = (
     "train_so3_corrector",
     "train_contact_plan_init",
     "train_contact_plan",
     "train_contact_meas",
     "train_contact_td_hazard",
 )
-_REMOVED_POSTTRAIN_SHELL_KEY_PREFIXES: tuple[str, ...] = (
-    _merge_key_parts("direct_pose", "_hinge_"),
-    _merge_key_parts("contact_td", "_hazard_"),
-    _merge_key_parts("contact_ttc", "_"),
+_RETIRED_POSTTRAIN_SHELL_KEY_PREFIXES: tuple[str, ...] = (
+    "contact_td_hazard_",
+    "contact_ttc_",
 )
-_REMOVED_POSTTRAIN_SHELL_EXACT_KEYS: tuple[str, ...] = (
+_RETIRED_POSTTRAIN_SHELL_EXACT_KEYS: tuple[str, ...] = (
     "train_contact_ttc",
-    _merge_key_parts("direct_hinge", "_delta"),
 )
 
 _CLI_BOOL_OVERRIDE_KEYS: tuple[str, ...] = (
@@ -849,29 +843,29 @@ def _cfg_reject_removed_targets(payload: Dict[str, Any]) -> None:
             "Migrate to phase_reset_source=none (no-reset) or phase_reset_source=contacts_meas."
         )
 
-    present_removed_keys = [k for k in _REMOVED_POSTTRAIN_TARGET_KEYS if k in payload]
+    present_removed_keys = [k for k in _REMOVED_MAINLINE_TARGET_KEYS if k in payload]
     if present_removed_keys:
         keys_txt = ", ".join(present_removed_keys)
         raise SystemExit(
-            "[FATAL][REMOVED_TARGET_KEY] active posttrain config must not contain removed target keys: "
+            "[FATAL][REMOVED_TARGET_KEY_PRESENT] active posttrain config must not contain removed target keys: "
             f"{keys_txt}. "
             "Use exactly one newflow target: train_direct_pose=true or train_lambda_head=true."
         )
 
 
-def _cfg_reject_removed_shell_keys(payload: Dict[str, Any]) -> None:
-    present_removed_shell_keys = [
+def _cfg_reject_retired_shell_keys(payload: Dict[str, Any]) -> None:
+    present_retired_shell_keys = [
         str(k)
         for k in payload.keys()
         if (
-            str(k) in _REMOVED_POSTTRAIN_SHELL_EXACT_KEYS
-            or any(str(k).startswith(prefix) for prefix in _REMOVED_POSTTRAIN_SHELL_KEY_PREFIXES)
+            str(k) in _RETIRED_POSTTRAIN_SHELL_EXACT_KEYS
+            or any(str(k).startswith(prefix) for prefix in _RETIRED_POSTTRAIN_SHELL_KEY_PREFIXES)
         )
     ]
-    if present_removed_shell_keys:
-        keys_txt = ", ".join(sorted(present_removed_shell_keys))
+    if present_retired_shell_keys:
+        keys_txt = ", ".join(sorted(present_retired_shell_keys))
         raise SystemExit(
-            "[FATAL][REMOVED_SHELL_KEY] posttrain mainline config must not contain removed shell keys: "
+            "[FATAL][RETIRED_SHELL_KEY_PRESENT] posttrain mainline config must not contain retired shell keys: "
             f"{keys_txt}. "
             "Remove hinge/contact_td_hazard/contact_ttc shells and keep only current newflow keys."
         )
@@ -1313,7 +1307,7 @@ def _cfg_from_payload(payload: Dict[str, Any]) -> PostTrainConfig:
     if not isinstance(payload, dict):
         raise TypeError("posttrain config payload must be a dict")
     _cfg_reject_removed_targets(payload)
-    _cfg_reject_removed_shell_keys(payload)
+    _cfg_reject_retired_shell_keys(payload)
     _cfg_reject_retired_direct_pose_highorder(payload)
     cfg_kwargs: Dict[str, Any] = {}
     cfg_kwargs.update(_cfg_parse_path_basic(payload))
@@ -1584,12 +1578,6 @@ def _update_rollout_recurrent_state(
             z_next = ret.get("plan_z_next", None)
             if torch.is_tensor(z_next):
                 state["plan_z"] = z_next.detach()
-            p_next = ret.get("phase_z_next", None)
-            if torch.is_tensor(p_next):
-                state["phase_z"] = p_next.detach()
-            a_next = ret.get("phase_event_age_next", None)
-            if torch.is_tensor(a_next):
-                state["phase_event_age"] = a_next.detach()
         except Exception:
             pass
     try:
@@ -1726,8 +1714,6 @@ def _rollout_step_common(
         angvel=inp_angvel,
         pose_history=inp_pose_hist,
         plan_z=state.get("plan_z", None),
-        phase_z=state.get("phase_z", None),
-        phase_event_age=state.get("phase_event_age", None),
         meas_logits_prev=state.get("meas_logits_prev", None),
         time_index=time_index_t,
         rollout_step=rollout_step_t,
@@ -1891,8 +1877,6 @@ def _lambda_rollout_prepare_context(
         "motion_raw": motion_raw,
         "y_prev_raw": y_prev_raw,
         "plan_z": None,
-        "phase_z": None,
-        "phase_event_age": None,
         "meas_logits_prev": None,
         "prev_foot_pos_meas": None,
         "rot_slice": rot_slice,
@@ -5226,34 +5210,6 @@ def _build_posttrain_model_from_ckpt(
         except Exception:
             pass
 
-    # ---- Infer contact phase state (prev_phase_vec) from checkpoint ----
-    phase_state_enable = False
-    phase_state_hidden = int(getattr(cfg, "contact_phase_state_hidden", 64) or 64)
-    try:
-        phase_state_enable = any(
-            k == "contact_phase_state_init"
-            or k.startswith("contact_phase_state_delta_head.")
-            for k in state_dict.keys()
-        )
-        w_h = state_dict.get("contact_phase_state_delta_head.1.weight", None)
-        if torch.is_tensor(w_h) and w_h.ndim == 2 and int(w_h.shape[0]) > 0:
-            phase_state_hidden = int(w_h.shape[0])
-        w_out = state_dict.get("contact_phase_state_delta_head.3.weight", None)
-        if torch.is_tensor(w_out) and w_out.ndim == 2 and int(w_out.shape[1]) > 0:
-            phase_state_hidden = int(w_out.shape[1])
-    except Exception:
-        phase_state_enable = False
-
-    phase_reset_source_model = str(cfg.phase_reset_source or "none").strip().lower()
-    # Consistent with run_freerun_cycles:
-    # - contacts_meas: internal threshold-crossing resets inside the model (event_kind controls it)
-    # - ttc_gt: resets are applied externally (posttrain rollout loops), so disable internal resets
-    phase_event_kind_model = str(getattr(cfg, "contact_phase_state_event_kind", "touchdown") or "touchdown").strip().lower()
-    phase_min_interval_model = int(getattr(cfg, "contact_phase_state_event_min_interval", 0) or 0)
-    if phase_reset_source_model == "ttc_gt":
-        phase_event_kind_model = "none"
-        phase_min_interval_model = 0
-
     # ---- Resolve leg gate config from explicit runtime config (no ckpt auto-infer) ----
     direct_pose_leg_gate_mode_raw = str(getattr(cfg, "direct_pose_leg_gate_mode", "none") or "none").strip().lower()
     if direct_pose_leg_gate_mode_raw == "auto":
@@ -5302,16 +5258,6 @@ def _build_posttrain_model_from_ckpt(
         contact_plan_init_mode=str(contact_plan_init_mode),
         contact_plan_init_hidden=int(contact_plan_init_hidden),
         contact_plan_init_dropout=float(contact_plan_init_dropout),
-        contact_phase_state_enable=bool(phase_state_enable),
-        contact_phase_state_init_mode=str(getattr(cfg, "contact_phase_state_init_mode", "obs") or "obs"),
-        contact_phase_state_hidden=int(phase_state_hidden),
-        contact_phase_state_delta_max=float(getattr(cfg, "contact_phase_state_delta_max", 0.5) or 0.5),
-        contact_phase_state_delta_init=float(getattr(cfg, "contact_phase_state_delta_init", (6.283185307179586 / 80.0)) or (6.283185307179586 / 80.0)),
-        contact_phase_state_event_kind=str(phase_event_kind_model),
-        contact_phase_state_event_thr=float(getattr(cfg, "contact_phase_state_event_thr", 0.5) or 0.5),
-        contact_phase_state_event_hyst=float(getattr(cfg, "contact_phase_state_event_hyst", 0.0) or 0.0),
-        contact_phase_state_event_min_interval=int(phase_min_interval_model),
-        phase_reset_source=str(phase_reset_source_model),
         use_event_clock=bool(use_event_clock),
         event_clock_max_delta=float(event_clock_max_delta),
         event_clock_hidden_dim=int(event_clock_hidden_dim),

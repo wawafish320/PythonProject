@@ -23,8 +23,17 @@ RUNTIME_NO_PHASE_FILES: tuple[str, ...] = (
     "train/models.py",
     "train/posttrain.py",
     "train/validate/run_freerun_cycles.py",
+    "train/validate/run_teacher_rollout.py",
 )
 FORBIDDEN_PHASE_TOKEN = "contact_phase_state"
+RUNTIME_NO_MODEL_PHASE_OUTPUT_FILES: tuple[str, ...] = (
+    "train/eval_utils.py",
+    "train/validate/run_teacher_rollout.py",
+)
+FORBIDDEN_MODEL_PHASE_OUTPUT_TOKENS: tuple[str, ...] = (
+    "phase_z_next",
+    "phase_event_age_next",
+)
 
 
 def _iter_line_hits(text: str, token: str) -> list[int]:
@@ -82,6 +91,14 @@ def main() -> int:
             errs.append(f"{p}: source file not found")
             continue
         errs.extend(_validate_tokens(p, (FORBIDDEN_PHASE_TOKEN,)))
+    for rel in RUNTIME_NO_MODEL_PHASE_OUTPUT_FILES:
+        p = Path(rel)
+        if not p.is_absolute():
+            p = repo_root / p
+        if not p.exists():
+            errs.append(f"{p}: source file not found")
+            continue
+        errs.extend(_validate_tokens(p, FORBIDDEN_MODEL_PHASE_OUTPUT_TOKENS))
 
     if errs:
         print(f"[FAIL] posttrain legacy guard failed ({len(errs)} issue(s)):")

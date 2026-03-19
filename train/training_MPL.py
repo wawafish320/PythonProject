@@ -220,8 +220,6 @@ class RolloutExecutionState:
     pose_hist_state: PoseHistState
     ss_sel_hold: Optional[torch.Tensor] = None
     plan_z: Optional[torch.Tensor] = None
-    phase_z: Optional[torch.Tensor] = None
-    phase_event_age: Optional[torch.Tensor] = None
     meas_prev_prob: Optional[torch.Tensor] = None
     prev_foot_pos_meas: Optional[torch.Tensor] = None
     reprojection_applied_count: int = 0
@@ -391,39 +389,12 @@ LEGACY_LOSS_CLI_FLAGS: dict[str, str] = {
     "--bone_prior_samples": "bone_prior_samples",
 }
 
-REMOVED_TRAINBASE_PHASE_RESET_KEYS: tuple[str, ...] = (
-    "contact_phase_state_event_kind",
-    "contact_phase_state_event_thr",
-    "contact_phase_state_event_hyst",
-    "contact_phase_state_event_min_interval",
-    "phase_reset_source",
-)
-
-REMOVED_TRAINBASE_PHASE_RESET_CLI_FLAGS: dict[str, str] = {
-    "--contact_phase_state_event_kind": "contact_phase_state_event_kind",
-    "--contact_phase_state_event_thr": "contact_phase_state_event_thr",
-    "--contact_phase_state_event_hyst": "contact_phase_state_event_hyst",
-    "--contact_phase_state_event_min_interval": "contact_phase_state_event_min_interval",
-    "--phase_reset_source": "phase_reset_source",
-}
-
-
 def _legacy_loss_keys_msg(keys: Sequence[str], *, context: str) -> str:
     keys_sorted = ", ".join(sorted({str(k) for k in keys}))
     return (
         f"[LegacyLossConfig] {context} contains removed keys: {keys_sorted}. "
         "Please remove them; MotionJointLoss now uses unified weights only "
         "(adaptive_bone_weights + unified_* knobs)."
-    )
-
-
-def _removed_trainbase_phase_reset_msg(keys: Sequence[str], *, context: str) -> str:
-    keys_sorted = ", ".join(sorted({str(k) for k in keys}))
-    return (
-        f"[trainbase] {context} contains removed phase-reset keys: {keys_sorted}. "
-        "train/training_MPL.py now hard-disables phase reset/event reset and always builds "
-        "contact_phase_state with phase_reset_source='none' and contact_phase_state_event_kind='none'. "
-        "Please remove these keys from trainbase configs/CLI. Posttrain/validate keep their own phase-reset controls."
     )
 
 
@@ -1423,17 +1394,11 @@ class Trainer:
         if direct_out is not None:
             rollout.buffers.out_direct.append(direct_out)
 
-        for source_key, target_attr in (
-            ('plan_z_next', 'plan_z'),
-            ('phase_z_next', 'phase_z'),
-            ('phase_event_age_next', 'phase_event_age'),
-        ):
-            value = ret.get(source_key, None)
-            if value is None:
-                continue
-            if torch.is_tensor(value) and not rollout.allow_grad:
-                value = value.detach()
-            setattr(rollout, target_attr, value)
+        plan_z_next = ret.get('plan_z_next', None)
+        if plan_z_next is not None:
+            if torch.is_tensor(plan_z_next) and not rollout.allow_grad:
+                plan_z_next = plan_z_next.detach()
+            rollout.plan_z = plan_z_next
 
     def _record_rollout_step_outputs(
         self,
@@ -1553,8 +1518,6 @@ class Trainer:
                 angvel=step_inputs.angvel_t,
                 pose_history=step_inputs.pose_history_t,
                 plan_z=rollout.plan_z,
-                phase_z=rollout.phase_z,
-                phase_event_age=rollout.phase_event_age,
                 meas_logits_prev=rollout.meas_prev_prob,
                 time_index=step_inputs.time_index_t,
                 rollout_step=step_inputs.rollout_step_t,
@@ -1860,7 +1823,7 @@ class Trainer:
                 stats['_geo_local_rad'] = geo_local_rad.detach()
         geo_local_tensor_rad = stats.get('_geo_local_rad')
         limb_summary = {}
-        collect_fn = getattr(self.loss_fn, '_collect_rot_local_stats', None)
+        collect_fn = getattr(self.loss_fn, '_collect_limb_local_stats', None)
         if geo_local_tensor_rad is not None and callable(collect_fn):
             try:
                 limb_summary = collect_fn(geo_local_tensor_rad)
@@ -1878,13 +1841,14 @@ class Trainer:
                     extra += f" limb={limb_raw:.2f}°"
                 if _math.isfinite(limb_weighted):
                     extra += f" limb/torso={limb_weighted:.2f}"
-            if not (isinstance(local_val, (float, int)) and _math.isfinite(local_val)):
-                return
+            local_extra = ""
+            if isinstance(local_val, (float, int)) and _math.isfinite(local_val):
+                local_extra = f" local={local_val:.2f}°"
             print(
                 "[HistDrift]"
                 f"[ep {int(epoch):03d}]"
                 f"[bi {int(batch_idx):04d}] "
-                f"rot_local={local_val:.2f}° steps={steps}{extra}"
+                f"steps={steps}{extra}{local_extra}"
             )
             local_curve = stats.get('rot_local_step_deg')
             geo_local_tensor_rad = stats.get('_geo_local_rad')
@@ -1906,11 +1870,14 @@ class Trainer:
                             if _math.isfinite(torso_deg):
                                 summary_txt += f" torso={torso_deg:.2f}°"
                     if not _math.isnan(local_val_step):
+                        extra_txt = ""
+                        if not (_math.isnan(local_val_step) or local_val_step in (float('inf'), float('-inf'))):
+                            extra_txt += f" local={local_val_step:.2f}°"
                         print(
                             "[HistDrift]"
                             f"[ep {int(epoch):03d}]"
                             f"[bi {int(batch_idx):04d}]"
-                            f"[step {idx:02d}] rot_local={local_val_step:.2f}°{summary_txt}"
+                            f"[step {idx:02d}]{extra_txt or ''}{summary_txt}"
                         )
         finally:
             stats.pop('_geo_local_rad', None)
@@ -3241,7 +3208,6 @@ class Trainer:
                 validation_result,
                 checkpoint_state,
             )
-
         checkpoint_state.last_payload = self._fit_checkpoint_payload()
         if out_dir:
             teacher_ckpt = self._save_fit_checkpoint_payload(
@@ -4498,51 +4464,6 @@ def _compute_input_drift_metrics(
             rv_end = (predX_raw[:, -1, cfg.rv_x] - gtX_raw[:, -1, cfg.rv_x]).abs().mean()
             _record_diag_metric(result, cfg.diag_scope, 'RootVelEndMAE', float(rv_end.item()))
 
-    if isinstance(cfg.rot6d_x, slice) and predX_raw is not None and gtX_raw is not None:
-        try:
-            Bx, Tx, Dx = predX_raw.shape
-            px = predX_raw[..., cfg.rot6d_x]
-            gx = gtX_raw[..., cfg.rot6d_x]
-            if Dx > 0 and px.shape[-1] % 6 == 0:
-                Jx = px.shape[-1] // 6
-                px6 = reproject_rot6d(px.reshape(-1, px.shape[-1]))
-                gx6 = reproject_rot6d(gx.reshape(-1, gx.shape[-1]))
-                Rp = rot6d_to_matrix(px6.view(-1, Jx, 6)).view(Bx, Tx, Jx, 3, 3)
-                Rg = rot6d_to_matrix(gx6.view(-1, Jx, 6)).view(Bx, Tx, Jx, 3, 3)
-                geo_in = geodesic_R(Rp, Rg)
-                _record_diag_metric(
-                    result,
-                    cfg.diag_scope,
-                    'InputRotErrorDeg',
-                    float((geo_in.mean() * cfg.deg).item()),
-                    extra_scope_aliases=('FreeRun',),
-                )
-                if cfg.diag_input_stats:
-                    result['InputRotErrorDeg_max'] = float((geo_in.max() * cfg.deg).item())
-                    result['InputRotErrorDeg_std'] = float((geo_in.std() * cfg.deg).item())
-                try:
-                    geo_in_deg = geo_in * cfg.deg
-                    mean_curve = geo_in_deg.mean(dim=-1).mean(dim=0)
-                    max_curve = geo_in_deg.max(dim=-1).values.max(dim=0).values
-                    _record_optional_diag_curve(
-                        result,
-                        metric_name='InputRotErrorDeg',
-                        curve=mean_curve,
-                        curve_max=max_curve,
-                    )
-                except (RuntimeError, TypeError, ValueError) as exc:
-                    _phasec_warn_once(
-                        "diag/input_rot_error_curve",
-                        "failed to record InputRotErrorDeg curve payload",
-                        exc,
-                    )
-        except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
-            _phasec_warn_once(
-                "diag/input_rot_error",
-                "failed to compute InputRotErrorDeg diagnostics",
-                exc,
-            )
-
     cond_raw_seq = seqs.cond_raw_seq
     if torch.is_tensor(cond_raw_seq):
         cond_raw_seq = cond_raw_seq.float()
@@ -5433,9 +5354,6 @@ def _load_train_entry_config_defaults(config_path: Optional[str], parser: argpar
     legacy_unknown = [k for k in unknown_keys if k in LEGACY_LOSS_TOPLEVEL_KEYS]
     if legacy_unknown:
         parser.error(_legacy_loss_keys_msg(legacy_unknown, context='config_json(top-level)'))
-    removed_phase_reset = [k for k in unknown_keys if k in REMOVED_TRAINBASE_PHASE_RESET_KEYS]
-    if removed_phase_reset:
-        parser.error(_removed_trainbase_phase_reset_msg(removed_phase_reset, context='config_json(top-level)'))
     if unknown_keys:
         parser.error(f"[config_json] 存在未识别字段: {', '.join(unknown_keys)}")
     try:
@@ -5483,8 +5401,6 @@ def _apply_train_entry_config_overrides(
         key = key.strip()
         if not key:
             parser.error('[config_override] 键名不能为空')
-        if key in REMOVED_TRAINBASE_PHASE_RESET_KEYS:
-            parser.error(_removed_trainbase_phase_reset_msg([key], context='config_override'))
         if not hasattr(namespace, key):
             parser.error(f"[config_override] 未知键名: {key}")
         new_value = _parse_literal(value_expr)
@@ -5627,26 +5543,6 @@ def _build_train_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentPar
                    help='contact plan init MLP hidden dim（仅 init_mode=obs/learnable+obs 生效）')
     p.add_argument('--contact_plan_init_dropout', type=float, default=0.0,
                    help='contact plan init MLP dropout（仅 init_mode=obs/learnable+obs 生效）')
-    # ---- Contact phase state (prev_phase_vec clock; step-stateful like plan_z) ----
-    p.add_argument(
-        '--contact_phase_state_enable',
-        action='store_true',
-        default=False,
-        help='启用显式相位状态 prev_phase_vec（phase_z）并作为 contact_plan GRU 输入的一部分；见 docs/contact_phase_state_prevphase_tta.md',
-    )
-    p.add_argument(
-        '--contact_phase_state_init_mode',
-        type=str,
-        default='obs',
-        choices=['zeros', 'learnable', 'obs', 'learnable+obs'],
-        help='phase_z 冷启动 init：obs(默认)|learnable+obs|learnable|zeros',
-    )
-    p.add_argument('--contact_phase_state_hidden', type=int, default=64,
-                   help='phase Δφ head hidden dim')
-    p.add_argument('--contact_phase_state_delta_max', type=float, default=0.5,
-                   help='每步相位推进 Δφ 的最大幅度（rad/step，tanh 缩放）')
-    p.add_argument('--contact_phase_state_delta_init', type=float, default=(6.283185307179586 / 80.0),
-                   help='Δφ 初始 bias（rad/step；默认约等于 80 帧一周期）')
     # ---- Event-Clock v3 (contact_plan residual correction) ----
     p.add_argument('--use_event_clock', action='store_true', default=False,
                    help='启用 Event-Clock v3：在 contact_plan GRU loop 内做 gated residual correction')
@@ -5778,8 +5674,7 @@ def _build_train_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentPar
     p.add_argument('--foot_contact_threshold', type=float, default=1.5, help='角速度阈值（rad/s），低于该值视为脚接触')
     p.add_argument('--monitor_batches', type=int, default=2, help='每个 epoch 在线指标采样的批次数')
     p.add_argument('--force_valfree_eval', action='store_true', default=False,
-                   help='即使当前为纯 teacher 阶段，也强制执行一次 freerun 验证并写出 valfree 指标')
-    p.add_argument('--teacher_eval_max_batches', type=int, default=None,
+                   help='即使当前为纯 teacher 阶段，也强制执行一次 freerun 验证并写出 valfree 指标')    p.add_argument('--teacher_eval_max_batches', type=int, default=None,
                    help='Teacher 评估最多跑多少个 batch；<=0 则跳过评估，用训练均值loss代填')
     p.add_argument('--eval_horizon', type=int, default=None,
                    help='在线 freerun 验证时的 horizon（帧数）；未指定则遍历整段序列')
@@ -5812,14 +5707,6 @@ def _parse_train_entry_args(argv: Optional[Sequence[str]] = None) -> argparse.Na
                 legacy_cli_hits.append(key)
     if legacy_cli_hits:
         parser.error(_legacy_loss_keys_msg(legacy_cli_hits, context='CLI args'))
-
-    removed_phase_reset_cli_hits: list[str] = []
-    for token in remaining_argv:
-        for flag, key in REMOVED_TRAINBASE_PHASE_RESET_CLI_FLAGS.items():
-            if token == flag or token.startswith(f'{flag}='):
-                removed_phase_reset_cli_hits.append(key)
-    if removed_phase_reset_cli_hits:
-        parser.error(_removed_trainbase_phase_reset_msg(removed_phase_reset_cli_hits, context='CLI args'))
 
     namespace = argparse.Namespace(**config_defaults)
     namespace.config_json = config_args.config_json
@@ -6240,16 +6127,6 @@ def _build_train_model(
         contact_plan_init_mode=str(getattr(args, 'contact_plan_init_mode', 'learnable') or 'learnable'),
         contact_plan_init_hidden=int(args.contact_plan_init_hidden or 128),
         contact_plan_init_dropout=float(args.contact_plan_init_dropout or 0.0),
-        contact_phase_state_enable=bool(getattr(args, 'contact_phase_state_enable', False)),
-        contact_phase_state_init_mode=str(getattr(args, 'contact_phase_state_init_mode', 'obs') or 'obs'),
-        contact_phase_state_hidden=int(args.contact_phase_state_hidden or 64),
-        contact_phase_state_delta_max=float(args.contact_phase_state_delta_max or 0.5),
-        contact_phase_state_delta_init=float(args.contact_phase_state_delta_init or (6.283185307179586 / 80.0)),
-        contact_phase_state_event_kind='none',
-        contact_phase_state_event_thr=0.5,
-        contact_phase_state_event_hyst=0.0,
-        contact_phase_state_event_min_interval=0,
-        phase_reset_source='none',
         use_event_clock=bool(args.use_event_clock),
         event_clock_max_delta=float(args.event_clock_max_delta or 0.5),
         event_clock_hidden_dim=int(args.event_clock_hidden_dim or 64),
@@ -6712,8 +6589,8 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
     """
     单步（无隐式状态）ONNX 导出：
       输入:  state[B,Dx], cond[B,Dc], contacts[B,C], angvel[B,A], pose_hist[B,P],
-            plan_z[B,Hp], phase_z[B,Hz]
-      输出:  motion_pred[B,Dy], plan_z_next[B,Hp], phase_z_next[B,Hz]
+            plan_z[B,Hp]
+      输出:  motion_pred[B,Dy], plan_z_next[B,Hp]
 
     训练与推理均使用显式历史缓冲，对应 UE 中的 PoseHistoryBuffer。
     """
@@ -6791,22 +6668,19 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
     angvel_dim = int(getattr(model, 'angvel_dim', angvel_seq.shape[-1] if isinstance(angvel_seq, torch.Tensor) else 0))
     pose_hist_dim = int(getattr(model, 'pose_hist_dim', pose_hist_seq.shape[-1] if isinstance(pose_hist_seq, torch.Tensor) else 0))
     plan_dim = int(getattr(model, 'contact_plan_hidden', 0) or 0) if bool(getattr(model, 'contact_plan_enable', False)) else 0
-    phase_dim = int(getattr(model, '_contact_phase_state_dim', 0) or 0) if bool(getattr(model, 'contact_phase_state_enable', False)) else 0
 
     cond0 = _frame_or_zero(cond_seq, cond_dim, torch.float32)
     contacts0 = _frame_or_zero(contacts_seq, contact_dim, torch.float32)
     angvel0 = _frame_or_zero(angvel_seq, angvel_dim, torch.float32)
     pose_hist0 = _frame_or_zero(pose_hist_seq, pose_hist_dim, torch.float32)
     plan_z0 = torch.zeros((1, plan_dim), dtype=torch.float32) if plan_dim > 0 else None
-    phase_z0 = torch.zeros((1, phase_dim), dtype=torch.float32) if phase_dim > 0 else None
 
     device = torch.device('cpu')
     model = model.to(device).eval()
 
-    if plan_dim <= 0 or phase_dim <= 0 or plan_z0 is None or phase_z0 is None:
+    if plan_dim <= 0 or plan_z0 is None:
         raise RuntimeError(
-            f"[Export][FATAL] ONNX export expects fixed mainchain contract plan_z+phase_z, "
-            f"got plan_dim={plan_dim}, phase_dim={phase_dim}."
+            f"[Export][FATAL] ONNX export expects contact_plan state, got plan_dim={plan_dim}."
         )
 
     class _StatelessWrapper(torch.nn.Module):
@@ -6814,13 +6688,12 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
             super().__init__()
             self.core = core
 
-        def forward(self, state, cond, contacts, angvel, pose_hist, plan_z, phase_z):
+        def forward(self, state, cond, contacts, angvel, pose_hist, plan_z):
             cond_in = cond if cond.shape[-1] > 0 else None
             contacts_in = contacts if contacts.shape[-1] > 0 else None
             angvel_in = angvel if angvel.shape[-1] > 0 else None
             pose_hist_in = pose_hist if pose_hist.shape[-1] > 0 else None
             plan_z_in = plan_z if plan_z.shape[-1] > 0 else None
-            phase_z_in = phase_z if phase_z.shape[-1] > 0 else None
             out = self.core(
                 state,
                 cond_in,
@@ -6828,7 +6701,6 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
                 angvel=angvel_in,
                 pose_history=pose_hist_in,
                 plan_z=plan_z_in,
-                phase_z=phase_z_in,
             )
             if isinstance(out, dict):
                 pred = out.get('out')
@@ -6837,19 +6709,16 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
                 z_next = out.get('plan_z_next')
                 if z_next is None:
                     z_next = plan_z.new_zeros(plan_z.shape)
-                p_next = out.get('phase_z_next')
-                if p_next is None:
-                    p_next = phase_z.new_zeros(phase_z.shape)
-                return pred, z_next, p_next
-            return out, plan_z, phase_z
+                return pred, z_next
+            return out, plan_z
 
     wrapper = _StatelessWrapper(model).cpu().eval()
-    sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0, plan_z0, phase_z0)
+    sample_out = wrapper(state0, cond0, contacts0, angvel0, pose_hist0, plan_z0)
     Dy = int(sample_out[0].shape[-1])
 
-    inputs = (state0, cond0, contacts0, angvel0, pose_hist0, plan_z0, phase_z0)
-    input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'plan_z', 'phase_z']
-    output_names = ['motion_pred', 'plan_z_next', 'phase_z_next']
+    inputs = (state0, cond0, contacts0, angvel0, pose_hist0, plan_z0)
+    input_names = ['state', 'cond', 'contacts', 'angvel', 'pose_hist', 'plan_z']
+    output_names = ['motion_pred', 'plan_z_next']
     dynamic_axes = {name: {0: 'B'} for name in input_names + output_names} if dynamic_batch else None
 
     os.makedirs(os.path.dirname(onnx_path) or '.', exist_ok=True)
@@ -6867,7 +6736,7 @@ def export_onnx_step_stateful_nophase(model: torch.nn.Module, loader, onnx_path:
     print(
         f'[Export][OK] saved: {onnx_path} | '
         f'Dx={Dx} Dy={Dy} Dc={cond_dim} C={contact_dim} A={angvel_dim} P={pose_hist_dim} '
-        f'Hp={plan_dim} Hz={phase_dim}'
+        f'Hp={plan_dim}'
     )
 
 def main():

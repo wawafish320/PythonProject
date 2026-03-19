@@ -1,6 +1,6 @@
 # Posttrain Pipeline (Current Canonical Chain)
 
-> Last updated: 2026-03-15
+> Last updated: 2026-03-18
 > Status: current default posttrain flow for the old d1 / newflow lane.
 
 This document keeps only the active mainline:
@@ -71,6 +71,7 @@ Main runtime policy:
 - `contact_phase_state*` is retired from mainline runtime and active configs
 - `contact_meas_provider*` is not part of mainline posttrain runtime
 - active mainline no longer treats `whitebox` as the default contact path
+- `tools/check_posttrain_newflow_active_configs.py` is the static guard for current active trainbase configs and canonical newflow posttrain configs
 
 Selection / reporting policy for this chain:
 
@@ -228,13 +229,15 @@ After finishing the chain:
 
 ```bash
 if rg -n "direct_pose_hinge|direct_hinge_delta|contact_phase_state|contact_meas_provider" \
-  train/posttrain.py train/models.py train/training_MPL.py train/eval_utils.py train/validate/run_freerun_cycles.py; then
+  train/posttrain.py train/models.py train/training_MPL.py train/eval_utils.py \
+  train/validate/run_freerun_cycles.py train/validate/run_teacher_rollout.py; then
   echo "[FAIL] legacy references found"
   exit 1
 fi
 python3 -m py_compile \
   train/posttrain.py train/models.py train/training_MPL.py \
-  train/eval_utils.py train/validate/run_freerun_cycles.py
+  train/eval_utils.py train/validate/run_freerun_cycles.py \
+  train/validate/run_teacher_rollout.py
 python3 tools/check_posttrain_newflow_active_configs.py
 python3 tools/check_posttrain_legacy_code_guard.py
 ```

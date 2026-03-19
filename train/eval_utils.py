@@ -306,8 +306,6 @@ def evaluate_freerun(
         # NOTE: let the model decide the initial plan_z when plan_z is None.
         # This allows using a learnable contact_plan_init_z (or falling back to zeros).
         plan_z = None
-        phase_z = None
-        phase_event_age = None
 
         prev_foot_pos_meas = None
         for t in range(start_t, end_t):
@@ -410,8 +408,6 @@ def evaluate_freerun(
                     angvel=angvel_t,
                     pose_history=pose_hist_t,
                     plan_z=plan_z,
-                    phase_z=phase_z,
-                    phase_event_age=phase_event_age,
                     time_index=time_index_t,
                     rollout_step=rollout_step_t,
                 )
@@ -425,12 +421,6 @@ def evaluate_freerun(
                     z_next = ret.get("plan_z_next", None)
                     if z_next is not None:
                         plan_z = z_next.detach()
-                    p_next = ret.get("phase_z_next", None)
-                    if p_next is not None:
-                        phase_z = p_next.detach()
-                    a_next = ret.get("phase_event_age_next", None)
-                    if a_next is not None:
-                        phase_event_age = a_next.detach()
                 except Exception:
                     pass
 
