@@ -1,0 +1,27 @@
+.DS_Store
+
+# Python cache / env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.venv*/
+
+# Local agent / scratch
+.claude/
+.tmp/
+
+# Runtime scratch
+logs/
+runs/
+
+# Temporary experiment outputs kept local only
+debug_output/*
+debug_output/_tmp_*/
+debug_output/__tmp_*/
+debug_output/freerun_diag_*
+models/*
+models/__tmp_*/
+tools/_tmp_*.py
