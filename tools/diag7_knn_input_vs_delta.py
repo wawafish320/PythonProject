@@ -427,7 +427,6 @@ def main() -> None:
         "so3_corr_gate_err_margin",
         "so3_corr_gate_err_use_ref",
         "so3_corr_gate_scale_max",
-        "contact_phase_state_event_min_interval",
     ):
         if key in noapply:
             setattr(ns, key, noapply.get(key))

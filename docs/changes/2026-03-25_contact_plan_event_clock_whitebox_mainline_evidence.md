@@ -27,10 +27,11 @@ Companion playbook:
 
 ## 2. 证据来源
 
-本页结论主要整理自下面两份历史记录：
+本页结论主要整理自下面几份历史记录 / 产物：
 
-- `docs/gait_speed_scaling_whitebox_evaluation.md`
+- `docs/changes/2026-03-15_gait_speed_scaling_whitebox_p0_snapshot.md`
 - `docs/Problems/active/2026-03-15_72_lowlr_to_lambda.md`
+- `debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model`
 
 其中最关键的是三轮 white-box follow-up：
 
@@ -52,10 +53,8 @@ Companion playbook:
 
 证据见：
 
-- `docs/gait_speed_scaling_whitebox_evaluation.md`
-  - `15.7 planner speed-zero probe`
 - `docs/Problems/active/2026-03-15_72_lowlr_to_lambda.md`
-  - `Gait speed white-box plan speed-zero probe`
+- `debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model`
 
 关键读数：
 
@@ -97,10 +96,8 @@ Companion playbook:
 
 证据见：
 
-- `docs/gait_speed_scaling_whitebox_evaluation.md`
-  - `15.8 planner state-path probe`
 - `docs/Problems/active/2026-03-15_72_lowlr_to_lambda.md`
-  - state-path probe readout / decision
+- `debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model`
 
 关键读数：
 
@@ -142,10 +139,8 @@ Companion playbook:
 
 证据见：
 
-- `docs/gait_speed_scaling_whitebox_evaluation.md`
-  - `15.9 planner write-back probe`
 - `docs/Problems/active/2026-03-15_72_lowlr_to_lambda.md`
-  - write-back probe readout / decision
+- `debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model`
 
 关键读数：
 
@@ -185,8 +180,8 @@ applied_correction = lambda_corr * delta_z
 
 证据见：
 
-- `docs/gait_speed_scaling_whitebox_evaluation.md:1458` 之后的 write-back probe readout
-- `docs/Problems/active/2026-03-15_72_lowlr_to_lambda.md:390` 附近的 runtime facts / readout
+- `docs/Problems/active/2026-03-15_72_lowlr_to_lambda.md`
+- `debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model`
 
 关键读数：
 
@@ -217,11 +212,8 @@ applied_correction = lambda_corr * delta_z
 
 证据见：
 
-- `docs/gait_speed_scaling_whitebox_evaluation.md`
-  - `15.9.2 exported tensors 给出的主结论`
-  - `15.9.3 如何回答这轮最关键的问题`
 - `docs/Problems/active/2026-03-15_72_lowlr_to_lambda.md`
-  - write-back probe readout / decision
+- `debug_output/_tmp_72_lowlr_to_lambda_20260315/eval_lambda_model`
 
 关键读数：
 

@@ -213,19 +213,6 @@ def main() -> None:
                         continue
             row[out_key] = _mean_list_of_lists(vals) if vals else None
 
-        wb_vals: List[Sequence[float]] = []
-        for rec in recs:
-            wb = rec.get("ContactMeasWhitebox", None)
-            if not isinstance(wb, dict):
-                continue
-            v = wb.get("MeasMean", None)
-            if isinstance(v, (list, tuple)) and v:
-                try:
-                    wb_vals.append([float(x) for x in v])
-                except Exception:
-                    continue
-        row["contact_meas_whitebox_per_c_mean"] = _mean_list_of_lists(wb_vals) if wb_vals else None
-
         per_ti.append(row)
 
     def _group_mean(ti_set: Sequence[int]) -> Dict[str, Any]:

@@ -430,13 +430,18 @@ def main() -> None:
         _cfg("rot_local_tail_select", getattr(lf, "rot_local_tail_select", "batch")) or "batch"
     )
     lf.rot_local_tail_ema_beta = float(_cfg("rot_local_tail_ema_beta", getattr(lf, "rot_local_tail_ema_beta", 0.9)))
+    lf.rot_local_tail_reduce = str(_cfg("rot_local_tail_reduce", getattr(lf, "rot_local_tail_reduce", "flat")) or "flat")
+    lf.rot_local_tail_uniform_mix = float(
+        _cfg("rot_local_tail_uniform_mix", getattr(lf, "rot_local_tail_uniform_mix", 0.4))
+    )
+    lf.rot_local_tail_rank_mix = float(
+        _cfg("rot_local_tail_rank_mix", getattr(lf, "rot_local_tail_rank_mix", 0.6))
+    )
     lf.unified_downstream_power = float(
         _cfg("unified_downstream_power", getattr(lf, "unified_downstream_power", 0.6))
     )
     lf.unified_self_scale = float(_cfg("unified_self_scale", getattr(lf, "unified_self_scale", 1.5)))
     lf.unified_min_weight = float(_cfg("unified_min_weight", getattr(lf, "unified_min_weight", 0.05)))
-    # Keep adaptive weighting conservative here to avoid hidden dependency on external prior tables.
-    lf.use_adaptive_weights = bool(_cfg("adaptive_bone_weights", False))
     try:
         if getattr(ds, "bone_names", None):
             lf.set_bone_names(ds.bone_names)
@@ -450,8 +455,7 @@ def main() -> None:
     print(
         "[LossCfg] "
         f"w_rot_local={lf.w_rot_local} w_direct_pose={lf.w_direct_pose} "
-        f"w_contact_plan={lf.w_contact_plan} w_contact_meas={lf.w_contact_meas} "
-        f"adaptive_bone_weights={lf.use_adaptive_weights}"
+        f"w_contact_plan={lf.w_contact_plan} w_contact_meas={lf.w_contact_meas}"
     )
 
     clip = ds.clips[0]
@@ -647,7 +651,6 @@ def main() -> None:
             "direct_pose_side_weight_right": float(lf.direct_pose_side_weight_right),
             "w_direct_delta": float(lf.w_direct_delta),
             "w_direct_delta_sym": float(lf.w_direct_delta_sym),
-            "adaptive_bone_weights": bool(lf.use_adaptive_weights),
         },
         "before_update": {
             "per_step": before["per_step"],

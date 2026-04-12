@@ -127,9 +127,9 @@ GROUP_SPECS: Tuple[GroupSpec, ...] = (
         name="plan_init_state",
         label="B. plan init-state rollback",
         prefixes=("contact_plan_init_head.",),
-        exact_keys=("contact_plan_init_z", "contact_phase_state_init"),
+        exact_keys=("contact_plan_init_z",),
         rationale=(
-            "Cold-start state for plan_z / phase-state, including learnable init vectors and obs-conditioned init head."
+            "Cold-start state for plan_z, including learnable init vectors and obs-conditioned init head."
         ),
     ),
     GroupSpec(
@@ -144,10 +144,10 @@ GROUP_SPECS: Tuple[GroupSpec, ...] = (
     GroupSpec(
         name="phase_contact_input",
         label="D. phase/contact input-side rollback",
-        prefixes=("contact_plan_phase_head.", "contact_phase_state_delta_head."),
+        prefixes=("contact_plan_phase_head.",),
         exact_keys=(),
         rationale=(
-            "Phase/contact side inputs into the planner: phase residual on logits and phase-state update head driven by cond/meas/delta_meas."
+            "Phase/contact side inputs into the planner: residual terms that modulate contact-plan logits."
         ),
     ),
 )
@@ -795,8 +795,6 @@ def ensure_downstream_lane(
             "ckpt_in": str(paths["warmstart_ckpt"]),
             "out_dir": str(paths["ckpt_70b_replace"].parent),
             "run_name": run_name_70b_replace,
-            "direct_pose_use_phase_z": True,
-            "direct_pose_phase_z_mode": "replace_contacts",
             "encoder_bundle": str(ENCODER_BUNDLE),
             "posttrain_contacts_source": "pretrain_contact",
             "posttrain_contacts_pretrain_clamp": PRETRAIN_CLAMP,

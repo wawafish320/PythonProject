@@ -309,16 +309,17 @@ h = h + period_emb
    loss_ortho = ||R^T @ R - I||^2
    ```
 
-#### 自适应骨骼权重
+#### 几何感知骨骼权重
 
-- **基于先验方差**:
+- **当前主线**使用统一几何权重
+- **统一权重公式**:
   ```python
-  bone_weights = 1 / (bone_prior_stds + eps)
+  influence = self_scale * ||offset|| + (sum_lever_arm_to_descendants) ** power
+  bone_weights = normalize(clamp_min(influence, min_w))
   ```
-- **层级权重**:
+- **评估口径**:
   ```python
-  # 末端骨骼权重更高
-  hierarchy_weights[bone] = distance_to_root[bone]
+  GeoLocalDegWeighted = weighted_mean(geo_local_per_joint, bone_weights)
   ```
 - **混合空间**: log-space或linear-space混合
 

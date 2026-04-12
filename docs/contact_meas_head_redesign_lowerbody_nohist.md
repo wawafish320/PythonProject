@@ -243,11 +243,13 @@ python tools/analyze_contact_meas_lag.py  --json debug_output/_tmp_teacher_meas/
 - `tools/diagnose_phase_tta_inputs.py --source meas`：events 数量/period 是否异常
 
 ### 3) 判定是不是“阈值抖动”还是“输入 OOD”
-只在 phase reset 使用侧加保护（不改变 meas 本体）：
-- `--contact_phase_state_event_hyst <0.05~0.15>`
-- `--contact_phase_state_event_min_interval <10~30>`
+`contact_phase_state_event_*` 这组 phase-state reset knobs 已从主线移除，不再作为当前执行建议。
 
-若加上后 events 立刻回到稳定周期，说明主要是 crossing jitter；否则更像输入 OOD/错相。
+当前口径下，若要区分 crossing jitter vs 输入 OOD，应直接看：
+- `metrics_per_step[*].ContactMeasGtAbsMean`
+- `tools/diagnose_phase_tta_inputs.py --source meas`
+
+如果这两类统计都稳定，却仍出现周期错乱，再回到离线问题单里看历史 phase-reset 诊断结论。
 
 ### 4) 定位 drift 是否来自跨 cycle 累积
 用 freerun 的 ablation 把“跨 cycle carry”切断：

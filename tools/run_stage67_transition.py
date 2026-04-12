@@ -1646,14 +1646,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--direct-pose-meas-source",
         type=str,
         default="model",
-        choices=("model", "whitebox", "gt", "softgt", "zero"),
+        choices=("model", "gt", "softgt", "zero"),
         help="Pass-through to freerun eval: override direct head contacts_meas source.",
     )
     ap_f.add_argument(
         "--contacts-meas-source",
         type=str,
         default="model",
-        choices=("model", "whitebox", "gt", "zero"),
+        choices=("model", "gt", "zero"),
         help="Pass-through to freerun eval: override runtime contacts_meas source for model/event-clock.",
     )
     ap_f.add_argument(

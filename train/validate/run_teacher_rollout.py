@@ -530,6 +530,7 @@ class TeacherRolloutRunner:
         direct_pose_feat_source = "cond"
         direct_pose_time_pe_dim = 0
         direct_pose_split_enable = False
+        direct_pose_stepc_unified_leg_terminal = False
         direct_pose_arm_split_enable = False
         direct_pose_arm_bones = None
         direct_pose_nonleg_proj_dim = 0
@@ -538,6 +539,7 @@ class TeacherRolloutRunner:
             direct_has_split_weights = any(
                 str(k).startswith(prefix)
                 for prefix in (
+                    "direct_pose_leg_terminal.",
                     "direct_pose_out_leg.",
                     "direct_pose_out_nonleg.",
                     "direct_pose_out_arm.",
@@ -549,6 +551,7 @@ class TeacherRolloutRunner:
             if (direct_has_weights or direct_has_split_weights) and int(Dc) > 0 and int(self.contact_dim or 0) > 0:
                 w_in = self.state_dict.get("direct_pose_head.0.weight", None)
                 w_out = self.state_dict.get("direct_pose_head.6.weight", None)
+                w_leg_terminal = self.state_dict.get("direct_pose_leg_terminal.6.weight", None)
                 w_hidden = self.state_dict.get("direct_pose_head.3.weight", None)
                 if torch.is_tensor(w_in) and w_in.ndim == 2:
                     in_dim = int(w_in.shape[1])
@@ -593,6 +596,9 @@ class TeacherRolloutRunner:
                             raise SystemExit(
                                 f"[FATAL] Unrecognized direct_pose_head out_dim={out_dim} (expected {expected_out} or {expected_out_modes})."
                             )
+                    elif torch.is_tensor(w_leg_terminal) and w_leg_terminal.ndim == 2:
+                        hid = int(w_leg_terminal.shape[1]) if int(w_leg_terminal.shape[1]) > 0 else hid
+                        direct_pose_stepc_unified_leg_terminal = True
 
                     if (not mode_resolved) and direct_has_split_weights:
                         for base_dim, src in base_candidates:
@@ -623,6 +629,7 @@ class TeacherRolloutRunner:
             direct_pose_feat_source = "cond"
             direct_pose_time_pe_dim = 0
             direct_pose_split_enable = False
+            direct_pose_stepc_unified_leg_terminal = False
             direct_pose_arm_split_enable = False
             direct_pose_arm_bones = None
             direct_pose_nonleg_proj_dim = 0
@@ -631,7 +638,8 @@ class TeacherRolloutRunner:
             direct_pose_split_enable = bool(
                 direct_pose_enable
                 and (
-                    any(str(k).startswith("direct_pose_out_leg.") for k in self.state_dict.keys())
+                    any(str(k).startswith("direct_pose_leg_terminal.") for k in self.state_dict.keys())
+                    or any(str(k).startswith("direct_pose_out_leg.") for k in self.state_dict.keys())
                     or (
                         torch.is_tensor(self.state_dict.get("direct_pose_leg_out_idx", None))
                         and torch.is_tensor(self.state_dict.get("direct_pose_nonleg_out_idx", None))
@@ -639,6 +647,10 @@ class TeacherRolloutRunner:
                         and int(self.state_dict["direct_pose_nonleg_out_idx"].numel()) > 0
                     )
                 )
+            )
+            direct_pose_stepc_unified_leg_terminal = bool(
+                direct_pose_split_enable
+                and any(str(k).startswith("direct_pose_leg_terminal.") for k in self.state_dict.keys())
             )
             direct_pose_arm_split_enable = bool(
                 direct_pose_split_enable
@@ -665,6 +677,7 @@ class TeacherRolloutRunner:
                         break
         except Exception:
             direct_pose_split_enable = False
+            direct_pose_stepc_unified_leg_terminal = False
             direct_pose_arm_split_enable = False
             direct_pose_arm_bones = None
             direct_pose_nonleg_proj_dim = 0
@@ -705,6 +718,7 @@ class TeacherRolloutRunner:
             direct_pose_feat_source=str(direct_pose_feat_source),
             direct_pose_time_pe_dim=int(direct_pose_time_pe_dim),
             direct_pose_split_enable=bool(direct_pose_split_enable),
+            direct_pose_stepc_unified_leg_terminal=bool(direct_pose_stepc_unified_leg_terminal),
             direct_pose_nonleg_proj_dim=int(direct_pose_nonleg_proj_dim),
             direct_pose_arm_split_enable=bool(direct_pose_arm_split_enable),
             direct_pose_arm_bones=direct_pose_arm_bones,

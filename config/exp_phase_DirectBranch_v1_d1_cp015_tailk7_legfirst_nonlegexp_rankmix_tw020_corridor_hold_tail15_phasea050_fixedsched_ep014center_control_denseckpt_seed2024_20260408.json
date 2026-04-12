@@ -1,0 +1,284 @@
+{
+  "data": "./raw_data/processed_data",
+  "bundle_json": "./raw_data/processed_data/norm_template.json",
+  "out": "./models/cp015_phasecd_tailk_probe_20260331",
+  "run_name": "exp_phase_DirectBranch_v1_d1_cp015_tailk7_legfirst_nonlegexp_rankmix_tw020_corridor_hold_tail15_phasea050_fixedsched_ep014center_control_denseckpt_seed2024_20260408",
+  "epochs": 15,
+  "batch": 16,
+  "lr": 0.001,
+  "seq_len": 60,
+  "amp": true,
+  "tf_mode": "epoch_linear",
+  "tf_start_epoch": 5,
+  "tf_end_epoch": 8,
+  "tf_max": 1.0,
+  "tf_min": 0.5,
+  "ss_chunk_len": 1,
+  "encoder_path": "./models/motion_encoder_equiv_stageA.pt",
+  "foot_contact_threshold": 2.0,
+  "diag_input_stats": true,
+  "freerun_debug_path": "debug_output/freerun_diag_exp_phase_DirectBranch_v1_d1_cp015_tailk7_legfirst_nonlegexp_rankmix_tw020_corridor_hold_tail15_phasea050_fixedsched_ep014center_control_denseckpt_seed2024_20260408.pt",
+  "monitor_batches": 2,
+  "eval_horizon": 14,
+  "eval_warmup": 0,
+  "width": 512,
+  "yaw_forward_offset": 0,
+  "history_debug_steps": 0,
+  "history_use_trend_features": true,
+  "w_rot_local": 0.2,
+  "w_root_vel": 0.05,
+  "w_root_speed": 0.03,
+  "rot_local_tail_weight": 0.0,
+  "rot_local_tail_k": 7,
+  "rot_local_tail_scope": "keybones",
+  "rot_local_tail_select": "ema",
+  "rot_local_tail_ema_beta": 0.9,
+  "rot_local_tail_reduce": "rank_linear_mix",
+  "rot_local_tail_uniform_mix": 0.4,
+  "rot_local_tail_rank_mix": 0.6,
+  "contact_plan_enable": true,
+  "trainbase_contacts_source": "pretrain_contact",
+  "trainbase_contacts_pretrain_clamp": 1.0,
+  "trainbase_contacts_pretrain_affine_stats": "debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+  "contact_plan_hidden": 64,
+  "contact_plan_dropout": 0.0,
+  "contact_plan_inject": "plan_z",
+  "contact_plan_inject_detach": true,
+  "w_contact_plan": 0.15,
+  "freerun_stage_schedule": [
+    {
+      "range": [
+        1,
+        5
+      ],
+      "label": "phase_a_plan_formation",
+      "params": {
+        "tf_max": 1.0,
+        "tf_min": 1.0,
+        "ss_chunk_len": 1,
+        "opt_lr": 0.001
+      },
+      "loss_groups": {
+        "aux": {
+          "w_contact_plan": 0.2
+        },
+        "core": {
+          "direct_pose_loss_leg_split": true,
+          "direct_pose_loss_group_norm_enable": true,
+          "direct_pose_loss_group_norm_w_leg": 1.0,
+          "direct_pose_loss_group_norm_w_nonleg": 0.0
+        }
+      }
+    },
+    {
+      "range": [
+        6,
+        9
+      ],
+      "label": "phase_b_corridor_entry",
+      "params": {
+        "tf_max": 1.0,
+        "tf_min": 0.5,
+        "ss_chunk_len": 1,
+        "opt_lr": 0.0005
+      },
+      "loss_groups": {
+        "aux": {
+          "w_contact_plan": 0.15
+        },
+        "core": {
+          "w_rot_local": 0.22,
+          "rot_local_tail_weight": 0.1,
+          "rot_local_tail_k": 7,
+          "direct_pose_loss_leg_split": true,
+          "direct_pose_loss_group_norm_enable": true,
+          "direct_pose_loss_group_norm_w_leg": 1.0,
+          "direct_pose_loss_group_norm_w_nonleg": 0.25
+        }
+      }
+    },
+    {
+      "range": [
+        10,
+        11
+      ],
+      "label": "phase_c_corridor_hold",
+      "params": {
+        "tf_max": 0.5,
+        "tf_min": 0.5,
+        "ss_chunk_len": 1,
+        "opt_lr": 0.0002
+      },
+      "loss_groups": {
+        "aux": {
+          "w_contact_plan": 0.13
+        },
+        "core": {
+          "w_rot_local": 0.22,
+          "rot_local_tail_weight": 0.2,
+          "rot_local_tail_k": 7,
+          "direct_pose_loss_leg_split": true,
+          "direct_pose_loss_group_norm_enable": true,
+          "direct_pose_loss_group_norm_w_leg": 1.0,
+          "direct_pose_loss_group_norm_w_nonleg": 1.0
+        }
+      }
+    },
+    {
+      "range": [
+        12,
+        15
+      ],
+      "label": "phase_d_short_late_tail",
+      "params": {
+        "tf_max": 0.5,
+        "tf_min": 0.5,
+        "ss_chunk_len": 1,
+        "opt_lr": 0.0001
+      },
+      "loss_groups": {
+        "aux": {
+          "w_contact_plan": 0.1
+        },
+        "core": {
+          "w_rot_local": 0.22,
+          "rot_local_tail_weight": 0.2,
+          "rot_local_tail_k": 7,
+          "direct_pose_loss_leg_split": false,
+          "direct_pose_loss_group_norm_enable": false
+        }
+      }
+    }
+  ],
+  "depth": 3,
+  "contact_plan_init_mode": "learnable+obs",
+  "contact_plan_init_hidden": 128,
+  "direct_pose_enable": true,
+  "w_direct_pose": 0.2,
+  "contact_plan_time_pe_dim": 16,
+  "direct_pose_meas_mode": "concat",
+  "direct_pose_meas_drop_prob": 0.1,
+  "direct_pose_plan_drop_prob": 0.1,
+  "direct_pose_meas_noise_std": 0.03,
+  "use_event_clock": true,
+  "event_clock_max_delta": 0.5,
+  "event_clock_hidden_dim": 64,
+  "event_clock_gate_hidden_dim": 32,
+  "event_clock_lambda_entropy_weight": 0.01,
+  "event_clock_lambda_prior_weight": 0.01,
+  "event_clock_delta_z_l2_weight": 0.001,
+  "config_json": "config/exp_phase_DirectBranch_v1_d1_cp015_tailk7_legfirst_nonlegexp_rankmix_tw020_corridor_hold_tail15_phasea050_fixedsched_ep014center_control_denseckpt_seed2024_20260408.json",
+  "val_mode": "online",
+  "norm_template": "raw_data/processed_data/norm_template.json",
+  "pretrain_template": "models/pretrain_template.json",
+  "no_monitor": false,
+  "resume": null,
+  "config_override": null,
+  "train_files": "",
+  "diag_topk": 8,
+  "diag_thr": 8.0,
+  "num_workers": 0,
+  "weight_decay": 0.01,
+  "warmup_steps": 1000,
+  "min_lr_ratio": 0.05,
+  "accum_steps": 1,
+  "grad_clip": 1.0,
+  "patience": 20,
+  "tf_warmup_epochs": 3,
+  "history_adaptive_max_frames": null,
+  "history_adaptive_hidden": 256,
+  "history_adaptive_heads": 2,
+  "history_adaptive_train_variable": false,
+  "history_dropout_prob": 0.1,
+  "tf_warmup_steps": 5000,
+  "tf_total_steps": 200000,
+  "num_heads": 4,
+  "context_len": 16,
+  "dropout": 0.1,
+  "w_rot_ortho": 0.001,
+  "contact_plan_time_pe_base": 10000.0,
+  "contact_plan_init_dropout": 0.0,
+  "direct_pose_hidden": 256,
+  "direct_pose_dropout": 0.0,
+  "direct_pose_detach_plan": true,
+  "direct_pose_split_enable": false,
+  "direct_pose_arm_split_enable": false,
+  "direct_pose_arm_bones": null,
+  "direct_pose_nonleg_proj_dim": 0,
+  "direct_pose_loss_leg_split": false,
+  "direct_pose_loss_arm_else_balance_enable": false,
+  "direct_pose_loss_arm_weight": 1.0,
+  "direct_pose_loss_else_weight": 1.0,
+  "direct_pose_grad_monitor_enable": false,
+  "direct_pose_grad_ratio_gate": 0.35,
+  "direct_pose_loss_group_norm_enable": false,
+  "direct_pose_loss_group_norm_w_leg": 1.0,
+  "direct_pose_loss_group_norm_w_nonleg": 1.0,
+  "direct_pose_loss_group_norm_ema_beta": 0.9,
+  "direct_pose_loss_group_norm_ratio_min": 0.2,
+  "direct_pose_loss_group_norm_ratio_max": 5.0,
+  "direct_pose_loss_group_norm_eps": 1e-06,
+  "contact_meas_gate_by_hit": "auto",
+  "contact_meas_ground_z_mode": "window",
+  "contact_meas_ground_z_beta": 0.05,
+  "contact_meas_ground_z_window": 5,
+  "contact_meas_ground_z_quantile": 0.2,
+  "contact_meas_ground_z_slew_up_cm": 0.0,
+  "contact_meas_ground_z_slew_down_cm": 0.0,
+  "adaptive_bone_weights": true,
+  "unified_downstream_power": 0.6,
+  "unified_self_scale": 1.5,
+  "unified_min_weight": 0.05,
+  "yaw_aug_deg": 0.0,
+  "normalize_c": false,
+  "aug_noise_std": 0.0,
+  "aug_time_warp_prob": 0.0,
+  "log_every": 50,
+  "force_valfree_eval": true,
+  "teacher_eval_max_batches": null,
+  "yaw_forward_axis": null,
+  "eval_angvel_dir_percentile": 0.75,
+  "no_grad_conn_test": false,
+  "save_fit_ckpt_epochs": "12-15",
+  "strategy_meta": {
+    "active_variant_id": "cp015_tailk7_legfirst_nonlegexp_rankmix_tw020_corridor_hold_tail15_phasea050_fixedsched_ep014center_control_denseckpt_seed2024_20260408",
+    "metric_gate_contract": "epoch_based_baseanchored",
+    "baseline_anchor": "control_denseckpt_tailk7_rankmix_tw020",
+    "notes": "E2-C matched leg-first -> nonleg expansion on top of canonical top7 rank_linear_mix tw020 lane. Keep support width fixed at top7 and only path-shape the direct-pose objective: phase_a leg-only, phase_b leg-dominant, phase_c full nonleg within split objective, phase_d restore whole-branch baseline objective.",
+    "legfirst_schedule": {
+      "phase_a": "leg_only_via_direct_pose_leg_split+group_norm(w_leg=1.0,w_nonleg=0.0)",
+      "phase_b": "leg_dominant_via_group_norm(w_leg=1.0,w_nonleg=0.25)",
+      "phase_c": "split_full_nonleg_via_group_norm(w_leg=1.0,w_nonleg=1.0)",
+      "phase_d": "return_to_full_branch_objective"
+    },
+    "corridor_targets": {
+      "semantic_floor_proxy": {
+        "Online/ContactPlanGtAbsMean_hi": 0.44
+      },
+      "acceptable_band": {
+        "Online/ContactPlanLRAbsDiffMean": [
+          0.65,
+          0.75
+        ],
+        "Online/ContactPlanLogitAbsMean": [
+          1.6,
+          1.9
+        ]
+      },
+      "hold_band": {
+        "Online/ContactPlanLRAbsDiffMean": [
+          0.66,
+          0.73
+        ],
+        "Online/ContactPlanLogitAbsMean": [
+          1.62,
+          1.88
+        ]
+      }
+    },
+    "parent_config_json": "config/exp_phase_DirectBranch_v1_d1_cp015_tailk7_rankmix_tw020_corridor_hold_tail15_phasea050_fixedsched_ep014center_control_denseckpt_seed2024_20260401.json",
+    "ablation_family": "cp015_tailk_e2c_legfirst_nonlegexp_20260408",
+    "ablation_role": "control_denseckpt_tailk7_legfirst_nonlegexp"
+  },
+  "seed": 2024
+}

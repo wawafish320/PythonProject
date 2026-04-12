@@ -60,8 +60,8 @@
 
 如果 `contacts_meas` 退化成常数/均值解，那么 `contacts_err` 就会变成“偏置”，几乎不随 drift 变化 → 闭环就不“闭”。
 
-> 当前默认推荐 **white-box meas**：`train/training_MPL.py:Trainer._contact_meas_whitebox()`  
-> `contact_meas_head` 可选保留（轻量化/泛化/无 FK 部署），但需防均值解。
+> 当前 mainline runtime 默认使用 learned `contact_meas_head`（`contacts_meas_source=model`）。  
+> 如需外部对照/冻结观测，请走 `pretrain_contact` validate lane；历史白盒 meas 已不再属于主线 runtime。
 
 ### 2.3 SO(3) corrector（短期纠偏）
 
@@ -121,15 +121,13 @@ R_blend = Exp(λ_eff * ω) @ R_inc
 
 典型根因是把 “delta 表示” 当作 “absolute 6D rotation” 写回导致首帧炸裂；已修复（首帧回到 ~0.x° 量级）。
 
-### 4.2 `contacts_meas_head` 均值解 → 白盒 meas（已默认）
+### 4.2 `contacts_meas_head` 均值解 → 历史白盒 meas 路线
 
 当 meas 要隐式学习 “FK + foot evidence” 时很容易退化成常数输出，`contacts_err` 失真。
 
-当前默认策略：
-- rollout / freerun_cycles 使用 white-box meas（确定性、无拟合误差）
-- ML meas head 仅作为可选项（部署/泛化需求出现时再做）
-
-补充：white-box meas 的稳定性/连续性 TODO 见 `docs/contact_meas_whitebox_stability.md`（Walk_F step1 崩溃类问题优先从这里排查）。
+当前建议：
+- 历史调试里曾大量使用 white-box meas 做定位，但相关专项文档已移除
+- 当前执行口径以 `docs/posttrain_pipeline.md` 与 `docs/contact_meas_head_redesign_lowerbody_nohist.md` 为准
 
 ### 4.3 time-PE 在 multi-cycle 下 OOD（需严格对齐）
 

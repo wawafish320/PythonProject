@@ -29,7 +29,6 @@
   "w_root_vel": 0.05,
   "w_root_speed": 0.03,
   "contact_plan_enable": true,
-  "trainbase_contacts_source": "pretrain_contact",
   "trainbase_contacts_pretrain_clamp": 1.0,
   "trainbase_contacts_pretrain_affine_stats": "debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
   "contact_plan_hidden": 64,

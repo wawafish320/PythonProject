@@ -34,13 +34,11 @@ PLAN_PREFIXES: Tuple[str, ...] = (
     "contact_plan_time_head.",
     "contact_plan_phase_head.",
     "contact_plan_init_head.",
-    "contact_phase_state_delta_head.",
     "event_clock_gate.",
     "event_clock_corrector.",
 )
 PLAN_EXACT_KEYS: Tuple[str, ...] = (
     "contact_plan_init_z",
-    "contact_phase_state_init",
 )
 
 

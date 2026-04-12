@@ -18,14 +18,6 @@ POSTTRAIN_FORBIDDEN_TOKENS: tuple[str, ...] = (
     "CONTACT_MEAS_PROVIDER_RETIRED",
 )
 
-RUNTIME_NO_PHASE_FILES: tuple[str, ...] = (
-    "train/training_MPL.py",
-    "train/models.py",
-    "train/posttrain.py",
-    "train/validate/run_freerun_cycles.py",
-    "train/validate/run_teacher_rollout.py",
-)
-FORBIDDEN_PHASE_TOKEN = "contact_phase_state"
 RUNTIME_NO_MODEL_PHASE_OUTPUT_FILES: tuple[str, ...] = (
     "train/eval_utils.py",
     "train/validate/run_teacher_rollout.py",
@@ -67,12 +59,6 @@ def main() -> int:
         default=Path("train/posttrain.py"),
         help="Path to posttrain source file.",
     )
-    ap.add_argument(
-        "--no-phase-files",
-        nargs="*",
-        default=list(RUNTIME_NO_PHASE_FILES),
-        help="Runtime files that must stay free of contact_phase_state token.",
-    )
     args = ap.parse_args()
 
     src = args.posttrain_file
@@ -83,14 +69,6 @@ def main() -> int:
         return 2
 
     errs = _validate_tokens(src, POSTTRAIN_FORBIDDEN_TOKENS)
-    for rel in args.no_phase_files:
-        p = Path(rel)
-        if not p.is_absolute():
-            p = repo_root / p
-        if not p.exists():
-            errs.append(f"{p}: source file not found")
-            continue
-        errs.extend(_validate_tokens(p, (FORBIDDEN_PHASE_TOKEN,)))
     for rel in RUNTIME_NO_MODEL_PHASE_OUTPUT_FILES:
         p = Path(rel)
         if not p.is_absolute():

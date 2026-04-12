@@ -264,6 +264,7 @@ class PostTrainConfig:
     direct_pose_phase_z_mode: str
     # Optional: split direct output into leg/non-leg heads with shared trunk.
     direct_pose_split_enable: bool
+    direct_pose_stepc_unified_leg_terminal: bool
     # Optional: non-leg projection bottleneck dim for split head.
     # >0 => h_nonleg=ReLU(Linear(hid, proj)); out_nonleg=Linear(proj, D_nonleg)
     # 0 => compat split (out_nonleg=Linear(hid, D_nonleg))
@@ -929,6 +930,9 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
         "direct_pose_hidden_override": parsed_scalars["direct_pose_hidden_override"],
         "direct_pose_nonleg_proj_dim": int(parsed_scalars["direct_pose_nonleg_proj_dim"]),
         "direct_pose_split_enable": _cfg_get_bool(payload, "direct_pose_split_enable", False),
+        "direct_pose_stepc_unified_leg_terminal": _cfg_get_bool(
+            payload, "direct_pose_stepc_unified_leg_terminal", False
+        ),
         "direct_pose_arm_split_enable": _cfg_get_bool(payload, "direct_pose_arm_split_enable", False),
         "direct_pose_arm_bones": _normalize_optional_csv(payload.get("direct_pose_arm_bones", None)),
         "direct_pose_nonleg_train_only": _cfg_get_bool(payload, "direct_pose_nonleg_train_only", False),
@@ -3673,6 +3677,7 @@ def _expected_trainable_prefixes(train_mode: str) -> list[str]:
         "lambda": ("lambda_fusion_head",),
         "direct": (
             "direct_pose_head",
+            "direct_pose_leg_terminal",
             "direct_pose_out_leg",
             "direct_pose_out_nonleg",
             "direct_pose_nonleg_proj",
@@ -3923,7 +3928,7 @@ def _unfreeze_direct_pose(
         _enable_modules(model, ("direct_pose_leg_gate_head",))
         return
     if bool(leg_only):
-        _enable_modules(model, ("direct_pose_leg_head", "direct_pose_leg_gate_head"))
+        _enable_modules(model, ("direct_pose_leg_terminal", "direct_pose_leg_head", "direct_pose_leg_gate_head"))
         return
     if bool(nonleg_only):
         _enable_modules(
@@ -3943,6 +3948,7 @@ def _unfreeze_direct_pose(
         model,
         (
             "direct_pose_head",
+            "direct_pose_leg_terminal",
             "direct_pose_out_leg",
             "direct_pose_out_nonleg",
             "direct_pose_out_arm",
@@ -4133,9 +4139,12 @@ def _save_posttrain_outputs(*, cfg: PostTrainConfig, model: EventMotionModel, lo
     cfg_jsonable["direct_pose_use_phase_z"] = bool(direct_pose_use_phase_z)
     cfg_jsonable["direct_pose_phase_z_mode"] = str(direct_pose_phase_z_mode)
     cfg_jsonable["direct_pose_split_enable"] = bool(direct_pose_split_enable)
+    cfg_jsonable["direct_pose_stepc_unified_leg_terminal"] = bool(
+        getattr(model, "direct_pose_leg_terminal", None) is not None
+    )
     cfg_jsonable["direct_pose_nonleg_proj_dim"] = int(direct_pose_nonleg_proj_dim)
-    cfg_jsonable["direct_pose_arm_split_enable"] = bool(getattr(cfg, "direct_pose_arm_split_enable", False))
-    cfg_jsonable["direct_pose_arm_bones"] = getattr(cfg, "direct_pose_arm_bones", None)
+    cfg_jsonable["direct_pose_arm_split_enable"] = bool(getattr(model, "direct_pose_arm_split_enable", False))
+    cfg_jsonable["direct_pose_arm_bones"] = getattr(model, "direct_pose_arm_bones", None)
     cfg_jsonable["direct_pose_nonleg_train_only"] = bool(getattr(cfg, "direct_pose_nonleg_train_only", False))
     cfg_jsonable["direct_pose_leg_gate_mode"] = str(direct_pose_leg_gate_mode_model)
     cfg_jsonable["direct_pose_leg_gate_power"] = float(direct_pose_leg_gate_power_model)
@@ -4346,6 +4355,12 @@ def _build_posttrain_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="true|false; split direct output heads into leg/non-leg with shared trunk (B2).",
+    )
+    ap.add_argument(
+        "--direct_pose_stepc_unified_leg_terminal",
+        type=str,
+        default=None,
+        help="true|false; replace legacy direct_pose_out_leg with a shared-trunk unified leg terminal block.",
     )
     ap.add_argument(
         "--direct_pose_nonleg_proj_dim",
@@ -4808,6 +4823,7 @@ def _build_posttrain_model_from_ckpt(
     # and the post-train output checkpoint would lose the direct branch. Keep it when present.
     direct_has_weights = bool(
         any(k.startswith("direct_pose_head.") for k in state_dict.keys())
+        or any(k.startswith("direct_pose_leg_terminal.") for k in state_dict.keys())
         or any(k.startswith("direct_pose_out_leg.") for k in state_dict.keys())
         or any(k.startswith("direct_pose_out_nonleg.") for k in state_dict.keys())
         or any(k.startswith("direct_pose_out_arm.") for k in state_dict.keys())
@@ -4839,6 +4855,7 @@ def _build_posttrain_model_from_ckpt(
         w_in = state_dict.get("direct_pose_head.0.weight", None)
         w_out = state_dict.get("direct_pose_head.6.weight", None)
         w_out_leg = state_dict.get("direct_pose_out_leg.weight", None)
+        w_leg_terminal = state_dict.get("direct_pose_leg_terminal.6.weight", None)
         w_out_nonleg = state_dict.get("direct_pose_out_nonleg.weight", None)
         w_out_arm = state_dict.get("direct_pose_out_arm.weight", None)
         w_out_else = state_dict.get("direct_pose_out_else.weight", None)
@@ -4850,6 +4867,15 @@ def _build_posttrain_model_from_ckpt(
                 if torch.is_tensor(w_out) and w_out.ndim == 2:
                     out_dim = int(w_out.shape[0])
                 elif (
+                    torch.is_tensor(w_leg_terminal)
+                    and w_leg_terminal.ndim == 2
+                    and torch.is_tensor(w_out_nonleg)
+                    and w_out_nonleg.ndim == 2
+                ):
+                    out_dim = int(w_leg_terminal.shape[0] + w_out_nonleg.shape[0])
+                    if int(w_leg_terminal.shape[1]) > 0:
+                        hid = int(w_leg_terminal.shape[1])
+                elif (
                     torch.is_tensor(w_out_leg)
                     and w_out_leg.ndim == 2
                     and torch.is_tensor(w_out_nonleg)
@@ -4858,6 +4884,17 @@ def _build_posttrain_model_from_ckpt(
                     out_dim = int(w_out_leg.shape[0] + w_out_nonleg.shape[0])
                     if int(w_out_leg.shape[1]) > 0:
                         hid = int(w_out_leg.shape[1])
+                elif (
+                    torch.is_tensor(w_leg_terminal)
+                    and w_leg_terminal.ndim == 2
+                    and torch.is_tensor(w_out_arm)
+                    and w_out_arm.ndim == 2
+                    and torch.is_tensor(w_out_else)
+                    and w_out_else.ndim == 2
+                ):
+                    out_dim = int(w_leg_terminal.shape[0] + w_out_arm.shape[0] + w_out_else.shape[0])
+                    if int(w_leg_terminal.shape[1]) > 0:
+                        hid = int(w_leg_terminal.shape[1])
                 elif (
                     torch.is_tensor(w_out_leg)
                     and w_out_leg.ndim == 2
@@ -4938,22 +4975,30 @@ def _build_posttrain_model_from_ckpt(
     direct_pose_use_phase_z = bool(getattr(cfg, "direct_pose_use_phase_z", False))
     direct_pose_phase_z_mode = str(getattr(cfg, "direct_pose_phase_z_mode", "concat") or "concat").strip().lower()
     direct_pose_split_enable_infer = False
+    direct_pose_stepc_unified_leg_terminal_infer = False
     direct_pose_arm_split_enable_infer = False
     direct_pose_nonleg_proj_dim_infer = 0
     try:
+        has_leg_terminal = any(str(k).startswith("direct_pose_leg_terminal.") for k in state_dict.keys())
         has_leg_out = any(str(k).startswith("direct_pose_out_leg.") for k in state_dict.keys())
         has_nonleg_out = any(str(k).startswith("direct_pose_out_nonleg.") for k in state_dict.keys())
         has_arm_out = any(str(k).startswith("direct_pose_out_arm.") for k in state_dict.keys())
         has_else_out = any(str(k).startswith("direct_pose_out_else.") for k in state_dict.keys())
         direct_pose_split_enable_infer = bool(
-            has_leg_out and (has_nonleg_out or (has_arm_out and has_else_out))
+            (has_leg_terminal or has_leg_out) and (has_nonleg_out or (has_arm_out and has_else_out))
         )
-        direct_pose_arm_split_enable_infer = bool(has_leg_out and has_arm_out and has_else_out)
+        direct_pose_stepc_unified_leg_terminal_infer = bool(has_leg_terminal)
+        direct_pose_arm_split_enable_infer = bool((has_leg_terminal or has_leg_out) and has_arm_out and has_else_out)
     except Exception:
         direct_pose_split_enable_infer = False
+        direct_pose_stepc_unified_leg_terminal_infer = False
         direct_pose_arm_split_enable_infer = False
     try:
         if isinstance(ckpt_posttrain_cfg, dict):
+            if "direct_pose_stepc_unified_leg_terminal" in ckpt_posttrain_cfg:
+                direct_pose_stepc_unified_leg_terminal_infer = bool(
+                    ckpt_posttrain_cfg.get("direct_pose_stepc_unified_leg_terminal", False)
+                )
             if "direct_pose_arm_split_enable" in ckpt_posttrain_cfg:
                 direct_pose_arm_split_enable_infer = bool(ckpt_posttrain_cfg.get("direct_pose_arm_split_enable", False))
             if bool(direct_pose_arm_split_enable_infer):
@@ -4982,8 +5027,11 @@ def _build_posttrain_model_from_ckpt(
     except Exception:
         pass
     direct_pose_split_enable = bool(getattr(cfg, "direct_pose_split_enable", False))
+    direct_pose_stepc_unified_leg_terminal = bool(getattr(cfg, "direct_pose_stepc_unified_leg_terminal", False))
     direct_pose_arm_split_enable = bool(getattr(cfg, "direct_pose_arm_split_enable", False))
     if bool(direct_pose_arm_split_enable):
+        direct_pose_split_enable = True
+    if bool(direct_pose_stepc_unified_leg_terminal):
         direct_pose_split_enable = True
     direct_pose_arm_bones = getattr(cfg, "direct_pose_arm_bones", None)
     direct_pose_nonleg_proj_dim = int(getattr(cfg, "direct_pose_nonleg_proj_dim", 0) or 0)
@@ -5038,6 +5086,9 @@ def _build_posttrain_model_from_ckpt(
     )
     nonleg_proj_mismatch = bool(int(direct_pose_nonleg_proj_dim) != int(direct_pose_nonleg_proj_dim_infer))
     split_mismatch = bool(direct_pose_split_enable) != bool(direct_pose_split_enable_infer)
+    stepc_leg_terminal_mismatch = bool(direct_pose_stepc_unified_leg_terminal) != bool(
+        direct_pose_stepc_unified_leg_terminal_infer
+    )
     arm_split_mismatch = bool(direct_pose_arm_split_enable) != bool(direct_pose_arm_split_enable_infer)
     if shape_override:
         if not bool(getattr(cfg, "train_direct_pose", False)):
@@ -5058,6 +5109,17 @@ def _build_posttrain_model_from_ckpt(
                 raise SystemExit(
                     "[FATAL] direct_pose split mode differs from checkpoint but train_direct_pose=false. "
                     "Enable train_direct_pose (or match direct_pose_split_enable to checkpoint)."
+                )
+            drop_direct_pose_weights = True
+    if stepc_leg_terminal_mismatch:
+        allow_compat_to_stepc = bool(direct_pose_stepc_unified_leg_terminal) and (
+            not bool(direct_pose_stepc_unified_leg_terminal_infer)
+        )
+        if not allow_compat_to_stepc:
+            if not bool(getattr(cfg, "train_direct_pose", False)):
+                raise SystemExit(
+                    "[FATAL] direct_pose_stepc_unified_leg_terminal differs from checkpoint but train_direct_pose=false. "
+                    "Enable train_direct_pose (or match direct_pose_stepc_unified_leg_terminal to checkpoint)."
                 )
             drop_direct_pose_weights = True
     if arm_split_mismatch:
@@ -5276,9 +5338,10 @@ def _build_posttrain_model_from_ckpt(
         direct_pose_use_phase_z=bool(direct_pose_use_phase_z),
         direct_pose_phase_z_mode=str(direct_pose_phase_z_mode),
         direct_pose_split_enable=bool(direct_pose_split_enable),
+        direct_pose_stepc_unified_leg_terminal=bool(direct_pose_stepc_unified_leg_terminal),
         direct_pose_nonleg_proj_dim=int(direct_pose_nonleg_proj_dim),
-        direct_pose_arm_split_enable=bool(getattr(cfg, "direct_pose_arm_split_enable", False)),
-        direct_pose_arm_bones=getattr(cfg, "direct_pose_arm_bones", None),
+        direct_pose_arm_split_enable=bool(direct_pose_arm_split_enable),
+        direct_pose_arm_bones=direct_pose_arm_bones,
         direct_pose_leg_enable=bool(getattr(cfg, "direct_pose_leg_enable", False)),
         direct_pose_leg_bones=getattr(cfg, "direct_pose_leg_bones", None),
         direct_pose_leg_mode=str(getattr(cfg, "direct_pose_leg_mode", "rot6d_add") or "rot6d_add"),
@@ -5307,6 +5370,7 @@ def _build_posttrain_model_from_ckpt(
             k
             for k in list(state_dict.keys())
             if str(k).startswith("direct_pose_head.")
+            or str(k).startswith("direct_pose_leg_terminal.")
             or str(k).startswith("direct_pose_out_leg.")
             or str(k).startswith("direct_pose_out_nonleg.")
             or str(k).startswith("direct_pose_out_arm.")

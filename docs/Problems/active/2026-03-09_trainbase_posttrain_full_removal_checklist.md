@@ -166,7 +166,7 @@
 - [ ] `train/validate/run_freerun_cycles.py`：删除依赖 `contact_phase_state` 的 phase-reset 运行逻辑与导出字段。
 - [ ] `train/validate/run_freerun_cycles.py`：删除 `phase_reset_source`、`phase_reset_source_strict` 等仅服务于该状态机的 CLI/summary。
 - [ ] `tools/run_stage67_transition.py`：删除 phase-reset compare 字段与命令透传。
-- [ ] `docs/contact_phase_state_prevphase_tta.md`：转入 archive 或明确标注 retired。
+- [x] 历史 phase/TTA 说明文档已从主文档集中移除。
 
 ### B4. 完成定义
 

@@ -251,8 +251,6 @@ def main() -> int:
             "ckpt_in": str(warmstart_ckpt),
             "out_dir": str(model_dir),
             "run_name": run_name,
-            "direct_pose_use_phase_z": True,
-            "direct_pose_phase_z_mode": "replace_contacts",
             "lr": 3e-4,
             "epochs": 1,
             "steps_per_epoch": 60,

@@ -1,5 +1,9 @@
 # TrainBase v2 流程重构设计（Core / Patch 分层）
 
+> Status: retained in `docs/trainbase_design` as foundational trainbase design context
+> Reader note: This file is not the current global posttrain canonical. Terms such as `mainline` or `current` below refer to the original trainbase-design context.
+> Current canonical entry: `docs/posttrain_pipeline.md`
+
 > Last updated: 2026-03-09  
 > 目标：在不破坏 Stage6→Stage7 主链质量的前提下，降低 train(base) 维护复杂度，明确“哪些属于 base core、哪些属于 patch 实验层”。
 > Update (2026-03-09): `whitebox` runtime/validate lane 已从当前 mainline 退休；本文若提到 `whitebox`，除非明确标成 historical/archive，否则都应按当前 contract 替换为 `pretrain_contact`。
@@ -8,8 +12,6 @@
 - `docs/Problems/active/2026-03-02_trainbase_simplify_review.md`
 - `docs/contact_loop_closure_design.md`
 - `docs/contact_meas_head_redesign_lowerbody_nohist.md`
-- `docs/contact_meas_whitebox_stability.md`
-- `docs/contact_phase_state_prevphase_tta.md`（历史路线图，主链已移除）
 
 ---
 
@@ -218,5 +220,4 @@ event_clock_mode: auto            # auto | on | off
 - 本文：trainbase v2 分层与治理（core/patch）
 - 闭环机制细节：`docs/contact_loop_closure_design.md`
 - learned meas 结构与调试：`docs/contact_meas_head_redesign_lowerbody_nohist.md`
-- historical white-box 复盘：`docs/contact_meas_whitebox_stability.md`
-- phase/TTA 历史路线图：`docs/contact_phase_state_prevphase_tta.md`（主链已移除）
+- 历史 white-box / phase-TTA 路线已从仓库主文档集中移除，不再作为当前入口

@@ -63,6 +63,10 @@ def _unfreeze_direct_pose(
                 p.requires_grad_(True)
         return
     if bool(leg_only):
+        leg_terminal = getattr(model, "direct_pose_leg_terminal", None)
+        if leg_terminal is not None:
+            for p in leg_terminal.parameters():
+                p.requires_grad_(True)
         leg = getattr(model, "direct_pose_leg_head", None)
         if leg is not None:
             for p in leg.parameters():
@@ -106,6 +110,10 @@ def _unfreeze_direct_pose(
     out_leg = getattr(model, "direct_pose_out_leg", None)
     if out_leg is not None:
         for p in out_leg.parameters():
+            p.requires_grad_(True)
+    leg_terminal = getattr(model, "direct_pose_leg_terminal", None)
+    if leg_terminal is not None:
+        for p in leg_terminal.parameters():
             p.requires_grad_(True)
     out_nonleg = getattr(model, "direct_pose_out_nonleg", None)
     if out_nonleg is not None:

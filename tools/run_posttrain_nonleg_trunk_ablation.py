@@ -76,7 +76,18 @@ def main() -> None:
     os.makedirs(cfg.out_dir, exist_ok=True)
 
     norm_spec, ds, batch_iter = posttrain._build_dataset_and_loader(cfg)
-    model, direct_pose_feat_source, direct_pose_time_pe_dim, direct_pose_time_pe_base, direct_pose_use_phase_z, direct_pose_phase_z_mode, direct_pose_split_enable, direct_pose_nonleg_proj_dim, direct_pose_leg_gate_mode_model, direct_pose_leg_gate_power_model = posttrain._build_posttrain_model_from_ckpt(
+    (
+        model,
+        direct_pose_feat_source,
+        direct_pose_time_pe_dim,
+        direct_pose_time_pe_base,
+        direct_pose_use_phase_z,
+        direct_pose_phase_z_mode,
+        direct_pose_split_enable,
+        direct_pose_nonleg_proj_dim,
+        direct_pose_leg_gate_mode_model,
+        direct_pose_leg_gate_power_model,
+    ) = posttrain._build_posttrain_model_from_ckpt(
         cfg=cfg,
         ds=ds,
         device=device,

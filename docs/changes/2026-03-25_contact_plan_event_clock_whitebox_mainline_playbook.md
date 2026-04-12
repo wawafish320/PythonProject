@@ -360,7 +360,7 @@ plan_z_raw --(writeback rule)---------> plan_z_next_t --(carry to next step)
   - rollout buffer
   - per-step override
   - export 拼装
-- `train/validate/run_gait_speed_scaling_whitebox.py`
+- `train/validate/run_gait_speed_scaling_eval.py`
   - donor probe 的组织方式
 
 不建议直接照搬：

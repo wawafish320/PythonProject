@@ -1,311 +1,235 @@
-# Posttrain Pipeline (Current Canonical Chain)
+# Posttrain Pipeline (Global Canonical / StepC Boundary)
 
-> Last updated: 2026-03-18
-> Status: current default posttrain flow for the old d1 / newflow lane.
+> Last updated: 2026-04-12
+> Status: current global canonical posttrain flow
+> Caveat: `N=5 / limited-N`
 
-This document keeps only the active mainline:
+This document defines the current global canonical posttrain boundary contract.
 
-`Stage6 -> 70a -> new70b_replace_lowdrift -> 70R -> 71(lr=3e-4) -> 72(lr=1e-4) -> lambda`
+The canonical claim is now:
 
-Everything else is archive-only unless a problem doc explicitly re-opens it.
-In particular:
+- the active default boundary contract is the StepC unified-leg-terminal handoff
+- the default downstream continuation remains:
+  - `70a-StepC donor -> replace-StepC -> 70R-StepC -> 71-StepC(lr=3e-4) -> 72-StepC(lr=1e-4) -> lambda-StepC`
 
-- raw `70b` stays diagnostic-only
-- historical `70c_replacecontacts` is not an active handoff stage
-- `71m`, `72_micro`, `hybridcarry`, `skip70c`, and legacy Stage1-5 lanes are not part of the current pipeline
+This is a boundary-contract promotion, not a donor-family-exclusive claim.
+Legacy old-boundary records and donor-family-specific notes are maintained in separate docs.
 
 ---
 
 ## 1) Source of Truth
 
-The current chain is locked by these records:
+Primary promotion artifacts:
 
-- lane handoff and chain semantics:
-  - `docs/Problems/active/2026-03-14_oldd1_newflow_leg_regression_handoff.md`
-- low-drift replace decision:
-  - `docs/Problems/active/2026-03-14_oldd1_skip70b_replace_lowdrift_experiment.md`
-- `71` attribution and lower-LR fix:
-  - `docs/Problems/active/2026-03-14_71_regression_attribution.md`
-- `72` lower-LR sweep and winning choice:
-  - `docs/Problems/active/2026-03-14_72_loss_curve_attribution.md`
-  - `docs/Problems/active/2026-03-14_72_lowlr_sweep.md`
-- `lambda` continuation from the winning `72`:
-  - `docs/Problems/active/2026-03-15_72_lowlr_to_lambda.md`
+- canonical downstream handoff verification:
+  - `debug_output/_tmp_stage6_stepc_canonical_chain_20260412/decision.md`
+  - `debug_output/_tmp_stage6_stepc_canonical_chain_20260412/summary.md`
+- full downstream continuation from canonical `70R-StepC`:
+  - `debug_output/_tmp_stage6_stepc_70r_to_lambda_20260412/decision.md`
+  - `debug_output/_tmp_stage6_stepc_70r_to_lambda_20260412/baseline_vs_stepc_full_chain_comparison.md`
 
-If this document conflicts with one of the files above, update this document to match the newer problem record.
+Cross-family supporting evidence:
 
-### Reverse lookup index
+- clean top7 causality record:
+  - `docs/train_design/2026-04-12_top7_clean_stage6_stepc_causality_record.md`
+- clean top7 chain comparison:
+  - `debug_output/_tmp_top7_clean_stage6_stepc_chain_20260412/decision.md`
+- top7 old-cut vs StepC bridge/control:
+  - `debug_output/_tmp_top7_posttrain_oldcut_vs_stepc_20260412/decision.md`
 
-Use this when you need to answer "why is this stage in the chain?" without re-reading every active note.
+Related interpretation docs:
 
-| Question | Open this doc | Locked answer |
-|---|---|---|
-| What is the real old d1 newflow handoff chain? | `docs/Problems/active/2026-03-14_oldd1_newflow_leg_regression_handoff.md` | operational chain is `Stage6 -> 70a -> new70b_replace -> 70R -> 71 -> 72 -> lambda`; raw `70b` is diagnostic-only |
-| Why did we replace the old replace stage with `new70b_replace_lowdrift`? | `docs/Problems/active/2026-03-14_oldd1_skip70b_replace_lowdrift_experiment.md` | the low-drift replace stage is the cleaner upstream handoff and its calf hotspot regression is absorbed by downstream `70R/71` |
-| Why is `71` now `lr=3e-4` instead of the old default recipe? | `docs/Problems/active/2026-03-14_71_regression_attribution.md` | unchanged `71` over-stepped the cleaner candidate `70R` start; same semantics + lower LR fixed it |
-| Why was `72` identified as the next bottleneck after fixing `71`? | `docs/Problems/active/2026-03-14_72_loss_curve_attribution.md` | unchanged `72` flipped the aggregate lead almost immediately because of early leg-side overshoot |
-| Why is the current `72` recipe `lr=1e-4`? | `docs/Problems/active/2026-03-14_72_lowlr_sweep.md` | lower LR directly fixed the `72` overshoot, and `lr=1e-4` was the best tested case |
-| Why does the chain still continue to `lambda` if `72` already wins? | `docs/Problems/active/2026-03-15_72_lowlr_to_lambda.md` | `lambda` preserves the `72(lr=1e-4)` gains and is effectively a no-op on the tracked direct metrics |
+- legacy old-boundary control:
+  - `docs/posttrain_pipeline_legacy_old_boundary.md`
+- top3 anchor/control:
+  - `docs/posttrain_pipeline_top3_anchor_control.md`
+- top7 family default under clean StepC:
+  - `docs/posttrain_pipeline_top7_clean_stepc.md`
+
+If this document conflicts with a newer accepted problem/audit record, update this document to match the newer accepted record.
 
 ---
 
-## 2) Locked Runtime Contract
+## 2) What Is Being Promoted
 
-These settings are part of the pipeline definition, not optional tuning:
+The promoted object is:
 
-- base ckpt:
-  - `models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth`
+- the StepC unified-leg-terminal boundary / handoff contract
+
+The promoted object is **not**:
+
+- a claim that one donor family now replaces all others as the only meaningful narrative
+- a claim that every hotspot became uniformly better
+- a claim that `top3` was “wrong” rather than a valid old-boundary-compatible anchor/control
+
+Most accurate causal read:
+
+- legacy old-boundary handoff was creating a real downstream compatibility mismatch
+- StepC unified-leg-terminal semantics remove that mismatch at the real downstream interface
+- the gain survives through `70a -> replace -> 70R -> 71 -> 72 -> lambda`
+- local mixed hotspot behavior remains possible without overturning the canonical ranking under the locked Step B' policy
+
+---
+
+## 3) Locked Runtime / Decision Contract
+
+These settings remain part of the canonical runtime / reporting definition:
+
 - contacts source:
   - `pretrain_contact`
 - clamp:
   - `1.0`
 - encoder bundle:
-  - `models/motion_encoder_equiv.pt.best.pt`
+  - canonical bundle from the promoted StepC artifacts
 - affine stats:
   - `debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json`
 
-Main runtime policy:
+Selection / reporting policy:
 
-- `train.posttrain` must keep the XOR contract: `train_direct_pose` or `train_lambda_head`
-- legacy hinge/contact-hazard/contact-ttc shells are not part of mainline runtime
-- `contact_phase_state*` is retired from mainline runtime and active configs
-- `contact_meas_provider*` is not part of mainline posttrain runtime
-- active mainline no longer treats `whitebox` as the default contact path
-- `tools/check_posttrain_newflow_active_configs.py` is the static guard for current active trainbase configs and canonical newflow posttrain configs
+- Step A gate remains necessary-but-not-sufficient
+- Step B' primary remains `all_ex_root_mean`
+- tie-break1 remains `all_ex_root_p95`
+- tie-break2 remains `leg_mean`
+- hard reject remains fixed incumbent `nonleg_p95` threshold
+- eval contract remains `model-source`
 
-Selection / reporting policy for this chain:
+Interpretation rule:
 
-- default decision contract: `model-source`
-- optional archive contract: strict `pretrain_contact`
-- current chain selection is driven by aggregate leg-side behavior, not by forcing every nonleg delta to be zero
-
----
-
-## 3) Canonical Chain
-
-### 3.1 Stage list
-
-| Stage | Recipe | Status | Notes |
-|---|---|---|---|
-| `Stage6` | `config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json` | required | current newflow entry stage |
-| `70a` | `config/posttrain_WalkF_stage7_70a_splitB2_pe32h512_20260227_fromarmchain.json` | required | last plain upstream stage |
-| `new70b_replace_lowdrift` | generated from the `70b_phasezin` base semantics with low-drift overrides | required | real operational replace handoff |
-| raw `70b` | `config/posttrain_WalkF_stage7_70b_phasezin_splitB2_pe32h512_20260227_fromarmchain.json` | diagnostic-only | do not use as downstream handoff |
-| `70R` | promoted nonleg-recovery stage from low-drift replace | required | current winning handoff into downstream |
-| `71(lr=3e-4)` | base `71` semantics, lower LR only | required | fixes the old early overshoot in `71` |
-| `72(lr=1e-4)` | base `72` semantics, lower LR only | required | fixes the old early overshoot in `72` |
-| `lambda` | `config/posttrain_WalkF_stage7_lambda_final_calib_20260227_fromarmchain_fullcompat.json` | required | preserves the `72(lr=1e-4)` result |
-
-### 3.2 Stage semantics
-
-`new70b_replace_lowdrift`
-
-- semantic base: `config/posttrain_WalkF_stage7_70b_phasezin_splitB2_pe32h512_20260227_fromarmchain.json`
-- active overrides:
-  - `direct_pose_use_phase_z=true`
-  - `direct_pose_phase_z_mode=replace_contacts`
-  - `lr=3e-4`
-  - `epochs=1`
-  - `steps_per_epoch=60`
-- build it from the `70a` replace-zerophase warmstart, not from raw `70b`
-
-`70R`
-
-- semantic base: `config/posttrain_WalkF_stage7_70R_nonleg_recovery_proj256_preleg_20260227_fromarmchain.json`
-- current promote recipe:
-  - `tools/run_posttrain_nonleg_trunk_ablation.py`
-  - `--trunk-mode full`
-  - `--epochs 1`
-  - `--steps-per-epoch 180`
-- input is `new70b_replace_lowdrift`
-
-`71(lr=3e-4)`
-
-- semantic base: `config/posttrain_WalkF_stage7_71_legonly_after_nonlegproj256_20260227_fromarmchain.json`
-- active override:
-  - `lr=3e-4`
-- keep the stage semantics unchanged; the fix is smaller step size, not redesign
-- keep dense step checkpoints for attribution / replay:
-  - `0,5,10,20,40,60,120,180`
-
-`72(lr=1e-4)`
-
-- semantic base: `config/posttrain_WalkF_stage7_72_legomega_after_nonlegproj256_20260227_fromarmchain.json`
-- active override:
-  - `lr=1e-4`
-- keep the stage semantics unchanged; the fix is smaller step size, not redesign
-- keep dense step checkpoints for attribution / replay:
-  - `0,5,10,20,40,60,120,180`
-
-`lambda`
-
-- semantic base: `config/posttrain_WalkF_stage7_lambda_final_calib_20260227_fromarmchain_fullcompat.json`
-- no new semantics are introduced here
-- on the current winning lane, `lambda` is a direct-metric no-op relative to `72(lr=1e-4)`
+- canonical promotion is bound to this locked policy
+- do not require every local metric to improve if the accepted ranking contract still gives a stable Step B' `win`
 
 ---
 
-## 4) Why This Is the Canonical Chain
+## 4) Canonical Chain
 
-The active verdict is now stable:
+### 4.1 Stage list
 
-1. raw `70b` is not the real handoff
-   - the operational handoff is `70a -> new70b_replace_lowdrift`
-2. low-drift replace is the right upstream stage choice
-   - it gives a much cleaner start into `70R`
-3. unchanged `71` was over-stepping the cleaner `70R` start
-   - `71(lr=3e-4)` fixes that without changing objective semantics
-4. unchanged `72` had the same problem even more sharply
-   - `72(lr=1e-4)` fixes that and becomes the best tested `72`
-5. `lambda` does not give the win back
-   - the `72(lr=1e-4)` gains are preserved to final `lambda`
+| Stage | Status | Notes |
+|---|---|---|
+| `70a-StepC donor` | required | first canonical downstream handoff stage under StepC upgrade |
+| `replace-StepC` | required | canonical low-drift replace handoff under StepC |
+| `70R-StepC` | required | canonical nonleg recovery stage under StepC |
+| `71-StepC(lr=3e-4)` | required | locked downstream continuation |
+| `72-StepC(lr=1e-4)` | required | locked downstream continuation |
+| `lambda-StepC` | required | chain closure; retains the StepC gain |
 
-Current winning endpoint (`model-source`):
+### 4.2 Canonical artifact map
 
-| lane | all_ex_root | leg | nonleg | arm | foot_l/ball_l@SIC12-15 | calf_r@SIC2-4 |
-|---|---:|---:|---:|---:|---:|---:|
-| current `lambda` | 0.112074 | 0.296389 | 0.072222 | 0.082665 | 0.812663 | 0.288880 |
-| candidate `lambda` | 0.101969 | 0.186385 | 0.083717 | 0.091849 | 0.385267 | 0.042300 |
+| Stage | Config / artifact |
+|---|---|
+| `70a-StepC donor` | `debug_output/_tmp_stage6_stepc_canonical_chain_20260412/configs/posttrain_70a_fromfresh_stepc_20260412.json` |
+| `replace-StepC` | `debug_output/_tmp_stage6_stepc_canonical_chain_20260412/configs/posttrain_70b_replace_lowdrift_fromfresh_stepc_20260412.json` |
+| `70R-StepC` | `debug_output/_tmp_stage6_stepc_canonical_chain_20260412/configs/posttrain_70R_fromfresh_stepc_20260412.json` |
+| `71-StepC(lr=3e-4)` | `debug_output/_tmp_stage6_stepc_70r_to_lambda_20260412/configs/posttrain_71_from_70R_stepc_lr3e4_20260412.json` |
+| `72-StepC(lr=1e-4)` | `debug_output/_tmp_stage6_stepc_70r_to_lambda_20260412/configs/posttrain_72_from_71_stepc_lr1e4_20260412.json` |
+| `lambda-StepC` | `debug_output/_tmp_stage6_stepc_70r_to_lambda_20260412/configs/posttrain_lambda_from_72_stepc_20260412.json` |
+
+### 4.3 What changed relative to the former canonical
+
+The old document framed the canonical line as old-boundary old-cut semantics.
+The current canonical line changes that framing:
+
+- `70a` is now interpreted through the StepC donor upgrade path
+- `replace` is now the StepC-preserving replace handoff
+- `70R -> 71 -> 72 -> lambda` are now understood as downstream continuation of a StepC-compatible handoff, not continuation of the old boundary contract
+
+---
+
+## 5) Why This Is the Global Canonical
+
+Accepted canonical evidence now supports all of the following:
+
+1. `70a-StepC donor` already beats canonical old-cut `70a`
+2. `replace-StepC` preserves that gain as a real handoff improvement
+3. `70R-StepC` remains better than canonical old-cut `70R`
+4. the downstream continuation through `71/72/lambda` keeps the gain rather than washing it out
+5. `lambda-StepC` remains better than canonical old-cut `lambda` on the locked Step B' policy
 
 Practical read:
 
-- aggregate leg-side quality is clearly better on the current candidate chain
-- `nonleg/arm` remain slightly higher, but this is not blocking the current flow decision
-- the active default therefore moves to the new chain above
+- the StepC gain is real at the true downstream interface
+- the gain is retained but attenuated across the full chain
+- this is enough to promote the StepC boundary contract to global canonical status
+
+Most accurate one-line summary:
+
+> StepC unified-leg-terminal is now the default global posttrain boundary contract because its downstream compatibility gain survives the real canonical chain through final `lambda`.
 
 ---
 
-## 5) Preferred Reproduction Path
+## 6) Relationship to Legacy / Top3 / Top7
 
-Use the recorded automation runners instead of reconstructing ad hoc one-off commands.
-This keeps the generated configs and checkpoint handoffs aligned with the accepted experiments.
+### 6.1 Legacy old-boundary chain
 
-### 5.1 Upstream lane lock
+The former old-boundary chain is retained only as:
 
-1. establish / replay the old d1 newflow reference lane
-   - `tools/run_oldd1_newflow_chain.py`
-2. build and compare the low-drift replace candidate
-   - `tools/run_oldd1_skip70b_replace_compare.py`
-3. continue low-drift replace through `70R -> 71`
-   - `tools/run_oldd1_skip70b_lowdrift_to71.py`
+- legacy control
+- historical reproduction target
+- comparison baseline
 
-### 5.2 Downstream winning choices
+See:
 
-4. run the `71` lower-LR sweep and take `lr=3e-4`
-   - `tools/run_71_lowlr_sweep.py`
-5. run the `72` lower-LR sweep and take `lr=1e-4`
-   - `tools/run_72_lowlr_sweep.py`
-6. continue the winning `72` to final `lambda`
-   - `tools/run_72_lowlr_to_lambda.py`
+- `docs/posttrain_pipeline_legacy_old_boundary.md`
 
-### 5.3 Reference generated configs and checkpoints
+### 6.2 Top3
 
-These are the locked reference artifacts for the current canonical line:
+`top3` should now be documented as:
 
-- low-drift replace config:
-  - `debug_output/_tmp_oldd1_skip70b_lowdrift_20260314/configs/posttrain_70b_replace_lowdrift_from_oldd1_20260314.json`
-- low-drift replace ckpt:
-  - `models/__tmp_oldd1_skip70b_lowdrift_20260314/70b_replace_lowdrift/ckpt_last_WalkF_stage7_70b_replace_lowdrift_from_oldd1_20260314.pth`
-- promoted `70R` ckpt:
-  - `models/__tmp_oldd1_skip70b_lowdrift_to71_20260314/70R/ckpt_last_WalkF_stage7_70R_from_oldd1_lowdrift_replace_20260314.pth`
-- winning `71(lr=3e-4)` config:
-  - `debug_output/_tmp_71_lowlr_sweep_20260314/configs/posttrain_71_lr3e4_20260314.json`
-- winning `71(lr=3e-4)` ckpt:
-  - `models/__tmp_71_lowlr_sweep_20260314/lr3e4/ckpt_last_WalkF_stage7_71_lr3e4_from_candidate70R_20260314.pth`
-- winning `72(lr=1e-4)` config:
-  - `debug_output/_tmp_72_lowlr_sweep_20260314/configs/posttrain_72_lr1e4_20260314.json`
-- winning `72(lr=1e-4)` ckpt:
-  - `models/__tmp_72_lowlr_sweep_20260314/lr1e4/ckpt_last_WalkF_stage7_72_lr1e4_from_lowlr71_20260314.pth`
-- final `lambda` ckpt:
-  - `models/__tmp_72_lowlr_to_lambda_20260315/lambda/ckpt_last_WalkF_stage7_lambda_from_lowlr72lr1e4_20260315.pth`
+- old-boundary-compatible anchor
+- legacy control
+- compatibility reference range
+
+It should **not** be documented as a universal natural optimum.
+
+See:
+
+- `docs/posttrain_pipeline_top3_anchor_control.md`
+
+### 6.3 Top7
+
+`top7` should now be documented as:
+
+- a StepC-compatible expansion family
+- a family-level default under clean StepC
+
+It provides strong corroborating evidence for the same boundary-causality story, but it is not the sole definition of global canonical by itself.
+
+See:
+
+- `docs/posttrain_pipeline_top7_clean_stepc.md`
 
 ---
 
-## 6) Validation Checklist
+## 7) Caveats
 
-After finishing the chain:
+These caveats remain mandatory:
 
-1. run the static no-legacy checks
+- `N=5 / limited-N`
+- some local hotspots remain mixed
+- some downstream stages show small `leg_p95` tradeoffs
+- promotion is policy-bound to Step B', not to a requirement that every local metric improve simultaneously
 
-```bash
-if rg -n "direct_pose_hinge|direct_hinge_delta|contact_phase_state|contact_meas_provider" \
-  train/posttrain.py train/models.py train/training_MPL.py train/eval_utils.py \
-  train/validate/run_freerun_cycles.py train/validate/run_teacher_rollout.py; then
-  echo "[FAIL] legacy references found"
-  exit 1
-fi
-python3 -m py_compile \
-  train/posttrain.py train/models.py train/training_MPL.py \
-  train/eval_utils.py train/validate/run_freerun_cycles.py \
-  train/validate/run_teacher_rollout.py
-python3 tools/check_posttrain_newflow_active_configs.py
-python3 tools/check_posttrain_legacy_code_guard.py
-```
+Do not write:
 
-2. evaluate the final ckpt with the locked contract
+- `top7 太 aggressive`
+- `top3 天然最优`
+- `everything was only boundary`
 
-```bash
-ENCODER_BUNDLE=models/motion_encoder_equiv.pt.best.pt
-AFFINE_STATS=debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json
+Prefer:
 
-PYTHONPATH=. python -m train.validate.run_freerun_cycles \
-  --teacher validate/teacher_batches/Walk_F_teacher.json \
-  --model <ckpt> \
-  --rounds 5 \
-  --time-index-mode cycle \
-  --depth 3 \
-  --event_clock auto \
-  --phase_reset_source none \
-  --contacts_meas_source model \
-  --lambda_fusion_apply \
-  --log_contacts \
-  --export_direct_arm_probe \
-  --export_joint_direct_geolocal_series
-```
-
-3. if you want the archive strict read, run the same eval with `pretrain_contact`
-
-```bash
-PYTHONPATH=. python -m train.validate.run_freerun_cycles \
-  --teacher validate/teacher_batches/Walk_F_teacher.json \
-  --model <ckpt> \
-  --rounds 5 \
-  --time-index-mode cycle \
-  --depth 3 \
-  --event_clock auto \
-  --phase_reset_source none \
-  --contacts_meas_source pretrain_contact \
-  --contacts_meas_pretrain_clamp 1.0 \
-  --contacts_meas_pretrain_affine_stats "${AFFINE_STATS}" \
-  --encoder-bundle "${ENCODER_BUNDLE}" \
-  --lambda_fusion_apply \
-  --log_contacts \
-  --export_direct_arm_probe \
-  --export_joint_direct_geolocal_series
-```
-
-Primary metrics to read first:
-
-- `all_ex_root`
-- `leg`
-- `legs_main`
-- `foot_l/ball_l@SIC12-15`
-- `calf_r@SIC2-4`
+- legacy old-boundary mismatch was the dominant downstream compatibility bottleneck
+- StepC fixes the real handoff contract
+- donor-family residual burden can still exist without overturning the canonical boundary promotion
 
 ---
 
-## 7) Explicitly Not Mainline
+## 8) Preferred Use
 
-Do not put these back into the pipeline document unless a newer problem record re-activates them:
+Use this document when answering:
 
-- raw `70b` as a required handoff stage
-- historical `70c_replacecontacts` as an active stage name
-- plain old `70R -> 71 -> 72 -> lambda` without the lower-LR fixes
-- `71m`
-- `72_micro`
-- `hybridcarry`
-- `skip70c`
-- `whitebox` contacts as default posttrain route
-- legacy Stage1-5 guidance in this file
+- what is the current global canonical posttrain chain?
+- what boundary contract is currently default?
+- what should new posttrain discussion treat as the default handoff interpretation?
 
-If any of those need to be revisited, document them in a problem note first, then decide whether they re-enter this pipeline doc.
+Do **not** use the legacy old-boundary document as the current default source of truth.
+

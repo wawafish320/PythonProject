@@ -39,6 +39,20 @@ def main() -> None:
     # With increasing input, EMA output should also increase (elementwise).
     assert torch.all(s1 >= s0)
 
+    loss.rot_local_tail_reduce = "rank_linear_mix"
+    loss.rot_local_tail_uniform_mix = 0.4
+    loss.rot_local_tail_rank_mix = 0.6
+    w, mode, mix_uniform, mix_rank = loss._rot_local_tail_reduce_weights(
+        5,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+    assert mode == "rank_linear_mix"
+    assert torch.isclose(w.sum(), torch.tensor(1.0), atol=1e-6)
+    assert torch.all(w[:-1] >= w[1:])
+    assert abs(mix_uniform - 0.4) < 1e-6
+    assert abs(mix_rank - 0.6) < 1e-6
+
     print("[OK] rot_local tail helpers sanity passed.")
 
 

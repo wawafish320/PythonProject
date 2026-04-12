@@ -27,7 +27,6 @@ POSTTRAIN_NEWFLOW_ACTIVE_CONFIGS: tuple[str, ...] = (
 )
 
 ACTIVE_CONFIG_FORBIDDEN_PREFIXES: tuple[str, ...] = (
-    "contact_phase_state_",
     "direct_pose_hinge_",
     "contact_meas_provider",
 )
@@ -43,7 +42,6 @@ POSTTRAIN_REMOVED_TARGET_KEYS: tuple[str, ...] = (
     "train_contact_td_hazard",
 )
 POSTTRAIN_RETIRED_SHELL_PREFIXES: tuple[str, ...] = (
-    "contact_phase_state_",
     "direct_pose_hinge_",
     "contact_meas_provider",
     "contact_td_hazard_",

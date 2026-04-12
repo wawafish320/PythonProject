@@ -32,7 +32,7 @@ from typing import Any, Dict, Iterable, List, Optional
 class Case:
     label: str
     ckpt: Path
-    direct_pose_meas_source: str = "model"  # model|whitebox|gt|zero
+    direct_pose_meas_source: str = "model"  # model|gt|zero
 
 
 def _load_json(path: Path) -> Any:

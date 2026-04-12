@@ -1104,25 +1104,15 @@ class Trainer:
 
         contacts_in_t = None
         if context.plan_enable:
-            contacts_source = str(getattr(self, 'trainbase_contacts_source', 'whitebox') or 'whitebox').strip().lower()
-            if contacts_source == 'pretrain_contact':
-                contacts_in_t = self._predict_pretrain_contacts_from_frozen(
-                    motion_step_t=context.motion,
-                    pose_hist_step_t=pose_history_t,
+            contacts_in_t = self._predict_pretrain_contacts_from_frozen(
+                motion_step_t=context.motion,
+                pose_hist_step_t=pose_history_t,
+            )
+            if contacts_in_t is None:
+                raise RuntimeError(
+                    '[FATAL] basetrain rollout contact resolution now requires valid frozen encoder+contact_head '
+                    'and runtime-compatible encoder input dimensions.'
                 )
-                if contacts_in_t is None:
-                    raise RuntimeError(
-                        '[FATAL] trainbase_contacts_source=pretrain_contact requires valid frozen encoder+contact_head '
-                        'and runtime-compatible encoder input dimensions.'
-                    )
-            else:
-                try:
-                    contacts_in_t, prev_foot_pos_meas = self._contact_meas_whitebox(
-                        context.motion_raw_local,
-                        prev_foot_pos_meas,
-                    )
-                except Exception:
-                    contacts_in_t = None
 
         cond_raw_t = None
         if context.cond_raw_seq is not None:
@@ -5504,7 +5494,7 @@ def _build_train_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentPar
         type=str,
         default='auto',
         choices=('auto', 'whitebox', 'pretrain_contact'),
-        help='Basetrain rollout contacts source：auto 优先接 frozen pretrain_contact，缺失时回退 whitebox。',
+        help='Basetrain rollout contacts source：auto / pretrain_contact 走 frozen contact head；whitebox 已退休，仅保留兼容报错入口。',
     )
     p.add_argument(
         '--trainbase_contacts_pretrain_clamp',
@@ -5617,9 +5607,9 @@ def _build_train_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentPar
     p.add_argument('--direct_pose_loss_group_norm_eps', type=float, default=1e-6,
                    help='group norm 数值稳定 epsilon')
     # ---- White-box contacts_meas knobs (P2 ground_z stability / ablations) ----
-    # NOTE: when contact_plan_enable=True, training/rollout will resolve contacts_in_t from
-    # trainbase_contacts_source=auto|whitebox|pretrain_contact; whitebox knobs below remain active
-    # for fallback / ablation when the resolved source is whitebox.
+    # NOTE: basetrain rollout contact inputs now stay on the frozen pretrain_contact path
+    # when contact_plan_enable=True. The legacy white-box knobs below are retained only for
+    # non-rollout diagnostics / archaeology helpers in this file.
     p.add_argument(
         '--contact_meas_gate_by_hit',
         type=str,
@@ -5674,7 +5664,8 @@ def _build_train_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentPar
     p.add_argument('--foot_contact_threshold', type=float, default=1.5, help='角速度阈值（rad/s），低于该值视为脚接触')
     p.add_argument('--monitor_batches', type=int, default=2, help='每个 epoch 在线指标采样的批次数')
     p.add_argument('--force_valfree_eval', action='store_true', default=False,
-                   help='即使当前为纯 teacher 阶段，也强制执行一次 freerun 验证并写出 valfree 指标')    p.add_argument('--teacher_eval_max_batches', type=int, default=None,
+                   help='即使当前为纯 teacher 阶段，也强制执行一次 freerun 验证并写出 valfree 指标')
+    p.add_argument('--teacher_eval_max_batches', type=int, default=None,
                    help='Teacher 评估最多跑多少个 batch；<=0 则跳过评估，用训练均值loss代填')
     p.add_argument('--eval_horizon', type=int, default=None,
                    help='在线 freerun 验证时的 horizon（帧数）；未指定则遍历整段序列')
@@ -5806,8 +5797,8 @@ def _resolve_trainer_runtime_config(
     trainbase_contacts_source = str(
         getattr(args, '_trainbase_contacts_source_resolved', getattr(args, 'trainbase_contacts_source', 'auto')) or 'auto'
     ).strip().lower()
-    if trainbase_contacts_source not in ('whitebox', 'pretrain_contact'):
-        trainbase_contacts_source = 'whitebox'
+    if trainbase_contacts_source != 'pretrain_contact':
+        trainbase_contacts_source = 'pretrain_contact'
     try:
         trainbase_contacts_pretrain_clamp = float(getattr(args, 'trainbase_contacts_pretrain_clamp', 1.0) or 0.0)
     except Exception:
@@ -6235,21 +6226,22 @@ def _prepare_train_model_runtime(
     requested_contacts_source = str(getattr(args, 'trainbase_contacts_source', 'auto') or 'auto').strip().lower()
     if requested_contacts_source not in ('auto', 'whitebox', 'pretrain_contact'):
         requested_contacts_source = 'auto'
-    resolved_contacts_source = 'whitebox'
+    resolved_contacts_source = 'pretrain_contact'
     if bool(getattr(model, 'contact_plan_enable', False)):
         has_pretrain_contact = (
             getattr(model, 'frozen_encoder', None) is not None
             and getattr(model, 'frozen_contact_head', None) is not None
         )
-        if requested_contacts_source == 'pretrain_contact':
-            if not has_pretrain_contact:
-                raise SystemExit(
-                    '[FATAL] trainbase_contacts_source=pretrain_contact requires --encoder_path to provide '
-                    'a frozen encoder bundle with contact_head.'
-                )
-            resolved_contacts_source = 'pretrain_contact'
-        elif requested_contacts_source == 'auto':
-            resolved_contacts_source = 'pretrain_contact' if has_pretrain_contact else 'whitebox'
+        if requested_contacts_source == 'whitebox':
+            raise SystemExit(
+                '[FATAL] trainbase_contacts_source=whitebox has been retired. '
+                'Use frozen pretrain_contact via --encoder_path.'
+            )
+        if not has_pretrain_contact:
+            raise SystemExit(
+                '[FATAL] contact_plan_enable now requires --encoder_path to provide '
+                'a frozen encoder bundle with contact_head for rollout contact resolution.'
+            )
     setattr(args, '_trainbase_contacts_source_resolved', resolved_contacts_source)
     print(
         f'[MPL] trainbase_contacts_source: requested={requested_contacts_source}, '

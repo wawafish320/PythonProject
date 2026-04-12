@@ -716,8 +716,6 @@ def main() -> int:
             "ckpt_in": str(paths["warmstart_ckpt"]),
             "out_dir": str(MODEL_ROOT / "70b_replace"),
             "run_name": run_name_70b_replace,
-            "direct_pose_use_phase_z": True,
-            "direct_pose_phase_z_mode": "replace_contacts",
             "encoder_bundle": str(ENCODER_BUNDLE),
             "posttrain_contacts_source": "pretrain_contact",
             "posttrain_contacts_pretrain_clamp": PRETRAIN_CLAMP,

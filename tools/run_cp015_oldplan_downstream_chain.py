@@ -204,66 +204,13 @@ def make_generated_config(base_config: Path, out_json: Path, overrides: Mapping[
     return out_json
 
 
-def infer_contact_dim(state_dict: Mapping[str, Any]) -> int:
-    cand_keys = (
-        "contact_plan_head.4.bias",
-        "contact_plan_head.4.weight",
-        "contact_plan_init_z",
-        "contact_phase_state_init",
-    )
-    for key in cand_keys:
-        tensor = state_dict.get(key, None)
-        if not torch.is_tensor(tensor):
-            continue
-        if tensor.ndim == 1 and int(tensor.shape[0]) > 0:
-            return int(tensor.shape[0])
-        if tensor.ndim >= 2 and int(tensor.shape[0]) > 0:
-            return int(tensor.shape[0])
-    raise RuntimeError("could not infer contact_dim from checkpoint")
-
-
 def create_replace_zerophase_warmstart(src_ckpt: Path, dst_ckpt: Path, report_json: Path) -> None:
     if dst_ckpt.is_file() and report_json.is_file():
         return
     obj = torch.load(src_ckpt, map_location="cpu")
     if not isinstance(obj, dict) or "model" not in obj:
         raise RuntimeError(f"unexpected checkpoint format: {src_ckpt}")
-    state_dict = dict(obj["model"])
-    phase_dim = 2 * int(infer_contact_dim(state_dict))
-    target_keys = [
-        "direct_pose_head.0.weight",
-        "direct_pose_leg_head.0.weight",
-        "direct_pose_leg_head_shared.0.weight",
-        "direct_pose_leg_gate_head.0.weight",
-        "direct_pose_leg_gate_head_shared.0.weight",
-    ]
-    changed: List[Dict[str, Any]] = []
-    for key in target_keys:
-        weight = state_dict.get(key, None)
-        if not (torch.is_tensor(weight) and weight.ndim == 2):
-            continue
-        old_in = int(weight.shape[1])
-        if old_in <= phase_dim:
-            raise RuntimeError(f"cannot adapt {key}: old_in={old_in} phase_dim={phase_dim}")
-        base_in = old_in - phase_dim
-        new_weight = torch.zeros_like(weight)
-        new_weight[:, :base_in] = weight[:, :base_in]
-        state_dict[key] = new_weight
-        changed.append(
-            {
-                "key": key,
-                "shape": [int(x) for x in weight.shape],
-                "base_in": int(base_in),
-                "phase_dim": int(phase_dim),
-            }
-        )
-
     out_obj = dict(obj)
-    out_obj["model"] = state_dict
-    cfg = dict(obj.get("posttrain_cfg", {}) or {})
-    cfg["direct_pose_use_phase_z"] = True
-    cfg["direct_pose_phase_z_mode"] = "replace_contacts"
-    out_obj["posttrain_cfg"] = cfg
 
     dst_ckpt.parent.mkdir(parents=True, exist_ok=True)
     torch.save(out_obj, dst_ckpt)
@@ -272,12 +219,7 @@ def create_replace_zerophase_warmstart(src_ckpt: Path, dst_ckpt: Path, report_js
         {
             "source_ckpt": str(src_ckpt),
             "output_ckpt": str(dst_ckpt),
-            "phase_dim": int(phase_dim),
-            "changed": changed,
-            "posttrain_cfg_updates": {
-                "direct_pose_use_phase_z": True,
-                "direct_pose_phase_z_mode": "replace_contacts",
-            },
+            "copied_without_phase_z_direct_adaptation": True,
         },
     )
 
@@ -1175,8 +1117,6 @@ def main() -> int:
             "ckpt_in": str(paths["warmstart_ckpt"]),
             "out_dir": str(MODEL_ROOT / "70b_replace"),
             "run_name": run_name_70b_replace,
-            "direct_pose_use_phase_z": True,
-            "direct_pose_phase_z_mode": "replace_contacts",
             "encoder_bundle": str(ENCODER_BUNDLE),
             "posttrain_contacts_source": "pretrain_contact",
             "posttrain_contacts_pretrain_clamp": PRETRAIN_CLAMP,

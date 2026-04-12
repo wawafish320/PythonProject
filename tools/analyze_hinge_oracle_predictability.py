@@ -20,7 +20,7 @@ Input freerun JSON must include:
 and metrics_per_step for cycle/contact filtering.
 
 Optional (recommended) additional context features (exported by run_freerun_cycles.py):
-  - plan_state_series.series.plan_z_in / phase_z_in / phase_event_age_in
+  - plan_state_series.series.plan_z_in / phase_event_age_in
   - keybone_state.series.branches.{inc|direct|blend}.pred_rotvec_deg_xyz
 
 For cond features we load the teacher JSON pointed by `teacher_json` in freerun JSON.
@@ -151,7 +151,6 @@ class SampleSet:
     meas: Optional[np.ndarray]  # (N,C)
     # Optional: internal state/context exports (mean-over-batch).
     plan_z_in: Optional[np.ndarray]  # (N,Dz)
-    phase_z_in: Optional[np.ndarray]  # (N,Dp)
     phase_event_age_in: Optional[np.ndarray]  # (N,Da)
     # Optional: per-step predicted joint-local pose state exports (flattened rotvec_deg_xyz).
     # Shapes: (N, 3*K) where K == len(keybone_state_bones).
@@ -357,7 +356,6 @@ def _build_samples(
 
     # Optional: plan/phase internal state exports (mean-over-batch per step).
     plan_z_in: Optional[np.ndarray] = None
-    phase_z_in: Optional[np.ndarray] = None
     phase_event_age_in: Optional[np.ndarray] = None
     try:
         ps = obj.get("plan_state_series", None)
@@ -388,11 +386,9 @@ def _build_samples(
                     return out
 
                 plan_z_in = _extract_pack("plan_z_in")
-                phase_z_in = _extract_pack("phase_z_in")
                 phase_event_age_in = _extract_pack("phase_event_age_in")
     except Exception:
         plan_z_in = None
-        phase_z_in = None
         phase_event_age_in = None
 
     # Optional: keybone predicted pose state exports (per branch, selected bones).
@@ -453,7 +449,6 @@ def _build_samples(
         plan=_stack_contact(plan),
         meas=_stack_contact(meas),
         plan_z_in=plan_z_in,
-        phase_z_in=phase_z_in,
         phase_event_age_in=phase_event_age_in,
         keybone_state_bones=keybone_state_bones,
         keybone_state_rotvec_deg_xyz=keybone_state_rotvec_deg_xyz,
@@ -537,12 +532,6 @@ def _make_features(samples: SampleSet, *, feature_set: str, phase_harmonics: int
         if samples.plan_z_in is None:
             raise ValueError("planz requested but plan_state_series.series.plan_z_in is missing (re-run freerun with --export_plan_state_series).")
         Xs.append(samples.plan_z_in.astype(np.float32, copy=False))
-    if "phasez_state" in tokens:
-        if samples.phase_z_in is None:
-            raise ValueError(
-                "phasez_state requested but plan_state_series.series.phase_z_in is missing (re-run freerun with --export_plan_state_series)."
-            )
-        Xs.append(samples.phase_z_in.astype(np.float32, copy=False))
     if "phaseage" in tokens:
         if samples.phase_event_age_in is None:
             raise ValueError(

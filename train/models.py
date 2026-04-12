@@ -607,6 +607,9 @@ class EventMotionModel(nn.Module):
         # Optional: split direct head output into leg/non-leg heads while keeping a shared trunk.
         # This reallocates output capacity without changing downstream output semantics.
         direct_pose_split_enable: bool = False,
+        # Step C: keep the shared trunk + grouped readout, but retire the legacy
+        # direct_pose_out_leg boundary in favor of a single leg terminal block.
+        direct_pose_stepc_unified_leg_terminal: bool = False,
         # Optional: add a non-leg projection bottleneck before direct_pose_out_nonleg.
         # When >0: h_nonleg = ReLU(Linear(hid, proj)); out_nonleg = Linear(proj, D_nonleg)
         # When <=0: out_nonleg = Linear(hid, D_nonleg) (legacy split behavior).
@@ -814,9 +817,13 @@ class EventMotionModel(nn.Module):
                     "(it replaces plan+meas phase hint)."
                 )
         self.direct_pose_split_enable = bool(direct_pose_split_enable) and bool(self.direct_pose_enable)
+        self.direct_pose_stepc_unified_leg_terminal = bool(direct_pose_stepc_unified_leg_terminal) and bool(
+            self.direct_pose_split_enable
+        )
         self.direct_pose_arm_split_enable = bool(direct_pose_arm_split_enable) and bool(self.direct_pose_split_enable)
         self.direct_pose_arm_bones = direct_pose_arm_bones
         self.direct_pose_out_leg: Optional[nn.Module] = None
+        self.direct_pose_leg_terminal: Optional[nn.Module] = None
         self.direct_pose_out_nonleg: Optional[nn.Module] = None
         self.direct_pose_nonleg_proj: Optional[nn.Module] = None
         self.direct_pose_out_arm: Optional[nn.Module] = None
@@ -1382,7 +1389,14 @@ class EventMotionModel(nn.Module):
                         nn.ReLU(),
                         nn.Dropout(drop) if drop > 0 else nn.Identity(),
                     )
-                    self.direct_pose_out_leg, _ = self._build_split_head_branch(trunk_dim=hid, out_dim=leg_out_dim)
+                    if bool(getattr(self, "direct_pose_stepc_unified_leg_terminal", False)):
+                        self.direct_pose_leg_terminal = self._build_direct_pose_terminal_block(
+                            trunk_dim=hid,
+                            out_dim=leg_out_dim,
+                            drop=drop,
+                        )
+                    else:
+                        self.direct_pose_out_leg, _ = self._build_split_head_branch(trunk_dim=hid, out_dim=leg_out_dim)
                     if bool(split_state["arm_split"]):
                         arm_out_dim = int(split_state["idx_arm"].numel())
                         else_out_dim = int(split_state["idx_else"].numel())
@@ -1681,10 +1695,12 @@ class EventMotionModel(nn.Module):
     def _direct_pose_split_state(self) -> Optional[Dict[str, Any]]:
         if not bool(getattr(self, "direct_pose_split_enable", False)):
             return None
+        leg_terminal = getattr(self, "direct_pose_leg_terminal", None)
         state = {
             "arm_split": bool(getattr(self, "direct_pose_arm_split_enable", False)),
             "head": getattr(self, "direct_pose_head", None),
-            "leg_head": getattr(self, "direct_pose_out_leg", None),
+            "unified_leg_terminal": bool(leg_terminal is not None),
+            "leg_head": leg_terminal if leg_terminal is not None else getattr(self, "direct_pose_out_leg", None),
             "nonleg_head": getattr(self, "direct_pose_out_nonleg", None),
             "arm_head": getattr(self, "direct_pose_out_arm", None),
             "else_head": getattr(self, "direct_pose_out_else", None),
@@ -1711,6 +1727,32 @@ class EventMotionModel(nn.Module):
         return None
 
     @staticmethod
+    def _direct_pose_last_linear(module: Any) -> Optional[nn.Linear]:
+        if isinstance(module, nn.Linear):
+            return module
+        if not isinstance(module, nn.Module):
+            return None
+        last_linear = None
+        for mm in module.modules():
+            if isinstance(mm, nn.Linear):
+                last_linear = mm
+        return last_linear
+
+    @staticmethod
+    def _init_square_identity_linear_(module: Any) -> None:
+        if not isinstance(module, nn.Linear):
+            return
+        if int(module.in_features) != int(module.out_features):
+            return
+        with torch.no_grad():
+            module.weight.zero_()
+            module.weight.add_(
+                torch.eye(int(module.out_features), device=module.weight.device, dtype=module.weight.dtype)
+            )
+            if module.bias is not None:
+                module.bias.zero_()
+
+    @staticmethod
     def _build_split_head_branch(
         *,
         trunk_dim: int,
@@ -1722,6 +1764,24 @@ class EventMotionModel(nn.Module):
             proj = nn.Sequential(nn.Linear(int(trunk_dim), proj_dim), nn.ReLU())
             return nn.Linear(proj_dim, int(out_dim)), proj
         return nn.Linear(int(trunk_dim), int(out_dim)), None
+
+    @staticmethod
+    def _build_direct_pose_terminal_block(*, trunk_dim: int, out_dim: int, drop: float) -> nn.Sequential:
+        block = nn.Sequential(
+            nn.Linear(int(trunk_dim), int(trunk_dim)),
+            nn.ReLU(),
+            nn.Dropout(float(drop)) if float(drop) > 0 else nn.Identity(),
+            nn.Linear(int(trunk_dim), int(trunk_dim)),
+            nn.ReLU(),
+            nn.Dropout(float(drop)) if float(drop) > 0 else nn.Identity(),
+            nn.Linear(int(trunk_dim), int(out_dim)),
+        )
+        try:
+            EventMotionModel._init_square_identity_linear_(block[0])
+            EventMotionModel._init_square_identity_linear_(block[3])
+        except Exception:
+            pass
+        return block
 
     @staticmethod
     def _direct_pose_local_index(parent_idx: torch.Tensor, child_idx: torch.Tensor, *, device: torch.device) -> Optional[torch.Tensor]:
@@ -1865,6 +1925,9 @@ class EventMotionModel(nn.Module):
         idx_else = split_state["idx_else"]
         if leg_head is None:
             return False
+        leg_last = self._direct_pose_last_linear(leg_head)
+        if leg_last is None:
+            return False
         if arm_split:
             if arm_head is None or else_head is None:
                 return False
@@ -1874,7 +1937,7 @@ class EventMotionModel(nn.Module):
         old_w = state_dict.get("direct_pose_head.6.weight", None)
         old_b = state_dict.get("direct_pose_head.6.bias", None)
         has_old = bool(torch.is_tensor(old_w) and old_w.ndim == 2 and int(old_w.shape[0]) == int(self.out_motion_dim))
-        ref_device = old_w.device if has_old else leg_head.weight.device
+        ref_device = old_w.device if has_old else leg_last.weight.device
         idx_leg_use = idx_leg.to(device=ref_device, dtype=torch.long)
         idx_nonleg_use = idx_nonleg.to(device=ref_device, dtype=torch.long)
         idx_arm_use = None
@@ -1889,6 +1952,25 @@ class EventMotionModel(nn.Module):
             if arm_nonleg_local is None or else_nonleg_local is None:
                 return False
         converted = False
+        unified_leg_terminal = bool(split_state.get("unified_leg_terminal", False))
+        leg_weight_key = "direct_pose_leg_terminal.6.weight" if unified_leg_terminal else "direct_pose_out_leg.weight"
+        leg_bias_key = "direct_pose_leg_terminal.6.bias" if unified_leg_terminal else "direct_pose_out_leg.bias"
+
+        if unified_leg_terminal:
+            model_sd = self.state_dict()
+            for key in (
+                "direct_pose_leg_terminal.0.weight",
+                "direct_pose_leg_terminal.0.bias",
+                "direct_pose_leg_terminal.3.weight",
+                "direct_pose_leg_terminal.3.bias",
+            ):
+                target_tensor = model_sd.get(key, None)
+                converted = self._copy_tensor_if_compatible(
+                    state_dict,
+                    target_key=key,
+                    target_tensor=target_tensor,
+                    source_tensor=target_tensor,
+                ) or converted
 
         # Legacy/non-split checkpoints may persist empty split-index buffers.
         # Keep the model-computed split mapping by dropping incompatible ckpt buffers.
@@ -1904,7 +1986,7 @@ class EventMotionModel(nn.Module):
 
         if has_old:
             copy_specs = [
-                ("direct_pose_out_leg.weight", leg_head.weight, idx_leg_use),
+                (leg_weight_key, leg_last.weight, idx_leg_use),
             ]
             if arm_split:
                 copy_specs.extend([
@@ -1924,7 +2006,7 @@ class EventMotionModel(nn.Module):
 
         if has_old and torch.is_tensor(old_b):
             copy_specs = [
-                ("direct_pose_out_leg.bias", leg_head.bias, idx_leg_use),
+                (leg_bias_key, leg_last.bias, idx_leg_use),
             ]
             if arm_split:
                 copy_specs.extend([
@@ -2079,14 +2161,62 @@ class EventMotionModel(nn.Module):
             state_dict.pop("direct_pose_head.6.bias", None)
         return converted
 
+    def _maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(self, state_dict: Dict[str, Any]) -> bool:
+        if (not isinstance(state_dict, dict)) or getattr(self, "direct_pose_leg_terminal", None) is None:
+            return False
+        if not any(str(key).startswith("direct_pose_out_leg.") for key in state_dict.keys()):
+            return False
+
+        model_sd = self.state_dict()
+        converted = False
+        for key in (
+            "direct_pose_leg_terminal.0.weight",
+            "direct_pose_leg_terminal.0.bias",
+            "direct_pose_leg_terminal.3.weight",
+            "direct_pose_leg_terminal.3.bias",
+        ):
+            target_tensor = model_sd.get(key, None)
+            converted = self._copy_tensor_if_compatible(
+                state_dict,
+                target_key=key,
+                target_tensor=target_tensor,
+                source_tensor=target_tensor,
+            ) or converted
+
+        converted = self._copy_tensor_if_compatible(
+            state_dict,
+            target_key="direct_pose_leg_terminal.6.weight",
+            target_tensor=model_sd.get("direct_pose_leg_terminal.6.weight", None),
+            source_tensor=state_dict.get("direct_pose_out_leg.weight", None),
+        ) or converted
+        converted = self._copy_tensor_if_compatible(
+            state_dict,
+            target_key="direct_pose_leg_terminal.6.bias",
+            target_tensor=model_sd.get("direct_pose_leg_terminal.6.bias", None),
+            source_tensor=state_dict.get("direct_pose_out_leg.bias", None),
+        ) or converted
+
+        removed_legacy = False
+        for key in list(state_dict.keys()):
+            if str(key).startswith("direct_pose_out_leg."):
+                state_dict.pop(key, None)
+                removed_legacy = True
+        return bool(converted or removed_legacy)
+
     def adapt_legacy_state_dict_(self, state_dict: Dict[str, Any]) -> bool:
         try:
-            return bool(self._maybe_upgrade_direct_pose_split_state_dict(state_dict))
+            converted_stepc = bool(self._maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(state_dict))
+            converted_split = bool(self._maybe_upgrade_direct_pose_split_state_dict(state_dict))
+            return bool(converted_stepc or converted_split)
         except Exception:
             return False
 
     def load_state_dict(self, state_dict, strict: bool = True):
         if isinstance(state_dict, dict):
+            try:
+                self._maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(state_dict)
+            except Exception:
+                pass
             try:
                 self._maybe_upgrade_direct_pose_split_state_dict(state_dict)
             except Exception:

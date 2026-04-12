@@ -1049,6 +1049,7 @@ class FreeRunCycleRunner:
         direct_pose_use_phase_z = False
         direct_pose_phase_z_mode = "concat"
         direct_pose_split_enable = False
+        direct_pose_stepc_unified_leg_terminal = False
         direct_pose_arm_split_enable = False
         direct_pose_arm_bones = None
         direct_pose_nonleg_proj_dim = 0
@@ -1059,6 +1060,9 @@ class FreeRunCycleRunner:
                 if v is not None:
                     direct_pose_phase_z_mode = str(v).strip().lower() or "concat"
                 direct_pose_split_enable = bool(self._ckpt_posttrain_cfg.get("direct_pose_split_enable", False))
+                direct_pose_stepc_unified_leg_terminal = bool(
+                    self._ckpt_posttrain_cfg.get("direct_pose_stepc_unified_leg_terminal", False)
+                )
                 direct_pose_arm_split_enable = bool(self._ckpt_posttrain_cfg.get("direct_pose_arm_split_enable", False))
                 direct_pose_arm_bones = self._ckpt_posttrain_cfg.get("direct_pose_arm_bones", None)
                 try:
@@ -1069,17 +1073,19 @@ class FreeRunCycleRunner:
             direct_pose_use_phase_z = False
             direct_pose_phase_z_mode = "concat"
             direct_pose_split_enable = False
+            direct_pose_stepc_unified_leg_terminal = False
             direct_pose_arm_split_enable = False
             direct_pose_arm_bones = None
             direct_pose_nonleg_proj_dim = 0
         try:
             direct_has_weights = any(str(k).startswith("direct_pose_head.") for k in self.state_dict.keys())
+            has_leg_terminal = any(str(k).startswith("direct_pose_leg_terminal.") for k in self.state_dict.keys())
             split_has_weights_nonleg = bool(
-                any(str(k).startswith("direct_pose_out_leg.") for k in self.state_dict.keys())
+                (has_leg_terminal or any(str(k).startswith("direct_pose_out_leg.") for k in self.state_dict.keys()))
                 and any(str(k).startswith("direct_pose_out_nonleg.") for k in self.state_dict.keys())
             )
             split_has_weights_arm = bool(
-                any(str(k).startswith("direct_pose_out_leg.") for k in self.state_dict.keys())
+                (has_leg_terminal or any(str(k).startswith("direct_pose_out_leg.") for k in self.state_dict.keys()))
                 and any(str(k).startswith("direct_pose_out_arm.") for k in self.state_dict.keys())
                 and any(str(k).startswith("direct_pose_out_else.") for k in self.state_dict.keys())
             )
@@ -1089,6 +1095,7 @@ class FreeRunCycleRunner:
                 w_in = self.state_dict.get("direct_pose_head.0.weight", None)
                 w_out = self.state_dict.get("direct_pose_head.6.weight", None)
                 w_out_leg = self.state_dict.get("direct_pose_out_leg.weight", None)
+                w_leg_terminal = self.state_dict.get("direct_pose_leg_terminal.6.weight", None)
                 w_out_nonleg = self.state_dict.get("direct_pose_out_nonleg.weight", None)
                 w_out_arm = self.state_dict.get("direct_pose_out_arm.weight", None)
                 w_out_else = self.state_dict.get("direct_pose_out_else.weight", None)
@@ -1099,7 +1106,26 @@ class FreeRunCycleRunner:
                     if torch.is_tensor(w_out) and w_out.ndim == 2:
                         out_dim = int(w_out.shape[0])
                         direct_pose_split_enable = False
+                        direct_pose_stepc_unified_leg_terminal = False
                         direct_pose_arm_split_enable = False
+                    elif (
+                        torch.is_tensor(w_leg_terminal)
+                        and w_leg_terminal.ndim == 2
+                        and torch.is_tensor(w_out_nonleg)
+                        and w_out_nonleg.ndim == 2
+                    ):
+                        out_dim = int(w_leg_terminal.shape[0] + w_out_nonleg.shape[0])
+                        direct_pose_split_enable = True
+                        direct_pose_stepc_unified_leg_terminal = True
+                        direct_pose_arm_split_enable = False
+                        if int(w_leg_terminal.shape[1]) > 0:
+                            hid = int(w_leg_terminal.shape[1])
+                        try:
+                            nonleg_in_dim = int(w_out_nonleg.shape[1])
+                            if nonleg_in_dim > 0 and int(nonleg_in_dim) != int(hid):
+                                direct_pose_nonleg_proj_dim = int(nonleg_in_dim)
+                        except Exception:
+                            pass
                     elif (
                         torch.is_tensor(w_out_leg)
                         and w_out_leg.ndim == 2
@@ -1108,6 +1134,7 @@ class FreeRunCycleRunner:
                     ):
                         out_dim = int(w_out_leg.shape[0] + w_out_nonleg.shape[0])
                         direct_pose_split_enable = True
+                        direct_pose_stepc_unified_leg_terminal = False
                         direct_pose_arm_split_enable = False
                         # Split readout must share the same hidden trunk output dim.
                         if int(w_out_leg.shape[1]) > 0:
@@ -1116,6 +1143,26 @@ class FreeRunCycleRunner:
                             nonleg_in_dim = int(w_out_nonleg.shape[1])
                             if nonleg_in_dim > 0 and int(nonleg_in_dim) != int(hid):
                                 direct_pose_nonleg_proj_dim = int(nonleg_in_dim)
+                        except Exception:
+                            pass
+                    elif (
+                        torch.is_tensor(w_leg_terminal)
+                        and w_leg_terminal.ndim == 2
+                        and torch.is_tensor(w_out_arm)
+                        and w_out_arm.ndim == 2
+                        and torch.is_tensor(w_out_else)
+                        and w_out_else.ndim == 2
+                    ):
+                        out_dim = int(w_leg_terminal.shape[0] + w_out_arm.shape[0] + w_out_else.shape[0])
+                        direct_pose_split_enable = True
+                        direct_pose_stepc_unified_leg_terminal = True
+                        direct_pose_arm_split_enable = True
+                        if int(w_leg_terminal.shape[1]) > 0:
+                            hid = int(w_leg_terminal.shape[1])
+                        try:
+                            arm_in_dim = int(w_out_arm.shape[1])
+                            if arm_in_dim > 0 and int(arm_in_dim) != int(hid):
+                                direct_pose_nonleg_proj_dim = int(arm_in_dim)
                         except Exception:
                             pass
                     elif (
@@ -1128,6 +1175,7 @@ class FreeRunCycleRunner:
                     ):
                         out_dim = int(w_out_leg.shape[0] + w_out_arm.shape[0] + w_out_else.shape[0])
                         direct_pose_split_enable = True
+                        direct_pose_stepc_unified_leg_terminal = False
                         direct_pose_arm_split_enable = True
                         # Split readout must share the same hidden trunk output dim.
                         if int(w_out_leg.shape[1]) > 0:
@@ -1209,6 +1257,7 @@ class FreeRunCycleRunner:
             direct_pose_time_pe_dim = 0
             direct_pose_use_phase_z = False
             direct_pose_split_enable = False
+            direct_pose_stepc_unified_leg_terminal = False
             direct_pose_nonleg_proj_dim = 0
 
         # Prefer checkpoint posttrain_cfg when present (cannot infer hidden_pre from tensor shapes).
@@ -1524,6 +1573,7 @@ class FreeRunCycleRunner:
             direct_pose_use_phase_z=bool(direct_pose_use_phase_z),
             direct_pose_phase_z_mode=str(direct_pose_phase_z_mode),
             direct_pose_split_enable=bool(direct_pose_split_enable),
+            direct_pose_stepc_unified_leg_terminal=bool(direct_pose_stepc_unified_leg_terminal),
             direct_pose_nonleg_proj_dim=int(max(0, int(direct_pose_nonleg_proj_dim or 0))),
             direct_pose_arm_split_enable=bool(direct_pose_arm_split_enable),
             direct_pose_arm_bones=direct_pose_arm_bones,

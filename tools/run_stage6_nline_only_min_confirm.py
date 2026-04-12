@@ -23,7 +23,6 @@ _DEFAULT_CASES: Dict[str, List[str]] = {
         "contact_meas_dropout",
         "contact_meas_enable",
         "contact_meas_hidden",
-        "contact_phase_state_enable",
     ],
 }
 

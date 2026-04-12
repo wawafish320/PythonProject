@@ -605,8 +605,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--lambda-fusion-apply", dest="lambda_fusion_apply", action="store_true")
     ap.add_argument("--no-lambda-fusion-apply", dest="lambda_fusion_apply", action="store_false")
     ap.set_defaults(lambda_fusion_apply=True)
-    ap.add_argument("--direct-pose-meas-source", type=str, default="model", choices=("model", "whitebox", "gt", "softgt", "zero"))
-    ap.add_argument("--contacts-meas-source", type=str, default="model", choices=("model", "whitebox", "gt", "zero"))
+    ap.add_argument("--direct-pose-meas-source", type=str, default="model", choices=("model", "gt", "softgt", "zero"))
+    ap.add_argument("--contacts-meas-source", type=str, default="model", choices=("model", "gt", "zero"))
     ap.add_argument(
         "--direct-pose-fusion-direct-mode",
         type=str,

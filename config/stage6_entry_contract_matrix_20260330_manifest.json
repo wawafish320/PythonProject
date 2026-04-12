@@ -1,0 +1,360 @@
+{
+  "name": "stage6_entry_contract_matrix_20260330",
+  "base_config": "config/exp_phase_DirectBranch_v1_d1_cp015_tailk3_corridor_hold_tail15_phasea050_fixedsched_ep014center_seed2024_20260324.json",
+  "stage6_config": "config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_armchain_pe32h512_20260227.json",
+  "wrapper": "debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py",
+  "teacher": "validate/teacher_batches/Walk_F_teacher.json",
+  "encoder_bundle": "models/motion_encoder_equiv.pt.best.pt",
+  "affine_stats": "debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json",
+  "old_stage6_exit_baseline": "debug_output/_tmp_stage6_basetrain_compare_20260313/old_bestfree/stage6_freerun/Walk_F_freerun_cycles.json",
+  "basetrain_out_root": "models/cp015_stage6_entry_contract_matrix_20260330",
+  "stage6_out_root": "models/__tmp_stage6_entry_contract_matrix_20260330",
+  "debug_root": "debug_output/_tmp_stage6_entry_contract_matrix_20260330",
+  "materialized_config_root": "debug_output/_tmp_stage6_entry_contract_matrix_20260330/basetrain_configs",
+  "freerun_eval": {
+    "rounds": 5,
+    "depth": 3,
+    "time_index_mode": "cycle",
+    "phase_reset_source": "none",
+    "pretrain_clamp": 1.0
+  },
+  "group_summary": {
+    "cycle_gte": 1,
+    "drop_wrap": true
+  },
+  "families": [
+    {
+      "family": "control_denseckpt_rerun",
+      "notes": "Replay the current phase_c/phase_d schedule unchanged, but widen save_fit_ckpt_epochs to 10-15 so the current entry family is rerun under a fresh output root.",
+      "save_fit_ckpt_epochs": "10-15"
+    },
+    {
+      "family": "cplus1_dorig_anchor",
+      "notes": "Use phase_c=10-12 and phase_d=13-15 with the original phase_d tail weight 0.2. This is the current anchor family to beat.",
+      "save_fit_ckpt_epochs": "10-15",
+      "freerun_stage_schedule": [
+        {
+          "range": [
+            1,
+            5
+          ],
+          "label": "phase_a_plan_formation",
+          "params": {
+            "tf_max": 1.0,
+            "tf_min": 1.0,
+            "ss_chunk_len": 1,
+            "opt_lr": 0.001
+          },
+          "loss_groups": {
+            "aux": {
+              "w_contact_plan": 0.2
+            }
+          }
+        },
+        {
+          "range": [
+            6,
+            9
+          ],
+          "label": "phase_b_corridor_entry",
+          "params": {
+            "tf_max": 1.0,
+            "tf_min": 0.5,
+            "ss_chunk_len": 1,
+            "opt_lr": 0.0005
+          },
+          "loss_groups": {
+            "aux": {
+              "w_contact_plan": 0.15
+            },
+            "core": {
+              "w_rot_local": 0.22,
+              "rot_local_tail_weight": 0.1,
+              "rot_local_tail_k": 3
+            }
+          }
+        },
+        {
+          "range": [
+            10,
+            12
+          ],
+          "label": "phase_c_corridor_hold_plus1",
+          "params": {
+            "tf_max": 0.5,
+            "tf_min": 0.5,
+            "ss_chunk_len": 1,
+            "opt_lr": 0.0002
+          },
+          "loss_groups": {
+            "aux": {
+              "w_contact_plan": 0.13
+            },
+            "core": {
+              "w_rot_local": 0.22,
+              "rot_local_tail_weight": 0.2,
+              "rot_local_tail_k": 3
+            }
+          }
+        },
+        {
+          "range": [
+            13,
+            15
+          ],
+          "label": "phase_d_short_late_tail_shifted",
+          "params": {
+            "tf_max": 0.5,
+            "tf_min": 0.5,
+            "ss_chunk_len": 1,
+            "opt_lr": 0.0001
+          },
+          "loss_groups": {
+            "aux": {
+              "w_contact_plan": 0.1
+            },
+            "core": {
+              "w_rot_local": 0.22,
+              "rot_local_tail_weight": 0.2,
+              "rot_local_tail_k": 3
+            }
+          }
+        }
+      ]
+    },
+    {
+      "family": "cplus1_dbridge015",
+      "notes": "Keep phase_c=10-12, insert a one-epoch bridge at epoch 13 with rot_local_tail_weight=0.15, then resume phase_d on 14-15. Tests whether the c->d transition is too hard.",
+      "save_fit_ckpt_epochs": "10-15",
+      "freerun_stage_schedule": [
+        {
+          "range": [
+            1,
+            5
+          ],
+          "label": "phase_a_plan_formation",
+          "params": {
+            "tf_max": 1.0,
+            "tf_min": 1.0,
+            "ss_chunk_len": 1,
+            "opt_lr": 0.001
+          },
+          "loss_groups": {
+            "aux": {
+              "w_contact_plan": 0.2
+            }
+          }
+        },
+        {
+          "range": [
+            6,
+            9
+          ],
+          "label": "phase_b_corridor_entry",
+          "params": {
+            "tf_max": 1.0,
+            "tf_min": 0.5,
+            "ss_chunk_len": 1,
+            "opt_lr": 0.0005
+          },
+          "loss_groups": {
+            "aux": {
+              "w_contact_plan": 0.15
+            },
+            "core": {
+              "w_rot_local": 0.22,
+              "rot_local_tail_weight": 0.1,
+              "rot_local_tail_k": 3
+            }
+          }
+        },
+        {
+          "range": [
+            10,
+            12
+          ],
+          "label": "phase_c_corridor_hold_plus1",
+          "params": {
+            "tf_max": 0.5,
+            "tf_min": 0.5,
+            "ss_chunk_len": 1,
+            "opt_lr": 0.0002
+          },
+          "loss_groups": {
+            "aux": {
+              "w_contact_plan": 0.13
+            },
+            "core": {
+              "w_rot_local": 0.22,
+              "rot_local_tail_weight": 0.2,
+              "rot_local_tail_k": 3
+            }
+          }
+        },
+        {
+          "range": [
+            13,
+            13
+          ],
+          "label": "phase_cd_bridge_rot_tail015",
+          "params": {
+            "tf_max": 0.5,
+            "tf_min": 0.5,
+            "ss_chunk_len": 1,
+            "opt_lr": 0.0002
+          },
+          "loss_groups": {
+            "aux": {
+              "w_contact_plan": 0.12
+            },
+            "core": {
+              "w_rot_local": 0.22,
+              "rot_local_tail_weight": 0.15,
+              "rot_local_tail_k": 3
+            }
+          }
+        },
+        {
+          "range": [
+            14,
+            15
+          ],
+          "label": "phase_d_short_late_tail_post_bridge",
+          "params": {
+            "tf_max": 0.5,
+            "tf_min": 0.5,
+            "ss_chunk_len": 1,
+            "opt_lr": 0.0001
+          },
+          "loss_groups": {
+            "aux": {
+              "w_contact_plan": 0.1
+            },
+            "core": {
+              "w_rot_local": 0.22,
+              "rot_local_tail_weight": 0.2,
+              "rot_local_tail_k": 3
+            }
+          }
+        }
+      ]
+    },
+    {
+      "family": "cplus1_dbridge010",
+      "notes": "Same as cplus1_dbridge015, but use a softer bridge rot_local_tail_weight=0.10 to test whether the bridge should preserve more of the relaxed hotspot behavior.",
+      "save_fit_ckpt_epochs": "10-15",
+      "freerun_stage_schedule": [
+        {
+          "range": [
+            1,
+            5
+          ],
+          "label": "phase_a_plan_formation",
+          "params": {
+            "tf_max": 1.0,
+            "tf_min": 1.0,
+            "ss_chunk_len": 1,
+            "opt_lr": 0.001
+          },
+          "loss_groups": {
+            "aux": {
+              "w_contact_plan": 0.2
+            }
+          }
+        },
+        {
+          "range": [
+            6,
+            9
+          ],
+          "label": "phase_b_corridor_entry",
+          "params": {
+            "tf_max": 1.0,
+            "tf_min": 0.5,
+            "ss_chunk_len": 1,
+            "opt_lr": 0.0005
+          },
+          "loss_groups": {
+            "aux": {
+              "w_contact_plan": 0.15
+            },
+            "core": {
+              "w_rot_local": 0.22,
+              "rot_local_tail_weight": 0.1,
+              "rot_local_tail_k": 3
+            }
+          }
+        },
+        {
+          "range": [
+            10,
+            12
+          ],
+          "label": "phase_c_corridor_hold_plus1",
+          "params": {
+            "tf_max": 0.5,
+            "tf_min": 0.5,
+            "ss_chunk_len": 1,
+            "opt_lr": 0.0002
+          },
+          "loss_groups": {
+            "aux": {
+              "w_contact_plan": 0.13
+            },
+            "core": {
+              "w_rot_local": 0.22,
+              "rot_local_tail_weight": 0.2,
+              "rot_local_tail_k": 3
+            }
+          }
+        },
+        {
+          "range": [
+            13,
+            13
+          ],
+          "label": "phase_cd_bridge_rot_tail010",
+          "params": {
+            "tf_max": 0.5,
+            "tf_min": 0.5,
+            "ss_chunk_len": 1,
+            "opt_lr": 0.0002
+          },
+          "loss_groups": {
+            "aux": {
+              "w_contact_plan": 0.12
+            },
+            "core": {
+              "w_rot_local": 0.22,
+              "rot_local_tail_weight": 0.1,
+              "rot_local_tail_k": 3
+            }
+          }
+        },
+        {
+          "range": [
+            14,
+            15
+          ],
+          "label": "phase_d_short_late_tail_post_bridge",
+          "params": {
+            "tf_max": 0.5,
+            "tf_min": 0.5,
+            "ss_chunk_len": 1,
+            "opt_lr": 0.0001
+          },
+          "loss_groups": {
+            "aux": {
+              "w_contact_plan": 0.1
+            },
+            "core": {
+              "w_rot_local": 0.22,
+              "rot_local_tail_weight": 0.2,
+              "rot_local_tail_k": 3
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
