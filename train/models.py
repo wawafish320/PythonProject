@@ -5,7 +5,6 @@ Unified model definitions for training and inference.
 """
 
 import math as _math
-import os
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
@@ -13,7 +12,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .utils import build_mlp
+from .utils import (
+    _build_pretrain_contact_encoder_input,
+    _resolve_joint_spec_indices,
+    build_mlp,
+)
 from .history import AdaptiveHistoryModule
 from .geometry import (
     rot6d_to_matrix,
@@ -23,8 +26,12 @@ from .geometry import (
     root_relative_matrices,
     parent_relative_matrices,
 )
-from .layout import parse_layout_entry
-from .rotvec_semantics import require_standard_rotvec_bundle
+from .layout import infer_rot_joint_count, parse_layout_entry, resolve_rot6d_slice
+from .model_ckpt_compat import (
+    attach_motion_encoder_bundle,
+    maybe_upgrade_direct_pose_split_state_dict,
+    maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict,
+)
 
 __all__ = [
     'MotionEncoder',
@@ -32,6 +39,7 @@ __all__ = [
     '_CondFiLM',
     'EventMotionModel',
     'MotionJointLoss',
+    '_build_pretrain_contact_encoder_input',
     'DEFAULT_DIRECT_POSE_LEG_BONES',
     'STAGE6_3WAY_ARMCHAIN_BONES',
     'STAGE6_3WAY_ARMCHAIN_BONES_CSV',
@@ -60,92 +68,6 @@ STAGE6_3WAY_ARMCHAIN_BONES: tuple[str, ...] = (
 )
 
 STAGE6_3WAY_ARMCHAIN_BONES_CSV = ','.join(STAGE6_3WAY_ARMCHAIN_BONES)
-
-
-def _normalize_joint_spec_items(
-    spec: Optional[Sequence[Any] | str],
-    *,
-    default_items: Sequence[Any],
-) -> list[Any]:
-    raw_items: Any = default_items if spec is None else spec
-    if isinstance(raw_items, str):
-        candidates = raw_items.split(',')
-    elif isinstance(raw_items, (list, tuple)):
-        candidates = list(raw_items)
-    else:
-        candidates = [raw_items]
-
-    items: list[Any] = []
-    for item in candidates:
-        if isinstance(item, str):
-            text = item.strip()
-            if text:
-                items.append(text)
-        elif isinstance(item, (int, np.integer)):
-            items.append(int(item))
-        elif item is not None:
-            text = str(item).strip()
-            if text:
-                items.append(text)
-    return items
-
-
-def _resolve_joint_spec_indices(
-    spec: Optional[Sequence[Any] | str],
-    *,
-    default_items: Sequence[Any],
-    bone_names: Optional[Sequence[str]],
-    joint_count: int,
-    collect_names: bool = False,
-) -> tuple[list[int], list[str]]:
-    items = _normalize_joint_spec_items(spec, default_items=default_items)
-    name_to_idx = {str(name): int(idx) for idx, name in enumerate(bone_names or [])}
-    indices: list[int] = []
-    names: list[str] = []
-    seen: set[int] = set()
-    for item in items:
-        idx = None
-        name = None
-        if isinstance(item, (int, np.integer)):
-            idx = int(item)
-        else:
-            text = str(item).strip()
-            if text.isdigit() or (text.startswith('-') and text[1:].isdigit()):
-                try:
-                    idx = int(text)
-                except Exception:
-                    idx = None
-            else:
-                name = text
-                idx = name_to_idx.get(text, None)
-        if idx is None or idx < 0 or (joint_count > 0 and idx >= joint_count) or idx in seen:
-            continue
-        seen.add(int(idx))
-        indices.append(int(idx))
-        if collect_names:
-            if name is None and bone_names is not None and int(idx) < len(bone_names):
-                name = str(bone_names[int(idx)])
-            if name is not None:
-                names.append(str(name))
-    return indices, names
-
-
-def _resolve_rot6d_joint_count(rot_slice: Optional[slice], bone_names: Optional[Sequence[str]]) -> int:
-    joint_count = 0
-    try:
-        if isinstance(rot_slice, slice) and rot_slice.start is not None and rot_slice.stop is not None:
-            rot_len = int(rot_slice.stop - rot_slice.start)
-            if rot_len > 0 and (rot_len % 6) == 0:
-                joint_count = int(rot_len // 6)
-    except Exception:
-        joint_count = 0
-    if joint_count <= 0 and bone_names is not None:
-        try:
-            joint_count = int(len(bone_names))
-        except Exception:
-            joint_count = 0
-    return joint_count
-
 
 class ContactMeasHeadLowerBodyNoHistV1(nn.Module):
     """
@@ -497,26 +419,6 @@ class PeriodicityGate(nn.Module):
         dynamic_prior = self.prior_head(prior_in)
         return lambda_corr, lambda_logit, dynamic_prior
 
-
-import os, json, math, glob, time, argparse
-
-from torch.utils.data import DataLoader
-try:
-    from tqdm import tqdm
-except ImportError:
-    print('Warning: tqdm not found. For a progress bar, run: pip install tqdm')
-
-    def tqdm(iterable, *GLOBAL_ARGS, **kwargs):
-        return iterable
-
-
-def _legacy_phase_state_name(suffix: str = "") -> str:
-    prefix = "contact" + "_phase" + "_state"
-    return prefix if not suffix else prefix + "_" + str(suffix)
-
-
-
-
 class EventMotionModel(nn.Module):
     """
     无状态动作生成模型：通过显式传入的历史缓冲而非隐式 hidden_state 建模。
@@ -695,7 +597,6 @@ class EventMotionModel(nn.Module):
         so3_corr_hidden: int = 128,
         so3_corr_dropout: float = 0.0,
         so3_corr_gate_logit_init: float = -5.0,
-        **legacy_kwargs: Any,
     ):
         super().__init__()
         self.in_state_dim = int(in_state_dim)
@@ -708,22 +609,6 @@ class EventMotionModel(nn.Module):
         self.contact_dim = max(0, int(contact_dim))
         self.angvel_dim = max(0, int(angvel_dim))
         self.pose_hist_dim = max(0, int(pose_hist_dim))
-        legacy_phase_suffixes = (
-            "enable",
-            "init_mode",
-            "hidden",
-            "delta_max",
-            "delta_init",
-            "event_kind",
-            "event_thr",
-            "event_hyst",
-            "event_min_interval",
-        )
-        for suffix in legacy_phase_suffixes:
-            legacy_kwargs.pop(_legacy_phase_state_name(suffix), None)
-        if legacy_kwargs:
-            unknown = ", ".join(sorted(str(k) for k in legacy_kwargs.keys()))
-            raise TypeError(f"EventMotionModel got unexpected keyword arguments: {unknown}")
         self.state_layout: Dict[str, Any] = dict(state_layout) if isinstance(state_layout, dict) else {}
         self.encoder_input_dim = self.contact_dim + self.angvel_dim + self.pose_hist_dim
         self.contact_plan_enable = bool(contact_plan_enable and self.contact_dim > 0 and self.cond_dim > 0)
@@ -983,215 +868,10 @@ class EventMotionModel(nn.Module):
         self.direct_pose_leg_side_rank1 = bool(direct_pose_leg_side_rank1) and bool(self.direct_pose_leg_side_routing)
         if bool(self.direct_pose_leg_side_rank1) and bool(self.direct_pose_leg_side_sign_gate):
             raise ValueError("direct_pose_leg_side_rank1 is incompatible with direct_pose_leg_side_sign_gate (pick one).")
-        if self.direct_pose_leg_enable:
-            # Determine BoneRotations6D slice and joint count.
-            rot_sl = None
-            if isinstance(output_layout, dict):
-                rot_sl = parse_layout_entry(output_layout.get("BoneRotations6D"), "BoneRotations6D", self.out_motion_dim)
-            if rot_sl is None and bone_names is not None and len(bone_names) > 0:
-                rot_sl = slice(0, min(self.out_motion_dim, int(len(bone_names) * 6)))
-            if isinstance(rot_sl, slice):
-                self.direct_pose_leg_rot6d_slice = rot_sl
-
-            J = _resolve_rot6d_joint_count(rot_sl, bone_names)
-            leg_idx, leg_names = _resolve_joint_spec_indices(
-                direct_pose_leg_bones,
-                default_items=("ball_r", "ball_l", "foot_r", "foot_l", "calf_r", "calf_l", "thigh_r", "thigh_l"),
-                bone_names=bone_names,
-                joint_count=J,
-                collect_names=True,
-            )
-            self.direct_pose_leg_joint_idx.extend(int(i) for i in leg_idx)
-            self.direct_pose_leg_joint_names.extend(str(name) for name in leg_names)
-
-            # Persist joint indices into state_dict so evaluation scripts can reconstruct the head.
-            if self.direct_pose_leg_joint_idx:
-                try:
-                    self.register_buffer(
-                        "direct_pose_leg_joint_idx_tensor",
-                        torch.as_tensor(self.direct_pose_leg_joint_idx, dtype=torch.long),
-                        persistent=True,
-                    )
-                except Exception:
-                    pass
-
-        # Build leg/non-leg output index mapping once (persisted in buffers) for direct split heads.
-        if bool(self.direct_pose_split_enable):
-            if str(getattr(self, "direct_pose_meas_mode", "concat") or "concat").strip().lower() != "concat":
-                raise ValueError("direct_pose_split_enable currently supports direct_pose_meas_mode='concat' only.")
-
-            split_leg_joint_idx = list(getattr(self, "direct_pose_leg_joint_idx", None) or [])
-            if not split_leg_joint_idx:
-                rot_sl_split = None
-                if isinstance(output_layout, dict):
-                    rot_sl_split = parse_layout_entry(output_layout.get("BoneRotations6D"), "BoneRotations6D", self.out_motion_dim)
-                if rot_sl_split is None and bone_names is not None and len(bone_names) > 0:
-                    rot_sl_split = slice(0, min(self.out_motion_dim, int(len(bone_names) * 6)))
-
-                J_split = _resolve_rot6d_joint_count(rot_sl_split, bone_names)
-                split_leg_joint_idx, _ = _resolve_joint_spec_indices(
-                    direct_pose_leg_bones,
-                    default_items=DEFAULT_DIRECT_POSE_LEG_BONES,
-                    bone_names=bone_names,
-                    joint_count=J_split,
-                )
-
-            # Keep split leg joint indices available to posttrain loss even when
-            # direct_pose_leg_enable=false (split-head-only training).
-            if split_leg_joint_idx:
-                self.direct_pose_leg_joint_idx = [int(i) for i in split_leg_joint_idx]
-                if not self.direct_pose_leg_joint_names:
-                    try:
-                        if bone_names is not None:
-                            self.direct_pose_leg_joint_names = [
-                                str(bone_names[int(i)])
-                                for i in self.direct_pose_leg_joint_idx
-                                if 0 <= int(i) < len(bone_names)
-                            ]
-                    except Exception:
-                        pass
-                try:
-                    leg_idx_tensor = torch.as_tensor(self.direct_pose_leg_joint_idx, dtype=torch.long)
-                    if hasattr(self, "direct_pose_leg_joint_idx_tensor"):
-                        self.direct_pose_leg_joint_idx_tensor = leg_idx_tensor
-                    else:
-                        self.register_buffer("direct_pose_leg_joint_idx_tensor", leg_idx_tensor, persistent=True)
-                except Exception:
-                    pass
-
-            rot_sl = None
-            if isinstance(output_layout, dict):
-                rot_sl = parse_layout_entry(output_layout.get("BoneRotations6D"), "BoneRotations6D", self.out_motion_dim)
-            if rot_sl is None and bone_names is not None and len(bone_names) > 0:
-                rot_sl = slice(0, min(self.out_motion_dim, int(len(bone_names) * 6)))
-            if (not isinstance(rot_sl, slice)) or rot_sl.start is None or rot_sl.stop is None:
-                raise ValueError("direct_pose_split_enable requires a valid BoneRotations6D output slice.")
-
-            out_dim_total = int(self.out_motion_dim)
-            rot_start = int(rot_sl.start)
-            rot_stop = int(rot_sl.stop)
-            rot_len = max(0, rot_stop - rot_start)
-            if rot_len <= 0 or (rot_len % 6) != 0:
-                raise ValueError(
-                    f"direct_pose_split_enable requires BoneRotations6D dim to be a positive multiple of 6 (got {rot_len})."
-                )
-            J_rot = int(rot_len // 6)
-
-            def build_split_out_index(
-                joint_indices: Sequence[int],
-                *,
-                base_mask: Optional[torch.Tensor] = None,
-                empty_error: str,
-            ) -> tuple[torch.Tensor, torch.Tensor]:
-                dim_mask = torch.zeros((out_dim_total,), dtype=torch.bool)
-                for j_idx in joint_indices:
-                    jj = int(j_idx)
-                    if 0 <= jj < J_rot:
-                        d0 = int(rot_start + jj * 6)
-                        d1 = int(d0 + 6)
-                        if 0 <= d0 and d1 <= out_dim_total:
-                            dim_mask[d0:d1] = True
-                if torch.is_tensor(base_mask):
-                    dim_mask = dim_mask & base_mask
-                if not bool(dim_mask.any().item()):
-                    raise ValueError(empty_error)
-                out_idx = torch.nonzero(dim_mask, as_tuple=False).flatten().to(dtype=torch.long)
-                return dim_mask, out_idx
-
-            leg_dim_mask, leg_out_idx = build_split_out_index(
-                split_leg_joint_idx,
-                empty_error="direct_pose_split_enable resolved empty leg output dims; check direct_pose_leg_bones mapping.",
-            )
-            nonleg_dim_mask = ~leg_dim_mask
-            if not bool(nonleg_dim_mask.any().item()):
-                raise ValueError("direct_pose_split_enable resolved empty non-leg output dims.")
-            nonleg_out_idx = torch.nonzero(nonleg_dim_mask, as_tuple=False).flatten().to(dtype=torch.long)
-            if int(leg_out_idx.numel() + nonleg_out_idx.numel()) != int(out_dim_total):
-                raise ValueError("direct split head index coverage mismatch (D_leg + D_nonleg != out_motion_dim).")
-            self.direct_pose_leg_out_idx = leg_out_idx
-            self.direct_pose_nonleg_out_idx = nonleg_out_idx
-            if bool(getattr(self, "direct_pose_arm_split_enable", False)):
-                arm_joint_idx, _ = _resolve_joint_spec_indices(
-                    getattr(self, "direct_pose_arm_bones", None),
-                    default_items=STAGE6_3WAY_ARMCHAIN_BONES,
-                    bone_names=bone_names,
-                    joint_count=J_rot,
-                )
-
-                arm_dim_mask, arm_out_idx = build_split_out_index(
-                    arm_joint_idx,
-                    base_mask=nonleg_dim_mask,
-                    empty_error=(
-                        "direct_pose_arm_split_enable resolved empty arm output dims; "
-                        "check direct_pose_arm_bones mapping."
-                    ),
-                )
-                else_dim_mask = nonleg_dim_mask & (~arm_dim_mask)
-                if not bool(else_dim_mask.any().item()):
-                    raise ValueError("direct_pose_arm_split_enable resolved empty else output dims.")
-                else_out_idx = torch.nonzero(else_dim_mask, as_tuple=False).flatten().to(dtype=torch.long)
-                if int(arm_out_idx.numel() + else_out_idx.numel()) != int(nonleg_out_idx.numel()):
-                    raise ValueError("direct arm/else split index coverage mismatch (D_arm + D_else != D_nonleg).")
-                self.direct_pose_arm_out_idx = arm_out_idx
-                self.direct_pose_else_out_idx = else_out_idx
-
-        # Derive per-side leg joint positions for explicit routing (optional).
-        # Positions are in the K-leg list order (direct_pose_leg_joint_idx order).
-        if bool(self.direct_pose_leg_side_routing):
-            if str(getattr(self, "direct_pose_leg_mode", "rot6d_add") or "rot6d_add").lower().strip() != "so3":
-                raise ValueError("direct_pose_leg_side_routing currently supports only direct_pose_leg_mode='so3'.")
-            if int(getattr(self, "contact_dim", 0) or 0) != 2:
-                raise ValueError(
-                    f"direct_pose_leg_side_routing requires contact_dim==2 (got contact_dim={int(getattr(self, 'contact_dim', 0) or 0)})."
-                )
-            if not self.direct_pose_leg_joint_names:
-                raise ValueError(
-                    "direct_pose_leg_side_routing requires leg joint names (direct_pose_leg_bones should be names, not indices)."
-                )
-            names_l = [str(n).lower() for n in self.direct_pose_leg_joint_names]
-            pos_r = [i for i, n in enumerate(names_l) if n.endswith(("_r", "right"))]
-            pos_l = [i for i, n in enumerate(names_l) if n.endswith(("_l", "left"))]
-            if not pos_r or not pos_l:
-                raise ValueError(
-                    f"direct_pose_leg_side_routing expects both _r and _l joints; got names={self.direct_pose_leg_joint_names}."
-                )
-            if len(pos_r) != len(pos_l):
-                raise ValueError(
-                    f"direct_pose_leg_side_routing expects symmetric joint counts per side; got n_r={len(pos_r)} n_l={len(pos_l)} "
-                    f"(names={self.direct_pose_leg_joint_names})."
-                )
-            if (len(pos_r) + len(pos_l)) != len(names_l):
-                unknown = [self.direct_pose_leg_joint_names[i] for i in range(len(names_l)) if (i not in pos_r and i not in pos_l)]
-                raise ValueError(
-                    "direct_pose_leg_side_routing expects all leg joints to be side-tagged with _r/_l; "
-                    f"unknown={unknown} (names={self.direct_pose_leg_joint_names})."
-                )
-            self.direct_pose_leg_side_k = int(len(pos_r))
-            self.direct_pose_leg_side_pos_r = list(pos_r)
-            self.direct_pose_leg_side_pos_l = list(pos_l)
-            # Persist for eval harnesses (tiny, but helpful for reproducibility).
-            try:
-                self.register_buffer(
-                    "direct_pose_leg_side_pos_r_tensor",
-                    torch.as_tensor(self.direct_pose_leg_side_pos_r, dtype=torch.long),
-                    persistent=True,
-                )
-                self.register_buffer(
-                    "direct_pose_leg_side_pos_l_tensor",
-                    torch.as_tensor(self.direct_pose_leg_side_pos_l, dtype=torch.long),
-                    persistent=True,
-                )
-            except Exception:
-                pass
-            # Optional side embedding (tiny asymmetry adapter).
-            if int(getattr(self, "direct_pose_leg_side_embed_dim", 0) or 0) > 0:
-                self.direct_pose_leg_side_embed = nn.Embedding(2, int(self.direct_pose_leg_side_embed_dim))
-                # Safe init: start identical for both sides (zeros), allow learning asymmetry if needed.
-                try:
-                    with torch.no_grad():
-                        self.direct_pose_leg_side_embed.weight.zero_()
-                except Exception:
-                    pass
+        self._init_direct_pose_routing_metadata(
+            bone_names=bone_names,
+            output_layout=output_layout,
+        )
         self.lambda_fusion_enable = bool(lambda_fusion_enable)
         self.lambda_fusion_mode = str(lambda_fusion_mode or "per_joint").lower().strip()
         if self.lambda_fusion_mode not in ("global", "per_joint"):
@@ -1265,405 +945,15 @@ class EventMotionModel(nn.Module):
             final_dim=out_motion_dim,
         )
         self.period_encoder = nn.Linear(self.period_dim, hidden_dim) if self.period_dim > 0 else None
-
-        # ===== Contact Plan (cond-only GRUCell) =====
-        # Purpose:
-        #   - produce contacts_plan as an *independent anchor* (only sees cond + its own hidden state),
-        #     so e_t = contacts_plan - contacts_meas stays informative when pose drifts.
-        self.contact_plan_cell: Optional[nn.GRUCell] = None
-        self.contact_plan_head: Optional[nn.Module] = None
-        self.contact_plan_time_head: Optional[nn.Module] = None
-        self.contact_plan_phase_head: Optional[nn.Module] = None
-        self.contact_plan_init_z: Optional[nn.Parameter] = None
-        self.contact_plan_init_head: Optional[nn.Module] = None
-        self._contact_plan_init_obs_dim: int = 0
-        self.event_clock_gate: Optional[PeriodicityGate] = None
-        self.event_clock_corrector: Optional[PlanZCorrector] = None
-        self.direct_pose_head: Optional[nn.Module] = None
-        self.lambda_fusion_joint_count: int = 0
-        self.lambda_fusion_head: Optional[nn.Module] = None
-        if self.contact_plan_enable:
-            h_plan = int(self.contact_plan_hidden)
-            self.contact_plan_cell = nn.GRUCell(self.cond_dim, h_plan)
-            # NOTE: keep GRU input strictly cond-only. Phase/TTA is injected as an additive residual on logits.
-
-            # Learnable initial hidden state for contact-plan GRU (mitigates plan_z cold-start).
-            # If older checkpoints don't have this parameter, strict=False loading keeps it at zeros.
-            self.contact_plan_init_z = nn.Parameter(torch.zeros(h_plan), requires_grad=True)
-            if self.contact_plan_init_mode in ("obs", "learnable+obs"):
-                obs_dim = int(self.contact_dim + self.angvel_dim + self.pose_hist_dim)
-                self._contact_plan_init_obs_dim = obs_dim
-                if obs_dim > 0:
-                    h_init = int(self.contact_plan_init_hidden or h_plan)
-                    drop = float(self._contact_plan_init_dropout)
-                    self.contact_plan_init_head = nn.Sequential(
-                        nn.LayerNorm(obs_dim),
-                        nn.Linear(obs_dim, h_init),
-                        nn.ReLU(),
-                        nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                        nn.Linear(h_init, h_plan),
-                    )
-                    # Safe init: keep obs-conditioned delta near 0 before training.
-                    try:
-                        last = self.contact_plan_init_head[-1]
-                        if isinstance(last, nn.Linear):
-                            with torch.no_grad():
-                                last.weight.zero_()
-                                if last.bias is not None:
-                                    last.bias.zero_()
-                    except Exception:
-                        pass
-            self.contact_plan_head = nn.Sequential(
-                nn.LayerNorm(h_plan),
-                nn.Linear(h_plan, h_plan),
-                nn.ReLU(),
-                nn.Dropout(self._contact_plan_dropout),
-                nn.Linear(h_plan, int(self._contact_plan_logits_dim)),
-            )
-            if self.contact_plan_time_pe_dim > 0:
-                self.contact_plan_time_head = nn.Linear(self.contact_plan_time_pe_dim, int(self._contact_plan_logits_dim))
-                try:
-                    with torch.no_grad():
-                        self.contact_plan_time_head.weight.zero_()
-                        if getattr(self.contact_plan_time_head, "bias", None) is not None:
-                            self.contact_plan_time_head.bias.zero_()
-                except Exception:
-                    pass
-
-
-            if self.use_event_clock:
-                self.event_clock_gate = PeriodicityGate(
-                    contact_dim=int(self.contact_dim),
-                    period_feat_dim=int(self.period_dim),
-                    hidden_dim=int(self.event_clock_gate_hidden_dim),
-                )
-                self.event_clock_corrector = PlanZCorrector(
-                    plan_z_dim=int(h_plan),
-                    contact_dim=int(self.contact_dim),
-                    period_feat_dim=int(self.period_dim),
-                    hidden_dim=int(self.event_clock_hidden_dim),
-                    max_delta=float(self.event_clock_max_delta),
-                )
-
-            if self.direct_pose_enable:
-                want_meas = (self.direct_pose_meas_mode == "concat")
-                base_dim = int(self.cond_dim)
-                if self.direct_pose_feat_source in ("hidden", "hidden_pre"):
-                    base_dim = int(self.hidden_dim)
-                elif self.direct_pose_feat_source in ("cond+hidden", "cond+hidden_pre"):
-                    base_dim = int(self.cond_dim + self.hidden_dim)
-                time_dim = int(getattr(self, "direct_pose_time_pe_dim", 0) or 0)
-                phase_dim = int(getattr(self, "_direct_pose_phase_dim", 0) or 0)
-                if self.direct_pose_phase_z_mode == "replace_contacts":
-                    # direct_in = [direct_feat(+time_pe), phase_z_in]  (no plan/meas)
-                    in_dim = int(base_dim + time_dim + phase_dim)
-                else:
-                    in_dim = int(
-                        base_dim
-                        + self.contact_dim
-                        + (self.contact_dim if want_meas else 0)
-                        + time_dim
-                        + phase_dim
-                    )
-                hid = int(self.direct_pose_hidden)
-                drop = float(self._direct_pose_dropout)
-                if bool(getattr(self, "direct_pose_split_enable", False)):
-                    split_state = self._direct_pose_split_state()
-                    if split_state is None:
-                        raise ValueError("direct_pose_split_enable requires split output index buffers.")
-                    leg_out_dim = int(split_state["idx_leg"].numel())
-                    nonleg_out_dim = int(split_state["idx_nonleg"].numel())
-                    if leg_out_dim <= 0 or nonleg_out_dim <= 0:
-                        raise ValueError("direct_pose_split_enable requires non-empty leg/non-leg output indices.")
-                    if int(leg_out_dim + nonleg_out_dim) != int(self.out_motion_dim):
-                        raise ValueError(
-                            f"direct_pose_split_enable index mismatch: D_leg={leg_out_dim} D_nonleg={nonleg_out_dim} "
-                            f"out_motion_dim={int(self.out_motion_dim)}"
-                        )
-                    # Shared trunk stays compatible with the legacy head's first two Linear layers.
-                    self.direct_pose_head = nn.Sequential(
-                        nn.Linear(in_dim, hid),
-                        nn.ReLU(),
-                        nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                        nn.Linear(hid, hid),
-                        nn.ReLU(),
-                        nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                    )
-                    if bool(getattr(self, "direct_pose_stepc_unified_leg_terminal", False)):
-                        self.direct_pose_leg_terminal = self._build_direct_pose_terminal_block(
-                            trunk_dim=hid,
-                            out_dim=leg_out_dim,
-                            drop=drop,
-                        )
-                    else:
-                        self.direct_pose_out_leg, _ = self._build_split_head_branch(trunk_dim=hid, out_dim=leg_out_dim)
-                    if bool(split_state["arm_split"]):
-                        arm_out_dim = int(split_state["idx_arm"].numel())
-                        else_out_dim = int(split_state["idx_else"].numel())
-                        if arm_out_dim <= 0 or else_out_dim <= 0:
-                            raise ValueError("direct_pose_arm_split_enable requires non-empty arm/else output indices.")
-                        if int(arm_out_dim + else_out_dim) != int(nonleg_out_dim):
-                            raise ValueError(
-                                f"direct arm/else split index mismatch: D_arm={arm_out_dim} D_else={else_out_dim} "
-                                f"D_nonleg={nonleg_out_dim}"
-                            )
-                        proj_dim = int(getattr(self, "direct_pose_nonleg_proj_dim", 0) or 0)
-                        self.direct_pose_out_arm, self.direct_pose_arm_proj = self._build_split_head_branch(
-                            trunk_dim=hid, out_dim=arm_out_dim, proj_dim=proj_dim
-                        )
-                        self.direct_pose_out_else, self.direct_pose_else_proj = self._build_split_head_branch(
-                            trunk_dim=hid, out_dim=else_out_dim, proj_dim=proj_dim
-                        )
-                    else:
-                        proj_dim = int(getattr(self, "direct_pose_nonleg_proj_dim", 0) or 0)
-                        self.direct_pose_out_nonleg, self.direct_pose_nonleg_proj = self._build_split_head_branch(
-                            trunk_dim=hid, out_dim=nonleg_out_dim, proj_dim=proj_dim
-                        )
-                else:
-                    out_dim = int(self.out_motion_dim)
-                    if self.direct_pose_meas_mode == "mode_select":
-                        out_dim = int(out_dim) * 2
-                    self.direct_pose_head = nn.Sequential(
-                        nn.Linear(in_dim, hid),
-                        nn.ReLU(),
-                        nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                        nn.Linear(hid, hid),
-                        nn.ReLU(),
-                        nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                        nn.Linear(hid, int(out_dim)),
-                    )
-                # Optional: leg residual head (extra capacity for selected joints only).
-                # - rot6d_add: predicts 6D residuals (added in parameter space; legacy)
-                # - so3: predicts omega in so(3) (composed on-manifold: exp(omega) @ R_main)
-                if bool(getattr(self, "direct_pose_leg_enable", False)) and getattr(self, "direct_pose_leg_joint_idx", None):
-                    leg_k = int(len(self.direct_pose_leg_joint_idx))
-                    leg_mode = str(getattr(self, "direct_pose_leg_mode", "rot6d_add") or "rot6d_add").lower().strip()
-                    leg_out = (3 if leg_mode == "so3" else 6) * int(leg_k)
-                    if leg_out > 0:
-                        self.direct_pose_leg_head = nn.Sequential(
-                            nn.Linear(in_dim, hid),
-                            nn.ReLU(),
-                            nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                            nn.Linear(hid, hid),
-                            nn.ReLU(),
-                            nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                            nn.Linear(hid, int(leg_out)),
-                        )
-                        # Safe init: start with zero residual so behavior matches baseline ckpts.
-                        try:
-                            last = self.direct_pose_leg_head[-1]
-                            if isinstance(last, nn.Linear):
-                                with torch.no_grad():
-                                    last.weight.zero_()
-                                    if last.bias is not None:
-                                        last.bias.zero_()
-                        except Exception:
-                            pass
-                        # Optional: learned gate/scale head (predicts per-joint logits; applied in forward).
-                        gm_leg = str(getattr(self, "direct_pose_leg_gate_mode", "none") or "none").lower().strip()
-                        if gm_leg in ("learned", "scale"):
-                            gate_out = int(leg_k)
-                            self.direct_pose_leg_gate_head = nn.Sequential(
-                                nn.Linear(in_dim, hid),
-                                nn.ReLU(),
-                                nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                                nn.Linear(hid, hid),
-                                nn.ReLU(),
-                                nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                                nn.Linear(hid, int(gate_out)),
-                            )
-                            # Safe init:
-                            # - learned gate: start mostly "open" but not fully saturated (sigmoid(2)≈0.881)
-                            # - scale: start as identity scaling (exp(0)=1)
-                            try:
-                                last = self.direct_pose_leg_gate_head[-1]
-                                if isinstance(last, nn.Linear):
-                                    with torch.no_grad():
-                                        last.weight.zero_()
-                                        if last.bias is not None:
-                                            if gm_leg == "learned":
-                                                last.bias.fill_(2.0)
-                                            else:
-                                                last.bias.zero_()
-                            except Exception:
-                                pass
-                    # Optional: shared-weight, per-side routed leg head (SO(3) only).
-                    # - Input: [direct_feat(+time_pe), plan_side, meas_side, phase_side(2D), (optional side_emb)]
-                    # - Output: omega for one side only, then scatter back to K joints.
-                    if bool(getattr(self, "direct_pose_leg_side_routing", False)) and int(getattr(self, "direct_pose_leg_side_k", 0) or 0) > 0:
-                        leg_side_k = int(getattr(self, "direct_pose_leg_side_k", 0) or 0)
-                        # Base feature dim = direct_feat(+time_pe) dim.
-                        base_leg_dim = int(base_dim + time_dim)
-                        side_emb_dim = int(getattr(self, "direct_pose_leg_side_embed_dim", 0) or 0)
-                        phase_side_dim = 2 if bool(getattr(self, "direct_pose_use_phase_z", False)) else 0
-                        meas_side_dim = 1 if want_meas else 0
-                        plan_other_side_dim = int(getattr(self, "direct_pose_leg_side_plan_other_dim", 0) or 0)
-                        phase_other_side_dim = int(getattr(self, "direct_pose_leg_side_phase_other_dim", 0) or 0)
-                        phase_rel_side_dim = int(getattr(self, "direct_pose_leg_side_phase_rel_dim", 0) or 0)
-                        cue_side_dim = int(getattr(self, "direct_pose_leg_side_cue_dim", 0) or 0)
-                        # Input: [direct_feat(+time_pe), plan_side, meas_side, phase_side(2D), (optional plan_other), (optional cue), (optional side_emb)]
-                        leg_in_dim = int(
-                            base_leg_dim
-                            + 1
-                            + meas_side_dim
-                            + phase_side_dim
-                            + plan_other_side_dim
-                            + phase_other_side_dim
-                            + phase_rel_side_dim
-                            + cue_side_dim
-                            + side_emb_dim
-                        )
-                        # Output parameterization:
-                        # - default: per-joint omega vectors => (K_side * 3)
-                        # - rank1  : shared direction (3) + per-joint non-negative scale (K_side) => (3 + K_side)
-                        if bool(getattr(self, "direct_pose_leg_side_rank1", False)):
-                            leg_out_side = 3 + int(leg_side_k)
-                        else:
-                            leg_out_side = 3 * int(leg_side_k)  # so3 only
-                        if leg_in_dim > 0 and leg_out_side > 0:
-                            self.direct_pose_leg_head_shared = nn.Sequential(
-                                nn.Linear(leg_in_dim, hid),
-                                nn.ReLU(),
-                                nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                                nn.Linear(hid, hid),
-                                nn.ReLU(),
-                                nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                                nn.Linear(hid, int(leg_out_side)),
-                            )
-                            # Safe init: start with zero residual so behavior is controllable for finetune.
-                            try:
-                                last = self.direct_pose_leg_head_shared[-1]
-                                if isinstance(last, nn.Linear):
-                                    with torch.no_grad():
-                                        last.weight.zero_()
-                                        if last.bias is not None:
-                                            last.bias.zero_()
-                            except Exception:
-                                pass
-                            # Optional: learned gate/scale head for routed shared leg omega (per-joint logits per side).
-                            gm_leg = str(getattr(self, "direct_pose_leg_gate_mode", "none") or "none").lower().strip()
-                            if gm_leg in ("learned", "scale"):
-                                gate_out = int(leg_side_k)
-                                self.direct_pose_leg_gate_head_shared = nn.Sequential(
-                                    nn.Linear(leg_in_dim, hid),
-                                    nn.ReLU(),
-                                    nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                                    nn.Linear(hid, hid),
-                                    nn.ReLU(),
-                                    nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                                    nn.Linear(hid, int(gate_out)),
-                                )
-                                # Safe init: same semantics as direct_pose_leg_gate_head.
-                                try:
-                                    last = self.direct_pose_leg_gate_head_shared[-1]
-                                    if isinstance(last, nn.Linear):
-                                        with torch.no_grad():
-                                            last.weight.zero_()
-                                            if last.bias is not None:
-                                                if gm_leg == "learned":
-                                                    last.bias.fill_(2.0)
-                                                else:
-                                                    last.bias.zero_()
-                                except Exception:
-                                    pass
-                            # Optional: per-side sign gate head (shared weights; run twice for R/L).
-                            if bool(getattr(self, "direct_pose_leg_side_sign_gate", False)):
-                                h_gate = max(8, int(hid // 4))
-                                self.direct_pose_leg_side_sign_gate_head = nn.Sequential(
-                                    nn.Linear(leg_in_dim, h_gate),
-                                    nn.ReLU(),
-                                    nn.Linear(h_gate, 1),
-                                )
-                                # Safe init: start near +1 (identity) so existing ckpts behave the same.
-                                # (omega head is zero-initialized anyway; this just avoids weird scaling when it learns.)
-                                try:
-                                    last = self.direct_pose_leg_side_sign_gate_head[-1]
-                                    if isinstance(last, nn.Linear):
-                                        with torch.no_grad():
-                                            last.weight.zero_()
-                                            if last.bias is not None:
-                                                last.bias.fill_(2.0)  # tanh(2)≈0.964
-                                except Exception:
-                                    pass
-
-        if self.lambda_fusion_enable:
-            try:
-                rot_sl = None
-                if isinstance(output_layout, dict):
-                    rot_sl = parse_layout_entry(output_layout.get("BoneRotations6D"), "BoneRotations6D", self.out_motion_dim)
-                if rot_sl is not None:
-                    rot_dim = int(rot_sl.stop - rot_sl.start)
-                    if rot_dim > 0 and rot_dim % 6 == 0:
-                        self.lambda_fusion_joint_count = int(rot_dim // 6)
-                elif bone_names is not None and len(bone_names) > 0 and (self.out_motion_dim // 6) > 0:
-                    self.lambda_fusion_joint_count = int(len(bone_names))
-            except Exception:
-                self.lambda_fusion_joint_count = 0
-
-            out_dim = 1 if self.lambda_fusion_mode == "global" else int(self.lambda_fusion_joint_count)
-            if int(out_dim) > 0:
-                use_rollout_step = bool(getattr(self, "lambda_fusion_use_rollout_step", False))
-                in_dim = int(self.hidden_dim + (self.contact_dim if self.contact_plan_enable else 0) + (1 if use_rollout_step else 0))
-                h_mid = max(8, int(self.lambda_fusion_hidden))
-                drop = float(self._lambda_fusion_dropout)
-                self.lambda_fusion_head = nn.Sequential(
-                    nn.LayerNorm(in_dim),
-                    nn.Linear(in_dim, h_mid),
-                    nn.ReLU(),
-                    nn.Dropout(drop) if drop > 0 else nn.Identity(),
-                    nn.Linear(h_mid, int(out_dim)),
-                )
-                try:
-                    last = self.lambda_fusion_head[-1]
-                    if isinstance(last, nn.Linear):
-                        with torch.no_grad():
-                            last.weight.zero_()
-                            if last.bias is not None:
-                                last.bias.fill_(float(self._lambda_fusion_logit_init))
-                except Exception:
-                    pass
-
-        # Contacts are provided externally via `contacts_input`; internal meas/hazard heads are retired.
-
-        # ===== SO(3) Delta Corrector (lightweight head) =====
-        # - Predicts omega_hat in so(3) to correct ΔR on-manifold.
-        # - Does NOT change the main motion output; baseline behavior remains identical
-        #   unless the caller explicitly uses omega_hat.
-        self.so3_corr_joint_count: int = 0
-        self.so3_delta_corrector: Optional[nn.Module] = None
-        self.so3_corr_gate_logit: Optional[nn.Parameter] = None
-        try:
-            rot_sl = None
-            if isinstance(output_layout, dict):
-                rot_sl = parse_layout_entry(output_layout.get("BoneRotations6D"), "BoneRotations6D", self.out_motion_dim)
-            if rot_sl is not None:
-                rot_dim = int(rot_sl.stop - rot_sl.start)
-                if rot_dim > 0 and rot_dim % 6 == 0:
-                    self.so3_corr_joint_count = int(rot_dim // 6)
-            elif bone_names is not None and len(bone_names) > 0 and (self.out_motion_dim // 6) > 0:
-                self.so3_corr_joint_count = int(len(bone_names))
-        except Exception:
-            self.so3_corr_joint_count = 0
-        if self.so3_corr_joint_count > 0:
-            self.so3_corr_gate_logit = nn.Parameter(torch.tensor(float(so3_corr_gate_logit_init)))
-            h_mid = max(8, int(so3_corr_hidden))
-            corr_in_dim = int(self.hidden_dim + (self.contact_dim if self.contact_plan_enable else 0))
-            self.so3_delta_corrector = nn.Sequential(
-                nn.LayerNorm(corr_in_dim),
-                nn.Linear(corr_in_dim, h_mid),
-                nn.ReLU(),
-                nn.Dropout(float(so3_corr_dropout)),
-                nn.Linear(h_mid, int(self.so3_corr_joint_count) * 3),
-            )
-            try:
-                last = self.so3_delta_corrector[-1]
-                if isinstance(last, nn.Linear):
-                    with torch.no_grad():
-                        last.weight.zero_()
-                        if last.bias is not None:
-                            last.bias.zero_()
-            except Exception:
-                pass
+        self._build_contact_plan_modules()
+        self._build_direct_pose_modules()
+        self._build_lambda_and_so3_aux_heads(
+            output_layout=output_layout,
+            bone_names=bone_names,
+            so3_corr_hidden=so3_corr_hidden,
+            so3_corr_dropout=so3_corr_dropout,
+            so3_corr_gate_logit_init=so3_corr_gate_logit_init,
+        )
 
         # Low-risk per-bone residual adapters:
         # - initial adapter output == 0 (zero-init last Linear) so behavior matches baseline;
@@ -1691,6 +981,569 @@ class EventMotionModel(nn.Module):
         self.frozen_encoder: Optional['MotionEncoder'] = None
         self.frozen_period_head: Optional['PeriodHead'] = None
         self.frozen_contact_head: Optional[nn.Module] = None
+
+    def _init_direct_pose_routing_metadata(
+        self,
+        *,
+        bone_names: Optional[Sequence[str]],
+        output_layout: Optional[Dict[str, Any]],
+    ) -> None:
+        if self.direct_pose_leg_enable:
+            rot_sl = resolve_rot6d_slice(
+                output_layout,
+                total_dim=self.out_motion_dim,
+            )
+            if isinstance(rot_sl, slice):
+                self.direct_pose_leg_rot6d_slice = rot_sl
+            joint_count = infer_rot_joint_count(rot_sl)
+            leg_idx, leg_names = _resolve_joint_spec_indices(
+                getattr(self, "direct_pose_leg_bones", None),
+                default_items=("ball_r", "ball_l", "foot_r", "foot_l", "calf_r", "calf_l", "thigh_r", "thigh_l"),
+                bone_names=bone_names,
+                joint_count=joint_count,
+                collect_names=True,
+            )
+            self.direct_pose_leg_joint_idx.extend(int(i) for i in leg_idx)
+            self.direct_pose_leg_joint_names.extend(str(name) for name in leg_names)
+            if self.direct_pose_leg_joint_idx:
+                try:
+                    self.register_buffer(
+                        "direct_pose_leg_joint_idx_tensor",
+                        torch.as_tensor(self.direct_pose_leg_joint_idx, dtype=torch.long),
+                        persistent=True,
+                    )
+                except Exception:
+                    pass
+
+        if bool(self.direct_pose_split_enable):
+            if str(getattr(self, "direct_pose_meas_mode", "concat") or "concat").strip().lower() != "concat":
+                raise ValueError("direct_pose_split_enable currently supports direct_pose_meas_mode='concat' only.")
+
+            split_leg_joint_idx = list(getattr(self, "direct_pose_leg_joint_idx", None) or [])
+            if not split_leg_joint_idx:
+                rot_sl_split = resolve_rot6d_slice(
+                    output_layout,
+                    total_dim=self.out_motion_dim,
+                )
+                joint_count_split = infer_rot_joint_count(rot_sl_split)
+                split_leg_joint_idx, _ = _resolve_joint_spec_indices(
+                    getattr(self, "direct_pose_leg_bones", None),
+                    default_items=DEFAULT_DIRECT_POSE_LEG_BONES,
+                    bone_names=bone_names,
+                    joint_count=joint_count_split,
+                )
+
+            if split_leg_joint_idx:
+                self.direct_pose_leg_joint_idx = [int(i) for i in split_leg_joint_idx]
+                if not self.direct_pose_leg_joint_names:
+                    try:
+                        if bone_names is not None:
+                            self.direct_pose_leg_joint_names = [
+                                str(bone_names[int(i)])
+                                for i in self.direct_pose_leg_joint_idx
+                                if 0 <= int(i) < len(bone_names)
+                            ]
+                    except Exception:
+                        pass
+                try:
+                    leg_idx_tensor = torch.as_tensor(self.direct_pose_leg_joint_idx, dtype=torch.long)
+                    if hasattr(self, "direct_pose_leg_joint_idx_tensor"):
+                        self.direct_pose_leg_joint_idx_tensor = leg_idx_tensor
+                    else:
+                        self.register_buffer("direct_pose_leg_joint_idx_tensor", leg_idx_tensor, persistent=True)
+                except Exception:
+                    pass
+
+            rot_sl = resolve_rot6d_slice(
+                output_layout,
+                total_dim=self.out_motion_dim,
+            )
+            if (not isinstance(rot_sl, slice)) or rot_sl.start is None or rot_sl.stop is None:
+                raise ValueError("direct_pose_split_enable requires a valid BoneRotations6D output slice.")
+
+            out_dim_total = int(self.out_motion_dim)
+            rot_start = int(rot_sl.start)
+            rot_stop = int(rot_sl.stop)
+            rot_len = max(0, rot_stop - rot_start)
+            if rot_len <= 0 or (rot_len % 6) != 0:
+                raise ValueError(
+                    f"direct_pose_split_enable requires BoneRotations6D dim to be a positive multiple of 6 (got {rot_len})."
+                )
+            joint_count_rot = int(rot_len // 6)
+
+            def build_split_out_index(
+                joint_indices: Sequence[int],
+                *,
+                base_mask: Optional[torch.Tensor] = None,
+                empty_error: str,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
+                dim_mask = torch.zeros((out_dim_total,), dtype=torch.bool)
+                for j_idx in joint_indices:
+                    jj = int(j_idx)
+                    if 0 <= jj < joint_count_rot:
+                        dim_start = int(rot_start + jj * 6)
+                        dim_stop = int(dim_start + 6)
+                        if 0 <= dim_start and dim_stop <= out_dim_total:
+                            dim_mask[dim_start:dim_stop] = True
+                if torch.is_tensor(base_mask):
+                    dim_mask = dim_mask & base_mask
+                if not bool(dim_mask.any().item()):
+                    raise ValueError(empty_error)
+                out_idx = torch.nonzero(dim_mask, as_tuple=False).flatten().to(dtype=torch.long)
+                return dim_mask, out_idx
+
+            leg_dim_mask, leg_out_idx = build_split_out_index(
+                split_leg_joint_idx,
+                empty_error="direct_pose_split_enable resolved empty leg output dims; check direct_pose_leg_bones mapping.",
+            )
+            nonleg_dim_mask = ~leg_dim_mask
+            if not bool(nonleg_dim_mask.any().item()):
+                raise ValueError("direct_pose_split_enable resolved empty non-leg output dims.")
+            nonleg_out_idx = torch.nonzero(nonleg_dim_mask, as_tuple=False).flatten().to(dtype=torch.long)
+            if int(leg_out_idx.numel() + nonleg_out_idx.numel()) != int(out_dim_total):
+                raise ValueError("direct split head index coverage mismatch (D_leg + D_nonleg != out_motion_dim).")
+            self.direct_pose_leg_out_idx = leg_out_idx
+            self.direct_pose_nonleg_out_idx = nonleg_out_idx
+            if bool(getattr(self, "direct_pose_arm_split_enable", False)):
+                arm_joint_idx, _ = _resolve_joint_spec_indices(
+                    getattr(self, "direct_pose_arm_bones", None),
+                    default_items=STAGE6_3WAY_ARMCHAIN_BONES,
+                    bone_names=bone_names,
+                    joint_count=joint_count_rot,
+                )
+                arm_dim_mask, arm_out_idx = build_split_out_index(
+                    arm_joint_idx,
+                    base_mask=nonleg_dim_mask,
+                    empty_error=(
+                        "direct_pose_arm_split_enable resolved empty arm output dims; "
+                        "check direct_pose_arm_bones mapping."
+                    ),
+                )
+                else_dim_mask = nonleg_dim_mask & (~arm_dim_mask)
+                if not bool(else_dim_mask.any().item()):
+                    raise ValueError("direct_pose_arm_split_enable resolved empty else output dims.")
+                else_out_idx = torch.nonzero(else_dim_mask, as_tuple=False).flatten().to(dtype=torch.long)
+                if int(arm_out_idx.numel() + else_out_idx.numel()) != int(nonleg_out_idx.numel()):
+                    raise ValueError("direct arm/else split index coverage mismatch (D_arm + D_else != D_nonleg).")
+                self.direct_pose_arm_out_idx = arm_out_idx
+                self.direct_pose_else_out_idx = else_out_idx
+
+        if not bool(self.direct_pose_leg_side_routing):
+            return
+        if str(getattr(self, "direct_pose_leg_mode", "rot6d_add") or "rot6d_add").lower().strip() != "so3":
+            raise ValueError("direct_pose_leg_side_routing currently supports only direct_pose_leg_mode='so3'.")
+        if int(getattr(self, "contact_dim", 0) or 0) != 2:
+            raise ValueError(
+                f"direct_pose_leg_side_routing requires contact_dim==2 (got contact_dim={int(getattr(self, 'contact_dim', 0) or 0)})."
+            )
+        if not self.direct_pose_leg_joint_names:
+            raise ValueError(
+                "direct_pose_leg_side_routing requires leg joint names (direct_pose_leg_bones should be names, not indices)."
+            )
+        joint_names_lower = [str(name).lower() for name in self.direct_pose_leg_joint_names]
+        pos_r = [idx for idx, name in enumerate(joint_names_lower) if name.endswith(("_r", "right"))]
+        pos_l = [idx for idx, name in enumerate(joint_names_lower) if name.endswith(("_l", "left"))]
+        if not pos_r or not pos_l:
+            raise ValueError(
+                f"direct_pose_leg_side_routing expects both _r and _l joints; got names={self.direct_pose_leg_joint_names}."
+            )
+        if len(pos_r) != len(pos_l):
+            raise ValueError(
+                f"direct_pose_leg_side_routing expects symmetric joint counts per side; got n_r={len(pos_r)} n_l={len(pos_l)} "
+                f"(names={self.direct_pose_leg_joint_names})."
+            )
+        if (len(pos_r) + len(pos_l)) != len(joint_names_lower):
+            unknown = [
+                self.direct_pose_leg_joint_names[idx]
+                for idx in range(len(joint_names_lower))
+                if idx not in pos_r and idx not in pos_l
+            ]
+            raise ValueError(
+                "direct_pose_leg_side_routing expects all leg joints to be side-tagged with _r/_l; "
+                f"unknown={unknown} (names={self.direct_pose_leg_joint_names})."
+            )
+        self.direct_pose_leg_side_k = int(len(pos_r))
+        self.direct_pose_leg_side_pos_r = list(pos_r)
+        self.direct_pose_leg_side_pos_l = list(pos_l)
+        try:
+            self.register_buffer(
+                "direct_pose_leg_side_pos_r_tensor",
+                torch.as_tensor(self.direct_pose_leg_side_pos_r, dtype=torch.long),
+                persistent=True,
+            )
+            self.register_buffer(
+                "direct_pose_leg_side_pos_l_tensor",
+                torch.as_tensor(self.direct_pose_leg_side_pos_l, dtype=torch.long),
+                persistent=True,
+            )
+        except Exception:
+            pass
+        if int(getattr(self, "direct_pose_leg_side_embed_dim", 0) or 0) > 0:
+            self.direct_pose_leg_side_embed = nn.Embedding(2, int(self.direct_pose_leg_side_embed_dim))
+            try:
+                with torch.no_grad():
+                    self.direct_pose_leg_side_embed.weight.zero_()
+            except Exception:
+                pass
+
+    def _build_contact_plan_modules(self) -> None:
+        self.contact_plan_cell: Optional[nn.GRUCell] = None
+        self.contact_plan_head: Optional[nn.Module] = None
+        self.contact_plan_time_head: Optional[nn.Module] = None
+        self.contact_plan_phase_head: Optional[nn.Module] = None
+        self.contact_plan_init_z: Optional[nn.Parameter] = None
+        self.contact_plan_init_head: Optional[nn.Module] = None
+        self._contact_plan_init_obs_dim = 0
+        self.event_clock_gate: Optional[PeriodicityGate] = None
+        self.event_clock_corrector: Optional[PlanZCorrector] = None
+        if not self.contact_plan_enable:
+            return
+
+        h_plan = int(self.contact_plan_hidden)
+        self.contact_plan_cell = nn.GRUCell(self.cond_dim, h_plan)
+        self.contact_plan_init_z = nn.Parameter(torch.zeros(h_plan), requires_grad=True)
+        if self.contact_plan_init_mode in ("obs", "learnable+obs"):
+            obs_dim = int(self.contact_dim + self.angvel_dim + self.pose_hist_dim)
+            self._contact_plan_init_obs_dim = obs_dim
+            if obs_dim > 0:
+                h_init = int(self.contact_plan_init_hidden or h_plan)
+                drop = float(self._contact_plan_init_dropout)
+                self.contact_plan_init_head = nn.Sequential(
+                    nn.LayerNorm(obs_dim),
+                    nn.Linear(obs_dim, h_init),
+                    nn.ReLU(),
+                    nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                    nn.Linear(h_init, h_plan),
+                )
+                try:
+                    last = self.contact_plan_init_head[-1]
+                    if isinstance(last, nn.Linear):
+                        with torch.no_grad():
+                            last.weight.zero_()
+                            if last.bias is not None:
+                                last.bias.zero_()
+                except Exception:
+                    pass
+        self.contact_plan_head = nn.Sequential(
+            nn.LayerNorm(h_plan),
+            nn.Linear(h_plan, h_plan),
+            nn.ReLU(),
+            nn.Dropout(self._contact_plan_dropout),
+            nn.Linear(h_plan, int(self._contact_plan_logits_dim)),
+        )
+        if self.contact_plan_time_pe_dim > 0:
+            self.contact_plan_time_head = nn.Linear(self.contact_plan_time_pe_dim, int(self._contact_plan_logits_dim))
+            try:
+                with torch.no_grad():
+                    self.contact_plan_time_head.weight.zero_()
+                    if getattr(self.contact_plan_time_head, "bias", None) is not None:
+                        self.contact_plan_time_head.bias.zero_()
+            except Exception:
+                pass
+        if self.use_event_clock:
+            self.event_clock_gate = PeriodicityGate(
+                contact_dim=int(self.contact_dim),
+                period_feat_dim=int(self.period_dim),
+                hidden_dim=int(self.event_clock_gate_hidden_dim),
+            )
+            self.event_clock_corrector = PlanZCorrector(
+                plan_z_dim=int(h_plan),
+                contact_dim=int(self.contact_dim),
+                period_feat_dim=int(self.period_dim),
+                hidden_dim=int(self.event_clock_hidden_dim),
+                max_delta=float(self.event_clock_max_delta),
+            )
+
+    def _build_direct_pose_modules(self) -> None:
+        self.direct_pose_head: Optional[nn.Module] = None
+        if not (self.contact_plan_enable and self.direct_pose_enable):
+            return
+
+        want_meas = self.direct_pose_meas_mode == "concat"
+        base_dim = int(self.cond_dim)
+        if self.direct_pose_feat_source in ("hidden", "hidden_pre"):
+            base_dim = int(self.hidden_dim)
+        elif self.direct_pose_feat_source in ("cond+hidden", "cond+hidden_pre"):
+            base_dim = int(self.cond_dim + self.hidden_dim)
+        time_dim = int(getattr(self, "direct_pose_time_pe_dim", 0) or 0)
+        phase_dim = int(getattr(self, "_direct_pose_phase_dim", 0) or 0)
+        if self.direct_pose_phase_z_mode == "replace_contacts":
+            in_dim = int(base_dim + time_dim + phase_dim)
+        else:
+            in_dim = int(base_dim + self.contact_dim + (self.contact_dim if want_meas else 0) + time_dim + phase_dim)
+        hid = int(self.direct_pose_hidden)
+        drop = float(self._direct_pose_dropout)
+
+        if bool(getattr(self, "direct_pose_split_enable", False)):
+            split_state = self._direct_pose_split_state()
+            if split_state is None:
+                raise ValueError("direct_pose_split_enable requires split output index buffers.")
+            leg_out_dim = int(split_state["idx_leg"].numel())
+            nonleg_out_dim = int(split_state["idx_nonleg"].numel())
+            if leg_out_dim <= 0 or nonleg_out_dim <= 0:
+                raise ValueError("direct_pose_split_enable requires non-empty leg/non-leg output indices.")
+            if int(leg_out_dim + nonleg_out_dim) != int(self.out_motion_dim):
+                raise ValueError(
+                    f"direct_pose_split_enable index mismatch: D_leg={leg_out_dim} D_nonleg={nonleg_out_dim} "
+                    f"out_motion_dim={int(self.out_motion_dim)}"
+                )
+            self.direct_pose_head = nn.Sequential(
+                nn.Linear(in_dim, hid),
+                nn.ReLU(),
+                nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                nn.Linear(hid, hid),
+                nn.ReLU(),
+                nn.Dropout(drop) if drop > 0 else nn.Identity(),
+            )
+            if bool(getattr(self, "direct_pose_stepc_unified_leg_terminal", False)):
+                self.direct_pose_leg_terminal = self._build_direct_pose_terminal_block(
+                    trunk_dim=hid,
+                    out_dim=leg_out_dim,
+                    drop=drop,
+                )
+            else:
+                self.direct_pose_out_leg, _ = self._build_split_head_branch(trunk_dim=hid, out_dim=leg_out_dim)
+            if bool(split_state["arm_split"]):
+                arm_out_dim = int(split_state["idx_arm"].numel())
+                else_out_dim = int(split_state["idx_else"].numel())
+                if arm_out_dim <= 0 or else_out_dim <= 0:
+                    raise ValueError("direct_pose_arm_split_enable requires non-empty arm/else output indices.")
+                if int(arm_out_dim + else_out_dim) != int(nonleg_out_dim):
+                    raise ValueError(
+                        f"direct arm/else split index mismatch: D_arm={arm_out_dim} D_else={else_out_dim} "
+                        f"D_nonleg={nonleg_out_dim}"
+                    )
+                proj_dim = int(getattr(self, "direct_pose_nonleg_proj_dim", 0) or 0)
+                self.direct_pose_out_arm, self.direct_pose_arm_proj = self._build_split_head_branch(
+                    trunk_dim=hid, out_dim=arm_out_dim, proj_dim=proj_dim
+                )
+                self.direct_pose_out_else, self.direct_pose_else_proj = self._build_split_head_branch(
+                    trunk_dim=hid, out_dim=else_out_dim, proj_dim=proj_dim
+                )
+            else:
+                proj_dim = int(getattr(self, "direct_pose_nonleg_proj_dim", 0) or 0)
+                self.direct_pose_out_nonleg, self.direct_pose_nonleg_proj = self._build_split_head_branch(
+                    trunk_dim=hid, out_dim=nonleg_out_dim, proj_dim=proj_dim
+                )
+        else:
+            out_dim = int(self.out_motion_dim)
+            if self.direct_pose_meas_mode == "mode_select":
+                out_dim = int(out_dim) * 2
+            self.direct_pose_head = nn.Sequential(
+                nn.Linear(in_dim, hid),
+                nn.ReLU(),
+                nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                nn.Linear(hid, hid),
+                nn.ReLU(),
+                nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                nn.Linear(hid, int(out_dim)),
+            )
+
+        if bool(getattr(self, "direct_pose_leg_enable", False)) and getattr(self, "direct_pose_leg_joint_idx", None):
+            leg_k = int(len(self.direct_pose_leg_joint_idx))
+            leg_mode = str(getattr(self, "direct_pose_leg_mode", "rot6d_add") or "rot6d_add").lower().strip()
+            leg_out = (3 if leg_mode == "so3" else 6) * int(leg_k)
+            if leg_out > 0:
+                self.direct_pose_leg_head = nn.Sequential(
+                    nn.Linear(in_dim, hid),
+                    nn.ReLU(),
+                    nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                    nn.Linear(hid, hid),
+                    nn.ReLU(),
+                    nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                    nn.Linear(hid, int(leg_out)),
+                )
+                try:
+                    last = self.direct_pose_leg_head[-1]
+                    if isinstance(last, nn.Linear):
+                        with torch.no_grad():
+                            last.weight.zero_()
+                            if last.bias is not None:
+                                last.bias.zero_()
+                except Exception:
+                    pass
+                gate_mode = str(getattr(self, "direct_pose_leg_gate_mode", "none") or "none").lower().strip()
+                if gate_mode in ("learned", "scale"):
+                    gate_out = int(leg_k)
+                    self.direct_pose_leg_gate_head = nn.Sequential(
+                        nn.Linear(in_dim, hid),
+                        nn.ReLU(),
+                        nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                        nn.Linear(hid, hid),
+                        nn.ReLU(),
+                        nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                        nn.Linear(hid, int(gate_out)),
+                    )
+                    try:
+                        last = self.direct_pose_leg_gate_head[-1]
+                        if isinstance(last, nn.Linear):
+                            with torch.no_grad():
+                                last.weight.zero_()
+                                if last.bias is not None:
+                                    if gate_mode == "learned":
+                                        last.bias.fill_(2.0)
+                                    else:
+                                        last.bias.zero_()
+                    except Exception:
+                        pass
+
+            if bool(getattr(self, "direct_pose_leg_side_routing", False)) and int(getattr(self, "direct_pose_leg_side_k", 0) or 0) > 0:
+                leg_side_k = int(getattr(self, "direct_pose_leg_side_k", 0) or 0)
+                base_leg_dim = int(base_dim + time_dim)
+                side_emb_dim = int(getattr(self, "direct_pose_leg_side_embed_dim", 0) or 0)
+                phase_side_dim = 2 if bool(getattr(self, "direct_pose_use_phase_z", False)) else 0
+                meas_side_dim = 1 if want_meas else 0
+                plan_other_side_dim = int(getattr(self, "direct_pose_leg_side_plan_other_dim", 0) or 0)
+                phase_other_side_dim = int(getattr(self, "direct_pose_leg_side_phase_other_dim", 0) or 0)
+                phase_rel_side_dim = int(getattr(self, "direct_pose_leg_side_phase_rel_dim", 0) or 0)
+                cue_side_dim = int(getattr(self, "direct_pose_leg_side_cue_dim", 0) or 0)
+                leg_in_dim = int(
+                    base_leg_dim
+                    + 1
+                    + meas_side_dim
+                    + phase_side_dim
+                    + plan_other_side_dim
+                    + phase_other_side_dim
+                    + phase_rel_side_dim
+                    + cue_side_dim
+                    + side_emb_dim
+                )
+                leg_out_side = 3 + int(leg_side_k) if bool(getattr(self, "direct_pose_leg_side_rank1", False)) else 3 * int(leg_side_k)
+                if leg_in_dim > 0 and leg_out_side > 0:
+                    self.direct_pose_leg_head_shared = nn.Sequential(
+                        nn.Linear(leg_in_dim, hid),
+                        nn.ReLU(),
+                        nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                        nn.Linear(hid, hid),
+                        nn.ReLU(),
+                        nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                        nn.Linear(hid, int(leg_out_side)),
+                    )
+                    try:
+                        last = self.direct_pose_leg_head_shared[-1]
+                        if isinstance(last, nn.Linear):
+                            with torch.no_grad():
+                                last.weight.zero_()
+                                if last.bias is not None:
+                                    last.bias.zero_()
+                    except Exception:
+                        pass
+                    gate_mode = str(getattr(self, "direct_pose_leg_gate_mode", "none") or "none").lower().strip()
+                    if gate_mode in ("learned", "scale"):
+                        gate_out = int(leg_side_k)
+                        self.direct_pose_leg_gate_head_shared = nn.Sequential(
+                            nn.Linear(leg_in_dim, hid),
+                            nn.ReLU(),
+                            nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                            nn.Linear(hid, hid),
+                            nn.ReLU(),
+                            nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                            nn.Linear(hid, int(gate_out)),
+                        )
+                        try:
+                            last = self.direct_pose_leg_gate_head_shared[-1]
+                            if isinstance(last, nn.Linear):
+                                with torch.no_grad():
+                                    last.weight.zero_()
+                                    if last.bias is not None:
+                                        if gate_mode == "learned":
+                                            last.bias.fill_(2.0)
+                                        else:
+                                            last.bias.zero_()
+                        except Exception:
+                            pass
+                    if bool(getattr(self, "direct_pose_leg_side_sign_gate", False)):
+                        h_gate = max(8, int(hid // 4))
+                        self.direct_pose_leg_side_sign_gate_head = nn.Sequential(
+                            nn.Linear(leg_in_dim, h_gate),
+                            nn.ReLU(),
+                            nn.Linear(h_gate, 1),
+                        )
+                        try:
+                            last = self.direct_pose_leg_side_sign_gate_head[-1]
+                            if isinstance(last, nn.Linear):
+                                with torch.no_grad():
+                                    last.weight.zero_()
+                                    if last.bias is not None:
+                                        last.bias.fill_(2.0)
+                        except Exception:
+                            pass
+
+    def _build_lambda_and_so3_aux_heads(
+        self,
+        *,
+        output_layout: Optional[Dict[str, Any]],
+        bone_names: Optional[Sequence[str]],
+        so3_corr_hidden: int,
+        so3_corr_dropout: float,
+        so3_corr_gate_logit_init: float,
+    ) -> None:
+        self.lambda_fusion_joint_count = 0
+        self.lambda_fusion_head: Optional[nn.Module] = None
+        if self.lambda_fusion_enable:
+            try:
+                rot_sl = resolve_rot6d_slice(
+                    output_layout,
+                    total_dim=self.out_motion_dim,
+                )
+                self.lambda_fusion_joint_count = infer_rot_joint_count(rot_sl)
+            except Exception:
+                self.lambda_fusion_joint_count = 0
+
+            out_dim = 1 if self.lambda_fusion_mode == "global" else int(self.lambda_fusion_joint_count)
+            if int(out_dim) > 0:
+                use_rollout_step = bool(getattr(self, "lambda_fusion_use_rollout_step", False))
+                in_dim = int(self.hidden_dim + (self.contact_dim if self.contact_plan_enable else 0) + (1 if use_rollout_step else 0))
+                h_mid = max(8, int(self.lambda_fusion_hidden))
+                drop = float(self._lambda_fusion_dropout)
+                self.lambda_fusion_head = nn.Sequential(
+                    nn.LayerNorm(in_dim),
+                    nn.Linear(in_dim, h_mid),
+                    nn.ReLU(),
+                    nn.Dropout(drop) if drop > 0 else nn.Identity(),
+                    nn.Linear(h_mid, int(out_dim)),
+                )
+                try:
+                    last = self.lambda_fusion_head[-1]
+                    if isinstance(last, nn.Linear):
+                        with torch.no_grad():
+                            last.weight.zero_()
+                            if last.bias is not None:
+                                last.bias.fill_(float(self._lambda_fusion_logit_init))
+                except Exception:
+                    pass
+
+        self.so3_corr_joint_count = 0
+        self.so3_delta_corrector: Optional[nn.Module] = None
+        self.so3_corr_gate_logit: Optional[nn.Parameter] = None
+        try:
+            rot_sl = resolve_rot6d_slice(
+                output_layout,
+                total_dim=self.out_motion_dim,
+            )
+            self.so3_corr_joint_count = infer_rot_joint_count(rot_sl)
+        except Exception:
+            self.so3_corr_joint_count = 0
+        if self.so3_corr_joint_count > 0:
+            self.so3_corr_gate_logit = nn.Parameter(torch.tensor(float(so3_corr_gate_logit_init)))
+            h_mid = max(8, int(so3_corr_hidden))
+            corr_in_dim = int(self.hidden_dim + (self.contact_dim if self.contact_plan_enable else 0))
+            self.so3_delta_corrector = nn.Sequential(
+                nn.LayerNorm(corr_in_dim),
+                nn.Linear(corr_in_dim, h_mid),
+                nn.ReLU(),
+                nn.Dropout(float(so3_corr_dropout)),
+                nn.Linear(h_mid, int(self.so3_corr_joint_count) * 3),
+            )
+            try:
+                last = self.so3_delta_corrector[-1]
+                if isinstance(last, nn.Linear):
+                    with torch.no_grad():
+                        last.weight.zero_()
+                        if last.bias is not None:
+                            last.bias.zero_()
+            except Exception:
+                pass
 
     def _direct_pose_split_state(self) -> Optional[Dict[str, Any]]:
         if not bool(getattr(self, "direct_pose_split_enable", False)):
@@ -1911,314 +1764,19 @@ class EventMotionModel(nn.Module):
         return out_flat.view(B, Tq, -1)
 
     def _maybe_upgrade_direct_pose_split_state_dict(self, state_dict: Dict[str, Any]) -> bool:
-        split_state = self._direct_pose_split_state()
-        if (not isinstance(state_dict, dict)) or split_state is None:
-            return False
-        arm_split = bool(split_state["arm_split"])
-        leg_head = split_state["leg_head"]
-        nonleg_head = split_state["nonleg_head"]
-        arm_head = split_state["arm_head"]
-        else_head = split_state["else_head"]
-        idx_leg = split_state["idx_leg"]
-        idx_nonleg = split_state["idx_nonleg"]
-        idx_arm = split_state["idx_arm"]
-        idx_else = split_state["idx_else"]
-        if leg_head is None:
-            return False
-        leg_last = self._direct_pose_last_linear(leg_head)
-        if leg_last is None:
-            return False
-        if arm_split:
-            if arm_head is None or else_head is None:
-                return False
-        elif nonleg_head is None:
-            return False
-
-        old_w = state_dict.get("direct_pose_head.6.weight", None)
-        old_b = state_dict.get("direct_pose_head.6.bias", None)
-        has_old = bool(torch.is_tensor(old_w) and old_w.ndim == 2 and int(old_w.shape[0]) == int(self.out_motion_dim))
-        ref_device = old_w.device if has_old else leg_last.weight.device
-        idx_leg_use = idx_leg.to(device=ref_device, dtype=torch.long)
-        idx_nonleg_use = idx_nonleg.to(device=ref_device, dtype=torch.long)
-        idx_arm_use = None
-        idx_else_use = None
-        arm_nonleg_local = None
-        else_nonleg_local = None
-        if arm_split:
-            idx_arm_use = idx_arm.to(device=ref_device, dtype=torch.long)
-            idx_else_use = idx_else.to(device=ref_device, dtype=torch.long)
-            arm_nonleg_local = self._direct_pose_local_index(idx_nonleg_use, idx_arm_use, device=ref_device)
-            else_nonleg_local = self._direct_pose_local_index(idx_nonleg_use, idx_else_use, device=ref_device)
-            if arm_nonleg_local is None or else_nonleg_local is None:
-                return False
-        converted = False
-        unified_leg_terminal = bool(split_state.get("unified_leg_terminal", False))
-        leg_weight_key = "direct_pose_leg_terminal.6.weight" if unified_leg_terminal else "direct_pose_out_leg.weight"
-        leg_bias_key = "direct_pose_leg_terminal.6.bias" if unified_leg_terminal else "direct_pose_out_leg.bias"
-
-        if unified_leg_terminal:
-            model_sd = self.state_dict()
-            for key in (
-                "direct_pose_leg_terminal.0.weight",
-                "direct_pose_leg_terminal.0.bias",
-                "direct_pose_leg_terminal.3.weight",
-                "direct_pose_leg_terminal.3.bias",
-            ):
-                target_tensor = model_sd.get(key, None)
-                converted = self._copy_tensor_if_compatible(
-                    state_dict,
-                    target_key=key,
-                    target_tensor=target_tensor,
-                    source_tensor=target_tensor,
-                ) or converted
-
-        # Legacy/non-split checkpoints may persist empty split-index buffers.
-        # Keep the model-computed split mapping by dropping incompatible ckpt buffers.
-        idx_pairs = [
-            ("direct_pose_leg_out_idx", idx_leg),
-            ("direct_pose_nonleg_out_idx", idx_nonleg),
-        ]
-        if arm_split:
-            idx_pairs.append(("direct_pose_arm_out_idx", idx_arm))
-            idx_pairs.append(("direct_pose_else_out_idx", idx_else))
-        for key, idx_tgt in idx_pairs:
-            converted = self._normalize_split_index_buffer(state_dict, key, idx_tgt) or converted
-
-        if has_old:
-            copy_specs = [
-                (leg_weight_key, leg_last.weight, idx_leg_use),
-            ]
-            if arm_split:
-                copy_specs.extend([
-                    ("direct_pose_out_arm.weight", arm_head.weight, idx_arm_use),
-                    ("direct_pose_out_else.weight", else_head.weight, idx_else_use),
-                ])
-            else:
-                copy_specs.append(("direct_pose_out_nonleg.weight", nonleg_head.weight, idx_nonleg_use))
-            for target_key, target_tensor, index_tensor in copy_specs:
-                converted = self._copy_indexed_tensor_if_needed(
-                    state_dict,
-                    target_key=target_key,
-                    target_tensor=target_tensor,
-                    source_tensor=old_w,
-                    index_tensor=index_tensor,
-                ) or converted
-
-        if has_old and torch.is_tensor(old_b):
-            copy_specs = [
-                (leg_bias_key, leg_last.bias, idx_leg_use),
-            ]
-            if arm_split:
-                copy_specs.extend([
-                    ("direct_pose_out_arm.bias", arm_head.bias, idx_arm_use),
-                    ("direct_pose_out_else.bias", else_head.bias, idx_else_use),
-                ])
-            else:
-                copy_specs.append(("direct_pose_out_nonleg.bias", nonleg_head.bias, idx_nonleg_use))
-            for target_key, target_tensor, index_tensor in copy_specs:
-                converted = self._copy_indexed_tensor_if_needed(
-                    state_dict,
-                    target_key=target_key,
-                    target_tensor=target_tensor,
-                    source_tensor=old_b,
-                    index_tensor=index_tensor,
-                ) or converted
-
-        src_nonleg_w = None
-        src_nonleg_b = None
-        if has_old:
-            try:
-                src_nonleg_w = old_w.index_select(0, idx_nonleg_use)
-            except Exception:
-                src_nonleg_w = None
-            if torch.is_tensor(old_b):
-                try:
-                    src_nonleg_b = old_b.index_select(0, idx_nonleg_use)
-                except Exception:
-                    src_nonleg_b = None
-        if src_nonleg_w is None:
-            w_ckpt_nonleg = state_dict.get("direct_pose_out_nonleg.weight", None)
-            if torch.is_tensor(w_ckpt_nonleg) and w_ckpt_nonleg.ndim == 2:
-                src_nonleg_w = w_ckpt_nonleg
-        if src_nonleg_b is None:
-            b_ckpt_nonleg = state_dict.get("direct_pose_out_nonleg.bias", None)
-            if torch.is_tensor(b_ckpt_nonleg) and b_ckpt_nonleg.ndim == 1:
-                src_nonleg_b = b_ckpt_nonleg
-
-        if arm_split:
-            for source_tensor, targets in (
-                (
-                    src_nonleg_w,
-                    (
-                        ("direct_pose_out_arm.weight", arm_head.weight, arm_nonleg_local),
-                        ("direct_pose_out_else.weight", else_head.weight, else_nonleg_local),
-                    ),
-                ),
-                (
-                    src_nonleg_b,
-                    (
-                        ("direct_pose_out_arm.bias", arm_head.bias, arm_nonleg_local),
-                        ("direct_pose_out_else.bias", else_head.bias, else_nonleg_local),
-                    ),
-                ),
-            ):
-                if not torch.is_tensor(source_tensor):
-                    continue
-                if int(source_tensor.shape[0]) != int(idx_nonleg_use.numel()):
-                    continue
-                for target_key, target_tensor, local_idx in targets:
-                    converted = self._copy_indexed_tensor_if_needed(
-                        state_dict,
-                        target_key=target_key,
-                        target_tensor=target_tensor,
-                        source_tensor=source_tensor,
-                        index_tensor=local_idx,
-                    ) or converted
-
-        if not arm_split:
-            # Optional projection bottleneck for non-leg branch:
-            # if checkpoint has legacy non-leg readout W_old: (D_nonleg, hid),
-            # factorize it to W_old ~= W_out @ W_proj with rank=proj_dim.
-            proj_linear = self._direct_pose_first_linear(split_state["nonleg_proj"])
-            if proj_linear is not None:
-                tgt_proj_w = proj_linear.weight
-                tgt_nonleg_w = nonleg_head.weight
-                cur_proj_w = state_dict.get("direct_pose_nonleg_proj.0.weight", None)
-                cur_nonleg_w = state_dict.get("direct_pose_out_nonleg.weight", None)
-                need_proj = (not torch.is_tensor(cur_proj_w)) or tuple(cur_proj_w.shape) != tuple(tgt_proj_w.shape)
-                need_nonleg = (not torch.is_tensor(cur_nonleg_w)) or tuple(cur_nonleg_w.shape) != tuple(tgt_nonleg_w.shape)
-
-                if (
-                    (need_proj or need_nonleg)
-                    and torch.is_tensor(src_nonleg_w)
-                    and src_nonleg_w.ndim == 2
-                    and int(src_nonleg_w.shape[0]) == int(tgt_nonleg_w.shape[0])
-                    and int(src_nonleg_w.shape[1]) == int(tgt_proj_w.shape[1])
-                ):
-                    try:
-                        src = src_nonleg_w.detach().to(dtype=torch.float32)
-                        u, s, vh = torch.linalg.svd(src, full_matrices=False)
-                        rank = int(min(int(tgt_proj_w.shape[0]), int(s.numel())))
-                        proj_w = torch.zeros(
-                            tuple(tgt_proj_w.shape),
-                            dtype=src_nonleg_w.dtype,
-                            device=src_nonleg_w.device,
-                        )
-                        out_w = torch.zeros(
-                            tuple(tgt_nonleg_w.shape),
-                            dtype=src_nonleg_w.dtype,
-                            device=src_nonleg_w.device,
-                        )
-                        if rank > 0:
-                            out_w[:, :rank] = (u[:, :rank] * s[:rank].unsqueeze(0)).to(dtype=out_w.dtype, device=out_w.device)
-                            proj_w[:rank, :] = vh[:rank, :].to(dtype=proj_w.dtype, device=proj_w.device)
-                        state_dict["direct_pose_nonleg_proj.0.weight"] = proj_w
-                        state_dict["direct_pose_nonleg_proj.0.bias"] = torch.zeros(
-                            (int(tgt_proj_w.shape[0]),),
-                            dtype=src_nonleg_w.dtype,
-                            device=src_nonleg_w.device,
-                        )
-                        state_dict["direct_pose_out_nonleg.weight"] = out_w
-                        converted = True
-                    except Exception:
-                        pass
-        else:
-            # Warm-start arm/else projection layers by copying legacy non-leg projection when available.
-            src_proj_w = state_dict.get("direct_pose_nonleg_proj.0.weight", None)
-            src_proj_b = state_dict.get("direct_pose_nonleg_proj.0.bias", None)
-            for branch, key in (
-                (split_state["arm_proj"], "direct_pose_arm_proj"),
-                (split_state["else_proj"], "direct_pose_else_proj"),
-            ):
-                lin = self._direct_pose_first_linear(branch)
-                if lin is None:
-                    continue
-                converted = self._copy_tensor_if_compatible(
-                    state_dict,
-                    target_key=f"{key}.0.weight",
-                    target_tensor=lin.weight,
-                    source_tensor=src_proj_w if torch.is_tensor(src_proj_w) and src_proj_w.ndim == 2 else None,
-                ) or converted
-                converted = self._copy_tensor_if_compatible(
-                    state_dict,
-                    target_key=f"{key}.0.bias",
-                    target_tensor=lin.bias,
-                    source_tensor=src_proj_b if torch.is_tensor(src_proj_b) and src_proj_b.ndim == 1 else None,
-                ) or converted
-            # Remove stale two-way branch tensors when loading into three-way model.
-            for k in (
-                "direct_pose_out_nonleg.weight",
-                "direct_pose_out_nonleg.bias",
-                "direct_pose_nonleg_proj.0.weight",
-                "direct_pose_nonleg_proj.0.bias",
-            ):
-                if k in state_dict:
-                    state_dict.pop(k, None)
-                    converted = True
-
-        if converted:
-            state_dict.pop("direct_pose_head.6.weight", None)
-            state_dict.pop("direct_pose_head.6.bias", None)
-        return converted
+        return maybe_upgrade_direct_pose_split_state_dict(self, state_dict)
 
     def _maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(self, state_dict: Dict[str, Any]) -> bool:
-        if (not isinstance(state_dict, dict)) or getattr(self, "direct_pose_leg_terminal", None) is None:
-            return False
-        if not any(str(key).startswith("direct_pose_out_leg.") for key in state_dict.keys()):
-            return False
-
-        model_sd = self.state_dict()
-        converted = False
-        for key in (
-            "direct_pose_leg_terminal.0.weight",
-            "direct_pose_leg_terminal.0.bias",
-            "direct_pose_leg_terminal.3.weight",
-            "direct_pose_leg_terminal.3.bias",
-        ):
-            target_tensor = model_sd.get(key, None)
-            converted = self._copy_tensor_if_compatible(
-                state_dict,
-                target_key=key,
-                target_tensor=target_tensor,
-                source_tensor=target_tensor,
-            ) or converted
-
-        converted = self._copy_tensor_if_compatible(
-            state_dict,
-            target_key="direct_pose_leg_terminal.6.weight",
-            target_tensor=model_sd.get("direct_pose_leg_terminal.6.weight", None),
-            source_tensor=state_dict.get("direct_pose_out_leg.weight", None),
-        ) or converted
-        converted = self._copy_tensor_if_compatible(
-            state_dict,
-            target_key="direct_pose_leg_terminal.6.bias",
-            target_tensor=model_sd.get("direct_pose_leg_terminal.6.bias", None),
-            source_tensor=state_dict.get("direct_pose_out_leg.bias", None),
-        ) or converted
-
-        removed_legacy = False
-        for key in list(state_dict.keys()):
-            if str(key).startswith("direct_pose_out_leg."):
-                state_dict.pop(key, None)
-                removed_legacy = True
-        return bool(converted or removed_legacy)
-
-    def adapt_legacy_state_dict_(self, state_dict: Dict[str, Any]) -> bool:
-        try:
-            converted_stepc = bool(self._maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(state_dict))
-            converted_split = bool(self._maybe_upgrade_direct_pose_split_state_dict(state_dict))
-            return bool(converted_stepc or converted_split)
-        except Exception:
-            return False
+        return maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(self, state_dict)
 
     def load_state_dict(self, state_dict, strict: bool = True):
         if isinstance(state_dict, dict):
             try:
-                self._maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(state_dict)
+                maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(self, state_dict)
             except Exception:
                 pass
             try:
-                self._maybe_upgrade_direct_pose_split_state_dict(state_dict)
+                maybe_upgrade_direct_pose_split_state_dict(self, state_dict)
             except Exception:
                 pass
         return super().load_state_dict(state_dict, strict=strict)
@@ -2236,10 +1794,11 @@ class EventMotionModel(nn.Module):
             return
         if not isinstance(output_layout, dict):
             output_layout = {}
-        rot_sl = parse_layout_entry(output_layout.get('BoneRotations6D'), 'BoneRotations6D', self.out_motion_dim)
-        if rot_sl is None:
-            rot_sl = slice(0, min(self.out_motion_dim, int(len(bone_names) * 6)))
-        if rot_sl.start is None or rot_sl.stop is None:
+        rot_sl = resolve_rot6d_slice(
+            output_layout,
+            total_dim=self.out_motion_dim,
+        )
+        if (not isinstance(rot_sl, slice)) or rot_sl.start is None or rot_sl.stop is None:
             return
 
         name_to_idx = {str(n): int(i) for i, n in enumerate(bone_names)}
@@ -2269,6 +1828,202 @@ class EventMotionModel(nn.Module):
             return next(self.motion_head.parameters()).device
         except StopIteration:
             return torch.device('cpu')
+
+    def _canonicalize_direct_hint_override(
+        self, override: Any, *, batch_size: int, seq_len: int, target_c: int, device: torch.device, dtype: torch.dtype, detach: bool
+    ) -> Optional[torch.Tensor]:
+        if not torch.is_tensor(override):
+            return None
+        ov = override.detach() if detach else override
+        if ov.ndim == 1:
+            ov = ov.view(1, 1, -1)
+        elif ov.ndim == 2:
+            ov = ov.unsqueeze(1)
+        if ov.ndim != 3:
+            return None
+        if ov.shape[0] == 1 and batch_size > 1:
+            ov = ov.expand(batch_size, -1, -1)
+        if ov.shape[1] == 1 and seq_len > 1:
+            ov = ov.expand(-1, seq_len, -1)
+        if target_c > 0 and ov.shape[-1] != target_c:
+            if ov.shape[-1] > target_c:
+                ov = ov[..., :target_c]
+            else:
+                ov = F.pad(ov, (0, target_c - ov.shape[-1]))
+        return ov.to(device=device, dtype=dtype).clamp(0.0, 1.0)
+
+    def _resolve_direct_pose_plan_override(
+        self, plan_in: torch.Tensor, *, batch_size: int, seq_len: int, device: torch.device, dtype: torch.dtype
+    ) -> torch.Tensor:
+        try:
+            override = getattr(self, "direct_pose_plan_override", None)
+            if isinstance(override, str) and override.strip().lower() in ("ignore", "zero", "none", "null"):
+                return torch.zeros_like(plan_in)
+            target_c = int(plan_in.shape[-1])
+            ov = self._canonicalize_direct_hint_override(
+                override,
+                batch_size=batch_size,
+                seq_len=seq_len,
+                target_c=target_c,
+                device=device,
+                dtype=dtype,
+                detach=True,
+            )
+            if torch.is_tensor(ov):
+                return ov
+        except Exception:
+            pass
+        return plan_in
+
+    def _resolve_direct_pose_meas_override(
+        self, meas_in: Optional[torch.Tensor], *, mode: str, plan_in: torch.Tensor, batch_size: int, seq_len: int,
+        device: torch.device, dtype: torch.dtype,
+    ) -> Optional[torch.Tensor]:
+        try:
+            override = getattr(self, "direct_pose_meas_override", None)
+            if isinstance(override, str) and override.strip().lower() in ("ignore", "zero", "none", "null"):
+                if mode == "concat":
+                    return torch.zeros_like(plan_in)
+                if mode == "mode_select":
+                    return None
+                return meas_in
+            target_c = int(plan_in.shape[-1])
+            ov = self._canonicalize_direct_hint_override(
+                override,
+                batch_size=batch_size,
+                seq_len=seq_len,
+                target_c=target_c,
+                device=device,
+                dtype=dtype,
+                detach=False,
+            )
+            if torch.is_tensor(ov):
+                return ov
+        except Exception:
+            pass
+        return meas_in
+
+    def _apply_direct_pose_leg_side_plan_other_ablation(
+        self, plan_other_r: torch.Tensor, plan_other_l: torch.Tensor, *, batch_size: int, seq_len: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        try:
+            ab = str(getattr(self, "direct_pose_leg_side_plan_other_ablate", "none") or "none").strip().lower()
+        except Exception:
+            ab = "none"
+        if ab in ("", "none", "off", "disable", "disabled"):
+            return plan_other_r, plan_other_l
+        if ab in ("0", "zero", "zeros"):
+            return plan_other_r * 0.0, plan_other_l * 0.0
+        if ab in ("roll", "roll_batch", "shift", "shift_batch") and int(batch_size) > 1:
+            return plan_other_r.roll(shifts=1, dims=0), plan_other_l.roll(shifts=1, dims=0)
+        if ab in ("roll_time", "shift_time") and int(seq_len) > 1:
+            return plan_other_r.roll(shifts=1, dims=1), plan_other_l.roll(shifts=1, dims=1)
+        return plan_other_r, plan_other_l
+
+    def _compute_direct_pose_leg_cross_leg_ablation(
+        self, *, leg_in: torch.Tensor, direct_feat: Optional[torch.Tensor], plan_in: Optional[torch.Tensor],
+        meas_in: Optional[torch.Tensor], phase_in_direct: Optional[torch.Tensor], batch_size: int, seq_len: int,
+        joint_count: int,
+    ) -> Optional[torch.Tensor]:
+        try:
+            ab = str(getattr(self, "direct_pose_leg_cross_leg_ablate", "none") or "none").strip().lower()
+        except Exception:
+            ab = "none"
+        if ab in ("", "none", "off", "disable", "disabled"):
+            return None
+        if getattr(self, "direct_pose_leg_head", None) is None:
+            return None
+        try:
+            contact_dim = int(getattr(self, "contact_dim", 0) or 0)
+        except Exception:
+            contact_dim = 0
+        try:
+            joint_names = list(getattr(self, "direct_pose_leg_joint_names", []) or [])
+        except Exception:
+            joint_names = []
+        if not (torch.is_tensor(leg_in) and contact_dim >= 2 and isinstance(joint_names, list) and len(joint_names) == joint_count):
+            return None
+        joint_names_lower = [str(name).lower() for name in joint_names]
+        pos_r = [idx for idx, name in enumerate(joint_names_lower) if name.endswith(("_r", "right"))]
+        pos_l = [idx for idx, name in enumerate(joint_names_lower) if name.endswith(("_l", "left"))]
+        if not (pos_r and pos_l and (len(pos_r) + len(pos_l) == joint_count)):
+            return None
+
+        x = leg_in.reshape(batch_size, seq_len, -1)
+        total_dim = int(x.shape[-1])
+        direct_dim = int(direct_feat.shape[-1]) if torch.is_tensor(direct_feat) else 0
+        plan_dim = int(plan_in.shape[-1]) if torch.is_tensor(plan_in) else 0
+        phase_dim = int(phase_in_direct.shape[-1]) if torch.is_tensor(phase_in_direct) else 0
+        meas_dim_raw = int(meas_in.shape[-1]) if torch.is_tensor(meas_in) else 0
+        meas_dim = 0
+        if total_dim == (direct_dim + plan_dim + meas_dim_raw + phase_dim):
+            meas_dim = meas_dim_raw
+        elif total_dim == (direct_dim + plan_dim + phase_dim):
+            meas_dim = 0
+
+        ch_r = int(getattr(self, "direct_pose_leg_contact_ch_r", 1) or 0)
+        ch_l = int(getattr(self, "direct_pose_leg_contact_ch_l", 0) or 0)
+        ch_r = max(0, min(contact_dim - 1, ch_r))
+        ch_l = max(0, min(contact_dim - 1, ch_l))
+
+        x_r = x.clone()
+        x_l = x.clone()
+        if direct_dim > 0 and plan_dim == contact_dim and total_dim == (direct_dim + plan_dim + meas_dim + phase_dim):
+            off_plan = direct_dim
+            off_meas = off_plan + plan_dim
+            off_phase = off_meas + meas_dim
+
+            def _ablate(xx: torch.Tensor, ch: int) -> None:
+                if ab in ("0", "zero", "zeros"):
+                    xx[..., off_plan + ch] = 0.0
+                    if meas_dim > 0:
+                        xx[..., off_meas + ch] = 0.0
+                    if phase_dim == 2 * contact_dim:
+                        start = off_phase + 2 * ch
+                        xx[..., start:start + 2] = 0.0
+                elif ab in ("roll", "roll_batch", "shift", "shift_batch") and int(batch_size) > 1:
+                    xx[..., off_plan + ch] = xx[..., off_plan + ch].roll(shifts=1, dims=0)
+                    if meas_dim > 0:
+                        xx[..., off_meas + ch] = xx[..., off_meas + ch].roll(shifts=1, dims=0)
+                    if phase_dim == 2 * contact_dim:
+                        start = off_phase + 2 * ch
+                        xx[..., start:start + 2] = xx[..., start:start + 2].roll(shifts=1, dims=0)
+                elif ab in ("roll_time", "shift_time") and int(seq_len) > 1:
+                    xx[..., off_plan + ch] = xx[..., off_plan + ch].roll(shifts=1, dims=1)
+                    if meas_dim > 0:
+                        xx[..., off_meas + ch] = xx[..., off_meas + ch].roll(shifts=1, dims=1)
+                    if phase_dim == 2 * contact_dim:
+                        start = off_phase + 2 * ch
+                        xx[..., start:start + 2] = xx[..., start:start + 2].roll(shifts=1, dims=1)
+        elif direct_dim > 0 and phase_dim == 2 * contact_dim and total_dim == (direct_dim + phase_dim):
+            off_phase = direct_dim
+
+            def _ablate(xx: torch.Tensor, ch: int) -> None:
+                start = off_phase + 2 * ch
+                if ab in ("0", "zero", "zeros"):
+                    xx[..., start:start + 2] = 0.0
+                elif ab in ("roll", "roll_batch", "shift", "shift_batch") and int(batch_size) > 1:
+                    xx[..., start:start + 2] = xx[..., start:start + 2].roll(shifts=1, dims=0)
+                elif ab in ("roll_time", "shift_time") and int(seq_len) > 1:
+                    xx[..., start:start + 2] = xx[..., start:start + 2].roll(shifts=1, dims=1)
+        else:
+            return None
+
+        _ablate(x_r, ch_l)
+        _ablate(x_l, ch_r)
+        flat_r = x_r.reshape(-1, x_r.shape[-1])
+        flat_l = x_l.reshape(-1, x_l.shape[-1])
+        if bool(getattr(self, "direct_pose_leg_detach_feat", False)):
+            flat_r = flat_r.detach()
+            flat_l = flat_l.detach()
+        out_r = self.direct_pose_leg_head(flat_r).view(batch_size, seq_len, -1)
+        out_l = self.direct_pose_leg_head(flat_l).view(batch_size, seq_len, -1)
+        if out_r.shape != out_l.shape or out_r.shape[-1] not in (3 * joint_count, 6 * joint_count):
+            return None
+        value_dim = int(out_r.shape[-1] // joint_count)
+        merged = out_r.view(batch_size, seq_len, joint_count, value_dim).clone()
+        merged[:, :, pos_l, :] = out_l.view(batch_size, seq_len, joint_count, value_dim)[:, :, pos_l, :]
+        return merged.view(batch_size, seq_len, joint_count * value_dim)
 
     def enable_adaptive_history(self, module: AdaptiveHistoryModule, *, pose_hist_len: Optional[int] = None) -> None:
         self.adaptive_history_module = module
@@ -3138,8 +2893,6 @@ class EventMotionModel(nn.Module):
                     contacts_meas = contacts_meas.unsqueeze(1)
                 e_t = contacts_plan - contacts_meas.to(device=device, dtype=dtype)
                 result['contacts_err'] = e_t.squeeze(1) if is_single else e_t
-
-        # ---- Direct pose head (bridge: add phase-hint contacts_meas) ----
         if self.direct_pose_head is not None and contacts_plan is not None:
             try:
                 plan_in = contacts_plan.detach() if self.direct_pose_detach_plan else contacts_plan
@@ -3149,38 +2902,13 @@ class EventMotionModel(nn.Module):
                     if p > 0.0:
                         m = (torch.rand(plan_in.shape[:-1] + (1,), device=plan_in.device) < p).to(plan_in.dtype)
                         plan_in = plan_in * (1.0 - m)
-                # Optional per-call override (debug): force a specific plan source for *direct* only.
-                # - tensor: used as plan_in (after clamp); supports (B,C) / (B,T,C) / (C,)
-                # - "ignore"/"zero": replace with zeros (keeps shape)
-                try:
-                    override = getattr(self, "direct_pose_plan_override", None)
-                    if isinstance(override, str):
-                        s = override.strip().lower()
-                        if s in ("ignore", "zero", "none", "null"):
-                            plan_in = torch.zeros_like(plan_in)
-                            override = None
-                    if torch.is_tensor(override):
-                        ov = override.detach()
-                        # Canonicalize to (B,T,C)
-                        if ov.ndim == 1:
-                            ov = ov.view(1, 1, -1)
-                        elif ov.ndim == 2:
-                            ov = ov.unsqueeze(1)
-                        if ov.ndim == 3:
-                            if ov.shape[0] == 1 and B > 1:
-                                ov = ov.expand(B, -1, -1)
-                            if ov.shape[1] == 1 and Tq > 1:
-                                ov = ov.expand(-1, Tq, -1)
-                            # Match contact dim (pad/trim) to avoid concat shape mismatch.
-                            target_c = int(plan_in.shape[-1]) if torch.is_tensor(plan_in) else int(self.contact_dim)
-                            if target_c > 0 and ov.shape[-1] != target_c:
-                                if ov.shape[-1] > target_c:
-                                    ov = ov[..., :target_c]
-                                else:
-                                    ov = F.pad(ov, (0, target_c - ov.shape[-1]))
-                            plan_in = ov.to(device=device, dtype=dtype).clamp(0.0, 1.0)
-                except Exception:
-                    pass
+                plan_in = self._resolve_direct_pose_plan_override(
+                    plan_in,
+                    batch_size=B,
+                    seq_len=Tq,
+                    device=device,
+                    dtype=dtype,
+                )
 
                 mode = str(getattr(self, "direct_pose_meas_mode", "concat") or "concat").lower().strip()
                 meas_in = None
@@ -3204,42 +2932,15 @@ class EventMotionModel(nn.Module):
                             if noise_std > 0.0 and _math.isfinite(noise_std):
                                 meas_in = meas_in + torch.randn_like(meas_in) * noise_std
                         meas_in = meas_in.clamp(0.0, 1.0)
-                    # Optional per-call override (debug): force a specific meas hint source for *direct* only.
-                    # - tensor: used as meas_in (after clamp); supports (B,C) / (B,T,C) / (C,)
-                    # - "ignore"/"zero": treat as missing (concat->zeros, mode_select->uniform)
-                    try:
-                        override = getattr(self, "direct_pose_meas_override", None)
-                        if isinstance(override, str):
-                            s = override.strip().lower()
-                            if s in ("ignore", "zero", "none", "null"):
-                                if mode == "concat":
-                                    meas_in = torch.zeros_like(plan_in)
-                                elif mode == "mode_select":
-                                    meas_in = None
-                            else:
-                                override = None
-                        if torch.is_tensor(override):
-                            ov = override
-                            # Canonicalize to (B,T,C)
-                            if ov.ndim == 1:
-                                ov = ov.view(1, 1, -1)
-                            elif ov.ndim == 2:
-                                ov = ov.unsqueeze(1)
-                            if ov.ndim == 3:
-                                if ov.shape[0] == 1 and B > 1:
-                                    ov = ov.expand(B, -1, -1)
-                                if ov.shape[1] == 1 and Tq > 1:
-                                    ov = ov.expand(-1, Tq, -1)
-                                # Match contact dim (pad/trim) to avoid concat shape mismatch.
-                                target_c = int(plan_in.shape[-1]) if torch.is_tensor(plan_in) else int(self.contact_dim)
-                                if target_c > 0 and ov.shape[-1] != target_c:
-                                    if ov.shape[-1] > target_c:
-                                        ov = ov[..., :target_c]
-                                    else:
-                                        ov = F.pad(ov, (0, target_c - ov.shape[-1]))
-                                meas_in = ov.to(device=device, dtype=dtype).clamp(0.0, 1.0)
-                    except Exception:
-                        pass
+                    meas_in = self._resolve_direct_pose_meas_override(
+                        meas_in,
+                        mode=mode,
+                        plan_in=plan_in,
+                        batch_size=B,
+                        seq_len=Tq,
+                        device=device,
+                        dtype=dtype,
+                    )
 
                 # Choose which features feed the direct head.
                 direct_feat = cond
@@ -3424,36 +3125,18 @@ class EventMotionModel(nn.Module):
                                             phase_r = plan_r.new_zeros((B, Tq, 0))
                                             phase_l = plan_l.new_zeros((B, Tq, 0))
 
-                                        # Optional: cross-leg context via plan_other scalar.
                                         plan_other_r = plan_r.new_zeros((B, Tq, 0))
                                         plan_other_l = plan_l.new_zeros((B, Tq, 0))
                                         if bool(getattr(self, "direct_pose_leg_side_plan_other", False)):
                                             plan_other_r = plan_l
                                             plan_other_l = plan_r
-                                            # Runtime ablation (eval-only): drop or decorrelate cross-leg plan_other.
-                                            # This is useful to diagnose whether direction prediction relies on cross-leg context.
-                                            try:
-                                                ab = str(
-                                                    getattr(self, "direct_pose_leg_side_plan_other_ablate", "none") or "none"
-                                                ).strip().lower()
-                                            except Exception:
-                                                ab = "none"
-                                            if ab not in ("", "none", "off", "disable", "disabled"):
-                                                if ab in ("0", "zero", "zeros"):
-                                                    plan_other_r = plan_other_r * 0.0
-                                                    plan_other_l = plan_other_l * 0.0
-                                                elif ab in ("roll", "roll_batch", "shift", "shift_batch"):
-                                                    # Deterministic shuffle: roll along batch dimension.
-                                                    if int(B) > 1:
-                                                        plan_other_r = plan_other_r.roll(shifts=1, dims=0)
-                                                        plan_other_l = plan_other_l.roll(shifts=1, dims=0)
-                                                elif ab in ("roll_time", "shift_time"):
-                                                    # Roll along time (only meaningful when Tq>1).
-                                                    if int(Tq) > 1:
-                                                        plan_other_r = plan_other_r.roll(shifts=1, dims=1)
-                                                        plan_other_l = plan_other_l.roll(shifts=1, dims=1)
+                                            plan_other_r, plan_other_l = self._apply_direct_pose_leg_side_plan_other_ablation(
+                                                plan_other_r,
+                                                plan_other_l,
+                                                batch_size=B,
+                                                seq_len=Tq,
+                                            )
 
-                                        # Optional: cross-leg phase context (sin/cos) and explicit relative phase.
                                         phase_other_r = plan_r.new_zeros((B, Tq, 0))
                                         phase_other_l = plan_l.new_zeros((B, Tq, 0))
                                         phase_rel_r = plan_r.new_zeros((B, Tq, 0))
@@ -3696,150 +3379,16 @@ class EventMotionModel(nn.Module):
                             K = int(idx.numel())
                             if K > 0:
                                 leg_in = direct_flat.detach() if bool(getattr(self, "direct_pose_leg_detach_feat", False)) else direct_flat
-
-                                # Optional: cross-leg ablation for the *non-routed* leg head.
-                                # Goal: for right-side joints, ablate left-channel contact features (plan/meas/phase) in leg head input,
-                                # and vice versa, then merge the per-side outputs back into the original K ordering.
-                                #
-                                # This keeps the main direct_out path unchanged and only probes whether leg omega relies on cross-leg context.
-                                try:
-                                    ab = str(getattr(self, "direct_pose_leg_cross_leg_ablate", "none") or "none").strip().lower()
-                                except Exception:
-                                    ab = "none"
-                                leg_delta = None
-                                if ab in ("", "none", "off", "disable", "disabled"):
-                                    leg_delta = self.direct_pose_leg_head(leg_in).view(B, Tq, -1)
-                                else:
-                                    try:
-                                        # Need both sides present in contact features.
-                                        Cc = int(getattr(self, "contact_dim", 0) or 0)
-                                    except Exception:
-                                        Cc = 0
-                                    # Require side-tagged joint names to route outputs.
-                                    try:
-                                        names = list(getattr(self, "direct_pose_leg_joint_names", []) or [])
-                                    except Exception:
-                                        names = []
-                                    # Only supported for symmetric _r/_l sets.
-                                    if (
-                                        torch.is_tensor(direct_flat)
-                                        and Cc >= 2
-                                        and isinstance(names, list)
-                                        and len(names) == K
-                                    ):
-                                        names_l = [str(n).lower() for n in names]
-                                        pos_r = [i for i, n in enumerate(names_l) if n.endswith(("_r", "right"))]
-                                        pos_l = [i for i, n in enumerate(names_l) if n.endswith(("_l", "left"))]
-                                        if pos_r and pos_l and (len(pos_r) + len(pos_l) == K):
-                                            # Determine where per-channel contact features live inside the already-built direct_flat input.
-                                            #
-                                            # Supported layouts for direct_flat (depends on direct_pose_meas_mode / phase_z_mode):
-                                            #   A) [direct_feat, plan(C), meas(C?), phase(2C?)]
-                                            #   B) [direct_feat, phase_hint(2C)]   (direct_pose_phase_z_mode='replace_contacts')
-                                            x = direct_flat.reshape(B, Tq, -1)
-                                            d_total = int(x.shape[-1])
-                                            d_direct = int(direct_feat.shape[-1]) if torch.is_tensor(direct_feat) else 0
-                                            d_plan = int(plan_in.shape[-1]) if torch.is_tensor(plan_in) else 0
-                                            d_phase = int(phase_in_direct.shape[-1]) if torch.is_tensor(phase_in_direct) else 0
-                                            d_meas_raw = int(meas_in.shape[-1]) if torch.is_tensor(meas_in) else 0
-                                            d_meas = 0
-                                            if d_total == (d_direct + d_plan + d_meas_raw + d_phase):
-                                                d_meas = d_meas_raw
-                                            elif d_total == (d_direct + d_plan + d_phase):
-                                                d_meas = 0
-                                            # Channel mapping (default dataset order is [L,R]).
-                                            ch_r = int(getattr(self, "direct_pose_leg_contact_ch_r", 1) or 0)
-                                            ch_l = int(getattr(self, "direct_pose_leg_contact_ch_l", 0) or 0)
-                                            ch_r = max(0, min(Cc - 1, ch_r))
-                                            ch_l = max(0, min(Cc - 1, ch_l))
-
-                                            # Layout A: plan+meas(+phase) present in direct_flat.
-                                            if d_direct > 0 and d_plan == Cc and d_total == (d_direct + d_plan + d_meas + d_phase):
-                                                off_plan = d_direct
-                                                off_meas = off_plan + d_plan
-                                                off_phase = off_meas + d_meas
-
-                                                x_r = x.clone()
-                                                x_l = x.clone()
-
-                                                def _ablate(xx: torch.Tensor, ch: int) -> None:
-                                                    if ab in ("0", "zero", "zeros"):
-                                                        xx[..., off_plan + ch] = 0.0
-                                                        if d_meas > 0:
-                                                            xx[..., off_meas + ch] = 0.0
-                                                        # phase layout: [sin0,cos0,sin1,cos1,...] (dim=2*C)
-                                                        if d_phase == 2 * Cc:
-                                                            s = off_phase + 2 * ch
-                                                            xx[..., s : s + 2] = 0.0
-                                                    elif ab in ("roll", "roll_batch", "shift", "shift_batch"):
-                                                        if int(B) > 1:
-                                                            xx[..., off_plan + ch] = xx[..., off_plan + ch].roll(shifts=1, dims=0)
-                                                            if d_meas > 0:
-                                                                xx[..., off_meas + ch] = xx[..., off_meas + ch].roll(
-                                                                    shifts=1, dims=0
-                                                                )
-                                                            if d_phase == 2 * Cc:
-                                                                s = off_phase + 2 * ch
-                                                                xx[..., s : s + 2] = xx[..., s : s + 2].roll(
-                                                                    shifts=1, dims=0
-                                                                )
-                                                    elif ab in ("roll_time", "shift_time"):
-                                                        if int(Tq) > 1:
-                                                            xx[..., off_plan + ch] = xx[..., off_plan + ch].roll(shifts=1, dims=1)
-                                                            if d_meas > 0:
-                                                                xx[..., off_meas + ch] = xx[..., off_meas + ch].roll(
-                                                                    shifts=1, dims=1
-                                                                )
-                                                            if d_phase == 2 * Cc:
-                                                                s = off_phase + 2 * ch
-                                                                xx[..., s : s + 2] = xx[..., s : s + 2].roll(
-                                                                    shifts=1, dims=1
-                                                                )
-
-                                            # Layout B: phase-hint-only (replace_contacts): direct_flat = [direct_feat, phase(2C)].
-                                            elif d_direct > 0 and d_phase == 2 * Cc and d_total == (d_direct + d_phase):
-                                                off_phase = d_direct
-
-                                                x_r = x.clone()
-                                                x_l = x.clone()
-
-                                                def _ablate(xx: torch.Tensor, ch: int) -> None:
-                                                    # Only phase exists here.
-                                                    if d_phase != 2 * Cc:
-                                                        return
-                                                    s = off_phase + 2 * ch
-                                                    if ab in ("0", "zero", "zeros"):
-                                                        xx[..., s : s + 2] = 0.0
-                                                    elif ab in ("roll", "roll_batch", "shift", "shift_batch"):
-                                                        if int(B) > 1:
-                                                            xx[..., s : s + 2] = xx[..., s : s + 2].roll(shifts=1, dims=0)
-                                                    elif ab in ("roll_time", "shift_time"):
-                                                        if int(Tq) > 1:
-                                                            xx[..., s : s + 2] = xx[..., s : s + 2].roll(shifts=1, dims=1)
-                                            else:
-                                                x_r = x_l = None
-
-                                            if torch.is_tensor(x_r) and torch.is_tensor(x_l):
-                                                # For right-side outputs, ablate left-channel features; for left-side, ablate right-channel.
-                                                _ablate(x_r, ch_l)
-                                                _ablate(x_l, ch_r)
-
-                                                flat_r = x_r.reshape(-1, x_r.shape[-1])
-                                                flat_l = x_l.reshape(-1, x_l.shape[-1])
-                                                if bool(getattr(self, "direct_pose_leg_detach_feat", False)):
-                                                    flat_r = flat_r.detach()
-                                                    flat_l = flat_l.detach()
-                                                out_r = self.direct_pose_leg_head(flat_r).view(B, Tq, -1)
-                                                out_l = self.direct_pose_leg_head(flat_l).view(B, Tq, -1)
-
-                                                # Merge per-side outputs in K ordering (supports 3*K or 6*K layouts).
-                                                if out_r.shape == out_l.shape and out_r.shape[-1] in (3 * K, 6 * K):
-                                                    L = int(out_r.shape[-1] // K)
-                                                    v_r = out_r.view(B, Tq, K, L)
-                                                    v_l = out_l.view(B, Tq, K, L)
-                                                    merged = v_r.clone()
-                                                    merged[:, :, pos_l, :] = v_l[:, :, pos_l, :]
-                                                    leg_delta = merged.view(B, Tq, K * L)
+                                leg_delta = self._compute_direct_pose_leg_cross_leg_ablation(
+                                    leg_in=leg_in,
+                                    direct_feat=direct_feat,
+                                    plan_in=plan_in,
+                                    meas_in=meas_in,
+                                    phase_in_direct=phase_in_direct,
+                                    batch_size=B,
+                                    seq_len=Tq,
+                                    joint_count=K,
+                                )
                                 if leg_delta is None:
                                     leg_delta = self.direct_pose_leg_head(leg_in).view(B, Tq, -1)
                                 rot_dim = int(rot_sl.stop - rot_sl.start)
@@ -4048,92 +3597,7 @@ class EventMotionModel(nn.Module):
         return result
 
     def attach_motion_encoder(self, bundle, *, map_location: str | torch.device = 'cpu'):
-        """
-        加载并冻结预训练的 MotionEncoder + PeriodHead（以及可选 contact_head），
-        用于提供 soft hint / frozen contact logits。
-        """
-        if isinstance(bundle, (str, os.PathLike)):
-            payload = torch.load(bundle, map_location=map_location)
-        else:
-            payload = bundle
-        if not isinstance(payload, dict):
-            raise TypeError("MotionEncoder bundle must be a dict or path to a dict.")
-        require_standard_rotvec_bundle(payload, context="MotionEncoder bundle")
-
-        encoder_state = payload.get('encoder')
-        period_state = payload.get('period_head')
-        contact_state = payload.get('contact_head')
-        if encoder_state is None or period_state is None:
-            raise KeyError("Bundle missing 'encoder' or 'period_head' state_dict.")
-
-        meta = dict(payload.get('meta', {}))
-        hint_mode = str(meta.get("period_hint_mode") or "").strip()
-        if not hint_mode:
-            # Backward-compatible default for older bundles that didn't record this field.
-            hint_mode = "contacts_tanh"
-        if hint_mode != "contacts_tanh":
-            raise ValueError(f"Unsupported MotionEncoder bundle period_hint_mode={hint_mode!r} (expected 'contacts_tanh').")
-        weight0 = encoder_state.get('mlp.0.weight')
-        if weight0 is None:
-            for key, val in encoder_state.items():
-                if key.endswith('weight') and val.ndim == 2:
-                    weight0 = val
-                    break
-        if weight0 is None:
-            raise ValueError("Unable to infer MotionEncoder dimensions from state_dict.")
-
-        input_dim = int(meta.get('input_dim', weight0.shape[1]))
-        hidden_dim = int(meta.get('hidden_dim', weight0.shape[0]))
-        z_dim = int(meta.get('z_dim', 0))
-        num_layers = int(meta.get('mlp_layers', 3))
-        dropout = float(meta.get('mlp_dropout', 0.0))
-
-        encoder = MotionEncoder(
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            z_dim=z_dim,
-            num_layers=num_layers,
-            dropout=dropout,
-        )
-        encoder.load_state_dict(encoder_state)
-        encoder.eval().requires_grad_(False)
-
-        period_dim = int(period_state['fc.weight'].shape[0])
-        period_head = PeriodHead(hidden_dim, period_dim)
-        period_head.load_state_dict(period_state)
-        period_head.eval().requires_grad_(False)
-
-        frozen_contact_head: Optional[nn.Module] = None
-        if isinstance(contact_state, dict):
-            try:
-                w = contact_state.get("fc.weight")
-                b = contact_state.get("fc.bias")
-                if torch.is_tensor(w):
-                    out_dim = int(w.shape[0])
-                    linear = nn.Linear(hidden_dim, out_dim)
-                    linear_state = {"weight": w}
-                    if torch.is_tensor(b):
-                        linear_state["bias"] = b
-                    linear.load_state_dict(linear_state, strict=False)
-                    linear.eval().requires_grad_(False)
-                    frozen_contact_head = linear
-            except Exception:
-                frozen_contact_head = None
-
-        if self.encoder_input_dim and self.encoder_input_dim != input_dim:
-            raise ValueError(f"Encoder input dim mismatch: dataset={self.encoder_input_dim} vs bundle={input_dim}")
-        self.encoder_input_dim = input_dim
-
-        device = self._target_device()
-        self.frozen_encoder = encoder.to(device)
-        self.frozen_period_head = period_head.to(device)
-        self.frozen_contact_head = frozen_contact_head.to(device) if frozen_contact_head is not None else None
-
-        if self.period_dim != period_dim or self.period_encoder is None:
-            self.period_dim = period_dim
-            self.period_encoder = nn.Linear(self.period_dim, self.hidden_dim).to(device)
-
-        return meta
+        return attach_motion_encoder_bundle(self, bundle, map_location=map_location)
 
 class MotionJointLoss(nn.Module):
     def __init__(

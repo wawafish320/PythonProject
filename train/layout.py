@@ -8,7 +8,7 @@ so that state/output layout handling has a single point of maintenance.
 """
 
 import json
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -17,12 +17,14 @@ from .rotvec_semantics import require_standard_rotvec_spec
 
 __all__ = [
     "parse_layout_entry",
+    "resolve_layout_slice",
+    "resolve_rot6d_slice",
+    "infer_rot_joint_count",
     "normalize_layout",
     "canonicalize_state_layout",
     "layout_span",
     "LayoutCenter",
     "DataNormalizer",
-    "apply_layout_center",
 ]
 
 
@@ -78,6 +80,56 @@ def parse_layout_entry(
         return slice(s, s + max(0, k))
 
     return None
+
+
+def resolve_layout_slice(
+    layout: Any,
+    key: str,
+    total_dim: Optional[int] = None,
+    *,
+    positive_only: bool = False,
+) -> Optional[slice]:
+    """
+    Resolve ``layout[key]`` to a Python slice via the canonical layout parser.
+    """
+    if not isinstance(layout, dict) or key not in layout:
+        return None
+    sl = parse_layout_entry(layout.get(key), key, total_dim)
+    if positive_only and isinstance(sl, slice):
+        try:
+            if sl.start is None or sl.stop is None or int(sl.stop - sl.start) <= 0:
+                return None
+        except Exception:
+            return None
+    return sl
+
+
+def resolve_rot6d_slice(
+    output_layout: Any,
+    *,
+    total_dim: Optional[int] = None,
+) -> Optional[slice]:
+    """
+    Resolve the ``BoneRotations6D`` output slice from the canonical layout.
+    """
+    return resolve_layout_slice(output_layout, "BoneRotations6D", total_dim)
+
+
+def infer_rot_joint_count(
+    rot_slice: Optional[slice],
+) -> int:
+    """
+    Infer joint count from a rot6d slice width.
+    """
+    joint_count = 0
+    try:
+        if isinstance(rot_slice, slice) and rot_slice.start is not None and rot_slice.stop is not None:
+            rot_len = int(rot_slice.stop - rot_slice.start)
+            if rot_len > 0 and (rot_len % 6) == 0:
+                joint_count = int(rot_len // 6)
+    except Exception:
+        joint_count = 0
+    return joint_count
 
 
 def normalize_layout(raw_layout: Dict[str, Any], D: int) -> Dict[str, Tuple[int, int]]:
@@ -258,102 +310,46 @@ class LayoutCenter:
             ds.fps = self.fps
 
     def apply_to_trainer(self, trainer):
-        trainer._x_layout = dict(self.state_layout)
-        trainer._y_layout = dict(self.output_layout)
-        trainer.y_to_x_map = self.materialize_y_to_x_map()
-        trainer.mu_x = torch.tensor(np.asarray(self.mu_x).reshape(1, -1), dtype=torch.float32)
-        trainer.std_x = torch.tensor(np.asarray(self.std_x).reshape(1, -1), dtype=torch.float32)
-        trainer.mu_y = torch.tensor(np.asarray(self.mu_y).reshape(1, -1), dtype=torch.float32)
-        trainer.std_y = torch.tensor(np.asarray(self.std_y).reshape(1, -1), dtype=torch.float32)
+        if self.state_layout is None or self.output_layout is None:
+            self.strict_validate(int(self.mu_x.size), int(self.mu_y.size))
+
+        state_layout = dict(self.state_layout or {})
+        output_layout = dict(self.output_layout or {})
+        dx = int(self.mu_x.size)
+        dy = int(self.mu_y.size)
+
+        trainer._x_layout = state_layout
+        trainer._y_layout = output_layout
+        trainer.yaw_slice = None
+        trainer.yaw_x_slice = None
+        trainer.rootvel_slice = parse_layout_entry(output_layout.get("RootVelocity"), "RootVelocity", dy)
+        trainer.angvel_slice = parse_layout_entry(output_layout.get("BoneAngularVelocities"), "BoneAngularVelocities", dy)
+        trainer.rootvel_x_slice = parse_layout_entry(state_layout.get("RootVelocity"), "RootVelocity", dx)
+        trainer.angvel_x_slice = parse_layout_entry(state_layout.get("BoneAngularVelocities"), "BoneAngularVelocities", dx)
+        trainer.rootpos_x_slice = parse_layout_entry(state_layout.get("RootPosition"), "RootPosition", dx)
+        trainer.rot6d_x_slice = parse_layout_entry(state_layout.get("BoneRotations6D"), "BoneRotations6D", dx)
+        trainer.rot6d_y_slice = parse_layout_entry(output_layout.get("BoneRotations6D"), "BoneRotations6D", dy)
+        trainer.rot6d_slice = trainer.rot6d_y_slice
+        trainer.y_to_x_map = list(self.materialize_y_to_x_map())
+        trainer.mu_x = torch.as_tensor(self.mu_x.reshape(1, -1), dtype=torch.float32)
+        trainer.std_x = torch.as_tensor(self.std_x.reshape(1, -1), dtype=torch.float32)
+        trainer.mu_y = torch.as_tensor(self.mu_y.reshape(1, -1), dtype=torch.float32)
+        trainer.std_y = torch.as_tensor(self.std_y.reshape(1, -1), dtype=torch.float32)
         trainer.tanh_scales_rootvel = self.tanh_scales_rootvel
         trainer.tanh_scales_angvel = self.tanh_scales_angvel
-        trainer.yaw_slice = None
-        trainer.rootvel_slice = parse_layout_entry(trainer._y_layout.get("RootVelocity"), "RootVelocity")
-        trainer.angvel_slice = parse_layout_entry(
-            trainer._y_layout.get("BoneAngularVelocities"), "BoneAngularVelocities"
-        )
-        trainer.yaw_x_slice = None
-        trainer.rootvel_x_slice = parse_layout_entry(trainer._x_layout.get("RootVelocity"), "RootVelocity")
-        trainer.angvel_x_slice = parse_layout_entry(
-            trainer._x_layout.get("BoneAngularVelocities"), "BoneAngularVelocities"
-        )
-        trainer.rootpos_x_slice = parse_layout_entry(trainer._x_layout.get("RootPosition"), "RootPosition")
-        trainer.rot6d_x_slice = parse_layout_entry(trainer._x_layout.get("BoneRotations6D"), "BoneRotations6D")
-        trainer.rot6d_y_slice = parse_layout_entry(trainer._y_layout.get("BoneRotations6D"), "BoneRotations6D")
+        trainer.fps = float(getattr(self, "fps", 60.0) or 60.0)
+        trainer.bone_hz = float(trainer.fps)
 
         axis_map = {"X": 0, "Y": 1, "Z": 2}
         columns = []
         if isinstance(self.rot6d_spec, dict):
             cols_val = self.rot6d_spec.get("columns")
             if isinstance(cols_val, (list, tuple)):
-                columns = [str(c).upper() for c in cols_val]
+                columns = [str(col).upper() for col in cols_val]
         forward_hint = columns[1] if len(columns) > 1 else (columns[0] if columns else "Z")
-        trainer.yaw_forward_axis = axis_map.get(forward_hint, getattr(trainer, "yaw_forward_axis", 2))
-
-
-def apply_layout_center(ds_train, trainer, bundle_path: str):
-    if not bundle_path:
-        raise SystemExit("[FATAL] 需要 --bundle_json 指定集中化的归一化与布局模板（不再支持猜测/回退）")
-
-    center = LayoutCenter(bundle_path)
-    center.strict_validate(int(ds_train.Dx), int(ds_train.Dy))
-
-    center.apply_to_dataset(ds_train)
-    center.apply_to_trainer(trainer)
-
-    try:
-        trainer._bundle_meta = dict(center.meta)
-    except Exception:
-        trainer._bundle_meta = {}
-
-    if getattr(trainer, "_bone_names", None) is None and getattr(ds_train, "bone_names", None):
-        try:
-            trainer._bone_names = list(ds_train.bone_names)
-        except Exception:
-            pass
-
-    trainer.normalizer = DataNormalizer(
-        mu_x=center.mu_x,
-        std_x=center.std_x,
-        mu_y=center.mu_y,
-        std_y=center.std_y,
-        y_to_x_map=center.materialize_y_to_x_map(),
-        yaw_x_slice=trainer.yaw_x_slice,
-        yaw_y_slice=trainer.yaw_slice,
-        rootvel_x_slice=trainer.rootvel_x_slice,
-        rootvel_y_slice=trainer.rootvel_slice,
-        angvel_x_slice=trainer.angvel_x_slice,
-        angvel_y_slice=trainer.angvel_slice,
-        tanh_scales_rootvel=center.tanh_scales_rootvel,
-        tanh_scales_angvel=center.tanh_scales_angvel,
-        angvel_mode=getattr(ds_train, "angvel_norm_mode", None),
-        angvel_mu=getattr(ds_train, "angvel_mu", None),
-        angvel_std=getattr(ds_train, "angvel_std", None),
-    )
-
-    xlay = getattr(trainer, "_x_layout", getattr(ds_train, "state_layout", None))
-    ylay = getattr(trainer, "_y_layout", getattr(ds_train, "output_layout", None))
-
-    yaw = None
-    rootv = parse_layout_entry(ylay.get("RootVelocity"), "RootVelocity")
-    angv = parse_layout_entry(ylay.get("BoneAngularVelocities"), "BoneAngularVelocities")
-
-    yaw_x = None
-    rootv_x = parse_layout_entry(xlay.get("RootVelocity"), "RootVelocity")
-    angv_x = parse_layout_entry(xlay.get("BoneAngularVelocities"), "BoneAngularVelocities")
-
-    rot6d_x_span = layout_span(xlay, "BoneRotations6D")
-    rot6d_y_span = layout_span(ylay, "BoneRotations6D")
-
-    mx = getattr(trainer, "mu_x", None)
-    sx = getattr(trainer, "std_x", None)
-    my = getattr(trainer, "mu_y", None)
-    sy = getattr(trainer, "std_y", None)
-    len_mx = int(mx.numel()) if hasattr(mx, "numel") else (len(mx) if mx is not None else 0)
-    len_sx = int(sx.numel()) if hasattr(sx, "numel") else (len(sx) if sx is not None else 0)
-    len_my = int(my.numel()) if hasattr(my, "numel") else (len(my) if my is not None else 0)
-    len_sy = int(sy.numel()) if hasattr(sy, "numel") else (len(sy) if sy is not None else 0)
-
+        yaw_forward_axis = axis_map.get(forward_hint)
+        if yaw_forward_axis is not None:
+            trainer.yaw_forward_axis = int(yaw_forward_axis)
 
 class DataNormalizer:
     """封装数据规格与(反)归一化逻辑。"""
@@ -472,3 +468,24 @@ class DataNormalizer:
                 continue
             x_out[..., xs : xs + xk] = dy_hat[..., ys : ys + yk]
         return x_out
+
+    def x_to_y(self, x_raw: torch.Tensor, dy: Optional[int] = None) -> torch.Tensor:
+        if dy is None:
+            if self.mu_y is not None:
+                dy = int(np.asarray(self.mu_y).reshape(-1).shape[0])
+            elif self.y_to_x_map:
+                dy = max(int(item["y_start"]) + int(item["y_size"]) for item in self.y_to_x_map)
+            else:
+                dy = int(x_raw.shape[-1])
+        y = x_raw.new_zeros((*x_raw.shape[:-1], int(dy)))
+        if self.y_to_x_map:
+            for item in self.y_to_x_map:
+                xs, xk = int(item["x_start"]), int(item["x_size"])
+                ys, yk = int(item["y_start"]), int(item["y_size"])
+                if xk <= 0 or yk <= 0:
+                    continue
+                y[..., ys : ys + yk] = x_raw[..., xs : xs + xk]
+            return y
+        take = min(int(dy), int(x_raw.shape[-1]))
+        y[..., :take] = x_raw[..., :take]
+        return y

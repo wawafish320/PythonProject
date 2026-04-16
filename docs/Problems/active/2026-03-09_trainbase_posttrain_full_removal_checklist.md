@@ -170,8 +170,8 @@
 
 ### B4. 完成定义
 
-- [ ] 主树中不再存在 `contact_phase_state_enable`
-- [ ] 主树中不再存在 `contact_phase_state_event_*`
+- [x] 运行主树（`train/` + `tests/` + `tools/`）中不再存在 `contact_phase_state_enable`
+- [x] 运行主树（`train/` + `tests/` + `tools/`）中不再存在 `contact_phase_state_event_*`
 - [ ] 主树中不再存在 `phase_reset_source`（若仅用于这套状态机）
 - [ ] 主树中不再存在 `_contact_phase_state_dim` / `contact_phase_state_delta_head`
 

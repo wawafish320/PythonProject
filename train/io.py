@@ -8,9 +8,13 @@ import surface: `from train.io import ...`.
 """
 
 import json
-from typing import Any, Dict, Optional, Tuple
+import math as _math
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 import numpy as np
+import torch
 
 from .layout import normalize_layout, canonicalize_state_layout
 
@@ -20,6 +24,9 @@ __all__ = [
     "velocity_yaw_from_array",
     "speed_from_X_layout",
     "npz_scalar_to_str",
+    "json_safe",
+    "write_json_payload",
+    "config_to_jsonable",
     "load_layouts_from_meta",
 ]
 
@@ -56,6 +63,93 @@ def npz_scalar_to_str(v) -> str:
     if not isinstance(v, str):
         raise ValueError(f"Expected string, got {type(v)}: {repr(v)}")
     return v
+
+
+def json_safe(value: Any) -> Any:
+    """
+    Recursively convert values to JSON-safe Python objects.
+    Non-finite floats are mapped to ``None``.
+    """
+    if isinstance(value, Mapping):
+        return {str(k): json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    if isinstance(value, Path):
+        return str(value)
+    if torch.is_tensor(value):
+        if value.numel() == 1:
+            try:
+                return json_safe(value.item())
+            except Exception:
+                pass
+        return [json_safe(v) for v in value.detach().cpu().tolist()]
+    if isinstance(value, np.ndarray):
+        return [json_safe(v) for v in value.tolist()]
+    if isinstance(value, float):
+        return value if _math.isfinite(value) else None
+    if isinstance(value, np.generic):
+        try:
+            return json_safe(value.item())
+        except Exception:
+            pass
+    if hasattr(value, "item") and not isinstance(value, (int, bool, str)):
+        try:
+            return json_safe(value.item())
+        except Exception:
+            pass
+    if isinstance(value, (int, str, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def write_json_payload(
+    path: str | Path,
+    payload: Mapping[str, Any],
+    *,
+    warn_prefix: Optional[str] = None,
+    warn_message: Optional[str] = None,
+) -> Optional[Path]:
+    path = Path(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        return path
+    except Exception as exc:
+        if warn_prefix is None:
+            raise
+        print(f"[{warn_prefix}][WARN] {warn_message or f'failed to write {path}'}: {exc}")
+        return None
+
+
+def config_to_jsonable(value: Any) -> Any:
+    """
+    Convert config/dataclass payloads into structures that can be serialized to JSON,
+    while preserving the current Path/list/dict compatibility semantics.
+    """
+    if is_dataclass(value) and not isinstance(value, type):
+        return {str(k): config_to_jsonable(v) for k, v in asdict(value).items()}
+    if isinstance(value, Mapping):
+        return {str(k): config_to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return [config_to_jsonable(v) for v in value]
+    if torch.is_tensor(value):
+        if value.numel() == 1:
+            try:
+                return value.item()
+            except Exception:
+                return json_safe(value)
+        return [config_to_jsonable(v) for v in value.detach().cpu().tolist()]
+    if isinstance(value, np.ndarray):
+        return [config_to_jsonable(v) for v in value.tolist()]
+    if isinstance(value, np.generic):
+        try:
+            return value.item()
+        except Exception:
+            return json_safe(value)
+    return value
 
 
 def direction_yaw_from_array(arr: Optional[np.ndarray]) -> Optional[np.ndarray]:

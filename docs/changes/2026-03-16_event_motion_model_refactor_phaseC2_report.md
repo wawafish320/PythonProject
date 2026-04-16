@@ -59,12 +59,13 @@
 |---|---|---:|---|
 | `py_compile` | `python -m py_compile train/models.py` | 0 | Phase C2 语法/导入检查 |
 | `debug_contact_loop_module_path` | `python -m train.debug_contact_loop` | 0 | contact-plan 主链 smoke 通过 |
-| `phase_contact_scaffold_smoke` | 内联 smoke：覆盖 `use_event_clock=False/True` + `contact_phase_state_enable=True` + direct-pose phase hint | 0 | 验证单 loop scaffold 后 shape、finite、phase/event-clock cache 正常 |
+| `phase_contact_scaffold_smoke` | 内联 smoke：覆盖 `use_event_clock=False/True` + `contact_phase_state_enable=True`（历史名，已于 `2026-04-15` 删除） + direct-pose phase hint | 0 | 验证单 loop scaffold 后 shape、finite、phase/event-clock cache 正常 |
 
 补充说明：
 
 - 本轮未修改默认配置、输出 tensor shape、checkpoint key 兼容策略。
 - `python train/debug_contact_loop.py` 仍保持 Phase A 已冻结的脚本路径失败现状，不属于本轮回归。
+- 若要在当前 mainline 复述这里的 phase-hint 意图，请使用仍存活的 direct-pose / phase-reset 参数，不要再使用 `contact_phase_state_*` legacy kwargs。
 
 ## 验收结论
 

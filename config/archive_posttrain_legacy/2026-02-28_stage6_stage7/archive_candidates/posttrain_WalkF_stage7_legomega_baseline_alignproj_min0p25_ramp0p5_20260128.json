@@ -40,7 +40,7 @@
   "paths": [
     "raw_data/processed_data/Walk_F.npz"
   ],
-  "phase_reset_source": "td_hazard",
+  "phase_reset_source": "contacts_meas",
   "pretrain_template": "models/pretrain_template.json",
   "rollout_cycles": 5,
   "rollout_include_boundary": true,
@@ -51,12 +51,7 @@
   "seq_len": 87,
   "steps_per_epoch": 60,
   "time_index_mode": "auto",
-  "train_contact_meas": false,
-  "train_contact_plan": false,
-  "train_contact_plan_init": false,
-  "train_contact_td_hazard": false,
   "train_direct_pose": true,
   "train_lambda_head": false,
-  "train_so3_corrector": false,
   "weight_decay": 0.0
 }

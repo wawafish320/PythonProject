@@ -1142,7 +1142,7 @@ def main() -> None:
         paths=None,
         pose_hist_len=int(norm_spec.get("pose_hist_len", 0) or 0),
         norm_spec=norm_spec,
-        index_mode=str(cfg.get("dataset_index_mode") or cfg.get("index_mode") or "sliding"),
+        index_mode=str(cfg.get("dataset_index_mode") or "sliding"),
     )
     ds.is_train = True
     ds.normalize_c = bool(cfg.get("normalize_c", False))

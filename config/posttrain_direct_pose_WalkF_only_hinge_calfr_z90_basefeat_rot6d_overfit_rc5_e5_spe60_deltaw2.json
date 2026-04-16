@@ -2,7 +2,6 @@
   "ckpt_in": "models/MLPL2_DirectBranch_v1/ckpt_last_posttrain_direct_pose_WalkF_only_hidden_timepe_20260117.pth",
   "out_dir": "models/MLPL2_DirectBranch_v1",
   "run_name": "posttrain_direct_pose_WalkF_only_hinge_calfr_z90_basefeat_rot6d_overfit_rc5_e5_spe60_deltaw2_20260120",
-
   "data": "raw_data/processed_data",
   "paths": [
     "raw_data/processed_data/Walk_F.npz"
@@ -10,7 +9,6 @@
   "bundle_json": "raw_data/processed_data/norm_template.json",
   "pretrain_template": "models/pretrain_template.json",
   "encoder_bundle": "models/motion_encoder_equiv_stageA.pt",
-
   "device": "auto",
   "batch": 1,
   "seq_len": 87,
@@ -20,8 +18,7 @@
   "rollout_include_boundary": true,
   "rollout_random_offset": true,
   "time_index_mode": "auto",
-  "phase_reset_source": "td_hazard",
-
+  "phase_reset_source": "contacts_meas",
   "depth": 3,
   "num_heads": 4,
   "dropout": 0.1,
@@ -30,18 +27,13 @@
   "steps_per_epoch": 60,
   "lr": 0.001,
   "weight_decay": 0.0,
-
   "detach_rollout_state": true,
-
-  "train_so3_corrector": false,
   "train_lambda_head": false,
   "train_direct_pose": true,
-
   "direct_pose_reinit": false,
   "direct_pose_feat_source": "hidden",
   "direct_pose_time_pe_dim": 16,
   "direct_pose_time_pe_base": 10000.0,
-
   "direct_pose_hinge_enable": true,
   "direct_pose_hinge_train_only": true,
   "direct_pose_hinge_bones": "calf_r",
@@ -50,7 +42,6 @@
   "direct_pose_hinge_feat_source": "hidden",
   "direct_pose_hinge_base_feat": "rot6d",
   "direct_pose_hinge_gate_mode": "none",
-
   "direct_pose_hinge_sup_weight": 1.0,
   "direct_pose_hinge_sup_kind": "smooth_l1",
   "direct_pose_hinge_sup_contact_source": "gt",
@@ -59,16 +50,11 @@
   "direct_pose_hinge_sup_angle_thresh_deg": 0.0,
   "direct_pose_hinge_sup_delta_thresh_deg": 0.0,
   "direct_pose_hinge_sup_delta_weight_power": 2.0,
-
   "lambda_time_weight_mode": "uniform",
   "lambda_time_weight_max": 1.0,
   "lambda_reliability_mode": "none",
   "lambda_reliability_warmup_steps": 0,
   "lambda_reliability_contact_err_max": 1.0,
-
-  "train_contact_meas": false,
   "contact_meas_weight": 0.0,
-
   "seed": 0
 }
-

@@ -127,22 +127,22 @@ python -m train.training_MPL \
 - `tf_start_epoch`, `tf_end_epoch`, `tf_max`, `tf_min`
 - `ss_chunk_len`（scheduled sampling chunk）
 
-### 4.4 Free-run 参数
+### 4.4 调度 / 调试参数
 
-- `freerun_horizon`, `freerun_weight`
-- `freerun_weight_mode`, `freerun_weight_init`, `freerun_weight_ramp_epochs`
-- `freerun_horizon_min`, `freerun_init_horizon`, `freerun_horizon_ramp_epochs`
-- `eval_horizon`, `eval_warmup`, `monitor_batches`
+- `freerun_stage_schedule`
+- `history_debug_steps`
+- `teacher_eval_max_batches`
+- `freerun_debug_path`
 
 ### 4.5 当前主损失相关参数
 
 - `w_rot_ortho`
 - `w_rot_local`
-- `w_rot_vel`, `rot_vel_log_scale`, `rot_vel_omega_min_deg_s`, `rot_vel_loss`
 - `w_root_vel`, `w_root_speed`
-- （可选）`w_contact_plan`, `w_contact_meas`, `w_direct_pose`, `w_direct_delta` 等
+- （可选）`w_contact_plan`, `w_direct_pose`
 
-注：当前仓库已统一到标准 axis-angle / rotvec 语义，`rot_vel_log_scale=1.0` 表示直接使用标准 `so3_log_map` 输出。
+注：旧版 `freerun_weight/horizon`、teacher/input noise、`eval_horizon/eval_warmup/monitor_batches`
+等 trainbase 配置已移除，不再属于当前 `training_MPL.py` 契约。
 
 ### 4.6 模型结构参数
 
@@ -154,9 +154,6 @@ python -m train.training_MPL \
 
 ### 4.7 数据增强参数（当前）
 
-- `aug_noise_std`
-- `aug_time_warp_prob`
-- `aug_lr_swap_prob`
 - `yaw_aug_deg`
 
 ---
@@ -173,10 +170,6 @@ python -m train.training_MPL \
     {
       "range": [1, 4],
       "label": "stage1_warmup_tf1",
-      "trainer": {
-        "freerun_weight": 0.0,
-        "freerun_horizon": 0
-      },
       "params": {
         "tf_max": 1.0,
         "tf_min": 1.0,
@@ -187,32 +180,23 @@ python -m train.training_MPL \
     {
       "range": [5, 8],
       "label": "stage2_transition",
-      "trainer": {
-        "freerun_weight": 0.05,
-        "freerun_horizon": 6
-      },
       "params": {
         "tf_max": 1.0,
         "tf_min": 0.5,
         "opt_lr": 0.0005
       },
-      "loss_groups": {
-        "core": {
-          "w_rot_local": 0.25
-        }
+      "loss": {
+        "w_rot_local": 0.25
       }
     },
     {
       "range": [9, 18],
       "label": "stage3_stable",
-      "trainer": {
-        "freerun_weight": 0.1,
-        "freerun_horizon": 10
-      },
       "params": {
         "tf_max": 0.5,
         "tf_min": 0.5,
-        "opt_lr": 0.0002
+        "opt_lr": 0.0002,
+        "history_dropout_prob": 0.15
       }
     }
   ]
@@ -222,9 +206,9 @@ python -m train.training_MPL \
 说明：
 
 - `range` 可写 `[start, end]`
-- `trainer` 常用于 `freerun_weight/horizon` 覆盖
 - `params` 会直接覆盖 Trainer/Loss 可写属性（`opt_lr` 会改 optimizer lr）
-- `loss_groups` 可按组覆盖 loss 参数（最终映射到 `loss_fn`）
+- `loss` / `loss_groups` 会映射到 `loss_fn`
+- `trainer.freerun_weight/horizon` 与旧 teacher/input noise 分支已经删除；请不要继续写入 schedule
 
 ---
 
@@ -301,15 +285,8 @@ python -m train.training_MPL \
 
 ### 8.1 在线评估
 
-训练中默认会做在线评估（与 `val_mode/no_monitor/monitor_batches` 相关）。
-
-如需在 teacher 阶段也强制跑 freerun 评估，可开启：
-
-```json
-{
-  "force_valfree_eval": true
-}
-```
+当前训练期可通过 `teacher_eval_max_batches` 限制 teacher 评估 batch 数；更细的 freerun
+诊断建议使用 `train/validate/` 下的独立脚本。
 
 ### 8.2 离线复用评估函数
 
@@ -385,7 +362,7 @@ python -m train.export_onnx_from_ckpt \
 建议：
 
 - 适度增大 `dropout`、`weight_decay`
-- 开启轻度增强：`aug_noise_std`、`aug_time_warp_prob`
+- 开启轻度 yaw 增强：`yaw_aug_deg`
 - 适当减小模型容量（`width`、`depth`）
 
 ---

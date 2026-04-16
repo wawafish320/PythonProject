@@ -7,6 +7,7 @@
 从 training_MPL.py 重构而来，作为独立工具模块。
 本模块是 train/ 子系统中几何原子能力的唯一来源（single source of truth）。
 """
+import math as _math
 from typing import Optional, Sequence, Tuple
 import torch
 import torch.nn.functional as F
@@ -399,6 +400,44 @@ def so3_exp_map(omega: torch.Tensor, *, eps: float = 1e-6) -> torch.Tensor:
     return eye + A * K + B * K2
 
 
+def _apply_so3_correction_to_delta_raw(
+    delta_raw: torch.Tensor,
+    *,
+    rot_slice: slice,
+    omega_hat: Optional[torch.Tensor],
+    gate_val: float,
+    max_deg: float,
+    columns: Sequence[str],
+    omega_detach: bool,
+) -> torch.Tensor:
+    if omega_hat is None or float(gate_val) <= 1e-6:
+        return delta_raw
+    joint_count = int((rot_slice.stop - rot_slice.start) // 6)
+    omega = (
+        omega_hat[:, 0]
+        if torch.is_tensor(omega_hat) and omega_hat.dim() == 4 and int(omega_hat.size(1)) == 1
+        else omega_hat
+    )
+    if (not torch.is_tensor(omega)) or omega.shape[0] != delta_raw.shape[0] or omega.shape[-2:] != (joint_count, 3):
+        return delta_raw
+    omega_eff = (omega.detach() if bool(omega_detach) else omega).to(device=delta_raw.device, dtype=delta_raw.dtype)
+    omega_eff = omega_eff * float(gate_val)
+    if float(max_deg) > 0.0:
+        max_rad = float(max_deg) * (_math.pi / 180.0)
+        omega_eff = omega_eff * (
+            max_rad / omega_eff.norm(dim=-1, keepdim=True).clamp_min(1e-9)
+        ).clamp_max(1.0)
+    cols = tuple(columns) if isinstance(columns, (list, tuple)) and len(columns) >= 2 else ("X", "Z")
+    delta6_proj = normalize_rot6d_delta(delta_raw[..., rot_slice], columns=cols)
+    R_delta = rot6d_to_matrix(delta6_proj, columns=cols)
+    R_used = torch.matmul(so3_exp_map(omega_eff), R_delta)
+    delta6_used_abs = matrix_to_rot6d(R_used, columns=cols)
+    delta6_used = delta6_used_abs - _rot6d_identity_like(delta6_used_abs, columns=cols)
+    corrected = delta_raw.clone()
+    corrected[..., rot_slice] = delta6_used.reshape(delta_raw.shape[0], joint_count * 6)
+    return corrected
+
+
 # ============================================
 # 测地线距离 (Geodesic Distance)
 # ============================================
@@ -666,6 +705,120 @@ def parent_relative_matrices(R: torch.Tensor, parents: Optional[Sequence[int] | 
 # 别名保持向后兼容
 _root_relative_matrices = root_relative_matrices
 _parent_relative_matrices = parent_relative_matrices
+
+
+def wrap_to_pi_torch(x: torch.Tensor, *, neg_pi_to_pos_pi: bool = False) -> torch.Tensor:
+    """
+    将角度包裹到 [-π, π) 范围，语义对齐 wrap_to_pi_np。
+    """
+    dtype = x.dtype if x.is_floating_point() else torch.get_default_dtype()
+    pi = torch.tensor(torch.pi, device=x.device, dtype=dtype)
+    y = torch.remainder(x.to(dtype=dtype) + pi, 2.0 * pi) - pi
+    if neg_pi_to_pos_pi:
+        y = torch.where(y == -pi, pi, y)
+    return y
+
+
+def _root_yaw_from_matrix_torch(
+    root_R: torch.Tensor,
+    *,
+    forward_axis: int,
+    up_axis: int,
+    offset: float = 0.0,
+) -> Optional[torch.Tensor]:
+    if not torch.is_tensor(root_R) or root_R.numel() == 0:
+        return None
+    if root_R.shape[-2:] != (3, 3):
+        return None
+    forward_axis = int(max(0, min(2, forward_axis)))
+    up_axis = int(max(0, min(2, up_axis)))
+    planar_axes = [ax for ax in (0, 1, 2) if ax != up_axis]
+    if len(planar_axes) != 2:
+        planar_axes = [0, 1]
+    ax0, ax1 = planar_axes
+    forward_vec = root_R[..., :, forward_axis]
+    yaw = torch.atan2(forward_vec[..., ax1], forward_vec[..., ax0])
+    if offset:
+        yaw = yaw - float(offset)
+    return wrap_to_pi_torch(yaw)
+
+
+def root_yaw_from_rot6d_torch(
+    rot6d: torch.Tensor,
+    *,
+    forward_axis: int,
+    up_axis: int,
+    offset: float = 0.0,
+    root_idx: int = 0,
+    reproject: bool = True,
+) -> Optional[torch.Tensor]:
+    if not torch.is_tensor(rot6d) or rot6d.numel() == 0:
+        return None
+    if rot6d.shape[-1] != 6:
+        return None
+
+    original_ndim = int(rot6d.ndim)
+    if original_ndim == 1:
+        rot6d_root = rot6d.view(1, 1, 6)
+    elif original_ndim == 2:
+        rot6d_root = rot6d.view(*rot6d.shape[:-1], 1, 6)
+    else:
+        joint_count = int(rot6d.shape[-2])
+        if joint_count <= 0:
+            return None
+        root_idx = max(0, min(joint_count - 1, int(root_idx)))
+        rot6d_root = rot6d[..., root_idx : root_idx + 1, :]
+
+    try:
+        rot6d_used = reproject_rot6d(rot6d_root) if reproject else rot6d_root
+        root_R = rot6d_to_matrix(rot6d_used)[..., 0, :, :]
+    except Exception:
+        return None
+
+    yaw = _root_yaw_from_matrix_torch(
+        root_R,
+        forward_axis=forward_axis,
+        up_axis=up_axis,
+        offset=offset,
+    )
+    if yaw is None:
+        return None
+    if original_ndim == 1:
+        return yaw.reshape(())
+    return yaw
+
+
+def root_yaw_from_rot6d_np(
+    rot6d: np.ndarray,
+    *,
+    forward_axis: int,
+    up_axis: int,
+    offset: float = 0.0,
+    root_idx: int = 0,
+) -> Optional[np.ndarray]:
+    if not isinstance(rot6d, np.ndarray) or rot6d.size == 0:
+        return None
+    if rot6d.shape[-1] != 6:
+        return None
+    try:
+        rot6d_t = torch.from_numpy(rot6d.astype(np.float32, copy=False))
+    except Exception:
+        return None
+    with torch.no_grad():
+        yaw = root_yaw_from_rot6d_torch(
+            rot6d_t,
+            forward_axis=forward_axis,
+            up_axis=up_axis,
+            offset=offset,
+            root_idx=root_idx,
+            reproject=True,
+        )
+    if yaw is None:
+        return None
+    try:
+        return yaw.detach().cpu().numpy()
+    except Exception:
+        return None
 
 
 # ============================================

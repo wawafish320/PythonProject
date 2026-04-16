@@ -37,6 +37,17 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 import torch  # ensure torch is bound before any inner scope uses it
 
+from train.model_ckpt_compat import (
+    ContactPlanBuildOverrides,
+    DirectPoseBuildOverrides,
+    DirectPoseLoadCompatOptions,
+    EventClockBuildOverrides,
+    LambdaFusionBuildOverrides,
+    load_event_motion_ckpt_payload,
+    prepare_event_motion_ckpt_state_for_load,
+    resolve_event_motion_build_state_from_ckpt,
+)
+from train.validate.contact_meas_whitebox import compute_contact_meas_whitebox
 from train.training_MPL import MotionEventDataset, Trainer, geodesic_R, validate_and_fix_model_
 from train.geometry import matrix_to_rot6d, reproject_rot6d, rot6d_to_matrix, so3_exp_map, so3_log_map
 from train.history import (
@@ -49,9 +60,9 @@ from train.history import (
 )
 from train.models import EventMotionModel, MotionJointLoss
 from train.layout import LayoutCenter, DataNormalizer
-from train.geometry import compose_rot6d_delta
-from train.rotvec_semantics import require_standard_rotvec_spec
+from train.posttrain_common import NORM_SPEC_RUNTIME_PRETRAIN_KEYS, merge_norm_spec
 from train.ttc import ttc_to_next_event_np
+from train.utils import resolve_device
 
 
 # ---- Helpers (mostly mirrored from run_teacher_rollout) ---------------------
@@ -95,30 +106,6 @@ def _get_phase_attr(obj: Any, suffix: str, default: Any) -> Any:
     if value is not None:
         return value
     return getattr(obj, _legacy_phase_attr_name(suffix), default)
-
-
-def _merge_norm_spec(bundle_path: Path, pretrain_path: Optional[Path]) -> Dict[str, Any]:
-    with bundle_path.open("r", encoding="utf-8") as f:
-        base = json.load(f)
-    require_standard_rotvec_spec(base, context=f"bundle {bundle_path}")
-    spec = dict(base)
-    if pretrain_path and pretrain_path.is_file():
-        with pretrain_path.open("r", encoding="utf-8") as f:
-            pre = json.load(f)
-        require_standard_rotvec_spec(pre, context=f"pretrain_template {pretrain_path}")
-        for key in (
-            "MuAngVel",
-            "StdAngVel",
-            "tanh_scales_angvel",
-            "pose_hist_len",
-            "pose_hist_dim",
-            "tanh_scales_pose_hist",
-            "MuPoseHist",
-            "StdPoseHist",
-        ):
-            if key in pre and pre[key] is not None:
-                spec[key] = pre[key]
-    return spec
 
 
 def _resolve_direct_pose_leg_idx_tensor(model: Any, *, device: torch.device) -> Optional[torch.Tensor]:
@@ -564,41 +551,32 @@ class FreeRunCycleRunner:
         self.args = args
         if not args.model:
             raise SystemExit("[FATAL] --model must be specified (ONNX not supported here).")
-        self.device = self._resolve_device(args.device)
+        self.device = resolve_device(args.device)
         self.bundle_path = Path(args.bundle).expanduser().resolve()
         self.bundle = LayoutCenter(str(self.bundle_path))
         pretrain_path = Path(args.pretrain_template).expanduser()
-        self.norm_spec = _merge_norm_spec(self.bundle_path, pretrain_path if pretrain_path.is_file() else None)
+        self.norm_spec = merge_norm_spec(
+            self.bundle_path,
+            pretrain_path if pretrain_path.is_file() else None,
+            pretrain_keys=NORM_SPEC_RUNTIME_PRETRAIN_KEYS,
+        )
         self.pose_hist_len = int(self.norm_spec.get("pose_hist_len", 0) or 0)
 
-        ckpt = torch.load(Path(args.model).expanduser(), map_location="cpu")
-        self._ckpt_posttrain_cfg = None
-        try:
-            if isinstance(ckpt, dict):
-                cfg = ckpt.get("posttrain_cfg", None)
-                if isinstance(cfg, dict):
-                    self._ckpt_posttrain_cfg = dict(cfg)
-        except Exception:
-            self._ckpt_posttrain_cfg = None
-        raw_state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
-        # Drop frozen_encoder / frozen_period_head weights that are not part of the runtime model
-        # to avoid noisy mismatch warnings during load_state_dict(strict=False).
-        self.state_dict = {}
-        skipped = 0
-        for k, v in raw_state.items():
-            if (
-                k.startswith("frozen_encoder.")
-                or k.startswith("frozen_period_head.")
-                or k.startswith("contact_plan_input_proj.")
-            ):
-                skipped += 1
-                continue
-            self.state_dict[k] = v
-        if skipped > 0:
-            print(f"[FreeRun][INFO] stripped {skipped} frozen encoder keys from checkpoint for runtime load.")
+        self.ckpt_payload = load_event_motion_ckpt_payload(
+            Path(args.model).expanduser(),
+            map_location="cpu",
+        )
+        self._ckpt_posttrain_cfg = self.ckpt_payload.ckpt_posttrain_cfg
+        self.state_dict = self.ckpt_payload.state_dict
+        if self.ckpt_payload.stripped_frozen_key_count > 0:
+            print(
+                "[FreeRun][INFO] stripped "
+                f"{self.ckpt_payload.stripped_frozen_key_count} frozen encoder keys "
+                "from checkpoint for runtime load."
+            )
 
-        self.width = self._infer_width()
-        self.period_dim = self._infer_period_dim()
+        self.width = self.ckpt_payload.width
+        self.period_dim = self.ckpt_payload.period_dim
         self.encoder_bundle_path = Path(args.encoder_bundle).expanduser() if args.encoder_bundle else None
 
         self.model: Optional[EventMotionModel] = None
@@ -889,22 +867,6 @@ class FreeRunCycleRunner:
         self._pose_hist_hybrid_donor_runner: Optional["FreeRunCycleRunner"] = None
         self._pose_hist_hybrid_donor_ckpt_path: Optional[Path] = None
 
-    @staticmethod
-    def _resolve_device(pref: str) -> torch.device:
-        pref = pref.lower()
-        has_mps = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-        if pref == "cpu":
-            return torch.device("cpu")
-        if pref == "cuda":
-            return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if pref == "mps":
-            return torch.device("mps" if has_mps else "cpu")
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        if has_mps:
-            return torch.device("mps")
-        return torch.device("cpu")
-
     def _infer_width(self) -> int:
         key = "shared_encoder.0.weight"
         if key not in self.state_dict:
@@ -938,408 +900,85 @@ class FreeRunCycleRunner:
         if self.model is not None:
             return
 
-        contact_plan_enable = any(
-            str(k).startswith("contact_plan_cell.") or str(k).startswith("contact_plan_head.")
-            for k in self.state_dict.keys()
+        build_state = resolve_event_motion_build_state_from_ckpt(
+            ckpt_payload=self.ckpt_payload,
+            in_state_dim=Dx,
+            out_motion_dim=Dy,
+            cond_dim=Dc,
+            contact_dim=int(self.contact_dim or 0),
+            period_dim=int(getattr(ds, "period_dim", 0) or self.period_dim),
+            contact_plan_overrides=ContactPlanBuildOverrides(
+                init_mode=self.contact_plan_init_mode_override,
+                init_hidden=self.contact_plan_init_hidden_override,
+                init_dropout=self.contact_plan_init_dropout_override,
+            ),
+            direct_pose_overrides=DirectPoseBuildOverrides(
+                train_direct_pose=False,
+                direct_pose_reinit=False,
+            ),
+            event_clock_overrides=EventClockBuildOverrides(
+                mode=str(getattr(self.args, "event_clock", "auto") or "auto"),
+                hidden_dim=getattr(self.args, "event_clock_hidden_dim", None),
+                gate_hidden_dim=getattr(self.args, "event_clock_gate_hidden_dim", None),
+                max_delta=float(getattr(self.args, "event_clock_max_delta", 0.5) or 0.5),
+                has_encoder_bundle=bool(self.encoder_bundle_path and self.encoder_bundle_path.is_file()),
+            ),
+            lambda_fusion_overrides=LambdaFusionBuildOverrides(
+                train_lambda_head=False,
+            ),
+            include_direct_pose_leg_cfg=True,
         )
-        contact_plan_hidden = 64
-        try:
-            w_hh = self.state_dict.get("contact_plan_cell.weight_hh", None)
-            if torch.is_tensor(w_hh) and w_hh.ndim == 2:
-                contact_plan_hidden = int(w_hh.shape[1])
-        except Exception:
-            pass
-        contact_plan_time_pe_dim = 0
-        try:
-            w_time = self.state_dict.get("contact_plan_time_head.weight", None)
-            if torch.is_tensor(w_time) and w_time.ndim == 2:
-                contact_plan_time_pe_dim = int(w_time.shape[1])
-        except Exception:
-            contact_plan_time_pe_dim = 0
-        # Infer obs-conditioned contact plan init head (plan_z0 = init_z + init_head(obs0)).
-        contact_plan_init_mode = "learnable"
-        contact_plan_init_hidden = 128
-        contact_plan_init_dropout = 0.0
-        try:
-            init_has_weights = any(str(k).startswith("contact_plan_init_head.") for k in self.state_dict.keys())
-            if init_has_weights:
-                contact_plan_init_mode = "learnable+obs"
-                w_init = self.state_dict.get("contact_plan_init_head.1.weight", None)
-                if torch.is_tensor(w_init) and w_init.ndim == 2:
-                    contact_plan_init_hidden = int(w_init.shape[0])
-        except Exception:
-            contact_plan_init_mode = "learnable"
-        # Allow overriding init mode for ablations (create init_head even if ckpt doesn't have weights).
-        if self.contact_plan_init_mode_override is not None:
-            contact_plan_init_mode = str(self.contact_plan_init_mode_override)
-        if self.contact_plan_init_hidden_override is not None:
-            try:
-                contact_plan_init_hidden = int(self.contact_plan_init_hidden_override)
-            except Exception:
-                pass
-        if self.contact_plan_init_dropout_override is not None:
-            try:
-                contact_plan_init_dropout = float(self.contact_plan_init_dropout_override)
-            except Exception:
-                contact_plan_init_dropout = 0.0
-        # Infer trunk injection mode from checkpoint shared_encoder input dim.
-        contact_plan_inject = "none"
-        try:
-            w0 = self.state_dict.get("shared_encoder.0.weight", None)
-            if torch.is_tensor(w0) and w0.ndim == 2:
-                nin = int(w0.shape[1])
-                base_in = int(Dx + Dc)
-                extra = int(max(0, nin - base_in))
-                if extra > 0:
-                    # If extra matches contact_dim, assume contacts injection; otherwise plan_z injection.
-                    if int(self.contact_dim) > 0 and extra == int(self.contact_dim):
-                        contact_plan_inject = "contacts"
-                    else:
-                        contact_plan_inject = "plan_z"
-                        # Ensure plan hidden matches injected dim (prefer actual injected size).
-                        if extra != int(contact_plan_hidden):
-                            contact_plan_hidden = int(extra)
-        except Exception:
-            contact_plan_inject = "none"
+        contact_plan_enable = bool(build_state.contact_plan_cfg.enable)
+        contact_plan_hidden = int(build_state.contact_plan_cfg.hidden)
+        contact_plan_time_pe_dim = int(build_state.contact_plan_cfg.time_pe_dim)
+        contact_plan_init_mode = str(build_state.contact_plan_cfg.init_mode)
+        contact_plan_init_hidden = int(build_state.contact_plan_cfg.init_hidden)
+        contact_plan_init_dropout = float(build_state.contact_plan_cfg.init_dropout)
+        contact_plan_inject = str(build_state.contact_plan_cfg.inject)
 
-        # Infer Event-Clock v3 (contact_plan residual correction) from checkpoint weights.
-        event_clock_has_weights = any(
-            str(k).startswith("event_clock_gate.") or str(k).startswith("event_clock_corrector.")
-            for k in self.state_dict.keys()
-        )
-        event_clock_mode = str(getattr(self.args, "event_clock", "auto") or "auto").strip().lower()
-        use_event_clock = bool(event_clock_has_weights)
-        if event_clock_mode == "on":
-            use_event_clock = True
-        elif event_clock_mode == "off":
-            use_event_clock = False
-        event_clock_hidden_dim = 64
-        event_clock_gate_hidden_dim = 32
-        try:
-            w_ec = self.state_dict.get("event_clock_corrector.correction_head.0.weight", None)
-            if torch.is_tensor(w_ec) and w_ec.ndim == 2:
-                event_clock_hidden_dim = int(w_ec.shape[0])
-        except Exception:
-            pass
-        try:
-            w_gate = self.state_dict.get("event_clock_gate.confidence_head.0.weight", None)
-            if torch.is_tensor(w_gate) and w_gate.ndim == 2:
-                event_clock_gate_hidden_dim = int(w_gate.shape[0])
-        except Exception:
-            pass
-        if getattr(self.args, "event_clock_hidden_dim", None) is not None:
-            try:
-                event_clock_hidden_dim = int(self.args.event_clock_hidden_dim)
-            except Exception:
-                pass
-        if getattr(self.args, "event_clock_gate_hidden_dim", None) is not None:
-            try:
-                event_clock_gate_hidden_dim = int(self.args.event_clock_gate_hidden_dim)
-            except Exception:
-                pass
+        use_event_clock = bool(build_state.event_clock_cfg.use_event_clock)
+        event_clock_hidden_dim = int(build_state.event_clock_cfg.hidden_dim)
+        event_clock_gate_hidden_dim = int(build_state.event_clock_cfg.gate_hidden_dim)
+        period_dim_init = int(build_state.event_clock_cfg.period_dim_init)
 
-        # Infer direct pose head (cond + contacts_plan -> absolute pose).
-        # If we don't instantiate this head, load_state_dict(strict=False) will warn about unexpected keys
-        # and the runtime model won't expose `out_direct`.
-        direct_pose_enable = False
-        direct_pose_hidden = 256
-        direct_pose_meas_mode = "concat"
-        direct_pose_feat_source = "cond"
-        direct_pose_time_pe_dim = 0
-        direct_pose_use_phase_z = False
-        direct_pose_phase_z_mode = "concat"
-        direct_pose_split_enable = False
-        direct_pose_stepc_unified_leg_terminal = False
-        direct_pose_arm_split_enable = False
-        direct_pose_arm_bones = None
-        direct_pose_nonleg_proj_dim = 0
-        try:
-            if isinstance(self._ckpt_posttrain_cfg, dict):
-                direct_pose_use_phase_z = bool(self._ckpt_posttrain_cfg.get("direct_pose_use_phase_z", False))
-                v = self._ckpt_posttrain_cfg.get("direct_pose_phase_z_mode", None)
-                if v is not None:
-                    direct_pose_phase_z_mode = str(v).strip().lower() or "concat"
-                direct_pose_split_enable = bool(self._ckpt_posttrain_cfg.get("direct_pose_split_enable", False))
-                direct_pose_stepc_unified_leg_terminal = bool(
-                    self._ckpt_posttrain_cfg.get("direct_pose_stepc_unified_leg_terminal", False)
-                )
-                direct_pose_arm_split_enable = bool(self._ckpt_posttrain_cfg.get("direct_pose_arm_split_enable", False))
-                direct_pose_arm_bones = self._ckpt_posttrain_cfg.get("direct_pose_arm_bones", None)
-                try:
-                    direct_pose_nonleg_proj_dim = int(self._ckpt_posttrain_cfg.get("direct_pose_nonleg_proj_dim", 0) or 0)
-                except Exception:
-                    direct_pose_nonleg_proj_dim = 0
-        except Exception:
-            direct_pose_use_phase_z = False
-            direct_pose_phase_z_mode = "concat"
-            direct_pose_split_enable = False
-            direct_pose_stepc_unified_leg_terminal = False
-            direct_pose_arm_split_enable = False
-            direct_pose_arm_bones = None
-            direct_pose_nonleg_proj_dim = 0
-        try:
-            direct_has_weights = any(str(k).startswith("direct_pose_head.") for k in self.state_dict.keys())
-            has_leg_terminal = any(str(k).startswith("direct_pose_leg_terminal.") for k in self.state_dict.keys())
-            split_has_weights_nonleg = bool(
-                (has_leg_terminal or any(str(k).startswith("direct_pose_out_leg.") for k in self.state_dict.keys()))
-                and any(str(k).startswith("direct_pose_out_nonleg.") for k in self.state_dict.keys())
-            )
-            split_has_weights_arm = bool(
-                (has_leg_terminal or any(str(k).startswith("direct_pose_out_leg.") for k in self.state_dict.keys()))
-                and any(str(k).startswith("direct_pose_out_arm.") for k in self.state_dict.keys())
-                and any(str(k).startswith("direct_pose_out_else.") for k in self.state_dict.keys())
-            )
-            split_has_weights = bool(split_has_weights_nonleg or split_has_weights_arm)
-            direct_has_weights = bool(direct_has_weights or split_has_weights)
-            if direct_has_weights and int(Dy) > 0 and int(Dc) > 0 and int(self.contact_dim) > 0:
-                w_in = self.state_dict.get("direct_pose_head.0.weight", None)
-                w_out = self.state_dict.get("direct_pose_head.6.weight", None)
-                w_out_leg = self.state_dict.get("direct_pose_out_leg.weight", None)
-                w_leg_terminal = self.state_dict.get("direct_pose_leg_terminal.6.weight", None)
-                w_out_nonleg = self.state_dict.get("direct_pose_out_nonleg.weight", None)
-                w_out_arm = self.state_dict.get("direct_pose_out_arm.weight", None)
-                w_out_else = self.state_dict.get("direct_pose_out_else.weight", None)
-                if torch.is_tensor(w_in) and w_in.ndim == 2:
-                    in_dim = int(w_in.shape[1])
-                    hid = int(w_in.shape[0])
-                    out_dim = None
-                    if torch.is_tensor(w_out) and w_out.ndim == 2:
-                        out_dim = int(w_out.shape[0])
-                        direct_pose_split_enable = False
-                        direct_pose_stepc_unified_leg_terminal = False
-                        direct_pose_arm_split_enable = False
-                    elif (
-                        torch.is_tensor(w_leg_terminal)
-                        and w_leg_terminal.ndim == 2
-                        and torch.is_tensor(w_out_nonleg)
-                        and w_out_nonleg.ndim == 2
-                    ):
-                        out_dim = int(w_leg_terminal.shape[0] + w_out_nonleg.shape[0])
-                        direct_pose_split_enable = True
-                        direct_pose_stepc_unified_leg_terminal = True
-                        direct_pose_arm_split_enable = False
-                        if int(w_leg_terminal.shape[1]) > 0:
-                            hid = int(w_leg_terminal.shape[1])
-                        try:
-                            nonleg_in_dim = int(w_out_nonleg.shape[1])
-                            if nonleg_in_dim > 0 and int(nonleg_in_dim) != int(hid):
-                                direct_pose_nonleg_proj_dim = int(nonleg_in_dim)
-                        except Exception:
-                            pass
-                    elif (
-                        torch.is_tensor(w_out_leg)
-                        and w_out_leg.ndim == 2
-                        and torch.is_tensor(w_out_nonleg)
-                        and w_out_nonleg.ndim == 2
-                    ):
-                        out_dim = int(w_out_leg.shape[0] + w_out_nonleg.shape[0])
-                        direct_pose_split_enable = True
-                        direct_pose_stepc_unified_leg_terminal = False
-                        direct_pose_arm_split_enable = False
-                        # Split readout must share the same hidden trunk output dim.
-                        if int(w_out_leg.shape[1]) > 0:
-                            hid = int(w_out_leg.shape[1])
-                        try:
-                            nonleg_in_dim = int(w_out_nonleg.shape[1])
-                            if nonleg_in_dim > 0 and int(nonleg_in_dim) != int(hid):
-                                direct_pose_nonleg_proj_dim = int(nonleg_in_dim)
-                        except Exception:
-                            pass
-                    elif (
-                        torch.is_tensor(w_leg_terminal)
-                        and w_leg_terminal.ndim == 2
-                        and torch.is_tensor(w_out_arm)
-                        and w_out_arm.ndim == 2
-                        and torch.is_tensor(w_out_else)
-                        and w_out_else.ndim == 2
-                    ):
-                        out_dim = int(w_leg_terminal.shape[0] + w_out_arm.shape[0] + w_out_else.shape[0])
-                        direct_pose_split_enable = True
-                        direct_pose_stepc_unified_leg_terminal = True
-                        direct_pose_arm_split_enable = True
-                        if int(w_leg_terminal.shape[1]) > 0:
-                            hid = int(w_leg_terminal.shape[1])
-                        try:
-                            arm_in_dim = int(w_out_arm.shape[1])
-                            if arm_in_dim > 0 and int(arm_in_dim) != int(hid):
-                                direct_pose_nonleg_proj_dim = int(arm_in_dim)
-                        except Exception:
-                            pass
-                    elif (
-                        torch.is_tensor(w_out_leg)
-                        and w_out_leg.ndim == 2
-                        and torch.is_tensor(w_out_arm)
-                        and w_out_arm.ndim == 2
-                        and torch.is_tensor(w_out_else)
-                        and w_out_else.ndim == 2
-                    ):
-                        out_dim = int(w_out_leg.shape[0] + w_out_arm.shape[0] + w_out_else.shape[0])
-                        direct_pose_split_enable = True
-                        direct_pose_stepc_unified_leg_terminal = False
-                        direct_pose_arm_split_enable = True
-                        # Split readout must share the same hidden trunk output dim.
-                        if int(w_out_leg.shape[1]) > 0:
-                            hid = int(w_out_leg.shape[1])
-                        try:
-                            arm_in_dim = int(w_out_arm.shape[1])
-                            if arm_in_dim > 0 and int(arm_in_dim) != int(hid):
-                                direct_pose_nonleg_proj_dim = int(arm_in_dim)
-                        except Exception:
-                            pass
-                    if out_dim is None:
-                        raise SystemExit("[FATAL] direct_pose_head weights found but output readout weights are missing.")
-                    try:
-                        w_proj = self.state_dict.get("direct_pose_nonleg_proj.0.weight", None)
-                        w_proj_arm = self.state_dict.get("direct_pose_arm_proj.0.weight", None)
-                        w_proj_else = self.state_dict.get("direct_pose_else_proj.0.weight", None)
-                        if torch.is_tensor(w_proj) and w_proj.ndim == 2 and int(w_proj.shape[0]) > 0:
-                            direct_pose_nonleg_proj_dim = int(w_proj.shape[0])
-                        elif torch.is_tensor(w_proj_arm) and w_proj_arm.ndim == 2 and int(w_proj_arm.shape[0]) > 0:
-                            direct_pose_nonleg_proj_dim = int(w_proj_arm.shape[0])
-                        elif torch.is_tensor(w_proj_else) and w_proj_else.ndim == 2 and int(w_proj_else.shape[0]) > 0:
-                            direct_pose_nonleg_proj_dim = int(w_proj_else.shape[0])
-                    except Exception:
-                        pass
-                    expected_out = int(Dy)
-                    expected_out_modes = int(Dy) * 2
-                    base_candidates = [
-                        (int(Dc), "cond"),
-                        (int(self.width), "hidden"),
-                        (int(Dc + self.width), "cond+hidden"),
-                    ]
-                    Cc = int(self.contact_dim)
+        direct_pose_enable = bool(build_state.direct_pose_cfg.enable)
+        direct_pose_hidden = int(build_state.direct_pose_cfg.hidden)
+        direct_pose_meas_mode = str(build_state.direct_pose_cfg.meas_mode)
+        direct_pose_feat_source = str(build_state.direct_pose_cfg.feat_source)
+        direct_pose_time_pe_dim = int(build_state.direct_pose_cfg.time_pe_dim)
+        direct_pose_use_phase_z = bool(build_state.direct_pose_cfg.use_phase_z)
+        direct_pose_phase_z_mode = str(build_state.direct_pose_cfg.phase_z_mode)
+        direct_pose_split_enable = bool(build_state.direct_pose_cfg.split_enable)
+        direct_pose_stepc_unified_leg_terminal = bool(build_state.direct_pose_cfg.stepc_unified_leg_terminal)
+        direct_pose_arm_split_enable = bool(build_state.direct_pose_cfg.arm_split_enable)
+        direct_pose_arm_bones = build_state.direct_pose_cfg.arm_bones
+        direct_pose_nonleg_proj_dim = int(build_state.direct_pose_cfg.nonleg_proj_dim)
 
-                    if out_dim == expected_out:
-                        # concat mode: input = base + plan + meas (+ time_pe)
-                        for base_dim, src in base_candidates:
-                            phase_dim = int(2 * Cc) if bool(direct_pose_use_phase_z) else 0
-                            if str(direct_pose_phase_z_mode or "concat").strip().lower() == "replace_contacts":
-                                # input = base + time_pe + phase_z (no plan/meas)
-                                tdim = int(in_dim - base_dim - phase_dim)
-                            else:
-                                tdim = int(in_dim - base_dim - (2 * Cc) - phase_dim)
-                            if tdim >= 0 and tdim % 2 == 0:
-                                direct_pose_enable = True
-                                direct_pose_hidden = hid
-                                direct_pose_meas_mode = "concat"
-                                direct_pose_feat_source = src
-                                direct_pose_time_pe_dim = int(tdim)
-                                break
-                    elif out_dim == expected_out_modes:
-                        # mode_select: input = base + plan (+ time_pe)
-                        for base_dim, src in base_candidates:
-                            phase_dim = int(2 * Cc) if bool(direct_pose_use_phase_z) else 0
-                            if str(direct_pose_phase_z_mode or "concat").strip().lower() == "replace_contacts":
-                                raise SystemExit(
-                                    "[FATAL] direct_pose_phase_z_mode='replace_contacts' is not supported for direct_pose_meas_mode='mode_select'."
-                                )
-                            tdim = int(in_dim - base_dim - Cc - phase_dim)
-                            if tdim >= 0 and tdim % 2 == 0:
-                                direct_pose_enable = True
-                                direct_pose_hidden = hid
-                                direct_pose_meas_mode = "mode_select"
-                                direct_pose_feat_source = src
-                                direct_pose_time_pe_dim = int(tdim)
-                                break
-                    else:
-                        raise SystemExit(
-                            f"[FATAL] Unrecognized direct_pose_head out_dim={out_dim} (expected {expected_out} or {expected_out_modes})."
-                        )
+        lambda_fusion_enable = bool(build_state.lambda_fusion_cfg.enable)
+        lambda_fusion_mode = str(build_state.lambda_fusion_cfg.mode)
+        lambda_fusion_hidden = int(build_state.lambda_fusion_cfg.hidden)
+        lambda_fusion_use_rollout_step = bool(build_state.lambda_fusion_cfg.use_rollout_step)
 
-                    if not direct_pose_enable:
-                        raise SystemExit(
-                            f"[FATAL] Unrecognized direct_pose_head shape: in_dim={in_dim} out_dim={out_dim} "
-                            f"(cond_dim={Dc}, hidden_dim={self.width}, contact_dim={self.contact_dim})."
-                        )
-        except Exception:
-            direct_pose_enable = False
-            direct_pose_feat_source = "cond"
-            direct_pose_time_pe_dim = 0
-            direct_pose_use_phase_z = False
-            direct_pose_split_enable = False
-            direct_pose_stepc_unified_leg_terminal = False
-            direct_pose_nonleg_proj_dim = 0
-
-        # Prefer checkpoint posttrain_cfg when present (cannot infer hidden_pre from tensor shapes).
-        if isinstance(self._ckpt_posttrain_cfg, dict):
-            try:
-                v = self._ckpt_posttrain_cfg.get("direct_pose_feat_source", None)
-                if v is not None:
-                    s = str(v).strip().lower()
-                    if s not in ("", "auto"):
-                        if s in ("h", "h_final", "hidden_only", "post", "final"):
-                            s = "hidden"
-                        if s in ("h_pre", "h_temporal", "hidden_pre", "pre", "temporal", "mid"):
-                            s = "hidden_pre"
-                        if s in ("cond_hidden", "hidden_cond", "concat", "cond+hidden", "hidden+cond"):
-                            s = "cond+hidden"
-                        if s in ("cond+hidden_pre", "cond_hidden_pre", "hidden_pre+cond", "cond+pre", "pre+cond"):
-                            s = "cond+hidden_pre"
-                        if s in ("cond", "hidden", "hidden_pre", "cond+hidden", "cond+hidden_pre"):
-                            direct_pose_feat_source = s
-            except Exception:
-                pass
-
-        # Infer lambda fusion head (Stage2): must match ckpt shapes to avoid size mismatch errors.
-        lambda_has_weights = any(str(k).startswith("lambda_fusion_head.") for k in self.state_dict.keys())
-        lambda_fusion_enable = bool(lambda_has_weights)
-        lambda_fusion_mode = "per_joint"
-        lambda_fusion_hidden = 128
-        lambda_fusion_use_rollout_step = False
-        try:
-            if lambda_has_weights:
-                w_in = self.state_dict.get("lambda_fusion_head.1.weight", None)
-                w_out = self.state_dict.get("lambda_fusion_head.4.weight", None)
-                if torch.is_tensor(w_in) and w_in.ndim == 2:
-                    lambda_fusion_hidden = int(w_in.shape[0])
-                    base_in = int(self.width + (self.contact_dim if contact_plan_enable else 0))
-                    in_features = int(w_in.shape[1])
-                    if in_features == base_in + 1:
-                        lambda_fusion_use_rollout_step = True
-                    elif in_features == base_in:
-                        lambda_fusion_use_rollout_step = False
-                if torch.is_tensor(w_out) and w_out.ndim == 2:
-                    out_dim = int(w_out.shape[0])
-                    lambda_fusion_mode = "global" if out_dim == 1 else "per_joint"
-        except Exception:
-            lambda_fusion_enable = False
-
-        # Important: EventMotionModel's period_dim can be mutated later by attach_motion_encoder().
-        # Some checkpoints are trained with period_dim=0 at init (so Event-Clock ignores period_feat),
-        # then period_dim is set by the attached encoder bundle (creating period_encoder weights).
-        # To faithfully reconstruct such ckpts, infer the Event-Clock period_feat_dim from its weight shapes
-        # and use it as the model init period_dim (then attach encoder bundle BEFORE loading weights).
-        period_dim_ckpt = int(getattr(ds, "period_dim", 0) or self.period_dim)
-        event_clock_period_feat_dim = None
-        try:
-            w0_ec = self.state_dict.get("event_clock_gate.confidence_head.0.weight", None)
-            if torch.is_tensor(w0_ec) and w0_ec.ndim == 2:
-                base = int(self.contact_dim) * 2 + 1
-                event_clock_period_feat_dim = max(0, int(w0_ec.shape[1]) - base)
-        except Exception:
-            event_clock_period_feat_dim = None
-        period_dim_init = int(period_dim_ckpt)
-        try:
-            if (
-                bool(event_clock_has_weights)
-                and event_clock_period_feat_dim is not None
-                and int(event_clock_period_feat_dim) != int(period_dim_ckpt)
-            ):
-                period_dim_init = int(event_clock_period_feat_dim)
-        except Exception:
-            period_dim_init = int(period_dim_ckpt)
-        if period_dim_init != int(period_dim_ckpt) and bool(event_clock_has_weights):
-            if not (self.encoder_bundle_path and self.encoder_bundle_path.is_file()):
-                print(
-                    f"[FreeRun][WARN] ckpt period_dim={int(period_dim_ckpt)} but Event-Clock was initialized with "
-                    f"period_feat_dim={int(period_dim_init)}; no encoder_bundle provided so period_encoder weights may be dropped. "
-                    "Pass --encoder-bundle to fully reconstruct the model."
-                )
-            else:
-                print(
-                    f"[FreeRun][INFO] ckpt period_dim={int(period_dim_ckpt)} but Event-Clock period_feat_dim={int(period_dim_init)}; "
-                    "initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights."
-                )
+        direct_pose_leg_enable = bool(build_state.direct_pose_leg_cfg.enable)
+        direct_pose_leg_bones = build_state.direct_pose_leg_cfg.bones
+        direct_pose_leg_mode = str(build_state.direct_pose_leg_cfg.mode)
+        direct_pose_leg_stopgrad_main = bool(build_state.direct_pose_leg_cfg.stopgrad_main)
+        direct_pose_leg_detach_feat = bool(build_state.direct_pose_leg_cfg.detach_feat)
+        direct_pose_leg_max_deg = float(build_state.direct_pose_leg_cfg.max_deg)
+        direct_pose_leg_side_routing = bool(build_state.direct_pose_leg_cfg.side_routing)
+        direct_pose_leg_contact_order = str(build_state.direct_pose_leg_cfg.contact_order)
+        direct_pose_leg_side_embed_dim = int(build_state.direct_pose_leg_cfg.side_embed_dim)
+        direct_pose_leg_side_plan_other = bool(build_state.direct_pose_leg_cfg.side_plan_other)
+        direct_pose_leg_side_phase_other = bool(build_state.direct_pose_leg_cfg.side_phase_other)
+        direct_pose_leg_side_phase_rel = bool(build_state.direct_pose_leg_cfg.side_phase_rel)
+        direct_pose_leg_side_cue = str(build_state.direct_pose_leg_cfg.side_cue)
+        direct_pose_leg_side_cue_tau = float(build_state.direct_pose_leg_cfg.side_cue_tau)
+        direct_pose_leg_side_sign_gate = bool(build_state.direct_pose_leg_cfg.side_sign_gate)
+        direct_pose_leg_side_rank1 = bool(build_state.direct_pose_leg_cfg.side_rank1)
+        direct_pose_leg_gate_mode = str(build_state.direct_pose_leg_cfg.gate_mode)
+        direct_pose_leg_gate_power = float(build_state.direct_pose_leg_cfg.gate_power)
+        direct_pose_leg_scale_log_clip = float(build_state.direct_pose_leg_cfg.scale_log_clip)
+        direct_pose_leg_scale_clamp_k = float(build_state.direct_pose_leg_cfg.scale_clamp_k)
 
         # Phase reset / clock anchor source:
         # - default ("contacts_meas"): phase resets are triggered by contacts_meas threshold crossing inside the model.
@@ -1367,168 +1006,6 @@ class FreeRunCycleRunner:
             )
         try:
             setattr(self, "phase_reset_source_applied", str(phase_reset_source_applied))
-        except Exception:
-            pass
-
-        # ---- Direct leg residual head config (optional; stored in posttrain_cfg) ----
-        # Needed to reconstruct checkpoints that include direct_pose_leg_head / joint_idx buffer.
-        direct_pose_leg_enable = False
-        direct_pose_leg_bones = None
-        direct_pose_leg_mode = "rot6d_add"
-        direct_pose_leg_stopgrad_main = False
-        direct_pose_leg_detach_feat = False
-        direct_pose_leg_max_deg = 0.0
-        direct_pose_leg_side_routing = False
-        direct_pose_leg_contact_order = "lr"
-        direct_pose_leg_side_embed_dim = 0
-        direct_pose_leg_side_plan_other = False
-        direct_pose_leg_side_phase_other = False
-        direct_pose_leg_side_phase_rel = False
-        direct_pose_leg_side_cue = "none"
-        direct_pose_leg_side_cue_tau = 30.0
-        direct_pose_leg_side_sign_gate = False
-        direct_pose_leg_side_rank1 = False
-        direct_pose_leg_gate_mode = "none"
-        direct_pose_leg_gate_power = 1.0
-        direct_pose_leg_scale_log_clip = 4.0
-        direct_pose_leg_scale_clamp_k = 0.0
-        try:
-            if isinstance(self._ckpt_posttrain_cfg, dict):
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_enable", None)
-                if v is not None:
-                    direct_pose_leg_enable = bool(v)
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_bones", None)
-                if v is not None:
-                    direct_pose_leg_bones = str(v)
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_mode", None)
-                if v is not None:
-                    s = str(v).strip().lower()
-                    direct_pose_leg_mode = "so3" if s in ("so3", "omega", "compose", "so3_compose") else "rot6d_add"
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_stopgrad_main", None)
-                if v is not None:
-                    direct_pose_leg_stopgrad_main = bool(v)
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_detach_feat", None)
-                if v is not None:
-                    direct_pose_leg_detach_feat = bool(v)
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_max_deg", None)
-                if v is not None:
-                    try:
-                        direct_pose_leg_max_deg = float(v)
-                    except Exception:
-                        direct_pose_leg_max_deg = 0.0
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_gate_mode", None)
-                if v is not None:
-                    s = str(v).strip().lower()
-                    if s in (
-                        "signed_scale",
-                        "signedscale",
-                        "signed",
-                        "signmag",
-                        "sign_mag",
-                        "signmagscale",
-                        "signedmag",
-                        "sscale",
-                    ):
-                        raise SystemExit(
-                            "[FATAL] ckpt posttrain_cfg uses direct_pose_leg_gate_mode='signed_scale', "
-                            "which is removed in current train/eval main chain. "
-                            "Migrate to direct_pose_leg_gate_mode='scale' (or 'learned')."
-                        )
-                    if s in ("learned", "on", "true", "1", "yes", "y"):
-                        direct_pose_leg_gate_mode = "learned"
-                    elif s in ("scale", "mag", "magnitude", "logmag", "log_mag", "exp", "alpha"):
-                        direct_pose_leg_gate_mode = "scale"
-                    elif s in ("", "auto", "none", "off", "false", "0", "no", "n", "disable", "disabled"):
-                        direct_pose_leg_gate_mode = "none"
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_gate_power", None)
-                if v is not None:
-                    try:
-                        direct_pose_leg_gate_power = float(v)
-                    except Exception:
-                        direct_pose_leg_gate_power = 1.0
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_scale_log_clip", None)
-                if v is not None:
-                    try:
-                        direct_pose_leg_scale_log_clip = float(v)
-                    except Exception:
-                        direct_pose_leg_scale_log_clip = 4.0
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_scale_clamp_k", None)
-                if v is not None:
-                    try:
-                        direct_pose_leg_scale_clamp_k = float(v)
-                    except Exception:
-                        direct_pose_leg_scale_clamp_k = 0.0
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_side_routing", None)
-                if v is not None:
-                    direct_pose_leg_side_routing = bool(v)
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_contact_order", None)
-                if v is not None:
-                    direct_pose_leg_contact_order = str(v)
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_side_embed_dim", None)
-                if v is not None:
-                    try:
-                        direct_pose_leg_side_embed_dim = int(v)
-                    except Exception:
-                        direct_pose_leg_side_embed_dim = 0
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_side_plan_other", None)
-                if v is not None:
-                    direct_pose_leg_side_plan_other = bool(v)
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_side_phase_other", None)
-                if v is not None:
-                    direct_pose_leg_side_phase_other = bool(v)
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_side_phase_rel", None)
-                if v is not None:
-                    direct_pose_leg_side_phase_rel = bool(v)
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_side_cue", None)
-                if v is not None:
-                    direct_pose_leg_side_cue = str(v)
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_side_cue_tau", None)
-                if v is not None:
-                    try:
-                        direct_pose_leg_side_cue_tau = float(v)
-                    except Exception:
-                        direct_pose_leg_side_cue_tau = 30.0
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_side_sign_gate", None)
-                if v is not None:
-                    direct_pose_leg_side_sign_gate = bool(v)
-                v = self._ckpt_posttrain_cfg.get("direct_pose_leg_side_rank1", None)
-                if v is not None:
-                    direct_pose_leg_side_rank1 = bool(v)
-        except Exception:
-            pass
-        # If weights exist, ensure the head is instantiated even when cfg key wasn't present.
-        try:
-            if any(
-                str(k).startswith("direct_pose_leg_head.")
-                or str(k).startswith("direct_pose_leg_head_shared.")
-                or str(k).startswith("direct_pose_leg_side_embed.")
-                or str(k).startswith("direct_pose_leg_side_sign_gate_head.")
-                for k in self.state_dict.keys()
-            ):
-                direct_pose_leg_enable = True
-            if any(
-                str(k).startswith("direct_pose_leg_gate_head.")
-                or str(k).startswith("direct_pose_leg_gate_head_shared.")
-                for k in self.state_dict.keys()
-            ):
-                # Gate/scale head only exists when leg SO(3) head is enabled.
-                direct_pose_leg_enable = True
-                if str(direct_pose_leg_gate_mode).strip().lower() in ("", "none", "off", "false", "0"):
-                    # Backward-compatible default when ckpt lacks explicit mode.
-                    direct_pose_leg_gate_mode = "learned"
-            if any(str(k).startswith("direct_pose_leg_head_shared.") for k in self.state_dict.keys()):
-                direct_pose_leg_side_routing = True
-            if any(str(k).startswith("direct_pose_leg_gate_head_shared.") for k in self.state_dict.keys()):
-                direct_pose_leg_side_routing = True
-            if any(str(k).startswith("direct_pose_leg_side_sign_gate_head.") for k in self.state_dict.keys()):
-                direct_pose_leg_side_routing = True
-                direct_pose_leg_side_sign_gate = True
-            if not bool(direct_pose_leg_side_rank1):
-                # Heuristic auto-detect for older ckpts without posttrain_cfg:
-                # rank1 head uses out_dim=(3 + K_side), which is typically not divisible by 3.
-                w = self.state_dict.get("direct_pose_leg_head_shared.6.weight", None)
-                if torch.is_tensor(w) and w.ndim == 2 and int(w.shape[0]) > 0 and (int(w.shape[0]) % 3) != 0:
-                    direct_pose_leg_side_rank1 = True
         except Exception:
             pass
 
@@ -1630,10 +1107,20 @@ class FreeRunCycleRunner:
             model = EventMotionModel(**filtered_kwargs).to(self.device)
         # Validate basic shapes then load weights (allow extra frozen encoder keys).
         validate_and_fix_model_(model, Dx, Dc)
-        # Attach frozen motion encoder BEFORE loading weights (period_dim/period_encoder may be created here).
-        if self.encoder_bundle_path and self.encoder_bundle_path.is_file():
-            model.attach_motion_encoder(torch.load(str(self.encoder_bundle_path), map_location="cpu"))
-        missing, unexpected = model.load_state_dict(self.state_dict, strict=False)
+        prepared_state_dict = prepare_event_motion_ckpt_state_for_load(
+            state_dict=build_state.state_dict,
+            model=model,
+            ckpt_posttrain_cfg=build_state.ckpt_posttrain_cfg,
+            contact_dim=int(self.contact_dim or 0),
+            direct_pose_cfg=build_state.direct_pose_cfg,
+            load_options=DirectPoseLoadCompatOptions(
+                train_direct_pose=False,
+                leg_enable=bool(direct_pose_leg_enable),
+                leg_bones=direct_pose_leg_bones,
+            ),
+            encoder_bundle=self.encoder_bundle_path if (self.encoder_bundle_path and self.encoder_bundle_path.is_file()) else None,
+        )
+        missing, unexpected = model.load_state_dict(prepared_state_dict, strict=False)
         if missing or unexpected:
             print(f"[FreeRun][WARN] state_dict mismatch: missing={missing}, unexpected={unexpected}")
         # Eval-time ablations for diagnosing "baseline direction capability".
@@ -1680,9 +1167,6 @@ class FreeRunCycleRunner:
             lr=1e-4,
             grad_clip=0.0,
             weight_decay=0.0,
-            tf_warmup_steps=0,
-            tf_total_steps=0,
-            augmentor=None,
             use_amp=False,
             accum_steps=1,
             pin_memory=False,
@@ -4536,7 +4020,7 @@ def _run_freerun_cycles(
         contacts_wb_t = None
         if need_wb:
             try:
-                contacts_wb_t, prev_foot_pos_meas = trainer._contact_meas_whitebox(motion_raw, prev_foot_pos_meas)
+                contacts_wb_t, prev_foot_pos_meas = compute_contact_meas_whitebox(trainer, motion_raw, prev_foot_pos_meas)
             except Exception:
                 contacts_wb_t = None
 

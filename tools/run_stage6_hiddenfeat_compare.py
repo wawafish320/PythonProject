@@ -147,8 +147,8 @@ def _build_config(spec: LaneSpec) -> Path:
     return path
 
 
-def _expected_best_free_ckpt(spec: LaneSpec) -> Path:
-    return MODEL_ROOT / spec.run_name / f"ckpt_best_free_{spec.run_name}.pth"
+def _expected_last_ckpt(spec: LaneSpec) -> Path:
+    return MODEL_ROOT / spec.run_name / f"ckpt_last_{spec.run_name}.pth"
 
 
 def _expected_stage6_ckpt(spec: LaneSpec) -> str | None:
@@ -252,15 +252,7 @@ def _resolve_ckpt_train_epoch(run_root: Path, ckpt_path: Path) -> tuple[str, int
     summary_path = run_root / "basetrain_keybone_group_summary.json"
     summary = _load_json(summary_path) if summary_path.is_file() else {}
     ckpt_name = ckpt_path.name
-    if ckpt_name.startswith("ckpt_best_free_"):
-        selector = "best_free"
-        epoch_raw = _safe_float(summary.get("best_free_by_GeoDriftSlopeProxy", {}).get("epoch"))
-        epoch = int(epoch_raw) if math.isfinite(epoch_raw) else None
-    elif ckpt_name.startswith("ckpt_best_teacher_"):
-        selector = "best_teacher"
-        epoch_raw = _safe_float(summary.get("best_teacher_by_GeoLocalDeg", {}).get("epoch"))
-        epoch = int(epoch_raw) if math.isfinite(epoch_raw) else None
-    elif ckpt_name.startswith("ckpt_last_"):
+    if ckpt_name.startswith("ckpt_last_"):
         selector = "last"
     metrics_dir = run_root / "metrics"
     if (epoch is None) or epoch <= 0:
@@ -338,7 +330,7 @@ def _load_hidden_lane_entry(spec: LaneSpec) -> Dict[str, Any]:
         "family": spec.family,
         "variant": spec.variant,
         "source": "hiddenfeat",
-        "ckpt": str(_expected_best_free_ckpt(spec)),
+        "ckpt": str(_expected_last_ckpt(spec)),
         "basetrain": _group_summary_to_metrics(basetrain_path),
         "stage6_exit": _group_summary_to_metrics(stage6_path),
         "paths": paths,
@@ -424,7 +416,7 @@ def _verdict_from_deltas(deltas: Iterable[float]) -> str:
 
 def _render_table(entries: Sequence[Dict[str, Any]], metric: str) -> List[str]:
     lines = [
-        f"## {'Basetrain best_free endpoint' if metric == 'basetrain' else 'Stage6 exit'}",
+        f"## {'Basetrain last endpoint' if metric == 'basetrain' else 'Stage6 exit'}",
         "",
         "| family | lane | variant | all_ex_root | leg | nonleg | delta_vs_baseline all_ex_root |",
         "|---|---|---|---:|---:|---:|---:|",
@@ -558,7 +550,7 @@ def main() -> int:
     config_rows = []
     for spec in LANES:
         cfg_path = _build_config(spec)
-        ckpt_path = _expected_best_free_ckpt(spec)
+        ckpt_path = _expected_last_ckpt(spec)
         config_rows.append(
             {
                 "lane_name": spec.lane_name,
@@ -567,7 +559,7 @@ def main() -> int:
                 "source_config": str(spec.source_config),
                 "config": str(cfg_path),
                 "run_name": spec.run_name,
-                "expected_best_free_ckpt": str(ckpt_path),
+                "expected_last_ckpt": str(ckpt_path),
             }
         )
         if ckpt_path.is_file():
@@ -575,7 +567,7 @@ def main() -> int:
             continue
         _run_cmd([sys.executable, "-m", "train.training_MPL", "--config_json", str(cfg_path)])
         if not ckpt_path.is_file():
-            raise SystemExit(f"[FATAL] missing best_free ckpt after training: {ckpt_path}")
+            raise SystemExit(f"[FATAL] missing last ckpt after training: {ckpt_path}")
 
     manifest = {
         "run_date": RUN_DATE,

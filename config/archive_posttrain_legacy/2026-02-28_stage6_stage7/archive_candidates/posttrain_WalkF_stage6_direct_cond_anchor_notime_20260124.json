@@ -8,12 +8,10 @@
   "depth": 3,
   "detach_rollout_state": true,
   "device": "auto",
-
   "direct_pose_feat_source": "cond",
   "direct_pose_reinit": true,
   "direct_pose_time_pe_base": 10000.0,
   "direct_pose_time_pe_dim": 0,
-
   "direct_pose_hinge_enable": true,
   "direct_pose_hinge_bones": "calf_r",
   "direct_pose_hinge_axis": "z",
@@ -21,7 +19,6 @@
   "direct_pose_hinge_base_feat": "rot6d",
   "direct_pose_hinge_clean": true,
   "direct_pose_hinge_eps_max_scale": 0.0,
-
   "dropout": 0.1,
   "encoder_bundle": "models/motion_encoder_equiv_stageA.pt",
   "epochs": 5,
@@ -33,7 +30,7 @@
   "paths": [
     "raw_data/processed_data/Walk_F.npz"
   ],
-  "phase_reset_source": "td_hazard",
+  "phase_reset_source": "contacts_meas",
   "pretrain_template": "models/pretrain_template.json",
   "rollout_cycles": 5,
   "rollout_include_boundary": true,
@@ -45,14 +42,7 @@
   "so3_corr_gate_logit_reset": null,
   "steps_per_epoch": 60,
   "time_index_mode": "auto",
-  "train_contact_meas": false,
-  "train_contact_plan": false,
-  "train_contact_plan_init": false,
-  "train_contact_td_hazard": false,
-  "train_contact_ttc": false,
   "train_direct_pose": true,
   "train_lambda_head": false,
-  "train_so3_corrector": false,
   "weight_decay": 0.0
 }
-

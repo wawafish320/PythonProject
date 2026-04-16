@@ -45,13 +45,7 @@
   "so3_corr_gate_logit_reset": null,
   "steps_per_epoch": 60,
   "time_index_mode": "auto",
-  "train_contact_meas": false,
-  "train_contact_plan": false,
-  "train_contact_plan_init": false,
-  "train_contact_td_hazard": false,
-  "train_contact_ttc": false,
   "train_direct_pose": true,
   "train_lambda_head": false,
-  "train_so3_corrector": false,
   "weight_decay": 0.0
 }

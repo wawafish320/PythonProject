@@ -74,7 +74,7 @@ STAGE_MODEL_EVAL_ROOT = OUT_ROOT / "stage_eval_model"
 STAGE6_COMPARE_JSON = ROOT / "debug_output" / "_tmp_stage6_basetrain_compare_20260313" / "compare_summary.json"
 FULL_OLDPLAN_SUMMARY_JSON = ROOT / "debug_output" / "_tmp_cp015_oldplan_downstream_chain_20260314" / "summary.json"
 ROLLBACK_SUMMARY_JSON = ROOT / "debug_output" / "_tmp_cp015_oldplan_component_ablation_20260314" / "summary.json"
-BASE_CKPT = ROOT / "models" / "MLPL2_DirectBranch_v1" / "exp_phase_DirectBranch_v1_d1" / "ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth"
+BASE_CKPT = ROOT / "models" / "MLPL2_DirectBranch_v1" / "exp_phase_DirectBranch_v1_d1" / "ckpt_last_exp_phase_DirectBranch_v1_d1.pth"
 STAGE6_CASE_NAME = "old_bestfree"
 
 TRANSITIONS: Tuple[Tuple[str, str], ...] = (

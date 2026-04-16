@@ -202,7 +202,7 @@ def _find_max_epoch(exp_dir: Path) -> Optional[int]:
     metrics_dir = exp_dir / "metrics"
     epochs: List[int] = []
     if metrics_dir.is_dir():
-        for path in metrics_dir.glob("valfree_ep*.json"):
+        for path in metrics_dir.glob("teacher_ep*.json"):
             try:
                 epochs.append(int(path.stem.rsplit("ep", 1)[1]))
             except Exception:
@@ -282,7 +282,7 @@ def _run_cmd(cmd: Sequence[str], *, log_path: Path, dry_run: bool) -> int:
 def _saved_ckpt_filenames(exp_dir: Path, run_name: str) -> List[str]:
     names: List[str] = []
     names.extend(path.name for path in sorted(exp_dir.glob("ckpt_epoch_*.pth")))
-    for selector in ("best_free", "best_teacher", "last"):
+    for selector in ("last",):
         path = exp_dir / f"ckpt_{selector}_{run_name}.pth"
         if path.is_file():
             names.append(path.name)
@@ -326,8 +326,6 @@ def _discover_candidates(exp_dir: Path, run_name: str) -> tuple[List[CandidateSp
         add_candidate(candidate_name=f"epoch{epoch:03d}", selector="ckpt_epoch", path=path, basetrain_epoch=epoch)
 
     alias_specs = [
-        ("best_free", exp_dir / f"ckpt_best_free_{run_name}.pth", _extract_summary_epoch(summary, "best_free_by_GeoDriftSlopeProxy")),
-        ("best_teacher", exp_dir / f"ckpt_best_teacher_{run_name}.pth", _extract_summary_epoch(summary, "best_teacher_by_GeoLocalDeg")),
         ("last", exp_dir / f"ckpt_last_{run_name}.pth", _find_max_epoch(exp_dir)),
     ]
     for selector, path, epoch in alias_specs:

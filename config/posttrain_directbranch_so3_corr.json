@@ -24,7 +24,6 @@
 
   "detach_rollout_state": true,
 
-  "train_so3_corrector": true,
   "train_lambda_head": false,
 
   "so3_corr_gate_force": null,
@@ -41,7 +40,6 @@
   "lambda_fusion_logit_init": -2.0,
   "lambda_fusion_use_rollout_step": true,
 
-  "train_contact_meas": false,
   "contact_meas_weight": 0.0,
 
   "seed": 0

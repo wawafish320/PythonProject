@@ -77,7 +77,6 @@ def _build_model(
         direct_pose_meas_noise_std=0.01,
         direct_pose_use_phase_z=use_phase,
         direct_pose_phase_z_mode=phase_mode,
-        contact_phase_state_enable=use_phase,
         phase_reset_source="contacts_meas",
         direct_pose_split_enable=split_enable,
         direct_pose_stepc_unified_leg_terminal=stepc_unified_leg_terminal,
@@ -134,7 +133,7 @@ class EventMotionModelRefactorPhaseDTest(unittest.TestCase):
         )
 
         legacy_state = copy.deepcopy(legacy_model.state_dict())
-        self.assertTrue(split_model.adapt_legacy_state_dict_(legacy_state))
+        self.assertTrue(split_model._maybe_upgrade_direct_pose_split_state_dict(legacy_state))
         self.assertNotIn("direct_pose_head.6.weight", legacy_state)
         self.assertIn("direct_pose_out_leg.weight", legacy_state)
         self.assertIn("direct_pose_out_nonleg.weight", legacy_state)
@@ -191,7 +190,7 @@ class EventMotionModelRefactorPhaseDTest(unittest.TestCase):
         )
 
         legacy_state = copy.deepcopy(legacy_split.state_dict())
-        self.assertTrue(stepc_model.adapt_legacy_state_dict_(legacy_state))
+        self.assertTrue(stepc_model._maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(legacy_state))
         self.assertIn("direct_pose_leg_terminal.6.weight", legacy_state)
         self.assertNotIn("direct_pose_out_leg.weight", legacy_state)
 

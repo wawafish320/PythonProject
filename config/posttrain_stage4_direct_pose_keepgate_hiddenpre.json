@@ -25,14 +25,8 @@
   "detach_rollout_state": true,
   "phase_reset_source": "none",
 
-  "train_so3_corrector": false,
   "train_lambda_head": false,
   "train_direct_pose": true,
-  "train_contact_plan_init": false,
-  "train_contact_plan": false,
-  "train_contact_meas": false,
-  "train_contact_ttc": false,
-  "train_contact_td_hazard": false,
 
   "direct_pose_feat_source": "hidden_pre",
   "direct_pose_reinit": true,

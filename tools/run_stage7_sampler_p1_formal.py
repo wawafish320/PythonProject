@@ -141,8 +141,6 @@ def _pick_ckpt(train_out: Path, run_name: str) -> Path:
     run_dir = train_out / run_name
     cands = [
         run_dir / f"ckpt_last_{run_name}.pth",
-        run_dir / f"ckpt_best_free_{run_name}.pth",
-        run_dir / f"ckpt_best_teacher_{run_name}.pth",
     ]
     for p in cands:
         if p.is_file():

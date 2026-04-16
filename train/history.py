@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -375,6 +375,71 @@ class AdaptiveHistoryModule(nn.Module):
         return self._last_diag
 
 
+def resolve_pose_hist_runtime_tensors(
+    dataset: Any,
+) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+    pose_norm = getattr(dataset, "pose_hist_norm", None)
+    pose_hist_scales = None
+    pose_hist_mu = None
+    pose_hist_std = None
+    if pose_norm is not None:
+        pose_hist_scales = torch.as_tensor(pose_norm.scales, dtype=torch.float32)
+        pose_hist_mu = (
+            torch.as_tensor(pose_norm.mu, dtype=torch.float32)
+            if getattr(pose_norm, "mu", None) is not None
+            else None
+        )
+        pose_hist_std = (
+            torch.as_tensor(pose_norm.std, dtype=torch.float32)
+            if getattr(pose_norm, "std", None) is not None
+            else None
+        )
+    return pose_hist_scales, pose_hist_mu, pose_hist_std
+
+
+def attach_adaptive_history_runtime(
+    model: Any,
+    *,
+    history_export_frames: int,
+    pose_hist_dim_raw: int,
+    pose_hist_len_raw: int,
+    history_frame_dim: int,
+    history_hidden_dim: int,
+    max_history_frames: Optional[int],
+    history_heads: int,
+    train_variable_history: bool,
+    history_dropout_prob: float,
+    use_trend_features: bool,
+    device: torch.device,
+) -> None:
+    if int(history_export_frames) <= 0:
+        return
+    if int(pose_hist_dim_raw) <= 0 or int(pose_hist_len_raw) <= 0:
+        print('[AdaptiveHistory][WARN] pose history not available; adaptive history disabled.')
+        return
+    if int(pose_hist_dim_raw) % int(pose_hist_len_raw) != 0:
+        print('[AdaptiveHistory][WARN] pose history dim不整除帧数，跳过 adaptive history。')
+        return
+
+    max_frames = max_history_frames
+    if max_frames is None:
+        max_frames = int(pose_hist_len_raw)
+
+    module_device = torch.device('cpu') if device.type == 'mps' else device
+    history_module = AdaptiveHistoryModule(
+        pose_dim=int(history_frame_dim),
+        hidden_dim=int(history_hidden_dim),
+        num_history_frames=int(history_export_frames),
+        max_history_frames=int(max_frames),
+        cond_dim=0,
+        num_heads=int(history_heads),
+        train_variable_history=bool(train_variable_history),
+        history_dropout_prob=float(history_dropout_prob),
+        use_trend_features=bool(use_trend_features),
+    ).to(module_device)
+    model.enable_adaptive_history(history_module, pose_hist_len=int(pose_hist_len_raw))
+
+
 __all__ = [
     "AdaptiveHistoryModule",
     "PoseHistState",
@@ -384,4 +449,6 @@ __all__ = [
     "resolve_pose_hist_input",
     "advance_pose_hist_state",
     "advance_pose_hist_state_with_tail",
+    "resolve_pose_hist_runtime_tensors",
+    "attach_adaptive_history_runtime",
 ]

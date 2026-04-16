@@ -158,28 +158,13 @@ def _maybe_load_metric(exp_dir: Path, tag: str, epoch: Optional[int]) -> Dict[st
 def _find_max_epoch(exp_dir: Path) -> Optional[int]:
     metrics_dir = exp_dir / "metrics"
     epochs: List[int] = []
-    for path in metrics_dir.glob("valfree_ep*.json"):
+    for path in metrics_dir.glob("teacher_ep*.json"):
         stem = path.stem
         try:
             epochs.append(int(stem.rsplit("ep", 1)[1]))
         except Exception:
             continue
     return max(epochs) if epochs else None
-
-
-def _load_basetrain_summary(exp_dir: Path) -> Dict[str, Any]:
-    path = exp_dir / "basetrain_keybone_group_summary.json"
-    return _load_json(path) if path.is_file() else {}
-
-
-def _extract_summary_epoch(summary: Mapping[str, Any], key: str) -> Optional[int]:
-    payload = summary.get(key)
-    if not isinstance(payload, Mapping):
-        return None
-    try:
-        return int(payload.get("epoch"))
-    except Exception:
-        return None
 
 
 def _discover_epoch_ckpts(exp_dir: Path) -> Dict[int, Path]:
@@ -199,16 +184,13 @@ def _discover_epoch_ckpts(exp_dir: Path) -> Dict[int, Path]:
 
 def _discover_candidates(exp_dir: Path, *, smoke_only: bool) -> List[Candidate]:
     run_name = exp_dir.name
-    summary = _load_basetrain_summary(exp_dir)
     last_epoch = _find_max_epoch(exp_dir)
     rows: List[Candidate] = []
     specs = [
-        ("best_free", exp_dir / f"ckpt_best_free_{run_name}.pth", _extract_summary_epoch(summary, "best_free_by_GeoDriftSlopeProxy")),
         ("last", exp_dir / f"ckpt_last_{run_name}.pth", last_epoch),
-        ("best_teacher", exp_dir / f"ckpt_best_teacher_{run_name}.pth", _extract_summary_epoch(summary, "best_teacher_by_GeoLocalDeg")),
     ]
     for selector, ckpt, epoch in specs:
-        if smoke_only and selector != "best_free":
+        if smoke_only and selector != "last":
             continue
         if ckpt.is_file():
             rows.append(
@@ -226,79 +208,8 @@ def _discover_candidates(exp_dir: Path, *, smoke_only: bool) -> List[Candidate]:
     return rows
 
 
-def _extract_group_mean(metrics: Mapping[str, Any], group_name: str) -> float:
-    summary = metrics.get("KeyBoneSummary", {})
-    if isinstance(summary, Mapping):
-        group_mean = summary.get("group_mean", {})
-        if isinstance(group_mean, Mapping):
-            return _safe_float(group_mean.get(group_name))
-    return float("nan")
-
-
-def _compute_geo_deg_slope(metrics: Mapping[str, Any]) -> float:
-    curve = metrics.get("GeoDegCurve")
-    if not isinstance(curve, list) or not curve:
-        start = _safe_float(metrics.get("GeoDegStart", metrics.get("GeoDeg")))
-        end = _safe_float(metrics.get("GeoDegEnd", start))
-        horizon = int(metrics.get("eval_horizon", 0) or 0)
-        return (end - start) / max(1, horizon - 1)
-    if isinstance(curve[0], (list, tuple)) and curve[0]:
-        horizon = len(curve[0])
-        mean_curve: List[float] = []
-        for step_idx in range(horizon):
-            vals = []
-            for batch_curve in curve:
-                if isinstance(batch_curve, (list, tuple)) and step_idx < len(batch_curve):
-                    value = _safe_float(batch_curve[step_idx])
-                    if math.isfinite(value):
-                        vals.append(value)
-            if vals:
-                mean_curve.append(float(sum(vals) / len(vals)))
-    else:
-        mean_curve = [_safe_float(v) for v in curve if math.isfinite(_safe_float(v))]
-    if len(mean_curve) < 2:
-        return float("inf")
-    return float((mean_curve[-1] - mean_curve[0]) / max(1, len(mean_curve) - 1))
-
-
 def _build_proxy_epoch_rows(exp_dir: Path, *, epoch_start: int, epoch_end: int, topk: int) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    for epoch in range(int(epoch_start), int(epoch_end) + 1):
-        free_metrics = _maybe_load_metric(exp_dir, "valfree", epoch)
-        teacher_metrics = _maybe_load_metric(exp_dir, "teacher", epoch)
-        if free_metrics is None or teacher_metrics is None:
-            continue
-        row = {
-            "epoch": int(epoch),
-            "freerun": {
-                "geo_deg": _safe_float(free_metrics.get("GeoDeg")),
-                "geo_local_deg": _safe_float(free_metrics.get("GeoLocalDeg")),
-                "geo_deg_slope": _compute_geo_deg_slope(free_metrics),
-                "geo_local_proxy": _safe_float(free_metrics.get("GeoDriftSlopeProxy")),
-                "root_vel_mae": _safe_float(free_metrics.get("RootVelMAE")),
-                "arm_mean": _extract_group_mean(free_metrics, "arm"),
-                "trunk_mean": _extract_group_mean(free_metrics, "trunk"),
-                "leg_mean": _extract_group_mean(free_metrics, "leg"),
-            },
-            "teacher": {
-                "geo_local_deg": _safe_float(teacher_metrics.get("GeoLocalDeg")),
-                "arm_mean": _extract_group_mean(teacher_metrics, "arm"),
-                "trunk_mean": _extract_group_mean(teacher_metrics, "trunk"),
-                "leg_mean": _extract_group_mean(teacher_metrics, "leg"),
-            },
-        }
-        rows.append(row)
-    rows.sort(
-        key=lambda row: (
-            _safe_float(row["freerun"]["geo_deg_slope"]),
-            _safe_float(row["freerun"]["arm_mean"]),
-            _safe_float(row["freerun"]["trunk_mean"]),
-            _safe_float(row["freerun"]["leg_mean"]),
-            _safe_float(row["teacher"]["geo_local_deg"]),
-            int(row["epoch"]),
-        )
-    )
-    return [{"rank": idx + 1, "row": row} for idx, row in enumerate(rows[: int(topk)])]
+    return []
 
 
 def _discover_exact_epoch_candidates(
@@ -319,14 +230,7 @@ def _discover_exact_epoch_candidates(
             continue
         by_epoch.setdefault(int(cand.basetrain_epoch), []).extend(list(cand.discovery_tags) or [cand.selector])
 
-    summary = _load_basetrain_summary(exp_dir)
-    best_free_epoch = _extract_summary_epoch(summary, "best_free_by_GeoDriftSlopeProxy")
     wanted: Dict[int, List[str]] = {}
-
-    if best_free_epoch is not None:
-        for epoch in range(int(best_free_epoch) - int(exact_window), int(best_free_epoch) + int(exact_window) + 1):
-            if epoch in epoch_ckpts:
-                wanted.setdefault(int(epoch), []).append("best_free_window")
 
     for item in list(proxy_epoch_rows)[: int(exact_topk)]:
         row = item.get("row", {})
@@ -585,13 +489,9 @@ def _build_candidate_row(
     metrics.update(phase_shift_metrics)
 
     exp_dir = _resolve(args.exp_dir) if str(args.exp_dir).strip() else None
-    valfree_metrics = _maybe_load_metric(exp_dir, "valfree", cand.basetrain_epoch) if exp_dir else None
     teacher_metrics = _maybe_load_metric(exp_dir, "teacher", cand.basetrain_epoch) if exp_dir else None
     basetrain_metrics = {
         "epoch": cand.basetrain_epoch,
-        "valfree_geo_local_deg": _safe_float(valfree_metrics.get("GeoLocalDeg")) if valfree_metrics else float("nan"),
-        "valfree_geo_drift_slope_proxy": _safe_float(valfree_metrics.get("GeoDriftSlopeProxy")) if valfree_metrics else float("nan"),
-        "valfree_root_vel_mae": _safe_float(valfree_metrics.get("RootVelMAE")) if valfree_metrics else float("nan"),
         "teacher_geo_local_deg": _safe_float(teacher_metrics.get("GeoLocalDeg")) if teacher_metrics else float("nan"),
     }
 
@@ -639,14 +539,13 @@ def _assign_rank(records: Sequence[Dict[str, Any]], metric_key: str) -> Dict[str
 def _evaluate_rows(rows: List[Dict[str, Any]], *, args: argparse.Namespace) -> Dict[str, Any]:
     baseline = None
     for row in rows:
-        if row["selector"] == "best_free":
+        if row["selector"] == "last":
             baseline = row
             break
     if baseline is None and rows:
         baseline = rows[0]
 
     baseline_geo = _safe_float(baseline["metrics"].get("geo_local_deg_weighted")) if baseline else float("nan")
-    baseline_drift = _safe_float(baseline["basetrain_metrics"].get("valfree_geo_drift_slope_proxy")) if baseline else float("nan")
 
     pass_rows: List[Dict[str, Any]] = []
     for row in rows:
@@ -687,23 +586,13 @@ def _evaluate_rows(rows: List[Dict[str, Any]], *, args: argparse.Namespace) -> D
         )
         geo_guardrail_ok = (not math.isfinite(geo_rel_delta_pct)) or (geo_rel_delta_pct <= float(args.geo_guardrail_pct))
 
-        drift_proxy = _safe_float(base_metrics.get("valfree_geo_drift_slope_proxy"))
-        drift_rel_delta_pct = (
-            100.0 * (drift_proxy - baseline_drift) / baseline_drift
-            if math.isfinite(drift_proxy) and math.isfinite(baseline_drift) and baseline_drift != 0.0
-            else float("nan")
-        )
-        drift_guardrail_ok = (not math.isfinite(drift_rel_delta_pct)) or (drift_rel_delta_pct <= float(args.drift_guardrail_pct))
-
         guardrail = {
             "schema_ok": bool(schema_ok),
             "contract_ok": bool(contract_ok),
             "geo_local_rel_delta_pct": geo_rel_delta_pct,
             "geo_local_guardrail_ok": bool(geo_guardrail_ok),
-            "basetrain_drift_rel_delta_pct": drift_rel_delta_pct,
-            "basetrain_drift_guardrail_ok": bool(drift_guardrail_ok),
         }
-        guardrail["pass"] = bool(schema_ok and contract_ok and geo_guardrail_ok and drift_guardrail_ok)
+        guardrail["pass"] = bool(schema_ok and contract_ok and geo_guardrail_ok)
         reasons: List[str] = []
         if not schema_ok:
             reasons.append("schema_incomplete")
@@ -711,8 +600,6 @@ def _evaluate_rows(rows: List[Dict[str, Any]], *, args: argparse.Namespace) -> D
             reasons.append("contract_mismatch")
         if not geo_guardrail_ok:
             reasons.append("geo_local_guardrail")
-        if not drift_guardrail_ok:
-            reasons.append("basetrain_drift_guardrail")
         guardrail["fail_reasons"] = reasons
         row["guardrail"] = guardrail
         if guardrail["pass"]:
@@ -826,20 +713,6 @@ def _render_md(summary: Mapping[str, Any]) -> str:
             f"{_fmt(metrics.get('sic12_15_foot_l_ball_l_mean'))} | {_fmt(metrics.get('calf_r_global_mean'))} | "
             f"{_fmt(metrics.get('geo_local_deg_weighted'))} |"
         )
-    proxy_rows = summary.get("proxy_epoch_candidates", [])
-    if proxy_rows:
-        lines.append("")
-        lines.append("## Proxy Epoch Scan")
-        lines.append("")
-        lines.append("| rank | epoch | GeoDegSlope | GeoDriftSlopeProxy | freerun_leg | teacher_GeoLocal |")
-        lines.append("|---:|---:|---:|---:|---:|---:|")
-        for item in proxy_rows:
-            row = item["row"]
-            lines.append(
-                f"| {item['rank']} | {row['epoch']} | {_fmt(row['freerun']['geo_deg_slope'])} | "
-                f"{_fmt(row['freerun']['geo_local_proxy'])} | {_fmt(row['freerun']['leg_mean'])} | "
-                f"{_fmt(row['teacher']['geo_local_deg'])} |"
-            )
     notes = summary.get("notes", [])
     if notes:
         lines.append("")
@@ -879,7 +752,7 @@ def main() -> int:
         description="Run basetrain handoff selector smoke/evaluator/sweep for saved selector checkpoints.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    ap.add_argument("--exp-dir", default="", help="Basetrain experiment directory; auto-discovers best_free/last/best_teacher when --candidate is omitted.")
+    ap.add_argument("--exp-dir", default="", help="Basetrain experiment directory; auto-discovers last when --candidate is omitted.")
     ap.add_argument("--candidate", action="append", default=[], help="Repeatable spec: name=ckpt|family|selector|epoch")
     ap.add_argument("--run-tag", default="manual")
     ap.add_argument("--teacher", default=str(DEFAULT_TEACHER))
@@ -893,16 +766,16 @@ def main() -> int:
     ap.add_argument("--phase-reset-source", default="none")
     ap.add_argument("--group-cycle-gte", type=int, default=1)
     ap.add_argument("--geo-guardrail-pct", type=float, default=5.0)
-    ap.add_argument("--drift-guardrail-pct", type=float, default=25.0)
+    ap.add_argument("--drift-guardrail-pct", type=float, default=25.0, help=argparse.SUPPRESS)
     ap.add_argument("--proxy-epoch-start", type=int, default=6)
     ap.add_argument("--proxy-epoch-end", type=int, default=18)
     ap.add_argument("--proxy-topk", type=int, default=5)
     ap.add_argument("--exact-epoch-topk", type=int, default=5, help="Use top-k proxy epochs as exact candidates when ckpt_epoch_*.pth exists.")
-    ap.add_argument("--exact-epoch-window", type=int, default=2, help="Also include best_free_epoch +/- window as exact candidates when ckpt_epoch_*.pth exists.")
+    ap.add_argument("--exact-epoch-window", type=int, default=2, help=argparse.SUPPRESS)
     ap.add_argument("--emit-best-handoff-ckpt", action="store_true", help="Emit ckpt_best_handoff_<run_name>.pth for the selected candidate.")
     ap.add_argument("--best-handoff-link-dir", default="", help="Directory where ckpt_best_handoff_<run_name>.pth is emitted.")
     ap.add_argument("--best-handoff-run-name", default="", help="Run name used in ckpt_best_handoff_<run_name>.pth.")
-    ap.add_argument("--smoke-only", action="store_true", help="Only evaluate best_free when using --exp-dir auto-discovery.")
+    ap.add_argument("--smoke-only", action="store_true", help="Only evaluate last when using --exp-dir auto-discovery.")
     ap.add_argument("--out-root", default="")
     ap.add_argument("--force-rerun", action="store_true")
     ap.add_argument("--allow-noncanonical-boundary", action="store_true", help="Allow off-contract diagnostics instead of enforcing the locked Stage6 anchor boundary.")
@@ -962,8 +835,8 @@ def main() -> int:
         if not has_epoch_ckpts:
             notes.append("No ckpt_epoch_*.pth checkpoints were found, so Step 2 epoch sweep is currently proxy-only; exact epoch replay still needs per-epoch ckpt saving.")
         else:
-            notes.append("ckpt_epoch_*.pth checkpoints were found, so proxy-ranked epochs are auto-promoted into exact epoch candidates when not already covered by best_free/last/best_teacher.")
-    notes.append("Step 0 smoke is represented by schema/contract checks on the best_free eval JSON.")
+            notes.append("ckpt_epoch_*.pth checkpoints were found, so proxy-ranked epochs are auto-promoted into exact epoch candidates when not already covered by saved selector checkpoints.")
+    notes.append("Step 0 smoke is represented by schema/contract checks on the last eval JSON.")
     notes.append("Evaluator v1 formally includes phase_shift_contact_plan_abs_mean in the weighted handoff score.")
 
     selected = eval_summary["selected_row"]

@@ -104,9 +104,7 @@ def _parse_ckpt_map(items: Optional[List[str]]) -> Dict[int, Path]:
 def _pick_ckpt(train_out: Path, run_name: str) -> Path:
     run_dir = train_out / run_name
     cands = [
-        run_dir / f"ckpt_best_free_{run_name}.pth",
         run_dir / f"ckpt_last_{run_name}.pth",
-        run_dir / f"ckpt_best_teacher_{run_name}.pth",
     ]
     for p in cands:
         if p.is_file():
@@ -148,7 +146,6 @@ def main() -> None:
     ap.add_argument("--seq-lens", type=str, default="60,50")
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--w-rot-vel", type=float, default=3.0)
-    ap.add_argument("--aug-lr-swap-prob", type=float, default=0.5)
     ap.add_argument(
         "--train-config-override",
         action="append",
@@ -210,7 +207,6 @@ def main() -> None:
         run_name = (
             f"{base_run}__seq{int(seq_len)}"
             f"_w{_fmt_float_tag(float(args.w_rot_vel))}"
-            f"_lrswap_p{_fmt_float_tag(float(args.aug_lr_swap_prob))}"
             f"_e{int(args.epochs)}"
         )
         run_dir = sweep_dir / run_name
@@ -235,8 +231,6 @@ def main() -> None:
                     f"epochs={int(args.epochs)}",
                     "--config_override",
                     f"w_rot_vel={float(args.w_rot_vel)}",
-                    "--config_override",
-                    f"aug_lr_swap_prob={float(args.aug_lr_swap_prob)}",
                 ]
                 for ov in (args.train_config_override or []):
                     s = str(ov).strip()
@@ -336,7 +330,6 @@ def main() -> None:
         "base_run_name": base_run,
         "epochs": int(args.epochs),
         "w_rot_vel": float(args.w_rot_vel),
-        "aug_lr_swap_prob": float(args.aug_lr_swap_prob),
         "loss_branch": str(args.loss_branch),
         "seq_lens": [int(x) for x in seq_lens],
         "rows": summary_rows,
@@ -351,9 +344,7 @@ def main() -> None:
     lines.append("")
     lines.append(f"- config_json: `{cfg_path}`")
     lines.append(f"- train_out: `{train_out}`")
-    lines.append(
-        f"- epochs={int(args.epochs)}, w_rot_vel={float(args.w_rot_vel)}, aug_lr_swap_prob={float(args.aug_lr_swap_prob)}"
-    )
+    lines.append(f"- epochs={int(args.epochs)}, w_rot_vel={float(args.w_rot_vel)}")
     lines.append(f"- loss_branch: `{args.loss_branch}`")
     lines.append("")
     lines.append("|seq_len|global R/L|rot_geo R/L|delta global vs first|delta rot_geo vs first|target_windows|total_windows|active_clips|")

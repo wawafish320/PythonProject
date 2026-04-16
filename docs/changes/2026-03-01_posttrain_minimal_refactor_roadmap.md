@@ -163,7 +163,7 @@ Step B2 指标（before/after）：
 - `_cfg_from_payload(...)`：仅做编排 merge + dataclass 构建
 
 约束：
-- 旧 alias 保留（含 `direct_pose_leg_gate_loss_weight` 兼容 alias）。
+- 历史上下文：当时保留了旧 alias（含 `direct_pose_leg_gate_loss_weight` 兼容 alias）；该 alias 已于 `2026-04-15` 从 mainline 删除，现仅接受 `direct_pose_leg_gate_sup_weight`。
 - default 行为不变（含 `rollout_include_boundary` 的 `rollout_cycles>1` 自动默认）。
 
 回归门：

@@ -30,6 +30,15 @@ import torch
 from torch.utils.data import DataLoader
 
 from train.dataset import MotionEventDataset, make_fixedlen_collate
+from train.model_ckpt_compat import (
+    DirectPoseBuildOverrides,
+    DirectPoseLoadCompatOptions,
+    EventClockBuildOverrides,
+    LambdaFusionBuildOverrides,
+    load_event_motion_ckpt_payload,
+    prepare_event_motion_ckpt_state_for_load,
+    resolve_event_motion_build_state_from_ckpt,
+)
 from train.models import EventMotionModel
 from train.training_MPL import export_onnx_step_stateful_nophase
 
@@ -153,28 +162,111 @@ def main() -> None:
     )
 
     Dx, Dy, Dc = int(ds_train.Dx), int(ds_train.Dy), int(ds_train.Dc)
+    contact_dim = int(getattr(ds_train, "contact_dim", 0) or 0)
+    angvel_dim = int(getattr(ds_train, "angvel_dim", 0) or 0)
+    pose_hist_dim = int(getattr(ds_train, "pose_hist_dim", 0) or 0)
+    period_dim = int(getattr(ds_train, "period_dim", 0) or 0)
+
+    ckpt_payload = load_event_motion_ckpt_payload(str(ckpt_path), map_location="cpu")
+    if ckpt_payload.stripped_frozen_key_count > 0:
+        print(
+            f"[ExportONNX][INFO] stripped {ckpt_payload.stripped_frozen_key_count} frozen encoder keys "
+            "from checkpoint for runtime load."
+        )
+    build_state = resolve_event_motion_build_state_from_ckpt(
+        ckpt_payload=ckpt_payload,
+        in_state_dim=Dx,
+        out_motion_dim=Dy,
+        cond_dim=Dc,
+        contact_dim=contact_dim,
+        period_dim=period_dim,
+        direct_pose_overrides=DirectPoseBuildOverrides(
+            train_direct_pose=False,
+            direct_pose_reinit=False,
+        ),
+        event_clock_overrides=EventClockBuildOverrides(
+            mode="auto",
+            max_delta=0.5,
+            has_encoder_bundle=False,
+        ),
+        lambda_fusion_overrides=LambdaFusionBuildOverrides(
+            train_lambda_head=False,
+        ),
+    )
+    contact_plan_enable = bool(
+        build_state.contact_plan_cfg.enable
+        or build_state.contact_plan_cfg.inject != "none"
+        or build_state.direct_pose_cfg.enable
+    )
 
     # ---- Build model with same architecture as training ----
     model = EventMotionModel(
         in_state_dim=Dx,
         out_motion_dim=Dy,
         cond_dim=Dc,
-        period_dim=getattr(ds_train, "period_dim", 0),
+        period_dim=int(build_state.event_clock_cfg.period_dim_init),
         hidden_dim=int(args.width),
         num_layers=int(args.depth),
         num_heads=int(args.num_heads),
         dropout=0.1,
         context_len=int(args.context_len),
-        contact_dim=getattr(ds_train, "contact_dim", 0),
-        angvel_dim=getattr(ds_train, "angvel_dim", 0),
-        pose_hist_dim=getattr(ds_train, "pose_hist_dim", 0),
+        contact_dim=contact_dim,
+        angvel_dim=angvel_dim,
+        pose_hist_dim=pose_hist_dim,
         bone_names=getattr(ds_train, "bone_names", None),
         output_layout=getattr(ds_train, "output_layout", None),
+        contact_plan_enable=bool(contact_plan_enable),
+        contact_plan_hidden=int(build_state.contact_plan_cfg.hidden),
+        contact_plan_dropout=0.0,
+        contact_plan_inject=str(build_state.contact_plan_cfg.inject),
+        contact_plan_inject_detach=True,
+        contact_plan_time_pe_dim=int(build_state.contact_plan_cfg.time_pe_dim),
+        contact_plan_init_mode=str(build_state.contact_plan_cfg.init_mode),
+        contact_plan_init_hidden=int(build_state.contact_plan_cfg.init_hidden),
+        contact_plan_init_dropout=float(build_state.contact_plan_cfg.init_dropout),
+        use_event_clock=bool(build_state.event_clock_cfg.use_event_clock),
+        event_clock_max_delta=float(build_state.event_clock_cfg.max_delta),
+        event_clock_hidden_dim=int(build_state.event_clock_cfg.hidden_dim),
+        event_clock_gate_hidden_dim=int(build_state.event_clock_cfg.gate_hidden_dim),
+        direct_pose_enable=bool(build_state.direct_pose_cfg.enable),
+        direct_pose_hidden=int(build_state.direct_pose_cfg.hidden),
+        direct_pose_dropout=0.0,
+        direct_pose_detach_plan=True,
+        direct_pose_meas_mode=str(build_state.direct_pose_cfg.meas_mode),
+        direct_pose_meas_drop_prob=0.0,
+        direct_pose_meas_noise_std=0.0,
+        direct_pose_plan_drop_prob=0.0,
+        direct_pose_feat_source=str(build_state.direct_pose_cfg.feat_source),
+        direct_pose_time_pe_dim=int(build_state.direct_pose_cfg.time_pe_dim),
+        direct_pose_time_pe_base=float(build_state.direct_pose_cfg.time_pe_base),
+        direct_pose_use_phase_z=bool(build_state.direct_pose_cfg.use_phase_z),
+        direct_pose_phase_z_mode=str(build_state.direct_pose_cfg.phase_z_mode),
+        direct_pose_split_enable=bool(build_state.direct_pose_cfg.split_enable),
+        direct_pose_stepc_unified_leg_terminal=bool(build_state.direct_pose_cfg.stepc_unified_leg_terminal),
+        direct_pose_nonleg_proj_dim=int(build_state.direct_pose_cfg.nonleg_proj_dim),
+        direct_pose_arm_split_enable=bool(build_state.direct_pose_cfg.arm_split_enable),
+        direct_pose_arm_bones=build_state.direct_pose_cfg.arm_bones,
+        lambda_fusion_enable=bool(build_state.lambda_fusion_cfg.enable),
+        lambda_fusion_mode=str(build_state.lambda_fusion_cfg.mode),
+        lambda_fusion_hidden=int(build_state.lambda_fusion_cfg.hidden),
+        lambda_fusion_dropout=float(build_state.lambda_fusion_cfg.dropout),
+        lambda_fusion_detach_err=True,
+        lambda_fusion_logit_init=float(build_state.lambda_fusion_cfg.logit_init),
+        lambda_fusion_use_rollout_step=bool(build_state.lambda_fusion_cfg.use_rollout_step),
     )
 
     # ---- Load checkpoint weights ----
-    ckpt = torch.load(str(ckpt_path), map_location="cpu")
-    state_dict = ckpt.get("model", ckpt)
+    state_dict = prepare_event_motion_ckpt_state_for_load(
+        state_dict=build_state.state_dict,
+        model=model,
+        ckpt_posttrain_cfg=build_state.ckpt_posttrain_cfg,
+        contact_dim=contact_dim,
+        direct_pose_cfg=build_state.direct_pose_cfg,
+        load_options=DirectPoseLoadCompatOptions(
+            train_direct_pose=False,
+            leg_enable=False,
+        ),
+    )
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
     if missing or unexpected:
         print(f"[ExportONNX][WARN] state_dict mismatch: missing={missing}, unexpected={unexpected}")

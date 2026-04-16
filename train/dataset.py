@@ -5,16 +5,17 @@ import json
 import math
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 
 from .geometry import (
     rot6d_to_matrix,
     reproject_rot6d,
     angvel_vec_from_R_seq,
+    root_yaw_from_rot6d_np,
     wrap_to_pi_np as _wrap_to_pi_np,
 )
 from .io import (
@@ -24,7 +25,7 @@ from .io import (
     speed_from_X_layout as _speed_from_X_layout,
     npz_scalar_to_str,
 )
-from .layout import normalize_layout as _normalize_layout
+from .layout import DataNormalizer, LayoutCenter, normalize_layout as _normalize_layout, parse_layout_entry
 from .normalizers import VectorTanhNormalizer
 from .rotvec_semantics import require_standard_rotvec_spec
 from torch.utils.data._utils.collate import default_collate as _default_collate
@@ -174,41 +175,6 @@ def make_fixedlen_collate(seq_len: int):
         return _default_collate(fixed)
 
     return _collate
-
-class MotionAugmentation:
-    """
-    训练时的数据增强：
-      - 时间扭曲（等长重采样，反射边界，保持可微）
-      - 加性高斯噪声
-
-    """
-
-    def __init__(self, noise_std: float=0.0, time_warp_prob: float=0.0):
-        self.noise_std = float(noise_std)
-        self.time_warp_prob = float(time_warp_prob)
-
-    @torch.no_grad()
-    def _time_warp(self, x: torch.Tensor, scale: float) -> torch.Tensor:
-        B, T, D = x.shape
-        if T <= 1 or scale <= 0:
-            return x
-        device = x.device
-        t = torch.arange(T, device=device, dtype=torch.float32)
-        c = (T - 1) / 2.0
-        src = (t - c) / scale + c
-        period = 2.0 * (T - 1)
-        s = torch.remainder(src, period)
-        src_reflect = torch.where(s <= T - 1, s, period - s)
-        i0 = torch.clamp(src_reflect.floor().to(torch.long), 0, T - 1)
-        i1 = torch.clamp(i0 + 1, 0, T - 1)
-        a = (src_reflect - i0.to(src_reflect.dtype)).view(1, T, 1)
-        idx0 = i0.view(1, T, 1).repeat(B, 1, D)
-        idx1 = i1.view(1, T, 1).repeat(B, 1, D)
-        x0 = torch.gather(x, 1, idx0)
-        x1 = torch.gather(x, 1, idx1)
-        y = torch.lerp(x0, x1, a)
-        return y
-
 
 @dataclass
 class ClipData:
@@ -798,34 +764,13 @@ class MotionEventDataset(Dataset):
 
     @staticmethod
     def _compute_root_yaw_from_rot6d(rot6d_arr: np.ndarray, forward_axis: int, up_axis: int, offset: float) -> Optional[np.ndarray]:
-        if rot6d_arr.ndim == 3 and rot6d_arr.shape[-1] == 6:
-            root = rot6d_arr[:, 0, :]
-        elif rot6d_arr.ndim == 2 and rot6d_arr.shape[-1] == 6:
-            root = rot6d_arr
-        else:
-            return None
-        try:
-            root_t = torch.from_numpy(root.astype(np.float32, copy=False)).view(-1, 1, 6)
-        except Exception:
-            return None
-        with torch.no_grad():
-            try:
-                rep = reproject_rot6d(root_t)
-                R = rot6d_to_matrix(rep).view(-1, 3, 3)
-            except Exception:
-                return None
-        forward_axis = int(max(0, min(2, forward_axis)))
-        up_axis = int(max(0, min(2, up_axis)))
-        planar_axes = [ax for ax in (0, 1, 2) if ax != up_axis]
-        if len(planar_axes) != 2:
-            planar_axes = [0, 1]
-        ax0, ax1 = planar_axes
-        forward_vec = R[:, :, forward_axis]
-        yaw = torch.atan2(forward_vec[:, ax1], forward_vec[:, ax0])
-        if offset:
-            yaw = yaw - float(offset)
-        yaw = torch.atan2(torch.sin(yaw), torch.cos(yaw))
-        return yaw.cpu().numpy()
+        return root_yaw_from_rot6d_np(
+            rot6d_arr,
+            forward_axis=forward_axis,
+            up_axis=up_axis,
+            offset=offset,
+            root_idx=0,
+        )
 
     @staticmethod
     def _rot2_(xy, c, s):
@@ -1047,3 +992,352 @@ class MotionEventDataset(Dataset):
         self.C_mu = np.array(mu, dtype=np.float32).reshape(1, -1).copy()
         self.C_std = np.array(std, dtype=np.float32).reshape(1, -1).copy()
         self.norm_stats_inherited = bool(inherit)
+
+
+@dataclass(frozen=True)
+class DatasetRuntimeArtifacts:
+    dataset: MotionEventDataset
+    dx: int
+    dy: int
+    dc: int
+    state_layout: Dict[str, tuple[int, int]]
+    output_layout: Dict[str, tuple[int, int]]
+    rootvel_slice: Optional[slice]
+    angvel_slice: Optional[slice]
+    rootvel_x_slice: Optional[slice]
+    angvel_x_slice: Optional[slice]
+    rootpos_x_slice: Optional[slice]
+    rot6d_x_slice: Optional[slice]
+    rot6d_y_slice: Optional[slice]
+    y_to_x_map: list[dict[str, int]]
+    normalizer: DataNormalizer
+    mu_x: np.ndarray
+    std_x: np.ndarray
+    mu_y: np.ndarray
+    std_y: np.ndarray
+    fps: float
+    bone_hz: float
+    pose_hist_len: int
+    pose_hist_dim: int
+    forward_axis: Optional[int]
+    forward_axis_offset: float
+    yaw_forward_axis: Optional[int]
+    bundle_meta: Dict[str, Any]
+
+
+def _resolve_motion_dataset_pose_hist_len(
+    pose_hist_len: Optional[int],
+    norm_spec: Optional[Mapping[str, Any]],
+) -> int:
+    if pose_hist_len is not None:
+        try:
+            return max(0, int(pose_hist_len))
+        except Exception:
+            return 0
+    if isinstance(norm_spec, Mapping):
+        try:
+            return max(0, int(norm_spec.get("pose_hist_len", 0) or 0))
+        except Exception:
+            return 0
+    return 0
+
+
+def build_motion_dataset(
+    *,
+    data_dir: str,
+    seq_len: int,
+    paths: Optional[Sequence[str]] = None,
+    pose_hist_len: Optional[int] = None,
+    norm_spec: Optional[Mapping[str, Any]] = None,
+    index_mode: str = "sliding",
+    optimize_index_fn: Optional[Callable[[MotionEventDataset], MotionEventDataset]] = None,
+    is_train: Optional[bool] = None,
+    yaw_aug_deg: Optional[float] = None,
+    normalize_c: Optional[bool] = None,
+) -> MotionEventDataset:
+    resolved_pose_hist_len = _resolve_motion_dataset_pose_hist_len(pose_hist_len, norm_spec)
+    dataset = MotionEventDataset(
+        data_dir=str(data_dir),
+        seq_len=int(seq_len),
+        paths=[str(p) for p in paths] if paths is not None else None,
+        pose_hist_len=resolved_pose_hist_len,
+        norm_spec=dict(norm_spec) if isinstance(norm_spec, Mapping) else norm_spec,
+        index_mode=str(index_mode or "sliding"),
+    )
+    if optimize_index_fn is not None:
+        dataset = optimize_index_fn(dataset)
+    if is_train is not None:
+        dataset.is_train = bool(is_train)
+    if yaw_aug_deg is not None:
+        dataset.yaw_aug_deg = float(yaw_aug_deg)
+    if normalize_c is not None:
+        dataset.normalize_c = bool(normalize_c)
+    if not hasattr(dataset, "state_layout"):
+        dataset.state_layout = {}
+    if not hasattr(dataset, "output_layout"):
+        dataset.output_layout = {}
+    return dataset
+
+
+def build_motion_dataloader(
+    dataset: MotionEventDataset,
+    *,
+    batch_size: int,
+    shuffle: bool,
+    drop_last: bool,
+    num_workers: int = 0,
+    pin_memory: bool = False,
+    persistent_workers: bool = False,
+    collate_fn: Optional[Callable[..., Any]] = None,
+    prefetch_factor: Optional[int] = None,
+) -> DataLoader:
+    loader_kwargs: Dict[str, Any] = {
+        "num_workers": int(num_workers),
+        "pin_memory": bool(pin_memory),
+    }
+    if int(num_workers) > 0:
+        loader_kwargs["persistent_workers"] = bool(persistent_workers)
+        if prefetch_factor is not None:
+            loader_kwargs["prefetch_factor"] = int(prefetch_factor)
+    if collate_fn is not None:
+        loader_kwargs["collate_fn"] = collate_fn
+    return DataLoader(
+        dataset,
+        batch_size=int(batch_size),
+        shuffle=bool(shuffle),
+        drop_last=bool(drop_last),
+        **loader_kwargs,
+    )
+
+
+def _coerce_runtime_layout(raw_layout: Any, dim: int) -> Dict[str, tuple[int, int]]:
+    if not isinstance(raw_layout, dict) or not raw_layout:
+        return {}
+    normalized = _normalize_layout(raw_layout, int(dim))
+    return {str(name): (int(start), int(size)) for name, (start, size) in normalized.items()}
+
+
+def _build_runtime_y_to_x_map(
+    state_layout: Mapping[str, tuple[int, int]],
+    output_layout: Mapping[str, tuple[int, int]],
+    existing_map: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> list[dict[str, int]]:
+    if existing_map:
+        return [
+            {
+                "name": str(item["name"]),
+                "x_start": int(item["x_start"]),
+                "x_size": int(item["x_size"]),
+                "y_start": int(item["y_start"]),
+                "y_size": int(item["y_size"]),
+            }
+            for item in existing_map
+            if isinstance(item, Mapping)
+        ]
+
+    y_to_x_map: list[dict[str, int]] = []
+    for name in sorted(set(state_layout.keys()) & set(output_layout.keys())):
+        x_start, x_size = state_layout[name]
+        y_start, y_size = output_layout[name]
+        width = min(int(x_size), int(y_size))
+        if width <= 0:
+            continue
+        y_to_x_map.append(
+            {
+                "name": str(name),
+                "x_start": int(x_start),
+                "x_size": int(width),
+                "y_start": int(y_start),
+                "y_size": int(width),
+            }
+        )
+    return y_to_x_map
+
+
+def _resolve_bundle_yaw_forward_axis(center: LayoutCenter) -> Optional[int]:
+    axis_map = {"X": 0, "Y": 1, "Z": 2}
+    columns: list[str] = []
+    if isinstance(center.rot6d_spec, dict):
+        cols_val = center.rot6d_spec.get("columns")
+        if isinstance(cols_val, (list, tuple)):
+            columns = [str(col).upper() for col in cols_val]
+    forward_hint = columns[1] if len(columns) > 1 else (columns[0] if columns else "Z")
+    return axis_map.get(forward_hint)
+
+
+def build_dataset_artifacts(
+    dataset: MotionEventDataset,
+    *,
+    bundle_path: Optional[str] = None,
+    norm_spec: Optional[Mapping[str, Any]] = None,
+) -> DatasetRuntimeArtifacts:
+    dx = int(dataset.Dx)
+    dy = int(dataset.Dy)
+    dc = int(dataset.Dc)
+
+    bundle_meta: Dict[str, Any] = {}
+    yaw_forward_axis: Optional[int] = None
+    tanh_scales_rootvel = None
+    tanh_scales_angvel = None
+
+    if bundle_path:
+        center = LayoutCenter(str(bundle_path))
+        center.strict_validate(dx, dy)
+        center.apply_to_dataset(dataset)
+        state_layout = dict(center.state_layout or {})
+        output_layout = dict(center.output_layout or {})
+        y_to_x_map = center.materialize_y_to_x_map()
+        mu_x = np.asarray(center.mu_x, dtype=np.float32)
+        std_x = np.asarray(center.std_x, dtype=np.float32)
+        mu_y = np.asarray(center.mu_y, dtype=np.float32)
+        std_y = np.asarray(center.std_y, dtype=np.float32)
+        tanh_scales_rootvel = center.tanh_scales_rootvel
+        tanh_scales_angvel = center.tanh_scales_angvel
+        bundle_meta = dict(center.meta)
+        yaw_forward_axis = _resolve_bundle_yaw_forward_axis(center)
+    else:
+        state_layout = _coerce_runtime_layout(
+            getattr(dataset, "state_layout_norm", None) or getattr(dataset, "state_layout", None),
+            dx,
+        )
+        output_layout = _coerce_runtime_layout(
+            getattr(dataset, "output_layout_norm", None) or getattr(dataset, "output_layout", None),
+            dy,
+        )
+        if not isinstance(norm_spec, Mapping):
+            raise RuntimeError("build_dataset_artifacts requires `bundle_path` or `norm_spec`.")
+        meta = norm_spec.get("meta", {}) if isinstance(norm_spec.get("meta", {}), Mapping) else {}
+        y_to_x_map = _build_runtime_y_to_x_map(state_layout, output_layout, meta.get("y_to_x_map"))
+        mu_x = np.asarray(norm_spec.get("MuX"), dtype=np.float32)
+        std_x = np.asarray(norm_spec.get("StdX"), dtype=np.float32)
+        mu_y = np.asarray(norm_spec.get("MuY"), dtype=np.float32)
+        std_y = np.asarray(norm_spec.get("StdY"), dtype=np.float32)
+        tanh_scales_rootvel = norm_spec.get("tanh_scales_rootvel", None)
+        tanh_scales_angvel = norm_spec.get("tanh_scales_angvel", None)
+        bundle_meta = dict(meta)
+
+    if not state_layout:
+        raise RuntimeError("[FATAL] dataset state_layout missing; cannot build runtime artifacts.")
+    if not output_layout:
+        raise RuntimeError("[FATAL] dataset output_layout missing; cannot build runtime artifacts.")
+    if mu_x.size != dx or std_x.size != dx:
+        raise RuntimeError(f"[FATAL] MuX/StdX length ({mu_x.size}/{std_x.size}) != Dx({dx})")
+    if mu_y.size != dy or std_y.size != dy:
+        raise RuntimeError(f"[FATAL] MuY/StdY length ({mu_y.size}/{std_y.size}) != Dy({dy})")
+
+    rootvel_slice = parse_layout_entry(output_layout.get("RootVelocity"), "RootVelocity", dy)
+    angvel_slice = parse_layout_entry(output_layout.get("BoneAngularVelocities"), "BoneAngularVelocities", dy)
+    rootvel_x_slice = parse_layout_entry(state_layout.get("RootVelocity"), "RootVelocity", dx)
+    angvel_x_slice = parse_layout_entry(state_layout.get("BoneAngularVelocities"), "BoneAngularVelocities", dx)
+    rootpos_x_slice = parse_layout_entry(state_layout.get("RootPosition"), "RootPosition", dx)
+    rot6d_x_slice = parse_layout_entry(state_layout.get("BoneRotations6D"), "BoneRotations6D", dx)
+    rot6d_y_slice = parse_layout_entry(output_layout.get("BoneRotations6D"), "BoneRotations6D", dy)
+    if not bundle_path:
+        y_to_x_map = _build_runtime_y_to_x_map(state_layout, output_layout, y_to_x_map)
+
+    normalizer = DataNormalizer(
+        mu_x=mu_x,
+        std_x=std_x,
+        mu_y=mu_y,
+        std_y=std_y,
+        y_to_x_map=y_to_x_map,
+        rootvel_x_slice=rootvel_x_slice,
+        rootvel_y_slice=rootvel_slice,
+        angvel_x_slice=angvel_x_slice,
+        angvel_y_slice=angvel_slice,
+        tanh_scales_rootvel=tanh_scales_rootvel,
+        tanh_scales_angvel=tanh_scales_angvel,
+        angvel_mode=getattr(dataset, "angvel_norm_mode", None),
+        angvel_mu=getattr(dataset, "angvel_mu", None),
+        angvel_std=getattr(dataset, "angvel_std", None),
+    )
+
+    fps = float(getattr(dataset, "fps", 60.0) or 60.0)
+    return DatasetRuntimeArtifacts(
+        dataset=dataset,
+        dx=dx,
+        dy=dy,
+        dc=dc,
+        state_layout=state_layout,
+        output_layout=output_layout,
+        rootvel_slice=rootvel_slice,
+        angvel_slice=angvel_slice,
+        rootvel_x_slice=rootvel_x_slice,
+        angvel_x_slice=angvel_x_slice,
+        rootpos_x_slice=rootpos_x_slice,
+        rot6d_x_slice=rot6d_x_slice,
+        rot6d_y_slice=rot6d_y_slice,
+        y_to_x_map=y_to_x_map,
+        normalizer=normalizer,
+        mu_x=mu_x,
+        std_x=std_x,
+        mu_y=mu_y,
+        std_y=std_y,
+        fps=fps,
+        bone_hz=fps,
+        pose_hist_len=int(getattr(dataset, "pose_hist_len", 0) or 0),
+        pose_hist_dim=int(getattr(dataset, "pose_hist_dim", 0) or 0),
+        forward_axis=getattr(dataset, "forward_axis", None),
+        forward_axis_offset=float(getattr(dataset, "forward_axis_offset", 0.0) or 0.0),
+        yaw_forward_axis=yaw_forward_axis,
+        bundle_meta=bundle_meta,
+    )
+
+
+def attach_dataset_runtime_to_trainer(
+    trainer: Any,
+    artifacts: DatasetRuntimeArtifacts,
+) -> Any:
+    trainer._x_layout = dict(artifacts.state_layout)
+    trainer._y_layout = dict(artifacts.output_layout)
+    trainer.yaw_slice = None
+    trainer.yaw_x_slice = None
+    trainer.rootvel_slice = artifacts.rootvel_slice
+    trainer.angvel_slice = artifacts.angvel_slice
+    trainer.rootvel_x_slice = artifacts.rootvel_x_slice
+    trainer.angvel_x_slice = artifacts.angvel_x_slice
+    trainer.rootpos_x_slice = artifacts.rootpos_x_slice
+    trainer.rot6d_x_slice = artifacts.rot6d_x_slice
+    trainer.rot6d_y_slice = artifacts.rot6d_y_slice
+    trainer.y_to_x_map = list(artifacts.y_to_x_map)
+    trainer.mu_x = torch.as_tensor(artifacts.mu_x.reshape(1, -1), dtype=torch.float32)
+    trainer.std_x = torch.as_tensor(artifacts.std_x.reshape(1, -1), dtype=torch.float32)
+    trainer.mu_y = torch.as_tensor(artifacts.mu_y.reshape(1, -1), dtype=torch.float32)
+    trainer.std_y = torch.as_tensor(artifacts.std_y.reshape(1, -1), dtype=torch.float32)
+    trainer.tanh_scales_rootvel = artifacts.normalizer.tanh_scales_rootvel
+    trainer.tanh_scales_angvel = artifacts.normalizer.tanh_scales_angvel
+    trainer.normalizer = artifacts.normalizer
+    trainer.pose_hist_len = int(artifacts.pose_hist_len)
+    trainer.pose_hist_dim = int(artifacts.pose_hist_dim)
+    trainer.fps = float(artifacts.fps)
+    trainer.bone_hz = float(artifacts.bone_hz)
+    trainer.forward_axis = artifacts.forward_axis
+    trainer.forward_axis_offset = float(artifacts.forward_axis_offset)
+    if artifacts.forward_axis is None and artifacts.yaw_forward_axis is not None:
+        trainer.yaw_forward_axis = int(artifacts.yaw_forward_axis)
+    try:
+        trainer._bundle_meta = dict(artifacts.bundle_meta)
+    except Exception:
+        trainer._bundle_meta = {}
+    if getattr(trainer, "_bone_names", None) is None and getattr(artifacts.dataset, "bone_names", None):
+        try:
+            trainer._bone_names = list(artifacts.dataset.bone_names)
+        except Exception:
+            pass
+    return trainer
+
+
+def build_and_attach_dataset_runtime(
+    trainer: Any,
+    dataset: MotionEventDataset,
+    *,
+    bundle_path: Optional[str] = None,
+    norm_spec: Optional[Mapping[str, Any]] = None,
+) -> DatasetRuntimeArtifacts:
+    artifacts = build_dataset_artifacts(
+        dataset,
+        bundle_path=bundle_path,
+        norm_spec=norm_spec,
+    )
+    attach_dataset_runtime_to_trainer(trainer, artifacts)
+    return artifacts

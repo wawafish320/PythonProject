@@ -11,6 +11,16 @@
 - `keep_for_repro/`: historical bridge configs that should stay available for reproduction.
 - `archive_candidates/`: non-active configs safe to archive from main config root.
 
+## Mainline obsolete notice
+- As of `2026-04-15`, this archive is historical-only and is not guaranteed to run against the current `train/*` mainline without migration.
+- Current mainline has removed several legacy/compat surfaces that some archived experiments may still mention:
+  - `EventMotionModel(..., contact_phase_state_*=...)`
+  - layout fallback that inferred rot6d layout from `bone_names` when `BoneRotations6D` was missing
+  - wrapper helpers `adapt_legacy_event_motion_state_dict(...)` and `preprocess_event_motion_state_dict_for_load(...)`
+  - posttrain aliases `direct_pose_leg_gate_loss_weight` and `index_mode -> dataset_index_mode`
+- Example archived config that still contains removed keys: `config/archive_posttrain_legacy/2026-02-28_stage6_stage7/archive_candidates/posttrain_WalkF_stage7_n1leg_cg4545_v2_20260220.json`
+- If you need to replay an archived config, migrate it to current mainline keys first or replay it against the historical snapshot / archived branch it originally targeted.
+
 ## Inventory
 | Category | Count | Notes |
 |---|---:|---|

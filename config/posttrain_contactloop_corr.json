@@ -30,8 +30,6 @@
   "corr_time_weight_max": 2.0,
   "detach_rollout_state": true,
 
-  "train_so3_corrector": true,
-  "train_contact_meas": false,
   "contact_meas_weight": 0.0,
 
   "seed": 0

@@ -9,7 +9,7 @@ We measure gradient norms on `EventMotionModel.contact_meas_head.*` coming from:
 Typical use (Walk_F, left support window):
     python -m train.validate.diagnose_contact_meas_grad \\
         --teacher validate/teacher_batches/Walk_F_teacher.json \\
-        --model models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_best_teacher_exp_phase_DirectBranch_v1_d1.pth \\
+        --model models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d1/ckpt_last_exp_phase_DirectBranch_v1_d1.pth \\
         --encoder-bundle models/motion_encoder_equiv_stageA.pt \\
         --depth 3 --steps 50-75 \\
         --w_contact_meas 0.05 --w_direct_pose 1.0
@@ -354,4 +354,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

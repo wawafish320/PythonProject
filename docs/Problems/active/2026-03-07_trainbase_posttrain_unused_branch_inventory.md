@@ -1,5 +1,7 @@
 # 2026-03-07 Trainbase / Posttrain 未有效进入训练目标的计算分支清单
 
+> Historical note (`2026-04-15`): this inventory remains useful for branch archaeology, but several interfaces mentioned here have since been removed from mainline, including `contact_phase_state_*`, layout `fallback_to_bone_names`, and some posttrain compat aliases. Treat those mentions as historical only.
+
 ## 目标
 
 为本轮完整复跑前，先把**这次未有效进入训练目标的计算分支**整理出来，便于后续在

@@ -230,7 +230,6 @@ def _build_row(cand: Candidate, paths: CandidatePaths) -> Dict[str, Any]:
             "geo_deg": _safe_float(metrics.get("GeoDeg")),
             "geo_local_deg": _safe_float(metrics.get("GeoLocalDeg")),
             "geo_deg_slope": _compute_geo_deg_slope(metrics),
-            "geo_local_proxy": _safe_float(metrics.get("GeoDriftSlopeProxy")),
             "root_vel_mae": _safe_float(metrics.get("RootVelMAE")),
             "ang_vel_mae": _safe_float(metrics.get("AngVelMAE")),
             "keybone_arm_mean": _extract_keybone_group_mean(metrics, "arm"),

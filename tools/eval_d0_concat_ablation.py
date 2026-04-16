@@ -217,8 +217,8 @@ def main() -> None:
 
     ap.add_argument("--log_contacts", action="store_true", help="Enable --log_contacts in freerun_cycles.")
 
-    ap.add_argument("--base_ckpt", type=str, default="models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1/ckpt_best_teacher_exp_phase_DirectBranch_v1.pth")
-    ap.add_argument("--d0_ckpt", type=str, default="models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d0/ckpt_best_teacher_exp_phase_DirectBranch_v1_d0.pth")
+    ap.add_argument("--base_ckpt", type=str, default="models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1/ckpt_last_exp_phase_DirectBranch_v1.pth")
+    ap.add_argument("--d0_ckpt", type=str, default="models/MLPL2_DirectBranch_v1/exp_phase_DirectBranch_v1_d0/ckpt_last_exp_phase_DirectBranch_v1_d0.pth")
     ap.add_argument("--no_ablate_meas", action="store_true", help="Do not run the (force_zero) meas ablation case.")
 
     ap.add_argument("--no_run", action="store_true", help="Skip running freerun_cycles; only summarize existing outputs.")

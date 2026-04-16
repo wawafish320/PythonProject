@@ -24,7 +24,6 @@
 
   "detach_rollout_state": true,
 
-  "train_so3_corrector": false,
   "train_lambda_head": true,
   "lambda_fusion_mode": "per_joint",
   "lambda_fusion_hidden": 128,
@@ -44,7 +43,6 @@
   "lambda_reliability_warmup_steps": 0,
   "lambda_reliability_contact_err_max": 1.0,
 
-  "train_contact_meas": false,
   "contact_meas_weight": 0.0,
 
   "seed": 0

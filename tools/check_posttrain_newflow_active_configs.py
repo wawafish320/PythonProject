@@ -12,9 +12,9 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 TRAINBASE_ACTIVE_CONFIGS: tuple[str, ...] = (
+    "config/exp_phase_mpl.json",
     "config/exp_phase_mpl.clean.json",
     "config/exp_phase_DirectBranch_v1_d1_noreset.json",
-    "config/exp_phase_DirectBranch_v1_d1_noreset_compat_20260226.json",
 )
 
 POSTTRAIN_NEWFLOW_ACTIVE_CONFIGS: tuple[str, ...] = (
@@ -32,6 +32,35 @@ ACTIVE_CONFIG_FORBIDDEN_PREFIXES: tuple[str, ...] = (
 )
 ACTIVE_CONFIG_FORBIDDEN_EXACT_KEYS: tuple[str, ...] = (
     "direct_hinge_delta",
+    "diag_input_stats",
+    "eval_horizon",
+    "eval_warmup",
+    "foot_contact_threshold",
+    "freerun_horizon",
+    "freerun_weight",
+    "monitor_batches",
+    "patience",
+    "tf_warmup_epochs",
+)
+
+TRAINBASE_REMOVED_STAGE_ROOT_KEYS: tuple[str, ...] = (
+    "teacher_rot_noise_deg_start",
+    "teacher_rot_noise_deg_end",
+    "teacher_rot_noise_prob_start",
+    "teacher_rot_noise_prob_end",
+    "targets",
+)
+TRAINBASE_REMOVED_STAGE_PARAM_KEYS: tuple[str, ...] = (
+    "freerun_horizon",
+    "freerun_weight",
+    "teacher_rot_noise_deg",
+    "teacher_rot_noise_prob",
+    "input_step_noise_prob",
+    "input_noise_profile",
+)
+TRAINBASE_REMOVED_STAGE_TRAINER_KEYS: tuple[str, ...] = (
+    "freerun_horizon",
+    "freerun_weight",
 )
 
 POSTTRAIN_REMOVED_TARGET_KEYS: tuple[str, ...] = (
@@ -91,6 +120,30 @@ def _check_trainbase_config(rel_path: str) -> list[str]:
         errs.append(
             f"{path}: active trainbase config must not contain retired keys: {', '.join(hits)}"
         )
+    schedule = payload.get("freerun_stage_schedule")
+    if isinstance(schedule, list):
+        removed_stage_hits: list[str] = []
+        for idx, stage in enumerate(schedule):
+            if not isinstance(stage, dict):
+                continue
+            for key in TRAINBASE_REMOVED_STAGE_ROOT_KEYS:
+                if key in stage:
+                    removed_stage_hits.append(f"freerun_stage_schedule[{idx}].{key}")
+            params = stage.get("params")
+            if isinstance(params, dict):
+                for key in TRAINBASE_REMOVED_STAGE_PARAM_KEYS:
+                    if key in params:
+                        removed_stage_hits.append(f"freerun_stage_schedule[{idx}].params.{key}")
+            trainer_cfg = stage.get("trainer")
+            if isinstance(trainer_cfg, dict):
+                for key in TRAINBASE_REMOVED_STAGE_TRAINER_KEYS:
+                    if key in trainer_cfg:
+                        removed_stage_hits.append(f"freerun_stage_schedule[{idx}].trainer.{key}")
+        if removed_stage_hits:
+            errs.append(
+                f"{path}: active trainbase config must not contain removed stage-schedule keys: "
+                + ", ".join(removed_stage_hits)
+            )
     return errs
 
 

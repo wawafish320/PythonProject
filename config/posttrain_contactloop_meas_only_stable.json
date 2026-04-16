@@ -29,13 +29,9 @@
 
   "detach_rollout_state": true,
 
-  "train_so3_corrector": false,
   "train_lambda_head": false,
   "train_direct_pose": false,
-  "train_contact_plan_init": false,
-  "train_contact_plan": false,
 
-  "train_contact_meas": true,
   "contact_meas_weight": 1.0,
   "contact_meas_rollout": false,
   "contact_meas_rollout_weight": 0.2,

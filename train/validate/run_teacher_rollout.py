@@ -22,7 +22,7 @@ import json
 import math
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -33,10 +33,17 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from train.training_MPL import MotionEventDataset, Trainer, validate_and_fix_model_, geodesic_R
 from train.geometry import rot6d_to_matrix, matrix_to_rot6d, reproject_rot6d, normalize_rot6d_delta
+from train.model_ckpt_compat import (
+    DirectPoseBuildOverrides,
+    DirectPoseLoadCompatOptions,
+    load_event_motion_ckpt_payload,
+    prepare_event_motion_ckpt_state_for_load,
+    resolve_event_motion_build_state_from_ckpt,
+)
 from train.models import EventMotionModel, MotionJointLoss, STAGE6_3WAY_ARMCHAIN_BONES_CSV
 from train.layout import LayoutCenter, DataNormalizer
-from train.geometry import compose_rot6d_delta
-from train.rotvec_semantics import require_standard_rotvec_spec
+from train.posttrain_common import NORM_SPEC_RUNTIME_PRETRAIN_KEYS, merge_norm_spec
+from train.utils import resolve_device
 
 
 def _legacy_phase_state_root() -> str:
@@ -233,30 +240,6 @@ def load_json(path: Path) -> Dict[str, object]:
         return json.load(f)
 
 
-def merge_norm_spec(bundle_path: Path, pretrain_path: Optional[Path]) -> Dict[str, object]:
-    with bundle_path.open("r", encoding="utf-8") as f:
-        base = json.load(f)
-    require_standard_rotvec_spec(base, context=f"bundle {bundle_path}")
-    spec = dict(base)
-    if pretrain_path and pretrain_path.is_file():
-        with pretrain_path.open("r", encoding="utf-8") as f:
-            pre = json.load(f)
-        require_standard_rotvec_spec(pre, context=f"pretrain_template {pretrain_path}")
-        for key in (
-            "MuAngVel",
-            "StdAngVel",
-            "tanh_scales_angvel",
-            "pose_hist_len",
-            "pose_hist_dim",
-            "tanh_scales_pose_hist",
-            "MuPoseHist",
-            "StdPoseHist",
-        ):
-            if key in pre and pre[key] is not None:
-                spec[key] = pre[key]
-    return spec
-
-
 def resolve_npz_path(clip_name: str, source_json: Optional[str], npz_root: Path) -> Path:
     candidates: List[Path] = []
     if npz_root:
@@ -352,38 +335,36 @@ class TeacherRolloutRunner:
         if not args.model and not args.onnx_model:
             raise SystemExit("[FATAL] --model or --onnx-model must be specified.")
         self.use_onnx = bool(args.onnx_model)
-        self.device = self._resolve_device(args.device if not self.use_onnx else "cpu")
+        self.device = resolve_device(args.device if not self.use_onnx else "cpu")
         self.bundle_path = Path(args.bundle).expanduser().resolve()
         self.bundle = LayoutCenter(str(self.bundle_path))
         pretrain_path = Path(args.pretrain_template).expanduser()
-        self.norm_spec = merge_norm_spec(self.bundle_path, pretrain_path if pretrain_path.is_file() else None)
+        self.norm_spec = merge_norm_spec(
+            self.bundle_path,
+            pretrain_path if pretrain_path.is_file() else None,
+            pretrain_keys=NORM_SPEC_RUNTIME_PRETRAIN_KEYS,
+        )
         self.pose_hist_len = int(self.norm_spec.get("pose_hist_len", 0) or 0)
-        self.ckpt = None
+        self.ckpt_payload = None
         self.state_dict = None
         self.onnx_path = Path(args.onnx_model).expanduser().resolve() if self.use_onnx else None
         self.ort_session = None
         self.ort_input_map: dict[str, str] = {}
         self.ort_output_name: Optional[str] = None
         if not self.use_onnx:
-            self.ckpt = torch.load(Path(args.model).expanduser(), map_location="cpu")
-            raw_state = self.ckpt["model"] if isinstance(self.ckpt, dict) and "model" in self.ckpt else self.ckpt
-            # Drop frozen_encoder / frozen_period_head weights that are not part of the runtime model to avoid
-            # mismatch errors. These are attached separately via --encoder-bundle for evaluation/export.
-            self.state_dict = {}
-            skipped = 0
-            for k, v in raw_state.items():
-                if (
-                    str(k).startswith("frozen_encoder.")
-                    or str(k).startswith("frozen_period_head.")
-                    or str(k).startswith("contact_plan_input_proj.")
-                ):
-                    skipped += 1
-                    continue
-                self.state_dict[k] = v
-            if skipped > 0:
-                print(f"[TeacherRollout][INFO] stripped {skipped} frozen encoder keys from checkpoint for runtime load.")
-        self.width = self._infer_width() if not self.use_onnx else None
-        self.period_dim = self._infer_period_dim() if not self.use_onnx else 0
+            self.ckpt_payload = load_event_motion_ckpt_payload(
+                Path(args.model).expanduser(),
+                map_location="cpu",
+            )
+            self.state_dict = self.ckpt_payload.state_dict
+            if self.ckpt_payload.stripped_frozen_key_count > 0:
+                print(
+                    "[TeacherRollout][INFO] stripped "
+                    f"{self.ckpt_payload.stripped_frozen_key_count} frozen encoder keys "
+                    "from checkpoint for runtime load."
+                )
+        self.width = self.ckpt_payload.width if not self.use_onnx else None
+        self.period_dim = self.ckpt_payload.period_dim if not self.use_onnx else 0
         self.encoder_bundle_path = Path(args.encoder_bundle).expanduser() if args.encoder_bundle else None
         self.model: Optional[EventMotionModel] = None
         self.loss_fn: Optional[MotionJointLoss] = None
@@ -398,22 +379,6 @@ class TeacherRolloutRunner:
             "std": None,
         }
         self.normalizer: Optional[DataNormalizer] = None
-
-    @staticmethod
-    def _resolve_device(pref: str) -> torch.device:
-        pref = pref.lower()
-        has_mps = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-        if pref == "cpu":
-            return torch.device("cpu")
-        if pref == "cuda":
-            return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if pref == "mps":
-            return torch.device("mps" if has_mps else "cpu")
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        if has_mps:
-            return torch.device("mps")
-        return torch.device("cpu")
 
     def _infer_width(self) -> int:
         key = "shared_encoder.0.weight"
@@ -473,214 +438,25 @@ class TeacherRolloutRunner:
         if self.model is not None:
             return
 
-        # ---- Infer optional heads from checkpoint (plan / meas / direct pose) ----
-        contact_plan_enable = any(
-            str(k).startswith("contact_plan_cell.") or str(k).startswith("contact_plan_head.")
-            for k in self.state_dict.keys()
+        build_state = resolve_event_motion_build_state_from_ckpt(
+            ckpt_payload=self.ckpt_payload,
+            in_state_dim=Dx,
+            out_motion_dim=Dy,
+            cond_dim=Dc,
+            contact_dim=int(self.contact_dim or 0),
+            period_dim=int(getattr(ds, "period_dim", 0) or self.period_dim),
+            direct_pose_overrides=DirectPoseBuildOverrides(
+                train_direct_pose=False,
+                direct_pose_reinit=False,
+            ),
+            default_direct_pose_arm_bones=str(STAGE6_3WAY_ARMCHAIN_BONES_CSV),
+            use_ckpt_direct_pose_posttrain_cfg=False,
         )
-        contact_plan_hidden = 64
-        try:
-            w_hh = self.state_dict.get("contact_plan_cell.weight_hh", None)
-            if torch.is_tensor(w_hh) and w_hh.ndim == 2:
-                contact_plan_hidden = int(w_hh.shape[1])
-        except Exception:
-            pass
-        contact_plan_time_pe_dim = 0
-        try:
-            w_time = self.state_dict.get("contact_plan_time_head.weight", None)
-            if torch.is_tensor(w_time) and w_time.ndim == 2:
-                contact_plan_time_pe_dim = int(w_time.shape[1])
-        except Exception:
-            contact_plan_time_pe_dim = 0
-
-        # Infer obs-conditioned contact plan init head (plan_z0 = init_z + init_head(obs0)).
-        contact_plan_init_mode = "learnable"
-        contact_plan_init_hidden = 128
-        try:
-            init_has_weights = any(str(k).startswith("contact_plan_init_head.") for k in self.state_dict.keys())
-            if init_has_weights:
-                contact_plan_init_mode = "learnable+obs"
-                w_init = self.state_dict.get("contact_plan_init_head.1.weight", None)
-                if torch.is_tensor(w_init) and w_init.ndim == 2:
-                    contact_plan_init_hidden = int(w_init.shape[0])
-        except Exception:
-            contact_plan_init_mode = "learnable"
-        # Infer trunk injection mode from checkpoint shared_encoder input dim.
-        contact_plan_inject = "none"
-        try:
-            w0 = self.state_dict.get("shared_encoder.0.weight", None)
-            if torch.is_tensor(w0) and w0.ndim == 2:
-                nin = int(w0.shape[1])
-                base_in = int(Dx + Dc)
-                extra = int(max(0, nin - base_in))
-                if extra > 0:
-                    if int(self.contact_dim or 0) > 0 and extra == int(self.contact_dim):
-                        contact_plan_inject = "contacts"
-                    else:
-                        contact_plan_inject = "plan_z"
-                        # Ensure plan hidden matches injected dim (prefer actual injected size).
-                        if extra != int(contact_plan_hidden):
-                            contact_plan_hidden = int(extra)
-        except Exception:
-            contact_plan_inject = "none"
-
-        direct_pose_enable = False
-        direct_pose_hidden = 256
-        direct_pose_meas_mode = "concat"
-        direct_pose_feat_source = "cond"
-        direct_pose_time_pe_dim = 0
-        direct_pose_split_enable = False
-        direct_pose_stepc_unified_leg_terminal = False
-        direct_pose_arm_split_enable = False
-        direct_pose_arm_bones = None
-        direct_pose_nonleg_proj_dim = 0
-        try:
-            direct_has_weights = any(str(k).startswith("direct_pose_head.") for k in self.state_dict.keys())
-            direct_has_split_weights = any(
-                str(k).startswith(prefix)
-                for prefix in (
-                    "direct_pose_leg_terminal.",
-                    "direct_pose_out_leg.",
-                    "direct_pose_out_nonleg.",
-                    "direct_pose_out_arm.",
-                    "direct_pose_out_else.",
-                    "direct_pose_leg_head.",
-                )
-                for k in self.state_dict.keys()
-            )
-            if (direct_has_weights or direct_has_split_weights) and int(Dc) > 0 and int(self.contact_dim or 0) > 0:
-                w_in = self.state_dict.get("direct_pose_head.0.weight", None)
-                w_out = self.state_dict.get("direct_pose_head.6.weight", None)
-                w_leg_terminal = self.state_dict.get("direct_pose_leg_terminal.6.weight", None)
-                w_hidden = self.state_dict.get("direct_pose_head.3.weight", None)
-                if torch.is_tensor(w_in) and w_in.ndim == 2:
-                    in_dim = int(w_in.shape[1])
-                    hid = int(w_in.shape[0])
-                    if torch.is_tensor(w_hidden) and w_hidden.ndim == 2 and int(w_hidden.shape[0]) > 0:
-                        hid = int(w_hidden.shape[0])
-                    base_candidates = [
-                        (int(Dc), "cond"),
-                        (int(self.width), "hidden"),
-                        (int(Dc + self.width), "cond+hidden"),
-                    ]
-                    Cc = int(self.contact_dim or 0)
-                    mode_resolved = False
-
-                    if torch.is_tensor(w_out) and w_out.ndim == 2:
-                        out_dim = int(w_out.shape[0])
-                        expected_out = int(Dy)
-                        expected_out_modes = int(Dy) * 2
-                        if out_dim == expected_out:
-                            for base_dim, src in base_candidates:
-                                tdim = int(in_dim - base_dim - (2 * Cc))
-                                if tdim >= 0 and tdim % 2 == 0:
-                                    direct_pose_enable = True
-                                    direct_pose_hidden = hid
-                                    direct_pose_meas_mode = "concat"
-                                    direct_pose_feat_source = src
-                                    direct_pose_time_pe_dim = int(tdim)
-                                    mode_resolved = True
-                                    break
-                        elif out_dim == expected_out_modes:
-                            for base_dim, src in base_candidates:
-                                tdim = int(in_dim - base_dim - Cc)
-                                if tdim >= 0 and tdim % 2 == 0:
-                                    direct_pose_enable = True
-                                    direct_pose_hidden = hid
-                                    direct_pose_meas_mode = "mode_select"
-                                    direct_pose_feat_source = src
-                                    direct_pose_time_pe_dim = int(tdim)
-                                    mode_resolved = True
-                                    break
-                        else:
-                            raise SystemExit(
-                                f"[FATAL] Unrecognized direct_pose_head out_dim={out_dim} (expected {expected_out} or {expected_out_modes})."
-                            )
-                    elif torch.is_tensor(w_leg_terminal) and w_leg_terminal.ndim == 2:
-                        hid = int(w_leg_terminal.shape[1]) if int(w_leg_terminal.shape[1]) > 0 else hid
-                        direct_pose_stepc_unified_leg_terminal = True
-
-                    if (not mode_resolved) and direct_has_split_weights:
-                        for base_dim, src in base_candidates:
-                            tdim = int(in_dim - base_dim - (2 * Cc))
-                            if tdim >= 0 and tdim % 2 == 0:
-                                direct_pose_enable = True
-                                direct_pose_hidden = hid
-                                direct_pose_meas_mode = "concat"
-                                direct_pose_feat_source = src
-                                direct_pose_time_pe_dim = int(tdim)
-                                mode_resolved = True
-                                break
-
-                    if direct_has_split_weights and not direct_pose_enable:
-                        direct_pose_enable = True
-                        direct_pose_hidden = hid
-                        direct_pose_meas_mode = "concat"
-                        direct_pose_feat_source = "cond"
-                        direct_pose_time_pe_dim = 0
-
-                    if direct_has_weights and (not direct_pose_enable):
-                        raise SystemExit(
-                            f"[FATAL] Unrecognized direct_pose_head shape: in_dim={in_dim} "
-                            f"(cond_dim={Dc}, hidden_dim={self.width}, contact_dim={self.contact_dim})."
-                        )
-        except Exception:
-            direct_pose_enable = False
-            direct_pose_feat_source = "cond"
-            direct_pose_time_pe_dim = 0
-            direct_pose_split_enable = False
-            direct_pose_stepc_unified_leg_terminal = False
-            direct_pose_arm_split_enable = False
-            direct_pose_arm_bones = None
-            direct_pose_nonleg_proj_dim = 0
-
-        try:
-            direct_pose_split_enable = bool(
-                direct_pose_enable
-                and (
-                    any(str(k).startswith("direct_pose_leg_terminal.") for k in self.state_dict.keys())
-                    or any(str(k).startswith("direct_pose_out_leg.") for k in self.state_dict.keys())
-                    or (
-                        torch.is_tensor(self.state_dict.get("direct_pose_leg_out_idx", None))
-                        and torch.is_tensor(self.state_dict.get("direct_pose_nonleg_out_idx", None))
-                        and int(self.state_dict["direct_pose_leg_out_idx"].numel()) > 0
-                        and int(self.state_dict["direct_pose_nonleg_out_idx"].numel()) > 0
-                    )
-                )
-            )
-            direct_pose_stepc_unified_leg_terminal = bool(
-                direct_pose_split_enable
-                and any(str(k).startswith("direct_pose_leg_terminal.") for k in self.state_dict.keys())
-            )
-            direct_pose_arm_split_enable = bool(
-                direct_pose_split_enable
-                and (
-                    any(str(k).startswith("direct_pose_out_arm.") for k in self.state_dict.keys())
-                    or (
-                        torch.is_tensor(self.state_dict.get("direct_pose_arm_out_idx", None))
-                        and torch.is_tensor(self.state_dict.get("direct_pose_else_out_idx", None))
-                        and int(self.state_dict["direct_pose_arm_out_idx"].numel()) > 0
-                        and int(self.state_dict["direct_pose_else_out_idx"].numel()) > 0
-                    )
-                )
-            )
-            if direct_pose_arm_split_enable:
-                direct_pose_arm_bones = str(STAGE6_3WAY_ARMCHAIN_BONES_CSV)
-            w_nonleg_proj = self.state_dict.get("direct_pose_nonleg_proj.0.weight", None)
-            if torch.is_tensor(w_nonleg_proj) and w_nonleg_proj.ndim == 2 and int(w_nonleg_proj.shape[0]) > 0:
-                direct_pose_nonleg_proj_dim = int(w_nonleg_proj.shape[0])
-            if direct_pose_nonleg_proj_dim <= 0:
-                for proj_key in ("direct_pose_arm_proj.0.weight", "direct_pose_else_proj.0.weight"):
-                    proj_w = self.state_dict.get(proj_key, None)
-                    if torch.is_tensor(proj_w) and proj_w.ndim == 2 and int(proj_w.shape[0]) > 0:
-                        direct_pose_nonleg_proj_dim = int(proj_w.shape[0])
-                        break
-        except Exception:
-            direct_pose_split_enable = False
-            direct_pose_stepc_unified_leg_terminal = False
-            direct_pose_arm_split_enable = False
-            direct_pose_arm_bones = None
-            direct_pose_nonleg_proj_dim = 0
+        contact_plan_enable = bool(
+            build_state.contact_plan_cfg.enable
+            or build_state.contact_plan_cfg.inject != "none"
+            or build_state.direct_pose_cfg.enable
+        )
 
         model = EventMotionModel(
             in_state_dim=Dx,
@@ -698,30 +474,30 @@ class TeacherRolloutRunner:
             state_layout=getattr(ds, "state_layout", None),
             bone_names=getattr(ds, "bone_names", None),
             output_layout=getattr(ds, "output_layout", None),
-            contact_plan_enable=bool(contact_plan_enable or contact_plan_inject != "none" or direct_pose_enable),
-            contact_plan_hidden=int(contact_plan_hidden),
+            contact_plan_enable=bool(contact_plan_enable),
+            contact_plan_hidden=int(build_state.contact_plan_cfg.hidden),
             contact_plan_dropout=0.0,
-            contact_plan_inject=str(contact_plan_inject),
+            contact_plan_inject=str(build_state.contact_plan_cfg.inject),
             contact_plan_inject_detach=True,
-            contact_plan_time_pe_dim=int(contact_plan_time_pe_dim),
-            contact_plan_init_mode=str(contact_plan_init_mode),
-            contact_plan_init_hidden=int(contact_plan_init_hidden),
+            contact_plan_time_pe_dim=int(build_state.contact_plan_cfg.time_pe_dim),
+            contact_plan_init_mode=str(build_state.contact_plan_cfg.init_mode),
+            contact_plan_init_hidden=int(build_state.contact_plan_cfg.init_hidden),
             contact_plan_init_dropout=0.0,
-            direct_pose_enable=bool(direct_pose_enable),
-            direct_pose_hidden=int(direct_pose_hidden),
+            direct_pose_enable=bool(build_state.direct_pose_cfg.enable),
+            direct_pose_hidden=int(build_state.direct_pose_cfg.hidden),
             direct_pose_dropout=0.0,
             direct_pose_detach_plan=True,
-            direct_pose_meas_mode=str(direct_pose_meas_mode),
+            direct_pose_meas_mode=str(build_state.direct_pose_cfg.meas_mode),
             direct_pose_meas_drop_prob=0.0,
             direct_pose_meas_noise_std=0.0,
             direct_pose_plan_drop_prob=0.0,
-            direct_pose_feat_source=str(direct_pose_feat_source),
-            direct_pose_time_pe_dim=int(direct_pose_time_pe_dim),
-            direct_pose_split_enable=bool(direct_pose_split_enable),
-            direct_pose_stepc_unified_leg_terminal=bool(direct_pose_stepc_unified_leg_terminal),
-            direct_pose_nonleg_proj_dim=int(direct_pose_nonleg_proj_dim),
-            direct_pose_arm_split_enable=bool(direct_pose_arm_split_enable),
-            direct_pose_arm_bones=direct_pose_arm_bones,
+            direct_pose_feat_source=str(build_state.direct_pose_cfg.feat_source),
+            direct_pose_time_pe_dim=int(build_state.direct_pose_cfg.time_pe_dim),
+            direct_pose_split_enable=bool(build_state.direct_pose_cfg.split_enable),
+            direct_pose_stepc_unified_leg_terminal=bool(build_state.direct_pose_cfg.stepc_unified_leg_terminal),
+            direct_pose_nonleg_proj_dim=int(build_state.direct_pose_cfg.nonleg_proj_dim),
+            direct_pose_arm_split_enable=bool(build_state.direct_pose_cfg.arm_split_enable),
+            direct_pose_arm_bones=build_state.direct_pose_cfg.arm_bones,
         ).to(self.device)
         validate_and_fix_model_(model, Dx, Dc)
         legacy_phase_root = _legacy_phase_state_root()
@@ -738,12 +514,21 @@ class TeacherRolloutRunner:
                 f"[TeacherRollout][INFO] ignoring {len(removed_legacy_phase)} retired {legacy_phase_root} tensor(s): "
                 f"{removed_legacy_phase}"
             )
-        missing, unexpected = model.load_state_dict(filtered_state_dict, strict=False)
+        prepared_state_dict = prepare_event_motion_ckpt_state_for_load(
+            state_dict=filtered_state_dict,
+            model=model,
+            ckpt_posttrain_cfg=build_state.ckpt_posttrain_cfg,
+            contact_dim=int(self.contact_dim or 0),
+            direct_pose_cfg=build_state.direct_pose_cfg,
+            load_options=DirectPoseLoadCompatOptions(
+                train_direct_pose=False,
+                leg_enable=False,
+            ),
+            encoder_bundle=self.encoder_bundle_path if (self.encoder_bundle_path and self.encoder_bundle_path.is_file()) else None,
+        )
+        missing, unexpected = model.load_state_dict(prepared_state_dict, strict=False)
         if missing or unexpected:
             print(f"[TeacherRollout][WARN] state_dict mismatch: missing={missing}, unexpected={unexpected}")
-        # Attach frozen motion encoder bundle if提供
-        if self.encoder_bundle_path and self.encoder_bundle_path.is_file():
-            model.attach_motion_encoder(torch.load(str(self.encoder_bundle_path), map_location="cpu"))
         model.eval()
         loss_fn = MotionJointLoss(
             output_layout=self.bundle.output_layout,
@@ -757,9 +542,6 @@ class TeacherRolloutRunner:
             lr=1e-4,
             grad_clip=0.0,
             weight_decay=0.0,
-            tf_warmup_steps=0,
-            tf_total_steps=0,
-            augmentor=None,
             use_amp=False,
             accum_steps=1,
             pin_memory=False,

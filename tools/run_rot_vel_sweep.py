@@ -240,7 +240,6 @@ def main() -> None:
     ap.add_argument("--rot-vel-log-scale", type=float, default=2.0)
     ap.add_argument("--rot-vel-omega-min-deg-s", type=float, default=30.0)
     ap.add_argument("--rot-vel-loss", type=str, default="smooth_l1", choices=("smooth_l1", "mse"))
-    ap.add_argument("--aug-lr-swap-prob", type=float, default=0.0, help="Training-time L/R swap augmentation prob.")
     ap.add_argument("--w-direct-delta-sym", type=float, default=0.0, help="Soft L/R symmetry regularizer on direct_delta.")
     ap.add_argument(
         "--direct-delta-sym-mirror-xyz",
@@ -320,7 +319,6 @@ def main() -> None:
         "rot_vel_log_scale": float(args.rot_vel_log_scale),
         "rot_vel_omega_min_deg_s": float(args.rot_vel_omega_min_deg_s),
         "rot_vel_loss": str(args.rot_vel_loss),
-        "aug_lr_swap_prob": float(args.aug_lr_swap_prob),
         "w_direct_delta_sym": float(args.w_direct_delta_sym),
         "direct_delta_sym_mirror_xyz": str(args.direct_delta_sym_mirror_xyz),
         "train_config_overrides": [str(x) for x in (args.train_config_override or [])],
@@ -334,11 +332,10 @@ def main() -> None:
         thr_tag = _fmt_float_tag(float(args.rot_vel_omega_min_deg_s))
         ls_tag = _fmt_float_tag(float(args.rot_vel_log_scale))
         loss_tag = str(args.rot_vel_loss)
-        swap_tag = _fmt_float_tag(float(args.aug_lr_swap_prob))
         sym_tag = _fmt_float_tag(float(args.w_direct_delta_sym))
         mir_tag = str(args.direct_delta_sym_mirror_xyz).replace(" ", "").replace(",", "_")
         mir_tag = mir_tag.replace("-", "m").replace(".", "p")
-        run_name = f"{base_run}__rotvel_w{w_tag}_lrswap_p{swap_tag}_thr{thr_tag}_ls{ls_tag}_{loss_tag}"
+        run_name = f"{base_run}__rotvel_w{w_tag}_thr{thr_tag}_ls{ls_tag}_{loss_tag}"
         if float(args.w_direct_delta_sym) != 0.0 or str(args.direct_delta_sym_mirror_xyz).replace(" ", "") != "1,1,1":
             run_name = f"{run_name}_symw{sym_tag}_symm{mir_tag}"
 
@@ -346,7 +343,6 @@ def main() -> None:
         run_eval_dir.mkdir(parents=True, exist_ok=True)
 
         # ---- Train ----------------------------------------------------------
-        ckpt_best_free = train_out / run_name / f"ckpt_best_free_{run_name}.pth"
         ckpt_last = train_out / run_name / f"ckpt_last_{run_name}.pth"
         if not args.skip_train:
             cmd = [
@@ -368,8 +364,6 @@ def main() -> None:
                 "--config_override",
                 f"rot_vel_loss={loss_tag}",
                 "--config_override",
-                f"aug_lr_swap_prob={float(args.aug_lr_swap_prob)}",
-                "--config_override",
                 f"w_direct_delta_sym={float(args.w_direct_delta_sym)}",
                 "--config_override",
                 f"direct_delta_sym_mirror_xyz={str(args.direct_delta_sym_mirror_xyz)}",
@@ -382,9 +376,9 @@ def main() -> None:
                     cmd += ["--config_override", ov]
             _run_and_tee(cmd, cwd=_ROOT, env=env, log_path=run_eval_dir / "train.log")
 
-        ckpt_path = ckpt_best_free if ckpt_best_free.is_file() else ckpt_last
+        ckpt_path = ckpt_last
         if not ckpt_path.is_file():
-            raise SystemExit(f"[FATAL] missing ckpt for run={run_name}: expected {ckpt_best_free} or {ckpt_last}")
+            raise SystemExit(f"[FATAL] missing ckpt for run={run_name}: expected {ckpt_last}")
 
         # ---- Freerun --------------------------------------------------------
         freerun_json = run_eval_dir / "Walk_F_freerun_cycles.json"

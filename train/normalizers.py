@@ -17,6 +17,8 @@ __all__ = [
     "VectorTanhNormalizerTorch",
     "AngvelNormalizer",
     "AngvelNormCfg",
+    "normalize_cond_tensor",
+    "prepare_runtime_stat_tensor",
     "_make_angnorm_from_spec",
 ]
 
@@ -93,6 +95,63 @@ class VectorTanhNormalizerTorch(nn.Module):
         else:
             raw = 0.5 * (torch.log1p(z) - torch.log1p(-z)) * self.scales
         return raw
+
+
+def prepare_runtime_stat_tensor(
+    value,
+    *,
+    ref_tensor: torch.Tensor,
+    cache: Optional[dict] = None,
+    cache_key: Optional[str] = None,
+) -> Optional[torch.Tensor]:
+    if value is None:
+        return None
+    device = ref_tensor.device
+    dtype = ref_tensor.dtype
+
+    bucket = None
+    runtime_key = None
+    if isinstance(cache, dict) and cache_key is not None:
+        bucket = cache.setdefault(str(cache_key), {})
+        runtime_key = (device, dtype)
+        tensor = bucket.get(runtime_key)
+        if tensor is not None:
+            return tensor
+
+    if torch.is_tensor(value):
+        tensor = value.to(device=device, dtype=dtype)
+    else:
+        tensor = torch.as_tensor(value, device=device, dtype=dtype)
+
+    if bucket is not None and runtime_key is not None:
+        bucket[runtime_key] = tensor
+    return tensor
+
+
+def normalize_cond_tensor(
+    cond_raw: Optional[torch.Tensor],
+    cond_mu: Optional[torch.Tensor],
+    cond_std: Optional[torch.Tensor],
+    *,
+    cond_norm_clip: float = 6.0,
+) -> Optional[torch.Tensor]:
+    if cond_raw is None or cond_mu is None or cond_std is None:
+        return None
+    if cond_mu.dim() == 3:
+        cond_mu = cond_mu.squeeze(1)
+    if cond_std.dim() == 3:
+        cond_std = cond_std.squeeze(1)
+    if cond_mu.shape != cond_raw.shape:
+        if cond_mu.size(0) == 1 and cond_raw.size(0) > 1:
+            cond_mu = cond_mu.expand(cond_raw.size(0), -1)
+        if cond_std.size(0) == 1 and cond_raw.size(0) > 1:
+            cond_std = cond_std.expand(cond_raw.size(0), -1)
+    std = cond_std.clamp_min(1e-6)
+    cond_norm = (cond_raw - cond_mu) / std
+    clamp_val = float(cond_norm_clip or 0.0)
+    if clamp_val > 0:
+        cond_norm = cond_norm.clamp(-clamp_val, clamp_val)
+    return cond_norm
 
 
 # -----------------------------------------------------------------------------

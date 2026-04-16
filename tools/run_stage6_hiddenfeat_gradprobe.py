@@ -35,28 +35,28 @@ SPECS: Sequence[ProbeSpec] = (
         name="old_hidden_gradon",
         family="old",
         source_config=ROOT / "models" / "MLPL2_DirectBranch_v1" / "exp_phase_DirectBranch_v1_d1" / "config_resolved.json",
-        resume_ckpt=ROOT / "models" / "MLPL2_DirectBranch_v1" / "exp_phase_DirectBranch_v1_d1" / "ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+        resume_ckpt=ROOT / "models" / "MLPL2_DirectBranch_v1" / "exp_phase_DirectBranch_v1_d1" / "ckpt_last_exp_phase_DirectBranch_v1_d1.pth",
         detach_feat=False,
     ),
     ProbeSpec(
         name="old_hidden_gradoff",
         family="old",
         source_config=ROOT / "models" / "MLPL2_DirectBranch_v1" / "exp_phase_DirectBranch_v1_d1" / "config_resolved.json",
-        resume_ckpt=ROOT / "models" / "MLPL2_DirectBranch_v1" / "exp_phase_DirectBranch_v1_d1" / "ckpt_best_free_exp_phase_DirectBranch_v1_d1.pth",
+        resume_ckpt=ROOT / "models" / "MLPL2_DirectBranch_v1" / "exp_phase_DirectBranch_v1_d1" / "ckpt_last_exp_phase_DirectBranch_v1_d1.pth",
         detach_feat=True,
     ),
     ProbeSpec(
         name="cp015_hidden_gradon",
         family="cp015",
         source_config=ROOT / "models" / "MLPL2_DirectBranch_v1" / "exp_phase_DirectBranch_v1_d1_cp015_tailk3" / "config_resolved.json",
-        resume_ckpt=ROOT / "models" / "MLPL2_DirectBranch_v1" / "exp_phase_DirectBranch_v1_d1_cp015_tailk3" / "ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+        resume_ckpt=ROOT / "models" / "MLPL2_DirectBranch_v1" / "exp_phase_DirectBranch_v1_d1_cp015_tailk3" / "ckpt_last_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
         detach_feat=False,
     ),
     ProbeSpec(
         name="cp015_hidden_gradoff",
         family="cp015",
         source_config=ROOT / "models" / "MLPL2_DirectBranch_v1" / "exp_phase_DirectBranch_v1_d1_cp015_tailk3" / "config_resolved.json",
-        resume_ckpt=ROOT / "models" / "MLPL2_DirectBranch_v1" / "exp_phase_DirectBranch_v1_d1_cp015_tailk3" / "ckpt_best_free_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
+        resume_ckpt=ROOT / "models" / "MLPL2_DirectBranch_v1" / "exp_phase_DirectBranch_v1_d1_cp015_tailk3" / "ckpt_last_exp_phase_DirectBranch_v1_d1_cp015_tailk3.pth",
         detach_feat=True,
     ),
 )
@@ -163,11 +163,15 @@ def _run_one_probe(spec: ProbeSpec) -> Dict[str, Any]:
     model_artifacts = tm._build_train_model(train_ctx, train_data)
     tm._prepare_train_model_runtime(train_ctx, train_data, model_artifacts)
     build_artifacts = tm._build_train_loss_and_trainer(train_ctx, train_data, model_artifacts)
-    tm.apply_layout_center(train_data.ds_train, build_artifacts.trainer, train_ctx.args.bundle_json)
+    dataset_artifacts = tm.build_and_attach_dataset_runtime(
+        build_artifacts.trainer,
+        train_data.ds_train,
+        bundle_path=train_ctx.args.bundle_json,
+    )
     runtime_cfg = tm._resolve_trainer_runtime_config(
         args=train_ctx.args,
         trainer=build_artifacts.trainer,
-        ds_train=train_data.ds_train,
+        dataset_artifacts=dataset_artifacts,
         norm_template_path=train_ctx.norm_template_path,
         bundle_json_path=build_artifacts.bundle_json_path,
         out_dir=train_ctx.out_dir,
