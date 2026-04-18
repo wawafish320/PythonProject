@@ -1,0 +1,187 @@
+{
+  "run_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813",
+  "model_root": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813",
+  "source_runbook": "docs/basetrain_to_posttrain_top7_fresh_chain_runbook.md",
+  "baseline_group_summary": "debug_output/_tmp_tail_top7_fresh_chain_20260413_195656/lambda_clean/eval_model_source_group_summary.json",
+  "current_lambda_eval": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source/Walk_F_freerun_cycles.json",
+  "current_lambda_group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source_group_summary.json",
+  "regression_compare": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/regression_vs_20260413.json",
+  "config_compare": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/config_compare_vs_20260413_and_20260416_212417.json",
+  "repo_status_initial": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/git_status_initial.txt",
+  "repo_status_final": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/git_status_final.txt",
+  "runtime_contract_notes": [
+    "posttrain stages launched config-only: no --posttrain_contacts_source CLI compatibility was added or used.",
+    "PYTHONPATH is set to repo root for every cpu_nomps_exec.py invocation.",
+    "70R used a run-root migrated runner to preserve nonleg_train_only=true, trunk-mode full, epochs=1, steps_per_epoch=180, save_step_ckpts=0,1,5,20,60,180 without patching tools/ or train/.",
+    "basetrain randomness remains a known legacy issue and was not fixed in this run.",
+    "basetrain runtime copy additionally strips adaptive_bone_weights because current train.training_MPL rejects it; this is recorded as current BASE_CONFIG/runtime drift, not a posttrain recipe change."
+  ],
+  "stages": {
+    "basetrain": {
+      "success": true,
+      "launch_command": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py -m train.training_MPL --config_json /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/basetrain_runtime.json",
+      "input_ckpt": null,
+      "output_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/basetrain/fresh_tail_top7_basetrain_20260418_074813/ckpt_last_fresh_tail_top7_basetrain_20260418_074813.pth",
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/basetrain_runtime.json",
+      "log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/logs/basetrain.log",
+      "eval_artifact": null,
+      "group_summary": null
+    },
+    "stage6": {
+      "success": true,
+      "launch_command": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/stage6_20260418_074813.json",
+      "input_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/basetrain/fresh_tail_top7_basetrain_20260418_074813/ckpt_last_fresh_tail_top7_basetrain_20260418_074813.pth",
+      "output_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/stage6_stepc_handoff/ckpt_last_stage6_tailfix_top7_stepc_clean_fromfresh_20260418_074813.pth",
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/stage6_20260418_074813.json",
+      "log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/logs/stage6.log",
+      "eval_artifact": null,
+      "group_summary": null
+    },
+    "70a": {
+      "success": true,
+      "launch_command": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/70a_20260418_074813.json",
+      "input_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/stage6_stepc_handoff/ckpt_last_stage6_tailfix_top7_stepc_clean_fromfresh_20260418_074813.pth",
+      "output_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/70a_clean/ckpt_last_WalkF_stage7_70a_from_fresh_tailk7_stage6stepc_clean_20260418_074813.pth",
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/70a_20260418_074813.json",
+      "log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/logs/70a.log",
+      "eval_artifact": null,
+      "group_summary": null
+    },
+    "warmstart_clean": {
+      "success": true,
+      "launch_command": "cp /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/70a_clean/ckpt_last_WalkF_stage7_70a_from_fresh_tailk7_stage6stepc_clean_20260418_074813.pth /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/warmstart_clean/ckpt_last_fresh_tail_top7_70a_replace_zerophase_cleanstepc_20260418_074813.pth",
+      "input_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/70a_clean/ckpt_last_WalkF_stage7_70a_from_fresh_tailk7_stage6stepc_clean_20260418_074813.pth",
+      "output_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/warmstart_clean/ckpt_last_fresh_tail_top7_70a_replace_zerophase_cleanstepc_20260418_074813.pth",
+      "config": null,
+      "log": null,
+      "eval_artifact": null,
+      "group_summary": null
+    },
+    "replace": {
+      "success": true,
+      "launch_command": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/replace_20260418_074813.json",
+      "input_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/warmstart_clean/ckpt_last_fresh_tail_top7_70a_replace_zerophase_cleanstepc_20260418_074813.pth",
+      "output_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/replace_clean/ckpt_last_WalkF_stage7_70b_replace_lowdrift_e3x60_lr5e5_from_fresh_tailk7_70a_cleanstepc_20260418_074813.pth",
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/replace_20260418_074813.json",
+      "log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/logs/replace.log",
+      "eval_artifact": null,
+      "group_summary": null
+    },
+    "70R": {
+      "success": true,
+      "launch_command": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/run_posttrain_nonleg_trunk_ablation_migrated.py --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/70R_20260418_074813.json --trunk-mode full --out-dir /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/70R_clean --run-name WalkF_stage7_70R_from_fresh_tailk7_replace_cleanstepc_s180_20260418_074813 --epochs 1 --steps-per-epoch 180 --save-step-ckpts 0,1,5,20,60,180",
+      "input_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/replace_clean/ckpt_last_WalkF_stage7_70b_replace_lowdrift_e3x60_lr5e5_from_fresh_tailk7_70a_cleanstepc_20260418_074813.pth",
+      "output_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/70R_clean/ckpt_last_WalkF_stage7_70R_from_fresh_tailk7_replace_cleanstepc_s180_20260418_074813.pth",
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/70R_20260418_074813.json",
+      "log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/logs/70R.log",
+      "eval_artifact": null,
+      "group_summary": null
+    },
+    "71": {
+      "success": true,
+      "launch_command": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/71_20260418_074813.json",
+      "input_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/70R_clean/ckpt_last_WalkF_stage7_70R_from_fresh_tailk7_replace_cleanstepc_s180_20260418_074813.pth",
+      "output_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/71_clean/ckpt_last_WalkF_stage7_71_from_fresh_70R_cleanstepc_lr3e4_20260418_074813.pth",
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/71_20260418_074813.json",
+      "log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/logs/71.log",
+      "eval_artifact": null,
+      "group_summary": null
+    },
+    "72": {
+      "success": true,
+      "launch_command": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/72_20260418_074813.json",
+      "input_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/71_clean/ckpt_last_WalkF_stage7_71_from_fresh_70R_cleanstepc_lr3e4_20260418_074813.pth",
+      "output_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/72_clean/ckpt_last_WalkF_stage7_72_from_fresh_71_cleanstepc_lr1e4_20260418_074813.pth",
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/72_20260418_074813.json",
+      "log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/logs/72.log",
+      "eval_artifact": null,
+      "group_summary": null
+    },
+    "lambda": {
+      "success": true,
+      "launch_command": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/lambda_20260418_074813.json",
+      "input_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/72_clean/ckpt_last_WalkF_stage7_72_from_fresh_71_cleanstepc_lr1e4_20260418_074813.pth",
+      "output_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/ckpt_last_WalkF_stage7_lambda_from_fresh_72_cleanstepc_20260418_074813.pth",
+      "config": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/lambda_20260418_074813.json",
+      "log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/logs/lambda.log",
+      "eval_artifact": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source/Walk_F_freerun_cycles.json",
+      "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source_group_summary.json"
+    },
+    "lambda_eval": {
+      "success": true,
+      "launch_command": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/ckpt_last_WalkF_stage7_lambda_from_fresh_72_cleanstepc_20260418_074813.pth --encoder-bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source --device cpu --contacts_meas_source model --lambda_fusion_apply --log_contacts --export_direct_arm_probe --export_joint_direct_geolocal_series --rounds 5 --depth 3 --time-index-mode cycle --event_clock auto --phase_reset_source none --force",
+      "input_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/ckpt_last_WalkF_stage7_lambda_from_fresh_72_cleanstepc_20260418_074813.pth",
+      "output_ckpt": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source/Walk_F_freerun_cycles.json",
+      "config": null,
+      "log": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/logs/lambda_eval.log",
+      "eval_artifact": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source/Walk_F_freerun_cycles.json",
+      "group_summary": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source_group_summary.json"
+    }
+  },
+  "lambda_metrics": {
+    "all_ex_root": {
+      "mean": 0.13188351334334233,
+      "p50": 0.08135249465703964,
+      "p90": 0.32049793004989624,
+      "p95": 0.4395734667778015,
+      "samples": 15480
+    },
+    "leg": {
+      "mean": 0.1730593220983242,
+      "p50": 0.1322893649339676,
+      "p90": 0.3299708366394043,
+      "p95": 0.474623441696167,
+      "samples": 2752
+    },
+    "nonleg": {
+      "mean": 0.12298063577469759,
+      "p50": 0.06952287256717682,
+      "p90": 0.3170571029186249,
+      "p95": 0.43404677510261536,
+      "samples": 12728
+    },
+    "arm": {
+      "mean": 0.1431994591958407,
+      "p50": 0.07853011786937714,
+      "p90": 0.3748510777950287,
+      "p95": 0.5051988959312439,
+      "samples": 8944
+    },
+    "else": {
+      "mean": 0.07519068950654113,
+      "p50": 0.056152939796447754,
+      "p90": 0.17479611933231354,
+      "p95": 0.2092507779598236,
+      "samples": 3784
+    }
+  },
+  "regression_flags": {
+    "vs_20260413": {
+      "strict_any_metric_worse": true,
+      "strict_all_ex_root_worse": true
+    },
+    "vs_20260416_212417": {
+      "strict_any_metric_worse": true,
+      "strict_all_ex_root_worse": true
+    }
+  },
+  "config_compare_summary": {
+    "posttrain_configs_match_vs_20260413": true,
+    "posttrain_configs_match_vs_20260416_212417": true,
+    "posttrain_configs_match_both_refs": true,
+    "70R_semantic_device_only_vs_20260413": true,
+    "70R_exact_match_vs_20260416_212417": true,
+    "basetrain_runtime_match_vs_20260413_sanitized": false,
+    "basetrain_runtime_match_vs_20260416_runtime": false,
+    "basetrain_runtime_only_diff_vs_20260416_212417": [
+      "adaptive_bone_weights"
+    ]
+  },
+  "70R_migrated_runner": "debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/run_posttrain_nonleg_trunk_ablation_migrated.py",
+  "baseline_group_summary_20260413": "debug_output/_tmp_tail_top7_fresh_chain_20260413_195656/lambda_clean/eval_model_source_group_summary.json",
+  "baseline_group_summary_20260416_212417": "debug_output/_tmp_tail_top7_fresh_chain_20260416_212417/lambda_clean/eval_model_source_group_summary.json",
+  "regression_compare_20260413": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/regression_vs_20260413.json",
+  "regression_compare_20260416_212417": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/regression_vs_20260416_212417.json",
+  "config_compare_vs_20260413": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/config_compare_vs_20260413.json",
+  "config_compare_vs_20260413_and_20260416_212417": "/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/config_compare_vs_20260413_and_20260416_212417.json"
+}

@@ -1,0 +1,23 @@
+$ /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/lambda_20260418_074813.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[LR-DBG:init] arg_lr=2.00e-04 opt_pg0=2.00e-04
+[posttrain] mode=train_lambda_head
+[posttrain] trainable=6 params: lambda_fusion_head.0.weight, lambda_fusion_head.0.bias, lambda_fusion_head.1.weight, lambda_fusion_head.1.bias, lambda_fusion_head.4.weight, lambda_fusion_head.4.bias
+[posttrain][e1 i0/200] total=0.043543 blend=0.043543 λ=0.119±0.000 inc=0.048853 dir=0.005811 λ_eff=0.116±0.017 r=0.971
+[posttrain][e1 i20/200] total=0.028048 blend=0.028048 λ=0.200±0.017 inc=0.034059 dir=0.006244 λ_eff=0.194±0.033 r=0.971
+[posttrain][e1 i40/200] total=0.007124 blend=0.007124 λ=0.682±0.125 inc=0.014152 dir=0.005086 λ_eff=0.662±0.155 r=0.971
+[posttrain][e1 i60/200] total=0.006036 blend=0.006036 λ=0.923±0.172 inc=0.012415 dir=0.005840 λ_eff=0.897±0.212 r=0.971
+[posttrain][e1 i80/200] total=0.005257 blend=0.005257 λ=0.943±0.173 inc=0.011743 dir=0.005121 λ_eff=0.916±0.215 r=0.971
+[posttrain][e1 i100/200] total=0.005391 blend=0.005391 λ=0.948±0.169 inc=0.011890 dir=0.005404 λ_eff=0.921±0.212 r=0.971
+[posttrain][e1 i120/200] total=0.005190 blend=0.005190 λ=0.951±0.167 inc=0.011737 dir=0.005160 λ_eff=0.923±0.211 r=0.971
+[posttrain][e1 i140/200] total=0.005792 blend=0.005792 λ=0.953±0.164 inc=0.012106 dir=0.005626 λ_eff=0.926±0.209 r=0.971
+[posttrain][e1 i160/200] total=0.005000 blend=0.005000 λ=0.955±0.162 inc=0.011564 dir=0.005069 λ_eff=0.927±0.207 r=0.971
+[posttrain][e1 i180/200] total=0.005586 blend=0.005586 λ=0.956±0.159 inc=0.011925 dir=0.005432 λ_eff=0.928±0.205 r=0.971
+[posttrain][epoch 1] avg_total=0.010038 ok_steps=200 skipped=0
+[posttrain][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/ckpt_last_WalkF_stage7_lambda_from_fresh_72_cleanstepc_20260418_074813.pth
+
+[exit_code] 0

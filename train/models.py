@@ -7,13 +7,11 @@ Unified model definitions for training and inference.
 import math as _math
 from typing import Any, Dict, Optional, Sequence, Tuple
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .utils import (
-    _build_pretrain_contact_encoder_input,
     _resolve_joint_spec_indices,
     build_mlp,
 )
@@ -28,7 +26,6 @@ from .geometry import (
 )
 from .layout import infer_rot_joint_count, parse_layout_entry, resolve_rot6d_slice
 from .model_ckpt_compat import (
-    attach_motion_encoder_bundle,
     maybe_upgrade_direct_pose_split_state_dict,
     maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict,
 )
@@ -36,22 +33,12 @@ from .model_ckpt_compat import (
 __all__ = [
     'MotionEncoder',
     'PeriodHead',
-    '_CondFiLM',
     'EventMotionModel',
     'MotionJointLoss',
-    '_build_pretrain_contact_encoder_input',
     'DEFAULT_DIRECT_POSE_LEG_BONES',
     'STAGE6_3WAY_ARMCHAIN_BONES',
     'STAGE6_3WAY_ARMCHAIN_BONES_CSV',
 ]
-
-# Lower-body joint indices for our default 46-bone skeleton.
-# pelvis + thigh/calf/twist/foot/ball (L+R), total 15 joints.
-LOWER_BODY_INDICES_V1: tuple[int, ...] = (
-    0,
-    32, 33, 34, 35, 36, 37, 38,
-    39, 40, 41, 42, 43, 44, 45,
-)
 
 DEFAULT_DIRECT_POSE_LEG_BONES: tuple[str, ...] = (
     'thigh_r', 'calf_r', 'foot_r', 'ball_r',
@@ -68,65 +55,6 @@ STAGE6_3WAY_ARMCHAIN_BONES: tuple[str, ...] = (
 )
 
 STAGE6_3WAY_ARMCHAIN_BONES_CSV = ','.join(STAGE6_3WAY_ARMCHAIN_BONES)
-
-class ContactMeasHeadLowerBodyNoHistV1(nn.Module):
-    """
-    ContactMeas head v1 (docs/contact_meas_head_redesign_lowerbody_nohist.md):
-    - Input: lower-body pose (6D) + lower-body angvel (3D), current frame only.
-    - Branch LayerNorm: LN_pose, LN_angvel, then concat -> MLP -> logits.
-    """
-
-    def __init__(
-        self,
-        *,
-        pose_dim: int,
-        angvel_dim: int,
-        hidden_dim: int,
-        out_dim: int,
-        dropout: float = 0.0,
-    ) -> None:
-        super().__init__()
-        pose_dim = int(pose_dim)
-        angvel_dim = int(angvel_dim)
-        in_dim = max(0, pose_dim) + max(0, angvel_dim)
-        hidden_dim = max(8, int(hidden_dim))
-        self.pose_dim = pose_dim
-        self.angvel_dim = angvel_dim
-        self.in_dim = int(in_dim)
-
-        self.ln_pose = nn.LayerNorm(pose_dim) if pose_dim > 0 else nn.Identity()
-        self.ln_angvel = nn.LayerNorm(angvel_dim) if angvel_dim > 0 else nn.Identity()
-
-        drop = float(dropout)
-        self.mlp = nn.Sequential(
-            nn.Linear(self.in_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(drop) if drop > 0 else nn.Identity(),
-            nn.Linear(hidden_dim, int(out_dim)),
-        )
-        try:
-            last = self.mlp[-1]
-            if isinstance(last, nn.Linear):
-                with torch.no_grad():
-                    last.weight.zero_()
-                    if last.bias is not None:
-                        last.bias.zero_()
-        except Exception:
-            pass
-
-    def forward(self, pose_lower: torch.Tensor, angvel_lower: torch.Tensor) -> torch.Tensor:
-        # pose_lower: (B,T,Dp)  angvel_lower: (B,T,Dw) -> logits: (B,T,C)
-        z_pose = self.ln_pose(pose_lower) if self.pose_dim > 0 else None
-        z_w = self.ln_angvel(angvel_lower) if self.angvel_dim > 0 else None
-        if z_pose is None:
-            x = z_w
-        elif z_w is None:
-            x = z_pose
-        else:
-            x = torch.cat([z_pose, z_w], dim=-1)
-        flat = x.reshape(-1, x.shape[-1])
-        logits = self.mlp(flat).view(x.shape[0], x.shape[1], -1)
-        return logits
 
 
 class MotionEncoder(nn.Module):
@@ -464,9 +392,6 @@ class EventMotionModel(nn.Module):
         contact_plan_init_mode: str = "learnable",
         contact_plan_init_hidden: int = 128,
         contact_plan_init_dropout: float = 0.0,
-        # Legacy phase-clock state is retired from mainline; `phase_reset_source` remains only
-        # for external validation/post-train coordination.
-        phase_reset_source: str = "contacts_meas",
         # ===== Event-Clock v3 (contact_plan residual correction) =====
         use_event_clock: bool = False,
         event_clock_max_delta: float = 0.5,
@@ -635,16 +560,6 @@ class EventMotionModel(nn.Module):
             self.contact_plan_init_mode = "learnable"
         self.contact_plan_init_hidden = max(8, int(contact_plan_init_hidden or 0))
         self._contact_plan_init_dropout = float(contact_plan_init_dropout or 0.0)
-        # Phase reset source is only consumed by external validate/post-train tooling.
-        self.phase_reset_source = str(phase_reset_source or "contacts_meas").strip().lower()
-        if self.phase_reset_source in ("contacts", "contact", "meas", "contacts_meas"):
-            self.phase_reset_source = "contacts_meas"
-        elif self.phase_reset_source in ("none", "off", "disable", "disabled"):
-            self.phase_reset_source = "none"
-        elif self.phase_reset_source in ("hazard", "tdhazard", "td_hazard", "tdhaz"):
-            raise ValueError("phase_reset_source='td_hazard' has been retired; use 'contacts_meas' or 'none'.")
-        else:
-            self.phase_reset_source = "contacts_meas"
         # Event-Clock v3: residual correction inside contact_plan loop
         self.use_event_clock = bool(use_event_clock and self.contact_plan_enable)
         self.event_clock_max_delta = float(event_clock_max_delta or 0.0)
@@ -1572,26 +1487,6 @@ class EventMotionModel(nn.Module):
         return state
 
     @staticmethod
-    def _direct_pose_first_linear(module: Any) -> Optional[nn.Linear]:
-        if isinstance(module, nn.Sequential) and len(module) > 0 and isinstance(module[0], nn.Linear):
-            return module[0]
-        if isinstance(module, nn.Linear):
-            return module
-        return None
-
-    @staticmethod
-    def _direct_pose_last_linear(module: Any) -> Optional[nn.Linear]:
-        if isinstance(module, nn.Linear):
-            return module
-        if not isinstance(module, nn.Module):
-            return None
-        last_linear = None
-        for mm in module.modules():
-            if isinstance(mm, nn.Linear):
-                last_linear = mm
-        return last_linear
-
-    @staticmethod
     def _init_square_identity_linear_(module: Any) -> None:
         if not isinstance(module, nn.Linear):
             return
@@ -1635,79 +1530,6 @@ class EventMotionModel(nn.Module):
         except Exception:
             pass
         return block
-
-    @staticmethod
-    def _direct_pose_local_index(parent_idx: torch.Tensor, child_idx: torch.Tensor, *, device: torch.device) -> Optional[torch.Tensor]:
-        try:
-            pos_map = {int(v): i for i, v in enumerate(parent_idx.detach().cpu().tolist())}
-            local_idx = [int(pos_map[int(v)]) for v in child_idx.detach().cpu().tolist()]
-        except Exception:
-            return None
-        local_tensor = torch.as_tensor(local_idx, dtype=torch.long, device=device)
-        if int(local_tensor.numel()) != int(child_idx.numel()):
-            return None
-        return local_tensor
-
-    @staticmethod
-    def _normalize_split_index_buffer(state_dict: Dict[str, Any], key: str, target_idx: torch.Tensor) -> bool:
-        value = state_dict.get(key, None)
-        if not torch.is_tensor(value):
-            return False
-        if tuple(value.shape) != tuple(target_idx.shape):
-            state_dict.pop(key, None)
-            return True
-        if value.dtype == target_idx.dtype:
-            return False
-        try:
-            state_dict[key] = value.to(dtype=target_idx.dtype)
-        except Exception:
-            state_dict.pop(key, None)
-        return True
-
-    @staticmethod
-    def _copy_tensor_if_compatible(
-        state_dict: Dict[str, Any],
-        *,
-        target_key: str,
-        target_tensor: Optional[torch.Tensor],
-        source_tensor: Optional[torch.Tensor],
-    ) -> bool:
-        if (not torch.is_tensor(target_tensor)) or (not torch.is_tensor(source_tensor)):
-            return False
-        current = state_dict.get(target_key, None)
-        if torch.is_tensor(current) and tuple(current.shape) == tuple(target_tensor.shape):
-            return False
-        if tuple(source_tensor.shape) != tuple(target_tensor.shape):
-            return False
-        state_dict[target_key] = source_tensor
-        return True
-
-    @staticmethod
-    def _copy_indexed_tensor_if_needed(
-        state_dict: Dict[str, Any],
-        *,
-        target_key: str,
-        target_tensor: Optional[torch.Tensor],
-        source_tensor: Optional[torch.Tensor],
-        index_tensor: Optional[torch.Tensor],
-    ) -> bool:
-        if (
-            (not torch.is_tensor(target_tensor))
-            or (not torch.is_tensor(source_tensor))
-            or (not torch.is_tensor(index_tensor))
-        ):
-            return False
-        current = state_dict.get(target_key, None)
-        if torch.is_tensor(current) and tuple(current.shape) == tuple(target_tensor.shape):
-            return False
-        try:
-            copied = source_tensor.index_select(0, index_tensor.to(device=source_tensor.device, dtype=torch.long))
-        except Exception:
-            return False
-        if tuple(copied.shape) != tuple(target_tensor.shape):
-            return False
-        state_dict[target_key] = copied
-        return True
 
     def _forward_direct_pose_readout(self, direct_flat: torch.Tensor, *, B: int, Tq: int) -> torch.Tensor:
         if not bool(getattr(self, "direct_pose_split_enable", False)):
@@ -1762,12 +1584,6 @@ class EventMotionModel(nn.Module):
         idx_nonleg_use = idx_nonleg.to(device=out_flat.device)
         out_flat = out_flat.index_copy(1, idx_nonleg_use, nonleg_out)
         return out_flat.view(B, Tq, -1)
-
-    def _maybe_upgrade_direct_pose_split_state_dict(self, state_dict: Dict[str, Any]) -> bool:
-        return maybe_upgrade_direct_pose_split_state_dict(self, state_dict)
-
-    def _maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(self, state_dict: Dict[str, Any]) -> bool:
-        return maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(self, state_dict)
 
     def load_state_dict(self, state_dict, strict: bool = True):
         if isinstance(state_dict, dict):
@@ -3596,9 +3412,6 @@ class EventMotionModel(nn.Module):
             result['period_pred'] = soft_period
         return result
 
-    def attach_motion_encoder(self, bundle, *, map_location: str | torch.device = 'cpu'):
-        return attach_motion_encoder_bundle(self, bundle, map_location=map_location)
-
 class MotionJointLoss(nn.Module):
     def __init__(
         self,
@@ -3637,9 +3450,6 @@ class MotionJointLoss(nn.Module):
         event_clock_lambda_entropy_weight: float = 0.0,
         event_clock_lambda_prior_weight: float = 0.0,
         event_clock_delta_z_l2_weight: float = 0.0,
-
-        # ===== Adaptive bone weighting =====
-        adaptive_bone_weights: bool = False,
         **legacy_kwargs: Any,
     ):
         super().__init__()
@@ -3741,8 +3551,6 @@ class MotionJointLoss(nn.Module):
         self.attn_lambda_local = getattr(self, 'attn_lambda_local', 0.02)
         self.attn_lambda_entropy = getattr(self, 'attn_lambda_entropy', 0.0)
         self._warned_bad_rot6d = False
-        self.template_hint: Optional[str] = None
-        self.bundle_hint: Optional[str] = None
         # 缓存几何骨骼权重（按 device/dtype）
         self._joint_weight_cache: dict[tuple, torch.Tensor] = {}
         # Tail-loss 辅助缓存（candidate pool 与选择打分）
@@ -3777,11 +3585,6 @@ class MotionJointLoss(nn.Module):
                     self.bone_offsets = torch.as_tensor(offsets, dtype=torch.float32)
                 except Exception:
                     self.bone_offsets = None
-        # Loss component tracking (reserved for optional adaptive weighting; currently disabled).
-        self._adaptive_loss_terms: Tuple[str, ...] = (
-            "rot_local",
-        )
-        self._reset_adaptive_tracking()
         self._loss_group_totals: Dict[str, float] = {}
         self._loss_group_alias = {
             'attn': 'aux',
@@ -3792,20 +3595,7 @@ class MotionJointLoss(nn.Module):
             'direct_pose': 'core',
         }
 
-        # === adaptive bone weight params ===
-        self.use_adaptive_weights = bool(adaptive_bone_weights)
-
         # skeleton parents may be set later via set_skeleton; avoid early fallback here
-
-    def _format_template_hint(self, prefix: str) -> str:
-        hints: list[str] = []
-        if isinstance(self.template_hint, str) and self.template_hint:
-            hints.append(f"norm_template={self.template_hint}")
-        if isinstance(self.bundle_hint, str) and self.bundle_hint:
-            hints.append(f"bundle_json={self.bundle_hint}")
-        if hints:
-            return f"{prefix} ({', '.join(hints)})"
-        return prefix
 
     @staticmethod
     def _resolve_rot6d_columns(spec: Optional[Dict[str, Any]]) -> tuple[str, str]:
@@ -3907,10 +3697,6 @@ class MotionJointLoss(nn.Module):
             except Exception:
                 self.bone_offsets = None
         self._tail_candidate_cache = {}
-
-    def _invalidate_weight_cache(self) -> None:
-        """Drop cached joint weights when configuration changes."""
-        self._joint_weight_cache = {}
 
     def _resolve_limb_masks(self, joint_count: int, device) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
         import torch
@@ -4431,16 +4217,6 @@ class MotionJointLoss(nn.Module):
 
     def _rot6d_matrices(self, X: torch.Tensor) -> Optional[torch.Tensor]:
         return self._extract_rot6d_mats(X, denorm=True, reproject=True, sanitize=True)
-
-    def _angvel_hz(self) -> float:
-        hz = float(getattr(self, 'bone_hz', 0.0) or 0.0)
-        if hz <= 0.0:
-            dt = float(getattr(self, 'dt_bone', 0.0) or 0.0)
-            if dt > 0.0:
-                hz = 1.0 / max(dt, 1e-6)
-        if hz <= 0.0:
-            hz = float(getattr(self, 'fps', 60.0) or 60.0)
-        return max(hz, 1e-6)
 
     def compute_rot6d_log_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
         Z = lambda v: pred.new_tensor(float(v))
@@ -5119,26 +4895,18 @@ class MotionJointLoss(nn.Module):
         total_loss: torch.Tensor,
         stats: Dict[str, float],
     ) -> tuple[torch.Tensor, Dict[str, float]]:
-        self._finalize_adaptive_payload(total_loss)
         stats.update(self._loss_group_stats())
         return total_loss, stats
 
     def forward(self, pred_motion, gt_motion, attn_weights=None, batch=None):
         self._init_loss_group_tracker()
         pm, gm, delta_pm, delta_fallback = self._prepare_forward_inputs(pred_motion, gt_motion)
-        self._reset_adaptive_tracking()
         loss, stats = self._run_forward_base(pm, gm, attn_weights=attn_weights)
         deg_per_rad = 180.0 / _math.pi
         loss = self._apply_motion_components(loss, stats, pm, gm, delta_pm, delta_fallback, deg_per_rad)
         loss = self._apply_direct_pose_component(loss, stats, pred_motion, gm, deg_per_rad)
         loss = self._apply_aux_components(loss, stats, pred_motion, batch)
         return self._finalize_forward_outputs(loss, stats)
-
-    def _reset_adaptive_tracking(self):
-        self._last_component_losses: Dict[str, torch.Tensor] = {}
-        self._last_component_weights: Dict[str, float] = {}
-        self._last_component_total_weight: float = 0.0
-        self._last_core_loss: Optional[torch.Tensor] = None
 
     def _init_loss_group_tracker(self):
         self._loss_group_totals = {key: 0.0 for key in ('core', 'aux', 'long')}
@@ -5224,45 +4992,4 @@ class MotionJointLoss(nn.Module):
                 payload[key] = self._stats_float(value)
         if payload:
             stats.update(payload)
-        self._register_component_loss(name, tensor, weight)
         return total_loss
-
-    def _register_component_loss(self, name: str, tensor: Optional[torch.Tensor], weight: float):
-        if tensor is None or weight <= 0:
-            return
-        if name not in self._adaptive_loss_terms:
-            return
-        self._last_component_losses[name] = tensor
-        self._last_component_weights[name] = float(weight)
-
-    def _finalize_adaptive_payload(self, total_loss: torch.Tensor):
-        if not self._last_component_losses:
-            self._last_core_loss = total_loss
-            self._last_component_total_weight = 0.0
-            return
-        contrib = None
-        for name, tensor in self._last_component_losses.items():
-            weight = self._last_component_weights.get(name, 0.0)
-            if weight <= 0:
-                continue
-            term = tensor * weight
-            contrib = term if contrib is None else contrib + term
-        if contrib is None:
-            self._last_core_loss = total_loss
-            self._last_component_total_weight = 0.0
-        else:
-            self._last_core_loss = total_loss - contrib
-            self._last_component_total_weight = float(
-                sum(w for w in self._last_component_weights.values() if w > 0.0)
-            )
-
-    def adaptive_loss_payload(self) -> Optional[Dict[str, Any]]:
-        if not self._last_component_losses:
-            return None
-        payload = {
-            'losses': dict(self._last_component_losses),
-            'weights': dict(self._last_component_weights),
-            'total_weight': float(self._last_component_total_weight),
-            'core_loss': self._last_core_loss,
-        }
-        return payload

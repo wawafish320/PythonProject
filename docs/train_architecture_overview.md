@@ -421,12 +421,6 @@ for epoch in range(1, epochs + 1):
         # 计算损失
         loss, loss_dict = loss_fn(preds, gt_seq, attn, batch)
 
-        # 自适应损失权重
-        if adaptive_loss_module:
-            loss, weights = adaptive_loss_module(
-                loss_dict, model, epoch
-            )
-
         # 反向传播
         optimizer.zero_grad()
         loss.backward()

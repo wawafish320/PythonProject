@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import torch
+import torch.nn as nn
 from .utils import warn_once
 
 if TYPE_CHECKING:
@@ -1416,6 +1417,115 @@ def apply_direct_pose_ckpt_compat(
     )
 
 
+def _direct_pose_first_linear(module: Any) -> Optional[nn.Linear]:
+    if isinstance(module, nn.Sequential) and len(module) > 0 and isinstance(module[0], nn.Linear):
+        return module[0]
+    if isinstance(module, nn.Linear):
+        return module
+    return None
+
+
+def _direct_pose_last_linear(module: Any) -> Optional[nn.Linear]:
+    if isinstance(module, nn.Linear):
+        return module
+    if not isinstance(module, nn.Module):
+        return None
+    last_linear = None
+    for mm in module.modules():
+        if isinstance(mm, nn.Linear):
+            last_linear = mm
+    return last_linear
+
+
+def _direct_pose_local_index(
+    parent_idx: torch.Tensor,
+    child_idx: torch.Tensor,
+    *,
+    device: torch.device,
+) -> Optional[torch.Tensor]:
+    try:
+        pos_map = {int(v): i for i, v in enumerate(parent_idx.detach().cpu().tolist())}
+        local_idx = [int(pos_map[int(v)]) for v in child_idx.detach().cpu().tolist()]
+    except Exception:
+        return None
+    local_tensor = torch.as_tensor(local_idx, dtype=torch.long, device=device)
+    if int(local_tensor.numel()) != int(child_idx.numel()):
+        return None
+    return local_tensor
+
+
+def _normalize_split_index_buffer(state_dict: dict[str, Any], key: str, target_idx: torch.Tensor) -> bool:
+    value = state_dict.get(key, None)
+    if not torch.is_tensor(value):
+        return False
+    if tuple(value.shape) != tuple(target_idx.shape):
+        state_dict.pop(key, None)
+        return True
+    if value.dtype == target_idx.dtype:
+        return False
+    try:
+        state_dict[key] = value.to(dtype=target_idx.dtype)
+    except Exception:
+        state_dict.pop(key, None)
+    return True
+
+
+def _copy_tensor_if_compatible(
+    state_dict: dict[str, Any],
+    *,
+    target_key: str,
+    target_tensor: Optional[torch.Tensor],
+    source_tensor: Optional[torch.Tensor],
+) -> bool:
+    if (not torch.is_tensor(target_tensor)) or (not torch.is_tensor(source_tensor)):
+        return False
+    current = state_dict.get(target_key, None)
+    if torch.is_tensor(current) and tuple(current.shape) == tuple(target_tensor.shape):
+        return False
+    if tuple(source_tensor.shape) != tuple(target_tensor.shape):
+        return False
+    state_dict[target_key] = source_tensor
+    return True
+
+
+def _copy_indexed_tensor_if_needed(
+    state_dict: dict[str, Any],
+    *,
+    target_key: str,
+    target_tensor: Optional[torch.Tensor],
+    source_tensor: Optional[torch.Tensor],
+    index_tensor: Optional[torch.Tensor],
+) -> bool:
+    if (
+        (not torch.is_tensor(target_tensor))
+        or (not torch.is_tensor(source_tensor))
+        or (not torch.is_tensor(index_tensor))
+    ):
+        return False
+    current = state_dict.get(target_key, None)
+    if torch.is_tensor(current) and tuple(current.shape) == tuple(target_tensor.shape):
+        return False
+    src_shape = tuple(source_tensor.shape)
+    tgt_shape = tuple(target_tensor.shape)
+    if len(src_shape) == 0 or len(tgt_shape) == 0:
+        return False
+    if int(index_tensor.numel()) <= 0:
+        return False
+    if src_shape[0] < int(index_tensor.max().item()) + 1:
+        return False
+    if len(src_shape) != len(tgt_shape):
+        return False
+    if any(int(src_shape[i]) != int(tgt_shape[i]) for i in range(1, len(src_shape))):
+        return False
+    if int(tgt_shape[0]) != int(index_tensor.numel()):
+        return False
+    try:
+        state_dict[target_key] = source_tensor.index_select(0, index_tensor.to(device=source_tensor.device, dtype=torch.long))
+    except Exception:
+        return False
+    return True
+
+
 def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_dict: dict[str, Any]) -> bool:
     split_state = model._direct_pose_split_state()
     if (not isinstance(state_dict, dict)) or split_state is None:
@@ -1431,7 +1541,7 @@ def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_
     idx_else = split_state["idx_else"]
     if leg_head is None:
         return False
-    leg_last = model._direct_pose_last_linear(leg_head)
+    leg_last = _direct_pose_last_linear(leg_head)
     if leg_last is None:
         return False
     if arm_split:
@@ -1450,8 +1560,8 @@ def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_
     if arm_split:
         idx_arm_use = idx_arm.to(device=ref_device, dtype=torch.long)
         idx_else_use = idx_else.to(device=ref_device, dtype=torch.long)
-        arm_nonleg_local = model._direct_pose_local_index(idx_nonleg_use, idx_arm_use, device=ref_device)
-        else_nonleg_local = model._direct_pose_local_index(idx_nonleg_use, idx_else_use, device=ref_device)
+        arm_nonleg_local = _direct_pose_local_index(idx_nonleg_use, idx_arm_use, device=ref_device)
+        else_nonleg_local = _direct_pose_local_index(idx_nonleg_use, idx_else_use, device=ref_device)
         if arm_nonleg_local is None or else_nonleg_local is None:
             return False
     converted = False
@@ -1468,7 +1578,7 @@ def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_
             "direct_pose_leg_terminal.3.bias",
         ):
             target_tensor = model_sd.get(key, None)
-            converted = model._copy_tensor_if_compatible(
+            converted = _copy_tensor_if_compatible(
                 state_dict,
                 target_key=key,
                 target_tensor=target_tensor,
@@ -1480,7 +1590,7 @@ def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_
         idx_pairs.append(("direct_pose_arm_out_idx", idx_arm))
         idx_pairs.append(("direct_pose_else_out_idx", idx_else))
     for key, idx_tgt in idx_pairs:
-        converted = model._normalize_split_index_buffer(state_dict, key, idx_tgt) or converted
+        converted = _normalize_split_index_buffer(state_dict, key, idx_tgt) or converted
 
     if has_old:
         copy_specs = [(leg_weight_key, leg_last.weight, idx_leg_use)]
@@ -1492,7 +1602,7 @@ def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_
         else:
             copy_specs.append(("direct_pose_out_nonleg.weight", nonleg_head.weight, idx_nonleg_use))
         for target_key, target_tensor, index_tensor in copy_specs:
-            converted = model._copy_indexed_tensor_if_needed(
+            converted = _copy_indexed_tensor_if_needed(
                 state_dict,
                 target_key=target_key,
                 target_tensor=target_tensor,
@@ -1510,7 +1620,7 @@ def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_
         else:
             copy_specs.append(("direct_pose_out_nonleg.bias", nonleg_head.bias, idx_nonleg_use))
         for target_key, target_tensor, index_tensor in copy_specs:
-            converted = model._copy_indexed_tensor_if_needed(
+            converted = _copy_indexed_tensor_if_needed(
                 state_dict,
                 target_key=target_key,
                 target_tensor=target_tensor,
@@ -1560,7 +1670,7 @@ def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_
             if int(source_tensor.shape[0]) != int(idx_nonleg_use.numel()):
                 continue
             for target_key, target_tensor, local_idx in targets:
-                converted = model._copy_indexed_tensor_if_needed(
+                converted = _copy_indexed_tensor_if_needed(
                     state_dict,
                     target_key=target_key,
                     target_tensor=target_tensor,
@@ -1569,7 +1679,7 @@ def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_
                 ) or converted
 
     if not arm_split:
-        proj_linear = model._direct_pose_first_linear(split_state["nonleg_proj"])
+        proj_linear = _direct_pose_first_linear(split_state["nonleg_proj"])
         if proj_linear is not None:
             tgt_proj_w = proj_linear.weight
             tgt_nonleg_w = nonleg_head.weight
@@ -1610,16 +1720,16 @@ def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_
             (split_state["arm_proj"], "direct_pose_arm_proj"),
             (split_state["else_proj"], "direct_pose_else_proj"),
         ):
-            lin = model._direct_pose_first_linear(branch)
+            lin = _direct_pose_first_linear(branch)
             if lin is None:
                 continue
-            converted = model._copy_tensor_if_compatible(
+            converted = _copy_tensor_if_compatible(
                 state_dict,
                 target_key=f"{key}.0.weight",
                 target_tensor=lin.weight,
                 source_tensor=src_proj_w if torch.is_tensor(src_proj_w) and src_proj_w.ndim == 2 else None,
             ) or converted
-            converted = model._copy_tensor_if_compatible(
+            converted = _copy_tensor_if_compatible(
                 state_dict,
                 target_key=f"{key}.0.bias",
                 target_tensor=lin.bias,
@@ -1653,19 +1763,19 @@ def maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(model: "EventMotionM
         "direct_pose_leg_terminal.3.bias",
     ):
         target_tensor = model_sd.get(key, None)
-        converted = model._copy_tensor_if_compatible(
+        converted = _copy_tensor_if_compatible(
             state_dict,
             target_key=key,
             target_tensor=target_tensor,
             source_tensor=target_tensor,
         ) or converted
-    converted = model._copy_tensor_if_compatible(
+    converted = _copy_tensor_if_compatible(
         state_dict,
         target_key="direct_pose_leg_terminal.6.weight",
         target_tensor=model_sd.get("direct_pose_leg_terminal.6.weight", None),
         source_tensor=state_dict.get("direct_pose_out_leg.weight", None),
     ) or converted
-    converted = model._copy_tensor_if_compatible(
+    converted = _copy_tensor_if_compatible(
         state_dict,
         target_key="direct_pose_leg_terminal.6.bias",
         target_tensor=model_sd.get("direct_pose_leg_terminal.6.bias", None),
@@ -2128,7 +2238,7 @@ def prepare_event_motion_ckpt_state_for_load(
             if isinstance(encoder_bundle, (str, bytes, bytearray)) or hasattr(encoder_bundle, "__fspath__")
             else encoder_bundle
         )
-        model.attach_motion_encoder(bundle_payload)
+        attach_motion_encoder_bundle(model, bundle_payload)
     apply_direct_pose_ckpt_compat(
         state_dict=load_state_dict,
         model=model,

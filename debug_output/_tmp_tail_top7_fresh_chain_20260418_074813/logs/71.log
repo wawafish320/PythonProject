@@ -1,0 +1,24 @@
+$ /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/71_20260418_074813.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[LR-DBG:init] arg_lr=3.00e-04 opt_pg0=3.00e-04
+[posttrain] mode=train_direct_pose
+[posttrain] trainable=12 params: direct_pose_leg_terminal.0.weight, direct_pose_leg_terminal.0.bias, direct_pose_leg_terminal.3.weight, direct_pose_leg_terminal.3.bias, direct_pose_leg_terminal.6.weight, direct_pose_leg_terminal.6.bias, direct_pose_leg_head.0.weight, direct_pose_leg_head.0.bias ...
+[posttrain][e1 i0/60] total=2.000000 dir=2.000000 blend=0.351135 inc=0.351135 λ=0.000±0.000 gnorm(L/N)=1.000/1.000 raw=1.000/1.000 ema=0.007/0.002 hit=0/0
+[posttrain][e1 i20/60] total=1.765111 dir=1.765111 blend=0.342488 inc=0.342488 λ=0.000±0.000 gnorm(L/N)=0.817/0.948 raw=0.817/0.948 ema=0.007/0.002 hit=0/0
+[posttrain][e1 i40/60] total=1.602751 dir=1.602751 blend=0.332822 inc=0.332822 λ=0.000±0.000 gnorm(L/N)=0.668/0.934 raw=0.668/0.934 ema=0.006/0.002 hit=0/0
+[posttrain][epoch 1] avg_total=1.917572 ok_steps=60 skipped=0
+[posttrain][e2 i0/60] total=2.271112 dir=2.271112 blend=0.378360 inc=0.378360 λ=0.000±0.000 gnorm(L/N)=1.170/1.101 raw=1.170/1.101 ema=0.005/0.002 hit=0/0
+[posttrain][e2 i20/60] total=2.112298 dir=2.112298 blend=0.348673 inc=0.348673 λ=0.000±0.000 gnorm(L/N)=1.052/1.060 raw=1.052/1.060 ema=0.005/0.002 hit=0/0
+[posttrain][e2 i40/60] total=2.040056 dir=2.040056 blend=0.333851 inc=0.333851 λ=0.000±0.000 gnorm(L/N)=0.942/1.098 raw=0.942/1.098 ema=0.004/0.002 hit=0/0
+[posttrain][epoch 2] avg_total=1.950287 ok_steps=60 skipped=0
+[posttrain][e3 i0/60] total=1.797627 dir=1.797627 blend=0.342409 inc=0.342409 λ=0.000±0.000 gnorm(L/N)=0.881/0.917 raw=0.881/0.917 ema=0.004/0.002 hit=0/0
+[posttrain][e3 i20/60] total=2.113194 dir=2.113194 blend=0.337997 inc=0.337997 λ=0.000±0.000 gnorm(L/N)=1.151/0.962 raw=1.151/0.962 ema=0.004/0.002 hit=0/0
+[posttrain][e3 i40/60] total=1.730344 dir=1.730344 blend=0.335308 inc=0.335308 λ=0.000±0.000 gnorm(L/N)=0.834/0.897 raw=0.834/0.897 ema=0.005/0.002 hit=0/0
+[posttrain][epoch 3] avg_total=2.034381 ok_steps=60 skipped=0
+[posttrain][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/71_clean/ckpt_last_WalkF_stage7_71_from_fresh_70R_cleanstepc_lr3e4_20260418_074813.pth
+
+[exit_code] 0

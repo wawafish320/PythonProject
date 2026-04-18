@@ -1,0 +1,25 @@
+$ /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/run_posttrain_nonleg_trunk_ablation_migrated.py --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/70R_20260418_074813.json --trunk-mode full --out-dir /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/70R_clean --run-name WalkF_stage7_70R_from_fresh_tailk7_replace_cleanstepc_s180_20260418_074813 --epochs 1 --steps-per-epoch 180 --save-step-ckpts 0,1,5,20,60,180
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[posttrain][INFO] adapted direct_pose_head.0.weight for phase replace: in_dim 47 -> 43 (dropped plan+meas, kept phase tail dim=4).
+[posttrain][INFO] adapted direct_pose_leg_head.0.weight for phase replace: in_dim 47 -> 43 (dropped plan+meas, kept phase tail dim=4).
+[LR-DBG:init] arg_lr=3.00e-04 opt_pg0=3.00e-04
+[ablation] trunk_mode=full extra_trainable=4
+[ablation] extra=direct_pose_head.0.weight, direct_pose_head.0.bias, direct_pose_head.3.weight, direct_pose_head.3.bias
+[ablation] total_trainable=12
+[posttrain][e1 i0/180] total=2.007118 dir=2.000000 blend=0.351135 inc=0.351135 λ=0.000±0.000 leg_align=3.559e-04 w=20.000 frac=1.917 gnorm(L/N)=1.000/1.000 raw=1.000/1.000 ema=0.007/0.002 hit=0/0 g(trunk/leg/non)=4.301e+01/nan/3.652e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i20/180] total=2.271840 dir=2.258253 blend=0.342488 inc=0.342488 λ=0.000±0.000 leg_align=6.794e-04 w=20.000 frac=1.902 gnorm(L/N)=1.255/1.003 raw=1.255/1.003 ema=0.008/0.004 hit=0/0 g(trunk/leg/non)=2.113e+01/nan/1.896e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i40/180] total=1.692235 dir=1.686925 blend=0.332822 inc=0.332822 λ=0.000±0.000 leg_align=2.655e-04 w=20.000 frac=1.844 gnorm(L/N)=0.966/0.721 raw=0.966/0.721 ema=0.007/0.003 hit=0/0 g(trunk/leg/non)=2.639e+01/nan/2.581e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i60/180] total=2.170872 dir=2.164594 blend=0.378360 inc=0.378360 λ=0.000±0.000 leg_align=3.139e-04 w=20.000 frac=1.908 gnorm(L/N)=1.223/0.942 raw=1.223/0.942 ema=0.007/0.003 hit=0/0 g(trunk/leg/non)=1.959e+01/nan/1.498e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i80/180] total=2.413090 dir=2.407307 blend=0.348673 inc=0.348673 λ=0.000±0.000 leg_align=2.891e-04 w=20.000 frac=1.875 gnorm(L/N)=1.067/1.340 raw=1.067/1.340 ema=0.007/0.002 hit=0/0 g(trunk/leg/non)=2.610e+01/nan/1.760e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i100/180] total=1.900331 dir=1.896996 blend=0.333851 inc=0.333851 λ=0.000±0.000 leg_align=1.668e-04 w=20.000 frac=1.901 gnorm(L/N)=0.951/0.946 raw=0.951/0.946 ema=0.007/0.002 hit=0/0 g(trunk/leg/non)=3.411e+01/nan/3.644e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i120/180] total=1.982983 dir=1.975177 blend=0.342409 inc=0.342409 λ=0.000±0.000 leg_align=3.903e-04 w=20.000 frac=1.910 gnorm(L/N)=1.154/0.822 raw=1.154/0.822 ema=0.007/0.002 hit=0/0 g(trunk/leg/non)=1.840e+01/nan/2.532e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i140/180] total=1.726838 dir=1.724357 blend=0.337997 inc=0.337997 λ=0.000±0.000 leg_align=1.241e-04 w=20.000 frac=1.876 gnorm(L/N)=0.798/0.926 raw=0.798/0.926 ema=0.007/0.002 hit=0/0 g(trunk/leg/non)=2.547e+01/nan/2.421e+01 legω=nan gr=nan grω=nan
+[posttrain][e1 i160/180] total=1.733181 dir=1.731033 blend=0.335308 inc=0.335308 λ=0.000±0.000 leg_align=1.074e-04 w=20.000 frac=1.921 gnorm(L/N)=0.758/0.973 raw=0.758/0.973 ema=0.007/0.002 hit=0/0 g(trunk/leg/non)=2.224e+01/nan/3.075e+01 legω=nan gr=nan grω=nan
+[posttrain][epoch 1] avg_total=2.013404 ok_steps=180 skipped=0
+[ablation][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/70R_clean/ckpt_last_WalkF_stage7_70R_from_fresh_tailk7_replace_cleanstepc_s180_20260418_074813.pth
+
+[exit_code] 0

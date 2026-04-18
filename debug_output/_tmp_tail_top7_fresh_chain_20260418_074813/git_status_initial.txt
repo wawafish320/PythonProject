@@ -1,0 +1,27 @@
+ M docs/delete/2026-04-14_train_models_refactor_hotspots_roadmap.md
+ M docs/train_architecture_overview.md
+ M tests/train/test_event_motion_model_refactor_phase_d.py
+ M train/model_ckpt_compat.py
+ M train/models.py
+ M train/posttrain.py
+ M train/training_MPL.py
+?? config/posttrain_WalkF_stage7_lambda_final_calib_20260226_frombase.json
+?? config/posttrain_WalkF_stage7_lambda_final_calib_20260226_fromsplitfirst.json
+?? config/posttrain_WalkF_stage7_lambda_final_calib_20260227_fromarmchain.json
+?? config/posttrain_WalkF_stage7_lambda_final_calib_20260228_fromarmchain_skip70c.json
+?? config/posttrain_WalkF_stage7_lambda_final_calib_20260301_fromd1newflow_rc5w30.json
+?? config/posttrain_WalkF_stage7_lambda_final_calib_ep5_20260227_fromsplitfirst.json
+?? config/posttrain_WalkF_stage7_lambda_final_calib_proj512_ep5_20260227_fromsplitfirst.json
+?? config/posttrain_WalkF_stage7_lambda_final_calib_supfocusULw4_ep5_20260227_fromsplitfirst.json
+?? config/posttrain_WalkF_stage7_lambda_final_calib_supfocusULw4v2_ep5_20260227_fromsplitfirst.json
+?? config/posttrain_WalkF_stage7_lambda_final_calib_supfocusULw4v3_ep5_20260227_fromsplitfirst.json
+?? docs/changes/2026-04-17_side_routing_doc_derived_ckpt_manifest.txt
+?? docs/changes/2026-04-17_side_routing_removal_p0_scan.md
+?? docs/delete/2026-04-17_train_models_cleanup_inventory.md
+?? docs/refactor/2026-04-17_side_routing_removal_plan.md
+?? docs/refactor/posttrain_checkpoint_contract_reset_cleanup_plan.md
+?? tests/train/test_event_motion_model_phase_c_contacts_meas.py
+?? tests/train/test_event_motion_model_phase_d_mode_normalization.py
+?? tests/train/test_event_motion_model_phase_e_direct_groups.py
+?? tools/scan_side_routing_ckpt_keys.py
+?? train/model_ckpt_contract.py

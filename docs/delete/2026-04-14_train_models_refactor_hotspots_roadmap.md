@@ -539,8 +539,9 @@ baseline-0 代码快照核对（`train/models.py`）：
 - 状态：`done`
 - 实际改动：
   - 将 `_normalize_joint_spec_items(...)`、`_resolve_joint_spec_indices(...)`、`_build_pretrain_contact_encoder_input(...)` 从 `train/models.py` 移至 `train/utils.py`。
-  - `train/models.py` 改为从 `train/utils.py` 引用 `_resolve_joint_spec_indices` 与 `_build_pretrain_contact_encoder_input`，模型内部调用语义不变；`_build_pretrain_contact_encoder_input` 继续通过 `train.models` 暴露，避免现有外部导入立刻失效。
+  - `train/models.py` 改为从 `train/utils.py` 引用 `_resolve_joint_spec_indices` 与 `_build_pretrain_contact_encoder_input`，模型内部调用语义不变；当时 `_build_pretrain_contact_encoder_input` 继续通过 `train.models` 暴露，避免现有外部导入立刻失效。
   - `train/training_MPL.py` 改为直接从 `train/utils.py` 导入 `_build_pretrain_contact_encoder_input`，不再从 `models.py` 引入非模型语义 helper。
+  - 后续跟进（`2026-04-18`）：`train/models.py` 中 `_build_pretrain_contact_encoder_input` 的 compat import / re-export 已删除，helper 现仅从 `train.utils` 暴露。
 - 最小验证：
   - `python3 -m py_compile train/models.py train/utils.py train/training_MPL.py train/geometry.py train/model_ckpt_compat.py`
   - `python3 - <<'PY'` / `import train.utils` / `import train.models` / `import train.training_MPL`

@@ -110,6 +110,7 @@ from .models import (
     STAGE6_3WAY_ARMCHAIN_BONES_CSV,
 )
 from .model_ckpt_compat import resume_load_weights_compat as _resume_load_weights_compat
+from .model_ckpt_compat import attach_motion_encoder_bundle as _attach_motion_encoder_bundle
 
 
 _arg = get_global_arg
@@ -290,7 +291,7 @@ def _legacy_loss_keys_msg(keys: Sequence[str], *, context: str) -> str:
     return (
         f"[LegacyLossConfig] {context} contains removed keys: {keys_sorted}. "
         "Please remove them; MotionJointLoss now uses unified weights only "
-        "(adaptive_bone_weights + unified_* knobs)."
+        "(unified_* knobs)."
     )
 
 
@@ -455,7 +456,6 @@ class Trainer:
         self._grad_connection_checked: bool = False
         self.grad_conn_window: int = 8
         self.grad_conn_detect_anomaly: bool = True
-        self.adaptive_loss_module = None
         self.hyperparam_scheduler: Optional[Any] = None
         self.teacher_forcing_ratio: float = 1.0
         # 自由运行时根部 yaw 的参考策略：
@@ -2079,50 +2079,6 @@ class Trainer:
             return False
         return True
 
-    def _maybe_apply_adaptive_loss(self, loss, stats):
-        module = getattr(self, 'adaptive_loss_module', None)
-        if module is None:
-            return loss, stats
-        payload_fn = getattr(self.loss_fn, 'adaptive_loss_payload', None)
-        if not callable(payload_fn):
-            return loss, stats
-        payload = payload_fn()
-        if not payload:
-            return loss, stats
-        raw_losses = payload.get('losses') or {}
-        total_weight = float(payload.get('total_weight', 0.0))
-        if total_weight <= 0:
-            return loss, stats
-        filtered = {
-            name: raw_losses[name]
-            for name in module.loss_names
-            if name in raw_losses and raw_losses[name] is not None
-        }
-        # 如果未显式指定 loss_names，运行时自动使用 payload 中的条目
-        if not filtered and not module.loss_names:
-            filtered = {k: v for k, v in raw_losses.items() if v is not None}
-        if not filtered:
-            return loss, stats
-        core_loss = payload.get('core_loss') or loss
-        weighted_loss, rel_weights = module(
-            filtered,
-            model=self.model,
-            epoch=getattr(self, 'cur_epoch', 0),
-            scales_override=None,  # component weights不是尺度，避免放大/缩小loss
-        )
-        adapted = core_loss + weighted_loss * total_weight
-        if not isinstance(stats, dict):
-            stats = {} if stats is None else dict(stats)
-        stats = dict(stats)
-        stats['adaptive_loss/total_weight'] = float(total_weight)
-        if hasattr(core_loss, 'detach'):
-            stats['adaptive_loss/base'] = float(core_loss.detach().cpu())
-        else:
-            stats['adaptive_loss/base'] = float(core_loss)
-        for name, rel in rel_weights.items():
-            stats[f'adaptive_loss/weight/{name}'] = float(rel * total_weight)
-        return adapted, stats
-
     def _step_hyperparam_scheduler(self, loss_tensor, grad_norm_value):
         scheduler = getattr(self, 'hyperparam_scheduler', None)
         if scheduler is None:
@@ -2249,7 +2205,6 @@ class Trainer:
             loss, stats = out, {}
         if not isinstance(stats, dict):
             stats = {} if stats is None else dict(stats)
-        loss, stats = self._maybe_apply_adaptive_loss(loss, stats)
         if epoch == 1 and batch_idx == 1:
             if isinstance(stats, Mapping):
                 cp_bce = stats.get('contact_plan_bce', None)
@@ -2902,7 +2857,6 @@ class TrainerRuntimeConfig:
     history_dropout_prob_min: float
     history_dropout_prob_max: float
     freerun_stage_schedule: list[Any]
-    adaptive_loss_module: Any
     hyperparam_scheduler: Any
     freerun_debug_path: Optional[str]
     enable_grad_connection_test: bool
@@ -3115,12 +3069,6 @@ def _parser_add_runtime_args(p: argparse.ArgumentParser) -> None:
 
 def _parser_add_data_args(p: argparse.ArgumentParser) -> None:
     # ---- (Reserved) post-train corrector knobs live in dedicated scripts ----
-    p.add_argument(
-        '--adaptive_bone_weights',
-        type=lambda x: str(x).lower() in ('1', 'true', 'yes'),
-        default=True,
-        help='是否根据骨骼运动幅度自适应权重（默认开启）。',
-    )
     # unified bone weight (new)
     p.add_argument('--unified_downstream_power', type=float, default=0.6, help='下游影响指数压缩 power (0.5~0.7 recommended)')
     p.add_argument('--unified_self_scale', type=float, default=1.5, help='自身长度放大系数')
@@ -3414,7 +3362,6 @@ def _resolve_trainer_runtime_config(
         'history_dropout_prob_min': 0.05,
         'history_dropout_prob_max': 0.30,
         'freerun_stage_schedule': _resolve_freerun_stage_schedule(args.freerun_stage_schedule),
-        'adaptive_loss_module': None,
         'hyperparam_scheduler': None,
         'freerun_debug_path': args.freerun_debug_path,
         'enable_grad_connection_test': not bool(args.no_grad_conn_test),
@@ -3447,7 +3394,7 @@ def _apply_trainer_runtime_config(trainer: Trainer, runtime_cfg: TrainerRuntimeC
         (
             'ss_chunk_len', 'tf_mode', 'tf_start_epoch', 'tf_end_epoch', 'tf_max', 'tf_min',
             'history_debug_steps', 'history_dropout_prob', 'history_dropout_prob_min', 'history_dropout_prob_max',
-            'freerun_stage_schedule', 'adaptive_loss_module', 'hyperparam_scheduler', 'freerun_debug_path', 'enable_grad_connection_test',
+            'freerun_stage_schedule', 'hyperparam_scheduler', 'freerun_debug_path', 'enable_grad_connection_test',
         ),
     )
     for trainer_attr, runtime_field in renamed_fields.items():
@@ -3687,7 +3634,7 @@ def _prepare_motion_encoder_and_contacts_runtime(
         else:
             try:
                 bundle = torch.load(str(resolved_bundle), map_location='cpu')
-                model.attach_motion_encoder(bundle)
+                _attach_motion_encoder_bundle(model, bundle)
                 print(f'[MPL] Attached MotionEncoder bundle: {resolved_bundle}')
                 try:
                     ds_train.period_dim = getattr(model, 'period_dim', getattr(ds_train, 'period_dim', 0))
@@ -3763,7 +3710,6 @@ def _build_train_loss_and_trainer(
 
     fps_data = float(getattr(ds_train, 'fps', 60.0) or 60.0)
     w_rot_local, w_root_vel, w_root_speed = (float(value or 0.0) for value in (args.w_rot_local, args.w_root_vel, args.w_root_speed))
-    adaptive_bone_weights = bool(args.adaptive_bone_weights)
 
     loss_fn = MotionJointLoss(
         output_layout=ds_train.output_layout,
@@ -3792,7 +3738,6 @@ def _build_train_loss_and_trainer(
         event_clock_lambda_entropy_weight=float(args.event_clock_lambda_entropy_weight or 0.01),
         event_clock_lambda_prior_weight=float(args.event_clock_lambda_prior_weight or 0.01),
         event_clock_delta_z_l2_weight=float(args.event_clock_delta_z_l2_weight or 0.001),
-        adaptive_bone_weights=adaptive_bone_weights,
     )
     loss_fn.unified_downstream_power = float(args.unified_downstream_power or 0.6)
     loss_fn.unified_self_scale = float(args.unified_self_scale or 1.5)
@@ -3819,8 +3764,6 @@ def _build_train_loss_and_trainer(
             print(f'[Loss][WARN] set_skeleton failed: {exc}')
     bundle_json_arg = args.bundle_json
     bundle_json_path = str(Path(bundle_json_arg).expanduser()) if bundle_json_arg else None
-    loss_fn.template_hint = str(train_ctx.norm_template_path) if train_ctx.norm_template_path else None
-    loss_fn.bundle_hint = bundle_json_path
 
     print(
         f'[LossWeights] '
@@ -3831,7 +3774,6 @@ def _build_train_loss_and_trainer(
         f'rot_local_tail_scope={getattr(loss_fn, "rot_local_tail_scope", "all")} '
         f'rot_local_tail_select={getattr(loss_fn, "rot_local_tail_select", "batch")} '
         f'rot_local_tail_ema_beta={getattr(loss_fn, "rot_local_tail_ema_beta", 0.9)} '
-        f'adaptive_bone_weights={loss_fn.use_adaptive_weights}'
     )
 
     loss_fn.dt_traj = 1.0 / max(1e-6, fps_data)

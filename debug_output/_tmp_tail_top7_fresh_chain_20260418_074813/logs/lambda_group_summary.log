@@ -1,0 +1,4 @@
+$ /Library/Frameworks/Python.framework/Versions/3.12/bin/python3 /Users/xingzhaorui/PycharmProjects/PythonProject/tools/phasea_group_summary.py /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source/Walk_F_freerun_cycles.json --cycle_gte 1 --drop_wrap --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source_group_summary.json
+/Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source_group_summary.json
+
+[exit_code] 0

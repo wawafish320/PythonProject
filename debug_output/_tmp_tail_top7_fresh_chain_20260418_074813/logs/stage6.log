@@ -1,0 +1,45 @@
+$ /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py -m train.posttrain --config /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/stage6_20260418_074813.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[posttrain][INFO] dropped 10 direct_pose_* tensors from checkpoint (reinit/override).
+[LR-DBG:init] arg_lr=3.00e-04 opt_pg0=3.00e-04
+[posttrain] mode=train_direct_pose
+[posttrain] trainable=24 params: direct_pose_head.0.weight, direct_pose_head.0.bias, direct_pose_head.3.weight, direct_pose_head.3.bias, direct_pose_leg_terminal.0.weight, direct_pose_leg_terminal.0.bias, direct_pose_leg_terminal.3.weight, direct_pose_leg_terminal.3.bias ...
+[posttrain][e1 i0/60] total=2.000000 dir=2.000000 blend=0.351135 inc=0.351135 λ=0.000±0.000 gnorm(L/N)=1.000/1.000 raw=1.000/1.000 ema=0.178/0.061 hit=0/0 g(trunk/leg/non)=9.381e-01/nan/6.052e-01 legω=4.509e+00 gr=nan grω=0.134 !grad_ratio_low_omega
+[posttrain][e1 i20/60] total=1.413231 dir=1.413231 blend=0.342488 inc=0.342488 λ=0.000±0.000 gnorm(L/N)=0.788/0.626 raw=0.788/0.626 ema=0.151/0.050 hit=0/0 g(trunk/leg/non)=1.464e+00/nan/1.155e+00 legω=3.896e+00 gr=nan grω=0.296 !grad_ratio_low_omega
+[posttrain][e1 i40/60] total=1.311065 dir=1.311065 blend=0.332822 inc=0.332822 λ=0.000±0.000 gnorm(L/N)=0.640/0.671 raw=0.640/0.671 ema=0.111/0.038 hit=0/0 g(trunk/leg/non)=1.512e+00/nan/1.269e+00 legω=4.515e+00 gr=nan grω=0.281 !grad_ratio_low_omega
+[posttrain][epoch 1] avg_total=1.500143 ok_steps=60 skipped=0
+[posttrain][e2 i0/60] total=1.605474 dir=1.605474 blend=0.378360 inc=0.378360 λ=0.000±0.000 gnorm(L/N)=0.759/0.847 raw=0.759/0.847 ema=0.079/0.030 hit=0/0 g(trunk/leg/non)=2.507e+00/nan/9.244e-01 legω=6.435e+00 gr=nan grω=0.144 !grad_ratio_low_omega
+[posttrain][e2 i20/60] total=1.343563 dir=1.343563 blend=0.348673 inc=0.348673 λ=0.000±0.000 gnorm(L/N)=0.601/0.743 raw=0.601/0.743 ema=0.056/0.024 hit=0/0 g(trunk/leg/non)=4.124e+00/nan/2.662e+00 legω=9.143e+00 gr=nan grω=0.291 !grad_ratio_low_omega
+[posttrain][e2 i40/60] total=1.554781 dir=1.554781 blend=0.333851 inc=0.333851 λ=0.000±0.000 gnorm(L/N)=0.804/0.751 raw=0.804/0.751 ema=0.040/0.017 hit=0/0 g(trunk/leg/non)=5.213e+00/nan/4.109e+00 legω=1.205e+01 gr=nan grω=0.341 !grad_ratio_low_omega
+[posttrain][epoch 2] avg_total=1.400704 ok_steps=60 skipped=0
+[posttrain][e3 i0/60] total=1.477169 dir=1.477169 blend=0.342409 inc=0.342409 λ=0.000±0.000 gnorm(L/N)=0.736/0.741 raw=0.736/0.741 ema=0.031/0.012 hit=0/0 g(trunk/leg/non)=6.941e+00/nan/3.394e+00 legω=1.946e+01 gr=nan grω=0.174 !grad_ratio_low_omega
+[posttrain][e3 i20/60] total=1.434084 dir=1.434084 blend=0.337997 inc=0.337997 λ=0.000±0.000 gnorm(L/N)=0.769/0.665 raw=0.769/0.665 ema=0.026/0.010 hit=0/0 g(trunk/leg/non)=6.055e+00/nan/6.440e+00 legω=1.874e+01 gr=nan grω=0.344 !grad_ratio_low_omega
+[posttrain][e3 i40/60] total=1.602228 dir=1.602228 blend=0.335308 inc=0.335308 λ=0.000±0.000 gnorm(L/N)=0.863/0.740 raw=0.863/0.740 ema=0.021/0.008 hit=0/0 g(trunk/leg/non)=9.856e+00/nan/6.540e+00 legω=2.269e+01 gr=nan grω=0.288 !grad_ratio_low_omega
+[posttrain][epoch 3] avg_total=1.571083 ok_steps=60 skipped=0
+[posttrain][e4 i0/60] total=1.771745 dir=1.771745 blend=0.346719 inc=0.346719 λ=0.000±0.000 gnorm(L/N)=0.979/0.793 raw=0.979/0.793 ema=0.018/0.006 hit=0/0 g(trunk/leg/non)=2.096e+01/nan/1.479e+01 legω=2.898e+01 gr=nan grω=0.510
+[posttrain][e4 i20/60] total=1.738984 dir=1.738984 blend=0.335602 inc=0.335602 λ=0.000±0.000 gnorm(L/N)=0.837/0.902 raw=0.837/0.902 ema=0.020/0.006 hit=0/0 g(trunk/leg/non)=1.509e+01/nan/1.211e+01 legω=1.857e+01 gr=nan grω=0.652
+[posttrain][e4 i40/60] total=1.712791 dir=1.712791 blend=0.349252 inc=0.349252 λ=0.000±0.000 gnorm(L/N)=0.850/0.863 raw=0.850/0.863 ema=0.018/0.005 hit=0/0 g(trunk/leg/non)=1.017e+01/nan/9.460e+00 legω=3.035e+01 gr=nan grω=0.312 !grad_ratio_low_omega
+[posttrain][epoch 4] avg_total=1.878064 ok_steps=60 skipped=0
+[posttrain][e5 i0/60] total=1.770195 dir=1.770195 blend=0.351931 inc=0.351931 λ=0.000±0.000 gnorm(L/N)=0.977/0.793 raw=0.977/0.793 ema=0.016/0.005 hit=0/0 g(trunk/leg/non)=1.620e+01/nan/1.257e+01 legω=4.015e+01 gr=nan grω=0.313 !grad_ratio_low_omega
+[posttrain][e5 i20/60] total=1.428144 dir=1.428144 blend=0.351147 inc=0.351147 λ=0.000±0.000 gnorm(L/N)=0.625/0.803 raw=0.625/0.803 ema=0.014/0.004 hit=0/0 g(trunk/leg/non)=1.851e+01/nan/1.397e+01 legω=2.668e+01 gr=nan grω=0.523
+[posttrain][e5 i40/60] total=2.165470 dir=2.165470 blend=0.340804 inc=0.340804 λ=0.000±0.000 gnorm(L/N)=1.195/0.971 raw=1.195/0.971 ema=0.012/0.004 hit=0/0 g(trunk/leg/non)=2.494e+01/nan/2.210e+01 legω=3.893e+01 gr=nan grω=0.568
+[posttrain][epoch 5] avg_total=1.805802 ok_steps=60 skipped=0
+[posttrain][e6 i0/60] total=1.648029 dir=1.648029 blend=0.338061 inc=0.338061 λ=0.000±0.000 gnorm(L/N)=0.833/0.815 raw=0.833/0.815 ema=0.012/0.003 hit=0/0 g(trunk/leg/non)=1.308e+01/nan/1.552e+01 legω=3.796e+01 gr=nan grω=0.409
+[posttrain][e6 i20/60] total=2.639501 dir=2.639501 blend=0.342840 inc=0.342840 λ=0.000±0.000 gnorm(L/N)=1.401/1.239 raw=1.401/1.239 ema=0.012/0.003 hit=0/0 g(trunk/leg/non)=4.131e+01/nan/2.342e+01 legω=5.641e+01 gr=nan grω=0.415
+[posttrain][e6 i40/60] total=2.107369 dir=2.107369 blend=0.349668 inc=0.349668 λ=0.000±0.000 gnorm(L/N)=0.967/1.141 raw=0.967/1.141 ema=0.013/0.003 hit=0/0 g(trunk/leg/non)=4.143e+01/nan/1.709e+01 legω=3.701e+01 gr=nan grω=0.462
+[posttrain][epoch 6] avg_total=1.952990 ok_steps=60 skipped=0
+[posttrain][e7 i0/60] total=1.921241 dir=1.921241 blend=0.337350 inc=0.337350 λ=0.000±0.000 gnorm(L/N)=0.923/0.998 raw=0.923/0.998 ema=0.011/0.003 hit=0/0 g(trunk/leg/non)=2.667e+01/nan/1.804e+01 legω=4.387e+01 gr=nan grω=0.411
+[posttrain][e7 i20/60] total=1.931916 dir=1.931916 blend=0.338612 inc=0.338612 λ=0.000±0.000 gnorm(L/N)=0.977/0.955 raw=0.977/0.955 ema=0.012/0.003 hit=0/0 g(trunk/leg/non)=2.428e+01/nan/1.851e+01 legω=3.035e+01 gr=nan grω=0.610
+[posttrain][e7 i40/60] total=1.693439 dir=1.693439 blend=0.337695 inc=0.337695 λ=0.000±0.000 gnorm(L/N)=0.889/0.805 raw=0.889/0.805 ema=0.012/0.003 hit=0/0 g(trunk/leg/non)=2.469e+01/nan/1.381e+01 legω=3.979e+01 gr=nan grω=0.347 !grad_ratio_low_omega
+[posttrain][epoch 7] avg_total=1.976632 ok_steps=60 skipped=0
+[posttrain][e8 i0/60] total=1.841945 dir=1.841945 blend=0.350710 inc=0.350710 λ=0.000±0.000 gnorm(L/N)=0.917/0.925 raw=0.917/0.925 ema=0.011/0.003 hit=0/0 g(trunk/leg/non)=2.666e+01/nan/1.391e+01 legω=3.809e+01 gr=nan grω=0.365
+[posttrain][e8 i20/60] total=2.289178 dir=2.289178 blend=0.410417 inc=0.410417 λ=0.000±0.000 gnorm(L/N)=1.206/1.083 raw=1.206/1.083 ema=0.010/0.003 hit=0/0 g(trunk/leg/non)=2.961e+01/nan/1.888e+01 legω=3.755e+01 gr=nan grω=0.503
+[posttrain][e8 i40/60] total=2.648574 dir=2.648574 blend=0.352540 inc=0.352540 λ=0.000±0.000 gnorm(L/N)=1.355/1.294 raw=1.355/1.294 ema=0.010/0.003 hit=0/0 g(trunk/leg/non)=3.222e+01/nan/1.572e+01 legω=3.304e+01 gr=nan grω=0.476
+[posttrain][epoch 8] avg_total=1.954594 ok_steps=60 skipped=0
+[posttrain][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/stage6_stepc_handoff/ckpt_last_stage6_tailfix_top7_stepc_clean_fromfresh_20260418_074813.pth
+
+[exit_code] 0

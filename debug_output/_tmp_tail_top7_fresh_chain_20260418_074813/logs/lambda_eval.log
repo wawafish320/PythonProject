@@ -1,0 +1,14 @@
+$ /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py -m train.validate.run_freerun_cycles --teacher /Users/xingzhaorui/PycharmProjects/PythonProject/validate/teacher_batches/Walk_F_teacher.json --model /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/ckpt_last_WalkF_stage7_lambda_from_fresh_72_cleanstepc_20260418_074813.pth --encoder-bundle /Users/xingzhaorui/PycharmProjects/PythonProject/models/motion_encoder_equiv.pt.best.pt --out /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source --device cpu --contacts_meas_source model --lambda_fusion_apply --log_contacts --export_direct_arm_probe --export_joint_direct_geolocal_series --rounds 5 --depth 3 --time-index-mode cycle --event_clock auto --phase_reset_source none --force
+[FreeRun][INFO] stripped 10 frozen encoder keys from checkpoint for runtime load.
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[posttrain][INFO] ckpt period_dim=32 but Event-Clock period_feat_dim=0; initializing model with Event-Clock-compatible period_dim then attaching encoder bundle before loading weights.
+[posttrain][WARN] lambda_fusion_use_rollout_step=False but ckpt expects 515 in_features (base=514); overriding to True.
+[FreeRun][WARN] state_dict mismatch: missing=['frozen_encoder.mlp.0.weight', 'frozen_encoder.mlp.0.bias', 'frozen_encoder.mlp.3.weight', 'frozen_encoder.mlp.3.bias', 'frozen_encoder.mlp.6.weight', 'frozen_encoder.mlp.6.bias', 'frozen_encoder.summary_head.weight', 'frozen_encoder.summary_head.bias', 'frozen_period_head.fc.weight', 'frozen_period_head.fc.bias'], unexpected=[]
+[LR-DBG:init] arg_lr=1.00e-04 opt_pg0=1.00e-04
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[OK] Walk_F: wrote /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source/Walk_F_freerun_cycles.json
+[Done] clips=1 ok / 0 failed
+
+[exit_code] 0

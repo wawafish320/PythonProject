@@ -20,12 +20,11 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
 
 from train.configuration.io import dump_json, load_json
 from train.dataset import (
@@ -56,6 +55,7 @@ from train.model_ckpt_compat import (
     DirectPoseLoadCompatOptions,
     EventClockBuildOverrides,
     LambdaFusionBuildOverrides,
+    attach_motion_encoder_bundle as _attach_motion_encoder_bundle,
     apply_direct_pose_ckpt_compat as _apply_direct_pose_ckpt_compat,
     infer_event_clock_build_cfg as _infer_event_clock_build_cfg,
     infer_lambda_fusion_build_cfg as _infer_lambda_fusion_build_cfg,
@@ -190,10 +190,6 @@ class PostTrainConfig:
     # - auto  : cycle when rollout_cycles>1 else global
     # - none  : disable time_index (no time-PE bias)
     time_index_mode: str
-    # Internal clock-reset source for train/infer consistency:
-    # - contacts_meas: threshold-crossing event from contacts_meas
-    # - none         : disable event resets
-    phase_reset_source: str
     depth: int
     num_heads: int
     dropout: float
@@ -479,22 +475,6 @@ def _cfg_reject_retired_direct_pose_highorder(payload: Dict[str, Any]) -> None:
             f"high-order branches: {keys_txt}. "
             "Keep side-routing/sign-gate/rank1/SIC-focus at inert defaults, or use archived repro/validate lanes."
         )
-
-
-def _canon_phase_reset_source(val: Any) -> str:
-    s = str(val or "none").strip().lower()
-    # External TTC-driven resets (handled in posttrain rollout loops, similar to run_freerun_cycles):
-    # - ttc_gt  : use GT touchdown events (ttc_td_events) to reset phase_z to the anchor [0,1]
-    if s in ("none", "null", "off", "disable", "disabled"):
-        return "none"
-    if s in ("ttc", "ttc_gt", "ttcgt"):
-        return "ttc_gt"
-    if s in ("contacts", "contacts_meas", "meas", "contact_meas"):
-        return "contacts_meas"
-    raise SystemExit(
-        f"[FATAL] unsupported phase_reset_source={s!r}; allowed values: none | contacts_meas | ttc_gt."
-    )
-
 def _cfg_parse_path_basic(payload: Dict[str, Any]) -> Dict[str, Any]:
     ckpt_in = _as_path(payload.get("ckpt_in"))
     if ckpt_in is None:
@@ -664,7 +644,6 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
             ("rollout_include_boundary_raw", _cfg_pick, {"key": "rollout_include_boundary"}),
             ("rollout_random_offset", _cfg_get_bool, {"key": "rollout_random_offset", "default": False}),
             ("time_index_mode", _cfg_get_str_or, {"key": "time_index_mode", "default": "global"}),
-            ("phase_reset_source", _cfg_get_str_or, {"key": "phase_reset_source", "default": "none"}),
             ("depth", _cfg_get_int_or, {"key": "depth", "default": 3}),
             ("num_heads", _cfg_get_int_or, {"key": "num_heads", "default": 4}),
             ("dropout", _cfg_get_float_or, {"key": "dropout", "default": 0.1}),
@@ -726,7 +705,6 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
         core_cfg.pop("rollout_include_boundary_raw"),
         default=(rollout_cycles_val > 1),
     )
-    core_cfg["phase_reset_source"] = _canon_phase_reset_source(core_cfg["phase_reset_source"])
     core_cfg["lambda_reliability_warmup_joint_scales"] = _as_float_list(
         core_cfg.pop("lambda_reliability_warmup_joint_scales_raw")
     )
@@ -850,17 +828,10 @@ def _prepare_rollout_contacts_input(
     model: EventMotionModel,
     *,
     motion_t: torch.Tensor,
-    motion_raw: torch.Tensor,
     pose_hist_t: Optional[torch.Tensor],
-    plan_z: Optional[torch.Tensor],
-    t: int,
-    prev_foot_pos_meas: Optional[torch.Tensor],
-) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+) -> Optional[torch.Tensor]:
 
     plan_enable = bool(getattr(model, "contact_plan_enable", False))
-    _ = motion_raw
-    _ = plan_z
-    _ = t
 
     contacts_in_t = None
     if plan_enable:
@@ -875,7 +846,7 @@ def _prepare_rollout_contacts_input(
                 "[FATAL] rollout contact resolution requires valid frozen encoder+contact_head "
                 "and runtime-compatible encoder input dimensions."
             )
-    return contacts_in_t, prev_foot_pos_meas
+    return contacts_in_t
 
 
 def _update_rollout_recurrent_state(
@@ -948,10 +919,8 @@ def _rollout_step_common(
     cycle_len: int = 1,
     yaw_gt_fn: Optional[Callable[[int], Optional[torch.Tensor]]] = None,
     detach_rollout_state: bool = True,
-    task_callback: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     motion = state["motion"]
-    motion_raw = state["motion_raw"]
     y_prev_raw = state["y_prev_raw"]
     device = motion.device
     dtype = motion.dtype
@@ -991,17 +960,12 @@ def _rollout_step_common(
     inp_angvel = angvel_t.unsqueeze(1) if torch.is_tensor(angvel_t) and angvel_t.dim() == 2 else angvel_t
     inp_pose_hist = pose_hist_t.unsqueeze(1) if torch.is_tensor(pose_hist_t) and pose_hist_t.dim() == 2 else pose_hist_t
 
-    contacts_in_t, prev_foot_pos_meas = _prepare_rollout_contacts_input(
+    contacts_in_t = _prepare_rollout_contacts_input(
         trainer,
         model,
         motion_t=motion,
-        motion_raw=motion_raw,
         pose_hist_t=pose_hist_t,
-        plan_z=state.get("plan_z", None),
-        t=int(t),
-        prev_foot_pos_meas=state.get("prev_foot_pos_meas", None),
     )
-    state["prev_foot_pos_meas"] = prev_foot_pos_meas
 
     time_index_mode = str(time_index_mode)
     if time_index_mode == "none":
@@ -1047,37 +1011,13 @@ def _rollout_step_common(
         raise RuntimeError("Model forward must return a dict.")
     _update_rollout_recurrent_state(model, ret, state)
 
-    step_ctx: Dict[str, Any] = {
+    return {
         "ret": ret,
-        "t": int(t),
-        "idx": int(idx),
         "contacts_in_t": contacts_in_t,
         "cond_raw_step": cond_raw_step,
         "time_index_t": time_index_t,
         "rollout_step_t": rollout_step_t,
-        "state": state,
     }
-    task_out = task_callback(step_ctx) if callable(task_callback) else None
-    if not isinstance(task_out, dict):
-        task_out = {}
-    y_carry_raw = task_out.get("y_carry_raw", None)
-    if torch.is_tensor(y_carry_raw):
-        if detach_rollout_state:
-            y_carry_raw = y_carry_raw.detach()
-            task_out["y_carry_raw"] = y_carry_raw
-        if int(t) < int(total_steps) - 1:
-            _apply_rollout_carry_state(
-                trainer,
-                state,
-                y_next_raw=y_carry_raw,
-                cond_raw_step=cond_raw_step,
-            )
-    task_out.setdefault("ret", ret)
-    task_out.setdefault("contacts_in_t", contacts_in_t)
-    task_out.setdefault("cond_raw_step", cond_raw_step)
-    task_out.setdefault("time_index_t", time_index_t)
-    task_out.setdefault("rollout_step_t", rollout_step_t)
-    return task_out
 
 
 def _lambda_entropy(p: torch.Tensor, *, eps: float = 1e-6) -> torch.Tensor:
@@ -1101,7 +1041,6 @@ def _lambda_rollout_prepare_context(
     model: EventMotionModel,
     batch: Dict[str, torch.Tensor],
     *,
-    columns: Tuple[str, str],
     rollout_steps: int,
     rollout_cycles: int,
     include_boundary: bool,
@@ -1203,7 +1142,6 @@ def _lambda_rollout_prepare_context(
         "y_prev_raw": y_prev_raw,
         "plan_z": None,
         "meas_logits_prev": None,
-        "prev_foot_pos_meas": None,
         "rot_slice": rot_slice,
         "pose_hist_state": pose_hist_state,
     }
@@ -1870,7 +1808,6 @@ def _lambda_rollout_unroll_single_step(*, t: int, ctx: Dict[str, Any]) -> None:
         cycle_len=cycle_len,
         yaw_gt_fn=runtime["yaw_gt_fn"],
         detach_rollout_state=bool(runtime["detach_rollout_state"]),
-        task_callback=None,
     )
     ret = step_common["ret"]
     contacts_in_t = step_common["contacts_in_t"]
@@ -2567,7 +2504,6 @@ def _lambda_fusion_loss_rollout(
         trainer,
         model,
         batch,
-        columns=columns,
         rollout_steps=rollout_steps,
         rollout_cycles=rollout_cycles,
         include_boundary=include_boundary,
@@ -2577,13 +2513,9 @@ def _lambda_fusion_loss_rollout(
         time_weight_max=time_weight_max,
     )
     device = prep_ctx["device"]
-    dtype = prep_ctx["dtype"]
     include_boundary = bool(prep_ctx["include_boundary"])
-    cycle_len = int(prep_ctx["cycle_len"])
-    total_steps = int(prep_ctx["total_steps"])
     offset = int(prep_ctx["offset"])
     J = int(prep_ctx["J"])
-    step_weights = prep_ctx["step_weights"]
     boundary_steps = int(prep_ctx["boundary_steps"])
     boundary_weighted_sum = float(prep_ctx["boundary_weighted_sum"])
     # ---- Resolve rollout-side weighting / regularization knobs ----
@@ -3335,18 +3267,6 @@ _POSTTRAIN_ARG_SPECS_RUNTIME_AND_TRAIN = (
         ("--time_index_mode",),
         dict(type=str, help="global|cycle|auto|none (time_index feeding for contact_plan time-PE)."),
     ),
-    (
-        ("--phase_reset_source",),
-        dict(
-            type=str,
-            help=(
-                "Phase reset / clock-anchor source. "
-                "'contacts_meas'=internal threshold-crossing reset; "
-                "'ttc_gt'=external reset from GT touchdown events (ttc_td_events; rollout-only); "
-                "'none'=disable internal resets."
-            )
-        ),
-    ),
     (("--depth",), dict(type=int)),
     (("--num_heads",), dict(type=int)),
     (("--dropout",), dict(type=float)),
@@ -3950,7 +3870,10 @@ def _load_posttrain_checkpoint_into_model(*, cfg: PostTrainConfig, model: EventM
     direct_pose_cfg = build_state.direct_pose_cfg
     state_dict = build_state.state_dict
     if cfg.encoder_bundle is not None and cfg.encoder_bundle.expanduser().is_file():
-        model.attach_motion_encoder(torch.load(str(cfg.encoder_bundle.expanduser()), map_location="cpu"))
+        _attach_motion_encoder_bundle(
+            model,
+            torch.load(str(cfg.encoder_bundle.expanduser()), map_location="cpu"),
+        )
 
     _apply_direct_pose_ckpt_compat(
         state_dict=state_dict,

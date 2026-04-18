@@ -1,0 +1,118 @@
+{
+  "baseline_run": "debug_output/_tmp_tail_top7_fresh_chain_20260413_195656",
+  "current_run": "debug_output/_tmp_tail_top7_fresh_chain_20260418_074813",
+  "normalization": [
+    "absolute repo root stripped from paths",
+    "202604DD_HHMMSS timestamps replaced with {STAMP}"
+  ],
+  "posttrain_configs_match_except_paths_timestamps": true,
+  "posttrain": {
+    "stage6": {
+      "baseline_config": "debug_output/_tmp_tail_top7_fresh_chain_20260413_195656/configs/stage6_20260413_195656.json",
+      "current_config": "debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/stage6_20260418_074813.json",
+      "diff_count": 0,
+      "allowed_semantic_diff_count": 0,
+      "unexpected_diff_count": 0,
+      "allowed_semantic_diffs": [],
+      "unexpected_diffs": []
+    },
+    "70a": {
+      "baseline_config": "debug_output/_tmp_tail_top7_fresh_chain_20260413_195656/configs/70a_20260413_195656.json",
+      "current_config": "debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/70a_20260418_074813.json",
+      "diff_count": 0,
+      "allowed_semantic_diff_count": 0,
+      "unexpected_diff_count": 0,
+      "allowed_semantic_diffs": [],
+      "unexpected_diffs": []
+    },
+    "replace": {
+      "baseline_config": "debug_output/_tmp_tail_top7_fresh_chain_20260413_195656/configs/replace_20260413_195656.json",
+      "current_config": "debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/replace_20260418_074813.json",
+      "diff_count": 0,
+      "allowed_semantic_diff_count": 0,
+      "unexpected_diff_count": 0,
+      "allowed_semantic_diffs": [],
+      "unexpected_diffs": []
+    },
+    "70R": {
+      "baseline_config": "debug_output/_tmp_tail_top7_fresh_chain_20260413_195656/configs/70R_20260413_195656.json",
+      "current_config": "debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/70R_20260418_074813.json",
+      "diff_count": 1,
+      "allowed_semantic_diff_count": 1,
+      "unexpected_diff_count": 0,
+      "allowed_semantic_diffs": [
+        {
+          "path": "device",
+          "baseline": "auto",
+          "current": "cpu",
+          "kind": "value"
+        }
+      ],
+      "unexpected_diffs": []
+    },
+    "71": {
+      "baseline_config": "debug_output/_tmp_tail_top7_fresh_chain_20260413_195656/configs/71_20260413_195656.json",
+      "current_config": "debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/71_20260418_074813.json",
+      "diff_count": 0,
+      "allowed_semantic_diff_count": 0,
+      "unexpected_diff_count": 0,
+      "allowed_semantic_diffs": [],
+      "unexpected_diffs": []
+    },
+    "72": {
+      "baseline_config": "debug_output/_tmp_tail_top7_fresh_chain_20260413_195656/configs/72_20260413_195656.json",
+      "current_config": "debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/72_20260418_074813.json",
+      "diff_count": 0,
+      "allowed_semantic_diff_count": 0,
+      "unexpected_diff_count": 0,
+      "allowed_semantic_diffs": [],
+      "unexpected_diffs": []
+    },
+    "lambda": {
+      "baseline_config": "debug_output/_tmp_tail_top7_fresh_chain_20260413_195656/configs/lambda_20260413_195656.json",
+      "current_config": "debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/lambda_20260418_074813.json",
+      "diff_count": 0,
+      "allowed_semantic_diff_count": 0,
+      "unexpected_diff_count": 0,
+      "allowed_semantic_diffs": [],
+      "unexpected_diffs": []
+    }
+  },
+  "70R_semantic_device_only": true,
+  "basetrain_runtime_vs_20260413_sanitized": {
+    "baseline_config": "debug_output/_tmp_tail_top7_fresh_chain_20260413_195656/configs/basetrain_sanitized.json",
+    "current_config": "debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/basetrain_runtime.json",
+    "match_after_normalization": false,
+    "diff_count": 27,
+    "only_baseline_keys": [
+      "adaptive_bone_weights",
+      "aug_noise_std",
+      "aug_time_warp_prob",
+      "contact_meas_gate_by_hit",
+      "contact_meas_ground_z_beta",
+      "contact_meas_ground_z_mode",
+      "contact_meas_ground_z_quantile",
+      "contact_meas_ground_z_slew_down_cm",
+      "contact_meas_ground_z_slew_up_cm",
+      "contact_meas_ground_z_window",
+      "diag_input_stats",
+      "eval_angvel_dir_percentile",
+      "eval_horizon",
+      "eval_warmup",
+      "foot_contact_threshold",
+      "force_valfree_eval",
+      "min_lr_ratio",
+      "monitor_batches",
+      "no_monitor",
+      "patience",
+      "tf_total_steps",
+      "tf_warmup_epochs",
+      "tf_warmup_steps",
+      "trainbase_contacts_source",
+      "val_mode",
+      "warmup_steps"
+    ],
+    "only_current_keys": [],
+    "common_top_level_value_diffs": []
+  }
+}

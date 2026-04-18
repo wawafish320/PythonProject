@@ -1,0 +1,95 @@
+$ /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py -m train.training_MPL --config_json /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/basetrain_runtime.json
+[config_json] Loaded defaults from /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/configs/basetrain_runtime.json (108 keys)
+[Spec] Loaded norm_template: raw_data/processed_data/norm_template.json
+[Spec] Loaded pretrain_template: models/pretrain_template.json
+[ForwardAxis] source=meta axis=2 (median Δyaw=12.85° offset=12.85°)
+[Spec] SRC up-axis = 2 (0:X,1:Y,2:Z)
+[Spec] handedness(from JSON) = left  hand_sign=-1
+[IndexOpt] stride=1 min_speed=0.0 -> windows=89
+[Export][Dims] Dx=419, Dy=278, Dc=7 | L=3, H=512, K=16
+[MPL] Attached MotionEncoder bundle: models/motion_encoder_equiv_stageA.pt
+[LossWeights] w_rot_ortho=0.001 w_rot_local=0.2 rot_local_tail_weight=0.0 rot_local_tail_k=7 rot_local_tail_scope=keybones rot_local_tail_select=ema rot_local_tail_ema_beta=0.9 
+[Dt] dt_traj=0.016667s | dt_bone=0.016667s (dataset fps=60.0)
+[LR-DBG:init] arg_lr=1.00e-03 opt_pg0=1.00e-03
+[Config] saved resolved config to /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/basetrain/fresh_tail_top7_basetrain_20260418_074813/config_resolved.json
+[GeoLoss] TRAIN denorm(Y.rot6d) applied on flat D.
+[Loss][UnifiedWeights] range=[0.050, 6.612] mean=1.000 std=1.499 power=0.6 self_scale=1.5 min_w=0.05 visual=False
+[GradConn] ok: window=8 grad_hits=103.
+[LR-DBG:fit-epoch001-start] pg0=1.00e-03
+[StageSched][ep 001] stage=1-5 phase_a_plan_formation | loss.w_contact_plan=0.2, opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Smoke] contact_plan_bce=0.6927704215049744
+[LR-DBG:after-opt-step] pg0=1.00e-03
+[Train][ep 001] loss=0.2148
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep001.json
+[ValTeacher@ep 001] loss=0.164760 | GeoDeg=0.907° | GeoLocalDeg=0.786° | AngVelMAE=0.04538 rad/s | AngMagRel=0.064
+[StageSched][ep 002] stage=1-5 phase_a_plan_formation | loss.w_contact_plan=0.2, opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 002] loss=0.1547
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep002.json
+[ValTeacher@ep 002] loss=0.141204 | GeoDeg=0.525° | GeoLocalDeg=0.330° | AngVelMAE=0.02014 rad/s | AngMagRel=0.026
+[StageSched][ep 003] stage=1-5 phase_a_plan_formation | loss.w_contact_plan=0.2, opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 003] loss=0.1351
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep003.json
+[ValTeacher@ep 003] loss=0.136789 | GeoDeg=0.371° | GeoLocalDeg=0.254° | AngVelMAE=0.01237 rad/s | AngMagRel=0.015
+[StageSched][ep 004] stage=1-5 phase_a_plan_formation | loss.w_contact_plan=0.2, opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 004] loss=0.1288
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep004.json
+[ValTeacher@ep 004] loss=0.111738 | GeoDeg=0.297° | GeoLocalDeg=0.178° | AngVelMAE=0.00919 rad/s | AngMagRel=0.012
+[StageSched][ep 005] stage=1-5 phase_a_plan_formation | loss.w_contact_plan=0.2, opt_lr=0.001, ss_chunk_len=1, tf_max=1.0, tf_min=1.0
+[Train][ep 005] loss=0.1079
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep005.json
+[ValTeacher@ep 005] loss=0.099040 | GeoDeg=0.254° | GeoLocalDeg=0.123° | AngVelMAE=0.00736 rad/s | AngMagRel=0.010
+[StageSched][ep 006] stage=6-9 phase_b_corridor_entry | loss.rot_local_tail_k=7, loss.rot_local_tail_weight=0.1, loss.w_contact_plan=0.15, loss.w_rot_local=0.22, opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 006] loss=0.0797
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep006.json
+[ValTeacher@ep 006] loss=0.074657 | GeoDeg=0.199° | GeoLocalDeg=0.110° | AngVelMAE=0.00675 rad/s | AngMagRel=0.009
+[StageSched][ep 007] stage=6-9 phase_b_corridor_entry | loss.rot_local_tail_k=7, loss.rot_local_tail_weight=0.1, loss.w_contact_plan=0.15, loss.w_rot_local=0.22, opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 007] loss=0.0770
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep007.json
+[ValTeacher@ep 007] loss=0.069945 | GeoDeg=0.190° | GeoLocalDeg=0.090° | AngVelMAE=0.00590 rad/s | AngMagRel=0.008
+[StageSched][ep 008] stage=6-9 phase_b_corridor_entry | loss.rot_local_tail_k=7, loss.rot_local_tail_weight=0.1, loss.w_contact_plan=0.15, loss.w_rot_local=0.22, opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 008] loss=0.0787
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep008.json
+[ValTeacher@ep 008] loss=0.067327 | GeoDeg=0.187° | GeoLocalDeg=0.096° | AngVelMAE=0.00555 rad/s | AngMagRel=0.007
+[StageSched][ep 009] stage=6-9 phase_b_corridor_entry | loss.rot_local_tail_k=7, loss.rot_local_tail_weight=0.1, loss.w_contact_plan=0.15, loss.w_rot_local=0.22, opt_lr=0.0005, ss_chunk_len=1, tf_max=1.0, tf_min=0.5
+[Train][ep 009] loss=0.0748
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep009.json
+[ValTeacher@ep 009] loss=0.065488 | GeoDeg=0.240° | GeoLocalDeg=0.110° | AngVelMAE=0.00537 rad/s | AngMagRel=0.007
+[StageSched][ep 010] stage=10-11 phase_c_corridor_hold | loss.rot_local_tail_k=7, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.13, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 010] loss=0.0711
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep010.json
+[ValTeacher@ep 010] loss=0.058740 | GeoDeg=0.181° | GeoLocalDeg=0.094° | AngVelMAE=0.00524 rad/s | AngMagRel=0.007
+[StageSched][ep 011] stage=10-11 phase_c_corridor_hold | loss.rot_local_tail_k=7, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.13, loss.w_rot_local=0.22, opt_lr=0.0002, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 011] loss=0.0695
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep011.json
+[ValTeacher@ep 011] loss=0.057412 | GeoDeg=0.166° | GeoLocalDeg=0.092° | AngVelMAE=0.00524 rad/s | AngMagRel=0.007
+[StageSched][ep 012] stage=12-15 phase_d_short_late_tail | loss.rot_local_tail_k=7, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0001, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 012] loss=0.0592
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep012.json
+[ValTeacher@ep 012] loss=0.047101 | GeoDeg=0.157° | GeoLocalDeg=0.077° | AngVelMAE=0.00516 rad/s | AngMagRel=0.007
+[StageSched][ep 013] stage=12-15 phase_d_short_late_tail | loss.rot_local_tail_k=7, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0001, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 013] loss=0.0593
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep013.json
+[ValTeacher@ep 013] loss=0.047037 | GeoDeg=0.159° | GeoLocalDeg=0.075° | AngVelMAE=0.00506 rad/s | AngMagRel=0.007
+[StageSched][ep 014] stage=12-15 phase_d_short_late_tail | loss.rot_local_tail_k=7, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0001, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 014] loss=0.0592
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep014.json
+[ValTeacher@ep 014] loss=0.047039 | GeoDeg=0.154° | GeoLocalDeg=0.078° | AngVelMAE=0.00506 rad/s | AngMagRel=0.007
+[StageSched][ep 015] stage=12-15 phase_d_short_late_tail | loss.rot_local_tail_k=7, loss.rot_local_tail_weight=0.2, loss.w_contact_plan=0.1, loss.w_rot_local=0.22, opt_lr=0.0001, ss_chunk_len=1, tf_max=0.5, tf_min=0.5
+[Train][ep 015] loss=0.0583
+[TeacherDiag] saved to /Users/xingzhaorui/PycharmProjects/PythonProject/debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/basetrain/freerun_diag_fresh_tail_top7_basetrain_20260418_074813_teacher_ep015.json
+[ValTeacher@ep 015] loss=0.046612 | GeoDeg=0.150° | GeoLocalDeg=0.079° | AngVelMAE=0.00515 rad/s | AngMagRel=0.007
+[Export][ENTER] preparing to export ONNX...
+[Export][ProbeDims] Dx=419 Dy=278 Dc=7
+[Export][Sanity] input dims check OK
+[Export][BatchShapes] {'motion': (16, 60, 419), 'gt_motion': (16, 60, 278), 'clip_id': (16,), 'start': (16,), 'clip_len': (16,), 'cond_in': (16, 60, 7), 'cond_tgt': (16, 60, 7), 'cond_tgt_raw': (16, 60, 7), 'contacts': (16, 60, 2), 'ttc_td': (16, 60, 2), 'ttc_td_valid': (16, 60, 2), 'ttc_td_events': (16, 60, 2), 'angvel': (16, 60, 138), 'angvel_raw': (16, 60, 138), 'pose_hist': (16, 60, 828)}
+[torch.onnx] Obtain model graph for `_StatelessWrapper([...]` with `torch.export.export(..., strict=False)`...
+[torch.onnx] Obtain model graph for `_StatelessWrapper([...]` with `torch.export.export(..., strict=False)`... ✅
+[torch.onnx] Run decomposition...
+[torch.onnx] Run decomposition... ✅
+[torch.onnx] Translate the graph into ONNX...
+[torch.onnx] Translate the graph into ONNX... ✅
+Applied 1 of general pattern rewrite rules.
+Applied 5 of general pattern rewrite rules.
+[Export][OK] saved: /Users/xingzhaorui/PycharmProjects/PythonProject/models/__tmp_tail_top7_fresh_chain_20260418_074813/basetrain/fresh_tail_top7_basetrain_20260418_074813/fresh_tail_top7_basetrain_20260418_074813_step_stateful_nophase.onnx | Dx=419 Dy=278 Dc=7 C=2 A=138 P=828 Hp=64
+
+[exit_code] 0
