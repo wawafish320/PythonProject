@@ -280,7 +280,6 @@ class DirectPoseBuildConfig:
     use_phase_z: bool
     phase_z_mode: str
     split_enable: bool
-    stepc_unified_leg_terminal: bool
     arm_split_enable: bool
     arm_bones: Any
     nonleg_proj_dim: int
@@ -509,9 +508,6 @@ def dump_posttrain_build_cfg(
             "use_phase_z": bool(getattr(model, "direct_pose_use_phase_z", direct_pose_cfg.use_phase_z)),
             "phase_z_mode": str(getattr(model, "direct_pose_phase_z_mode", direct_pose_cfg.phase_z_mode) or direct_pose_cfg.phase_z_mode),
             "split_enable": bool(getattr(model, "direct_pose_split_enable", direct_pose_cfg.split_enable)),
-            "stepc_unified_leg_terminal": bool(
-                getattr(model, "direct_pose_stepc_unified_leg_terminal", direct_pose_cfg.stepc_unified_leg_terminal)
-            ),
             "arm_split_enable": bool(getattr(model, "direct_pose_arm_split_enable", direct_pose_cfg.arm_split_enable)),
             "arm_bones": getattr(model, "direct_pose_arm_bones", direct_pose_cfg.arm_bones),
             "nonleg_proj_dim": int(getattr(model, "direct_pose_nonleg_proj_dim", direct_pose_cfg.nonleg_proj_dim)),
@@ -828,11 +824,6 @@ def resolve_posttrain_build_state_from_contract(
             use_phase_z=_require_contract_bool(direct_pose_raw, "use_phase_z", context="build_cfg.direct_pose"),
             phase_z_mode=str(direct_pose_phase_z_mode),
             split_enable=_require_contract_bool(direct_pose_raw, "split_enable", context="build_cfg.direct_pose"),
-            stepc_unified_leg_terminal=_require_contract_bool(
-                direct_pose_raw,
-                "stepc_unified_leg_terminal",
-                context="build_cfg.direct_pose",
-            ),
             arm_split_enable=_require_contract_bool(
                 direct_pose_raw,
                 "arm_split_enable",
@@ -929,7 +920,6 @@ def load_posttrain_effective_cfg(
             "direct_pose_use_phase_z": bool(direct_pose_cfg.use_phase_z),
             "direct_pose_phase_z_mode": str(direct_pose_cfg.phase_z_mode),
             "direct_pose_split_enable": bool(direct_pose_cfg.split_enable),
-            "direct_pose_stepc_unified_leg_terminal": bool(direct_pose_cfg.stepc_unified_leg_terminal),
             "direct_pose_arm_split_enable": bool(direct_pose_cfg.arm_split_enable),
             "direct_pose_arm_bones": direct_pose_cfg.arm_bones,
             "direct_pose_nonleg_proj_dim": int(direct_pose_cfg.nonleg_proj_dim),

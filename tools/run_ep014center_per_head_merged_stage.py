@@ -100,7 +100,7 @@ MAIN_CASES: Tuple[Tuple[str, float], ...] = (
 
 INSPECT_MODULE_NAMES: Tuple[str, ...] = (
     "direct_pose_head",
-    "direct_pose_out_leg",
+    "direct_pose_leg_terminal",
     "direct_pose_out_nonleg",
     "direct_pose_out_arm",
     "direct_pose_out_else",
@@ -203,7 +203,7 @@ def build_optimizer_group_overrides(nonleg_lr: float) -> list[dict[str, Any]]:
             "name": "leg_bucket",
             "lr": 5e-5,
             "module_prefixes": [
-                "direct_pose_out_leg",
+                "direct_pose_leg_terminal",
                 "direct_pose_leg_head",
                 "direct_pose_leg_gate_head",
                 "direct_pose_leg_head_shared",

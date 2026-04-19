@@ -494,7 +494,6 @@ class TeacherRolloutRunner:
             direct_pose_feat_source=str(build_state.direct_pose_cfg.feat_source),
             direct_pose_time_pe_dim=int(build_state.direct_pose_cfg.time_pe_dim),
             direct_pose_split_enable=bool(build_state.direct_pose_cfg.split_enable),
-            direct_pose_stepc_unified_leg_terminal=bool(build_state.direct_pose_cfg.stepc_unified_leg_terminal),
             direct_pose_nonleg_proj_dim=int(build_state.direct_pose_cfg.nonleg_proj_dim),
             direct_pose_arm_split_enable=bool(build_state.direct_pose_cfg.arm_split_enable),
             direct_pose_arm_bones=build_state.direct_pose_cfg.arm_bones,

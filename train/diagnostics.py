@@ -614,7 +614,7 @@ def collect_direct_pose_grad_stats(trainer) -> Dict[str, float]:
     if model is None:
         return {}
     g_trunk = grad_norm_of_module(getattr(model, "direct_pose_head", None))
-    g_leg = grad_norm_of_module(getattr(model, "direct_pose_out_leg", None))
+    g_leg = grad_norm_of_module(getattr(model, "direct_pose_leg_terminal", None))
     g_nonleg_head = grad_norm_of_module(getattr(model, "direct_pose_out_nonleg", None))
     g_arm = grad_norm_of_module(getattr(model, "direct_pose_out_arm", None))
     g_else = grad_norm_of_module(getattr(model, "direct_pose_out_else", None))

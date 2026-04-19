@@ -222,22 +222,16 @@ def state_and_cfg(ckpt: Path) -> tuple[Dict[str, Any], Dict[str, Any]]:
 
 
 def ckpt_layout(ckpt: Path) -> Dict[str, bool]:
-    state, cfg = state_and_cfg(ckpt)
+    state, _cfg = state_and_cfg(ckpt)
     return {
         "has_direct_pose_leg_terminal": any(str(key).startswith("direct_pose_leg_terminal.") for key in state),
-        "has_direct_pose_out_leg": any(str(key).startswith("direct_pose_out_leg.") for key in state),
-        "cfg_direct_pose_stepc_unified_leg_terminal": bool(cfg.get("direct_pose_stepc_unified_leg_terminal", False)),
     }
 
 
 def assert_stepc_layout(ckpt: Path) -> Dict[str, bool]:
     layout = ckpt_layout(ckpt)
-    if (
-        not layout["has_direct_pose_leg_terminal"]
-        or layout["has_direct_pose_out_leg"]
-        or not layout["cfg_direct_pose_stepc_unified_leg_terminal"]
-    ):
-        raise RuntimeError(f"checkpoint is not StepC-compatible: {ckpt} layout={layout}")
+    if not layout["has_direct_pose_leg_terminal"]:
+        raise RuntimeError(f"checkpoint is missing canonical split leg terminal: {ckpt} layout={layout}")
     return layout
 
 
@@ -507,7 +501,6 @@ def run_locked_stage(
         "posttrain_contacts_source": "pretrain_contact",
         "posttrain_contacts_pretrain_clamp": PRETRAIN_CLAMP,
         "posttrain_contacts_pretrain_affine_stats": str(AFFINE_STATS),
-        "direct_pose_stepc_unified_leg_terminal": True,
     }
     if lr_override is not None:
         overrides["lr"] = float(lr_override)

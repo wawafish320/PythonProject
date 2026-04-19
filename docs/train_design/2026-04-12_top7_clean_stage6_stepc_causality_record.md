@@ -57,8 +57,8 @@ Phase 0：
 - 验证 provenance 来自同一个 canonical `top7` donor
 - 验证 layout：
   - `has_direct_pose_leg_terminal = true`
-  - `has_direct_pose_out_leg = false`
-  - `cfg_direct_pose_stepc_unified_leg_terminal = true`
+  - legacy split leg linear head absent
+  - canonical split leg terminal enabled
 
 Phase 1：
 
@@ -143,8 +143,8 @@ layout check：
 | check | value |
 | --- | --- |
 | `has_direct_pose_leg_terminal` | `true` |
-| `has_direct_pose_out_leg` | `false` |
-| `cfg_direct_pose_stepc_unified_leg_terminal` | `true` |
+| legacy split leg linear head | absent |
+| canonical split leg terminal | `true` |
 
 stage6 指标：
 

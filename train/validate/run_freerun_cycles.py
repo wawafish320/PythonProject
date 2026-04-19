@@ -949,7 +949,6 @@ class FreeRunCycleRunner:
         direct_pose_use_phase_z = bool(build_state.direct_pose_cfg.use_phase_z)
         direct_pose_phase_z_mode = str(build_state.direct_pose_cfg.phase_z_mode)
         direct_pose_split_enable = bool(build_state.direct_pose_cfg.split_enable)
-        direct_pose_stepc_unified_leg_terminal = bool(build_state.direct_pose_cfg.stepc_unified_leg_terminal)
         direct_pose_arm_split_enable = bool(build_state.direct_pose_cfg.arm_split_enable)
         direct_pose_arm_bones = build_state.direct_pose_cfg.arm_bones
         direct_pose_nonleg_proj_dim = int(build_state.direct_pose_cfg.nonleg_proj_dim)
@@ -1050,7 +1049,6 @@ class FreeRunCycleRunner:
             direct_pose_use_phase_z=bool(direct_pose_use_phase_z),
             direct_pose_phase_z_mode=str(direct_pose_phase_z_mode),
             direct_pose_split_enable=bool(direct_pose_split_enable),
-            direct_pose_stepc_unified_leg_terminal=bool(direct_pose_stepc_unified_leg_terminal),
             direct_pose_nonleg_proj_dim=int(max(0, int(direct_pose_nonleg_proj_dim or 0))),
             direct_pose_arm_split_enable=bool(direct_pose_arm_split_enable),
             direct_pose_arm_bones=direct_pose_arm_bones,

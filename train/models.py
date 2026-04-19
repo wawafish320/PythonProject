@@ -27,7 +27,6 @@ from .geometry import (
 from .data.layout import infer_rot_joint_count, parse_layout_entry, resolve_rot6d_slice
 from .checkpoint.compat import (
     maybe_upgrade_direct_pose_split_state_dict,
-    maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict,
 )
 
 __all__ = [
@@ -434,9 +433,6 @@ class EventMotionModel(nn.Module):
         # Optional: split direct head output into leg/non-leg heads while keeping a shared trunk.
         # This reallocates output capacity without changing downstream output semantics.
         direct_pose_split_enable: bool = False,
-        # Step C: keep the shared trunk + grouped readout, but retire the legacy
-        # direct_pose_out_leg boundary in favor of a single leg terminal block.
-        direct_pose_stepc_unified_leg_terminal: bool = False,
         # Optional: add a non-leg projection bottleneck before direct_pose_out_nonleg.
         # When >0: h_nonleg = ReLU(Linear(hid, proj)); out_nonleg = Linear(proj, D_nonleg)
         # When <=0: out_nonleg = Linear(hid, D_nonleg) (legacy split behavior).
@@ -617,12 +613,8 @@ class EventMotionModel(nn.Module):
                     "(it replaces plan+meas phase hint)."
                 )
         self.direct_pose_split_enable = bool(direct_pose_split_enable) and bool(self.direct_pose_enable)
-        self.direct_pose_stepc_unified_leg_terminal = bool(direct_pose_stepc_unified_leg_terminal) and bool(
-            self.direct_pose_split_enable
-        )
         self.direct_pose_arm_split_enable = bool(direct_pose_arm_split_enable) and bool(self.direct_pose_split_enable)
         self.direct_pose_arm_bones = direct_pose_arm_bones
-        self.direct_pose_out_leg: Optional[nn.Module] = None
         self.direct_pose_leg_terminal: Optional[nn.Module] = None
         self.direct_pose_out_nonleg: Optional[nn.Module] = None
         self.direct_pose_nonleg_proj: Optional[nn.Module] = None
@@ -1210,14 +1202,11 @@ class EventMotionModel(nn.Module):
                 nn.ReLU(),
                 nn.Dropout(drop) if drop > 0 else nn.Identity(),
             )
-            if bool(getattr(self, "direct_pose_stepc_unified_leg_terminal", False)):
-                self.direct_pose_leg_terminal = self._build_direct_pose_terminal_block(
-                    trunk_dim=hid,
-                    out_dim=leg_out_dim,
-                    drop=drop,
-                )
-            else:
-                self.direct_pose_out_leg, _ = self._build_split_head_branch(trunk_dim=hid, out_dim=leg_out_dim)
+            self.direct_pose_leg_terminal = self._build_direct_pose_terminal_block(
+                trunk_dim=hid,
+                out_dim=leg_out_dim,
+                drop=drop,
+            )
             if bool(split_state["arm_split"]):
                 arm_out_dim = int(split_state["idx_arm"].numel())
                 else_out_dim = int(split_state["idx_else"].numel())
@@ -1467,8 +1456,8 @@ class EventMotionModel(nn.Module):
         state = {
             "arm_split": bool(getattr(self, "direct_pose_arm_split_enable", False)),
             "head": getattr(self, "direct_pose_head", None),
-            "unified_leg_terminal": bool(leg_terminal is not None),
-            "leg_head": leg_terminal if leg_terminal is not None else getattr(self, "direct_pose_out_leg", None),
+            "unified_leg_terminal": True,
+            "leg_head": leg_terminal,
             "nonleg_head": getattr(self, "direct_pose_out_nonleg", None),
             "arm_head": getattr(self, "direct_pose_out_arm", None),
             "else_head": getattr(self, "direct_pose_out_else", None),
@@ -1587,10 +1576,6 @@ class EventMotionModel(nn.Module):
 
     def load_state_dict(self, state_dict, strict: bool = True):
         if isinstance(state_dict, dict):
-            try:
-                maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(self, state_dict)
-            except Exception:
-                pass
             try:
                 maybe_upgrade_direct_pose_split_state_dict(self, state_dict)
             except Exception:

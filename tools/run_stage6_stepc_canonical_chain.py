@@ -240,7 +240,6 @@ def create_replace_warmstart(src_ckpt: Path, dst_ckpt: Path, report_json: Path) 
     out_cfg = dict(donor_cfg) if isinstance(donor_cfg, dict) else {}
     out_cfg["direct_pose_use_phase_z"] = True
     out_cfg["direct_pose_phase_z_mode"] = "replace_contacts"
-    out_cfg["direct_pose_stepc_unified_leg_terminal"] = True
     out_obj["posttrain_cfg"] = out_cfg
 
     dst_ckpt.parent.mkdir(parents=True, exist_ok=True)
@@ -260,7 +259,6 @@ def create_replace_warmstart(src_ckpt: Path, dst_ckpt: Path, report_json: Path) 
             "checkpoint_posttrain_cfg_updates": {
                 "direct_pose_use_phase_z": True,
                 "direct_pose_phase_z_mode": "replace_contacts",
-                "direct_pose_stepc_unified_leg_terminal": True,
             },
         },
         "applied_tensor_deltas": applied,
@@ -466,11 +464,9 @@ def compare_stepb(cur: Mapping[str, Any], ref: Mapping[str, Any]) -> Dict[str, A
 
 
 def ckpt_layout(ckpt: Path) -> Dict[str, bool]:
-    state, cfg = state_and_cfg(ckpt)
+    state, _cfg = state_and_cfg(ckpt)
     return {
         "has_direct_pose_leg_terminal": any(str(k).startswith("direct_pose_leg_terminal.") for k in state.keys()),
-        "has_direct_pose_out_leg": any(str(k).startswith("direct_pose_out_leg.") for k in state.keys()),
-        "cfg_direct_pose_stepc_unified_leg_terminal": bool(cfg.get("direct_pose_stepc_unified_leg_terminal", False)),
     }
 
 
@@ -551,7 +547,6 @@ def stepc_rows() -> Dict[str, Any]:
             "posttrain_contacts_source": "pretrain_contact",
             "posttrain_contacts_pretrain_clamp": PRETRAIN_CLAMP,
             "posttrain_contacts_pretrain_affine_stats": str(AFFINE_STATS),
-            "direct_pose_stepc_unified_leg_terminal": True,
         },
     )
     ckpt_70a = run_posttrain(cfg_70a, CANONICAL_STAGE6_CKPT, MODEL_ROOT / "70a_stepc", RUN_NAME_70A_STEPC)
@@ -571,7 +566,6 @@ def stepc_rows() -> Dict[str, Any]:
             "posttrain_contacts_source": "pretrain_contact",
             "posttrain_contacts_pretrain_clamp": PRETRAIN_CLAMP,
             "posttrain_contacts_pretrain_affine_stats": str(AFFINE_STATS),
-            "direct_pose_stepc_unified_leg_terminal": True,
             "direct_pose_use_phase_z": True,
             "direct_pose_phase_z_mode": "replace_contacts",
         },
@@ -591,7 +585,6 @@ def stepc_rows() -> Dict[str, Any]:
             "posttrain_contacts_source": "pretrain_contact",
             "posttrain_contacts_pretrain_clamp": PRETRAIN_CLAMP,
             "posttrain_contacts_pretrain_affine_stats": str(AFFINE_STATS),
-            "direct_pose_stepc_unified_leg_terminal": True,
             "direct_pose_use_phase_z": True,
             "direct_pose_phase_z_mode": "replace_contacts",
         },
@@ -655,8 +648,7 @@ def stepc_rows() -> Dict[str, Any]:
                     "direct_pose_leg_terminal.3.bias",
                 ],
                 "tensor_upgrade": [
-                    "direct_pose_out_leg.weight -> direct_pose_leg_terminal.6.weight",
-                    "direct_pose_out_leg.bias -> direct_pose_leg_terminal.6.bias",
+                    "canonical split leg terminal readout",
                 ],
                 "partial_load": True,
             },

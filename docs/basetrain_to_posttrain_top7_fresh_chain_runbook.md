@@ -229,7 +229,6 @@ common = {
     "device": "cpu",
     "posttrain_contacts_pretrain_clamp": os.environ["CONTACT_CLAMP"],
     "posttrain_contacts_pretrain_affine_stats": os.environ["AFFINE_STATS"],
-    "direct_pose_stepc_unified_leg_terminal": True,
 }
 
 specs = [

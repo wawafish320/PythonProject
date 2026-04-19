@@ -101,7 +101,7 @@ SELECTED_METRICS: Tuple[str, ...] = (
 
 INSPECT_MODULE_NAMES: Tuple[str, ...] = (
     "direct_pose_head",
-    "direct_pose_out_leg",
+    "direct_pose_leg_terminal",
     "direct_pose_out_nonleg",
     "direct_pose_out_arm",
     "direct_pose_out_else",

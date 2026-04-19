@@ -187,7 +187,7 @@ MODULE_GROUPS: Mapping[str, Tuple[str, ...]] = {
     "shared_trunk": ("direct_pose_head",),
     "arm_branch": ("direct_pose_arm_proj", "direct_pose_out_arm"),
     "else_branch": ("direct_pose_else_proj", "direct_pose_out_else"),
-    "leg_readout": ("direct_pose_out_leg",),
+    "leg_readout": ("direct_pose_leg_terminal",),
     "leg_branch": ("direct_pose_leg_head",),
 }
 HOOK_MODULES: Mapping[str, str] = {

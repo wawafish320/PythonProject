@@ -37,7 +37,7 @@ L2_MODULES = ["direct_pose_head.0", "direct_pose_head.3"]
 L2_LEG03_MODULES = ["direct_pose_head.0", "direct_pose_head.3", "direct_pose_leg_head.0", "direct_pose_leg_head.3"]
 L2P_MODULES = ["direct_pose_head.0", "direct_pose_head.3", "direct_pose_leg_head"]
 SPLIT_BRANCH_MODULES = {
-    "out_leg": ["direct_pose_out_leg"],
+    "out_leg": ["direct_pose_leg_terminal"],
     "arm": ["direct_pose_arm_proj.0", "direct_pose_out_arm"],
     "else": ["direct_pose_else_proj.0", "direct_pose_out_else"],
 }
@@ -118,7 +118,7 @@ ARCH_TIMELINE_BLUEPRINT: list[dict[str, Any]] = [
             ],
             "train_direct_pose": [
                 "direct_pose_head",
-                "direct_pose_out_leg",
+                "direct_pose_leg_terminal",
                 "direct_pose_out_nonleg",
                 "direct_pose_nonleg_proj",
                 "direct_pose_leg_head",
@@ -146,7 +146,7 @@ ARCH_TIMELINE_BLUEPRINT: list[dict[str, Any]] = [
             "train_lambda_head": ["lambda_fusion_head"],
             "train_direct_pose": [
                 "direct_pose_head",
-                "direct_pose_out_leg",
+                "direct_pose_leg_terminal",
                 "direct_pose_out_nonleg",
                 "direct_pose_nonleg_proj",
                 "direct_pose_out_arm",
@@ -166,7 +166,7 @@ ARCH_TIMELINE_BLUEPRINT: list[dict[str, Any]] = [
             "train_lambda_head": ["lambda_fusion_head"],
             "train_direct_pose": [
                 "direct_pose_head",
-                "direct_pose_out_leg",
+                "direct_pose_leg_terminal",
                 "direct_pose_out_nonleg",
                 "direct_pose_nonleg_proj",
                 "direct_pose_out_arm",
@@ -466,6 +466,7 @@ def _build_topology_audit(*, baseline_state: Mapping[str, torch.Tensor]) -> dict
         },
         "intersections": intersections,
     }
+    out_direct_emit_literal = "result['out_direct'] = direct_out"
     code_refs = {
         "split_state": f"train/models.py:{_find_line(models_path, 'def _direct_pose_split_state') or 1}",
         "readout_fn": f"train/models.py:{_find_line(models_path, 'def _forward_direct_pose_readout') or 1}",
@@ -473,7 +474,7 @@ def _build_topology_audit(*, baseline_state: Mapping[str, torch.Tensor]) -> dict
         "readout_leg_copy": f"train/models.py:{_find_line(models_path, 'out_flat = out_flat.index_copy(1, idx_leg_use, leg_out)') or 1}",
         "readout_arm_copy": f"train/models.py:{_find_line(models_path, 'out_flat = out_flat.index_copy(1, idx_arm.to(device=out_flat.device), arm_out)') or 1}",
         "readout_else_copy": f"train/models.py:{_find_line(models_path, 'out_flat = out_flat.index_copy(1, idx_else.to(device=out_flat.device), else_out)') or 1}",
-        "out_direct_emit": f"train/models.py:{_find_line(models_path, \"result['out_direct'] = direct_out\") or 1}",
+        "out_direct_emit": f"train/models.py:{_find_line(models_path, out_direct_emit_literal) or 1}",
         "lambda_head": f"train/models.py:{_find_line(models_path, 'if self.lambda_fusion_head is not None:') or 1}",
     }
     return {

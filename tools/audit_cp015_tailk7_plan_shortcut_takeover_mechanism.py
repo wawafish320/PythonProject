@@ -1020,7 +1020,7 @@ def main() -> None:
                 "direct_pose_meas_mode": str(getattr(model, "direct_pose_meas_mode", "")),
                 "direct_pose_feat_source": str(getattr(model, "direct_pose_feat_source", "")),
                 "first_linear_weight_shape": list(first.weight.shape),
-                "readout": "shared direct_pose_head trunk + direct_pose_out_leg/direct_pose_out_arm/direct_pose_out_else",
+                "readout": "shared direct_pose_head trunk + direct_pose_leg_terminal/direct_pose_out_arm/direct_pose_out_else",
             },
             "branch_layout": branch_layout_payload,
             "selection": {

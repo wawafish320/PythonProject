@@ -110,7 +110,7 @@ SELECTED_METRICS: Tuple[str, ...] = (
 
 INSPECT_MODULE_NAMES: Tuple[str, ...] = (
     "direct_pose_head",
-    "direct_pose_out_leg",
+    "direct_pose_leg_terminal",
     "direct_pose_out_nonleg",
     "direct_pose_out_arm",
     "direct_pose_out_else",
@@ -425,7 +425,7 @@ def build_code_review(*, ds: Any, references: Mapping[str, Any]) -> Dict[str, An
     live_mechanisms = [
         "Current replace is `train_mode=direct`; no lambda/contact shell is trainable.",
         "The live direct path uses `direct_pose_feat_source=cond` plus 32-d time PE; the model-side `direct_pose_meas_mode` stays `concat`.",
-        "Replace trains the split direct trunk and readouts together: `direct_pose_head`, `direct_pose_out_leg`, `direct_pose_out_arm`, `direct_pose_out_else`, `direct_pose_arm_proj`, `direct_pose_else_proj`, and `direct_pose_leg_head`.",
+        "Replace trains the split direct trunk and readouts together: `direct_pose_head`, `direct_pose_leg_terminal`, `direct_pose_out_arm`, `direct_pose_out_else`, `direct_pose_arm_proj`, `direct_pose_else_proj`, and `direct_pose_leg_head`.",
         "Leg cleanup is an on-manifold SO(3) omega head (`direct_pose_leg_mode=so3`) composed inside posttrain/eval; current replace does not stop-grad the main leg base and does not detach leg-head features.",
         "The direct objective is live in leg/non-leg split form (`direct_pose_loss_leg_split=true`) with EMA group-norm enabled and symmetric weights (`w_leg=1`, `w_nonleg=1`).",
         "Arm/else split is active inside the non-leg branch (`direct_pose_arm_split_enable=true`), but there is no extra non-leg focus mask in current replace.",

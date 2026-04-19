@@ -218,10 +218,10 @@ if int(contract.get("version", -1)) != 1:
 可删对象：
 
 - `maybe_upgrade_direct_pose_split_state_dict(...)`
-- `maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(...)`
+- legacy split-leg linear-head terminal upgrade helper
 - `train/models.py` 中对应 wrapper:
   - `_maybe_upgrade_direct_pose_split_state_dict(...)`
-  - `_maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(...)`
+  - legacy split-leg terminal upgrade wrapper
 
 验收：
 

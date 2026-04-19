@@ -282,7 +282,6 @@ class PostTrainConfig:
     direct_pose_phase_z_mode: str
     # Optional: split direct output into leg/non-leg heads with shared trunk.
     direct_pose_split_enable: bool
-    direct_pose_stepc_unified_leg_terminal: bool
     # Optional: non-leg projection bottleneck dim for split head.
     # >0 => h_nonleg=ReLU(Linear(hid, proj)); out_nonleg=Linear(proj, D_nonleg)
     # 0 => compat split (out_nonleg=Linear(hid, D_nonleg))
@@ -513,7 +512,6 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
             ("direct_pose_hidden_override", _cfg_get_int, {"key": "direct_pose_hidden_override", "default": None, "allow_none": True}),
             ("direct_pose_nonleg_proj_dim", _cfg_get_int, {"key": "direct_pose_nonleg_proj_dim", "default": 0, "min_value": 0}),
             ("direct_pose_split_enable", _cfg_get_bool, {"key": "direct_pose_split_enable", "default": False}),
-            ("direct_pose_stepc_unified_leg_terminal", _cfg_get_bool, {"key": "direct_pose_stepc_unified_leg_terminal", "default": False}),
             ("direct_pose_arm_split_enable", _cfg_get_bool, {"key": "direct_pose_arm_split_enable", "default": False}),
             ("direct_pose_nonleg_train_only", _cfg_get_bool, {"key": "direct_pose_nonleg_train_only", "default": False}),
             ("direct_pose_leg_enable", _cfg_get_bool, {"key": "direct_pose_leg_enable", "default": False}),
@@ -3108,7 +3106,7 @@ def _run_training_loop(*, cfg: PostTrainConfig, train_mode: str, model: EventMot
             if direct_grad_monitor_enable:
                 grad_norms = {
                     "trunk": _grad_norm_of_module(getattr(model, "direct_pose_head", None)),
-                    "out_leg": _grad_norm_of_module(getattr(model, "direct_pose_out_leg", None)),
+                    "out_leg": _grad_norm_of_module(getattr(model, "direct_pose_leg_terminal", None)),
                     "out_nonleg_head": _grad_norm_of_module(getattr(model, "direct_pose_out_nonleg", None)),
                     "out_arm": _grad_norm_of_module(getattr(model, "direct_pose_out_arm", None)),
                     "out_else": _grad_norm_of_module(getattr(model, "direct_pose_out_else", None)),
@@ -3277,9 +3275,6 @@ def _save_posttrain_outputs(
     cfg_jsonable["direct_pose_use_phase_z"] = bool(artifacts.direct_pose_use_phase_z)
     cfg_jsonable["direct_pose_phase_z_mode"] = str(artifacts.direct_pose_phase_z_mode)
     cfg_jsonable["direct_pose_split_enable"] = bool(artifacts.direct_pose_split_enable)
-    cfg_jsonable["direct_pose_stepc_unified_leg_terminal"] = bool(
-        getattr(model, "direct_pose_leg_terminal", None) is not None
-    )
     cfg_jsonable["direct_pose_nonleg_proj_dim"] = int(artifacts.direct_pose_nonleg_proj_dim)
     cfg_jsonable["direct_pose_arm_split_enable"] = bool(getattr(model, "direct_pose_arm_split_enable", False))
     cfg_jsonable["direct_pose_arm_bones"] = getattr(model, "direct_pose_arm_bones", None)
@@ -3482,10 +3477,6 @@ _POSTTRAIN_ARG_SPECS_DIRECT_POSE_BUILD = (
     (
         ("--direct_pose_split_enable",),
         dict(type=str, help="true|false; split direct output heads into leg/non-leg with shared trunk (B2)."),
-    ),
-    (
-        ("--direct_pose_stepc_unified_leg_terminal",),
-        dict(type=str, help="true|false; replace legacy direct_pose_out_leg with a shared-trunk unified leg terminal block."),
     ),
     (
         ("--direct_pose_nonleg_proj_dim",),
@@ -3855,7 +3846,6 @@ def main() -> None:
         "direct": (
             "direct_pose_head",
             "direct_pose_leg_terminal",
-            "direct_pose_out_leg",
             "direct_pose_out_nonleg",
             "direct_pose_nonleg_proj",
             "direct_pose_out_arm",

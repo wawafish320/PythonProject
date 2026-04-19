@@ -33,7 +33,6 @@ __all__ = [
     "infer_lambda_fusion_build_cfg",
     "load_event_motion_ckpt_payload",
     "maybe_upgrade_direct_pose_split_state_dict",
-    "maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict",
     "prepare_event_motion_ckpt_state_for_load",
     "resume_load_weights_compat",
     "resolve_contact_plan_build_cfg",
@@ -157,7 +156,6 @@ class DirectPoseBuildConfig:
     use_phase_z: bool
     phase_z_mode: str
     split_enable: bool
-    stepc_unified_leg_terminal: bool
     arm_split_enable: bool
     arm_bones: Any
     nonleg_proj_dim: int
@@ -176,7 +174,6 @@ class DirectPoseCkptInference:
     time_pe_dim: int
     phase_z_mode: str
     split_enable: bool
-    stepc_unified_leg_terminal: bool
     arm_split_enable: bool
     nonleg_proj_dim: int
 
@@ -193,7 +190,6 @@ class DirectPoseBuildOverrides:
     use_phase_z: Optional[bool] = None
     phase_z_mode: str = "auto"
     split_enable: Optional[bool] = None
-    stepc_unified_leg_terminal: Optional[bool] = None
     arm_split_enable: Optional[bool] = None
     arm_bones: Any = None
     nonleg_proj_dim: Optional[int] = None
@@ -475,7 +471,6 @@ def resume_load_weights_compat(
             )
 
         try:
-            maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(model, state_dict)
             maybe_upgrade_direct_pose_split_state_dict(model, state_dict)
         except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
             _resume_warn_once(
@@ -748,16 +743,7 @@ def _infer_direct_pose_head_shape(
             state_dict.get("direct_pose_out_nonleg.weight", None),
         ),
         (
-            state_dict.get("direct_pose_out_leg.weight", None),
-            state_dict.get("direct_pose_out_nonleg.weight", None),
-        ),
-        (
             state_dict.get("direct_pose_leg_terminal.6.weight", None),
-            state_dict.get("direct_pose_out_arm.weight", None),
-            state_dict.get("direct_pose_out_else.weight", None),
-        ),
-        (
-            state_dict.get("direct_pose_out_leg.weight", None),
             state_dict.get("direct_pose_out_arm.weight", None),
             state_dict.get("direct_pose_out_else.weight", None),
         ),
@@ -845,26 +831,18 @@ def _infer_direct_pose_ckpt_layout(
         except Exception:
             enable = False
 
-    split_enable, stepc_unified_leg_terminal, arm_split_enable = False, False, False
+    split_enable, arm_split_enable = False, False
     try:
         has_leg_terminal = any(str(key).startswith("direct_pose_leg_terminal.") for key in state_dict.keys())
-        has_leg_out = any(str(key).startswith("direct_pose_out_leg.") for key in state_dict.keys())
         has_nonleg_out = any(str(key).startswith("direct_pose_out_nonleg.") for key in state_dict.keys())
         has_arm_out = any(str(key).startswith("direct_pose_out_arm.") for key in state_dict.keys())
         has_else_out = any(str(key).startswith("direct_pose_out_else.") for key in state_dict.keys())
-        split_enable = bool((has_leg_terminal or has_leg_out) and (has_nonleg_out or (has_arm_out and has_else_out)))
-        stepc_unified_leg_terminal = bool(has_leg_terminal)
-        arm_split_enable = bool((has_leg_terminal or has_leg_out) and has_arm_out and has_else_out)
+        split_enable = bool(has_leg_terminal and (has_nonleg_out or (has_arm_out and has_else_out)))
+        arm_split_enable = bool(has_leg_terminal and has_arm_out and has_else_out)
     except Exception:
-        split_enable, stepc_unified_leg_terminal, arm_split_enable = False, False, False
+        split_enable, arm_split_enable = False, False
     try:
         if isinstance(ckpt_posttrain_cfg, dict):
-            stepc_unified_leg_terminal = bool(
-                ckpt_posttrain_cfg.get(
-                    "direct_pose_stepc_unified_leg_terminal",
-                    stepc_unified_leg_terminal,
-                )
-            )
             arm_split_enable = bool(
                 ckpt_posttrain_cfg.get("direct_pose_arm_split_enable", arm_split_enable)
             )
@@ -905,7 +883,6 @@ def _infer_direct_pose_ckpt_layout(
         time_pe_dim=int(time_pe_dim),
         phase_z_mode=str(phase_z_mode),
         split_enable=bool(split_enable),
-        stepc_unified_leg_terminal=bool(stepc_unified_leg_terminal),
         arm_split_enable=bool(arm_split_enable),
         nonleg_proj_dim=int(nonleg_proj_dim),
     )
@@ -921,7 +898,6 @@ def _resolve_direct_pose_ckpt_compat_policy(
     direct_pose_feat_source: str,
     direct_pose_time_pe_dim: int,
     direct_pose_split_enable: bool,
-    direct_pose_stepc_unified_leg_terminal: bool,
     direct_pose_arm_split_enable: bool,
     direct_pose_nonleg_proj_dim: int,
 ) -> bool:
@@ -939,9 +915,6 @@ def _resolve_direct_pose_ckpt_compat_policy(
     )
     nonleg_proj_mismatch = bool(int(direct_pose_nonleg_proj_dim) != int(ckpt_layout.nonleg_proj_dim))
     split_mismatch = bool(direct_pose_split_enable) != bool(ckpt_layout.split_enable)
-    stepc_leg_terminal_mismatch = bool(direct_pose_stepc_unified_leg_terminal) != bool(
-        ckpt_layout.stepc_unified_leg_terminal
-    )
     arm_split_mismatch = bool(direct_pose_arm_split_enable) != bool(ckpt_layout.arm_split_enable)
     if shape_override:
         if not train_direct_pose:
@@ -961,13 +934,6 @@ def _resolve_direct_pose_ckpt_compat_policy(
             bool(direct_pose_split_enable) and (not bool(ckpt_layout.split_enable)),
             "[FATAL] direct_pose split mode differs from checkpoint but train_direct_pose=false. "
             "Enable train_direct_pose (or match direct_pose_split_enable to checkpoint).",
-        ),
-        (
-            stepc_leg_terminal_mismatch,
-            bool(direct_pose_stepc_unified_leg_terminal)
-            and (not bool(ckpt_layout.stepc_unified_leg_terminal)),
-            "[FATAL] direct_pose_stepc_unified_leg_terminal differs from checkpoint but train_direct_pose=false. "
-            "Enable train_direct_pose (or match direct_pose_stepc_unified_leg_terminal to checkpoint).",
         ),
         (
             arm_split_mismatch,
@@ -999,7 +965,6 @@ def resolve_direct_pose_build_cfg(
             (
                 "direct_pose_head.",
                 "direct_pose_leg_terminal.",
-                "direct_pose_out_leg.",
                 "direct_pose_out_nonleg.",
                 "direct_pose_out_arm.",
                 "direct_pose_out_else.",
@@ -1043,11 +1008,6 @@ def resolve_direct_pose_build_cfg(
         if overrides.split_enable is not None
         else bool(ckpt_layout.split_enable)
     )
-    direct_pose_stepc_unified_leg_terminal = (
-        bool(overrides.stepc_unified_leg_terminal)
-        if overrides.stepc_unified_leg_terminal is not None
-        else bool(ckpt_layout.stepc_unified_leg_terminal)
-    )
     direct_pose_arm_split_enable = (
         bool(overrides.arm_split_enable)
         if overrides.arm_split_enable is not None
@@ -1056,7 +1016,6 @@ def resolve_direct_pose_build_cfg(
     direct_pose_split_enable = bool(
         direct_pose_split_enable
         or direct_pose_arm_split_enable
-        or direct_pose_stepc_unified_leg_terminal
     )
     direct_pose_arm_bones = overrides.arm_bones
     direct_pose_nonleg_proj_dim = (
@@ -1103,7 +1062,6 @@ def resolve_direct_pose_build_cfg(
         direct_pose_feat_source=direct_pose_feat_source,
         direct_pose_time_pe_dim=direct_pose_time_pe_dim,
         direct_pose_split_enable=direct_pose_split_enable,
-        direct_pose_stepc_unified_leg_terminal=direct_pose_stepc_unified_leg_terminal,
         direct_pose_arm_split_enable=direct_pose_arm_split_enable,
         direct_pose_nonleg_proj_dim=direct_pose_nonleg_proj_dim,
     )
@@ -1118,7 +1076,6 @@ def resolve_direct_pose_build_cfg(
         use_phase_z=bool(direct_pose_use_phase_z),
         phase_z_mode=str(direct_pose_phase_z_mode),
         split_enable=bool(direct_pose_split_enable),
-        stepc_unified_leg_terminal=bool(direct_pose_stepc_unified_leg_terminal),
         arm_split_enable=bool(direct_pose_arm_split_enable),
         arm_bones=direct_pose_arm_bones,
         nonleg_proj_dim=int(direct_pose_nonleg_proj_dim),
@@ -1132,7 +1089,6 @@ def _drop_direct_pose_ckpt_tensors(state_dict: dict[str, Any]) -> None:
         for key in list(state_dict.keys())
         if str(key).startswith("direct_pose_head.")
         or str(key).startswith("direct_pose_leg_terminal.")
-        or str(key).startswith("direct_pose_out_leg.")
         or str(key).startswith("direct_pose_out_nonleg.")
         or str(key).startswith("direct_pose_out_arm.")
         or str(key).startswith("direct_pose_out_else.")
@@ -1565,25 +1521,20 @@ def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_
         if arm_nonleg_local is None or else_nonleg_local is None:
             return False
     converted = False
-    unified_leg_terminal = bool(split_state.get("unified_leg_terminal", False))
-    leg_weight_key = "direct_pose_leg_terminal.6.weight" if unified_leg_terminal else "direct_pose_out_leg.weight"
-    leg_bias_key = "direct_pose_leg_terminal.6.bias" if unified_leg_terminal else "direct_pose_out_leg.bias"
-
-    if unified_leg_terminal:
-        model_sd = model.state_dict()
-        for key in (
-            "direct_pose_leg_terminal.0.weight",
-            "direct_pose_leg_terminal.0.bias",
-            "direct_pose_leg_terminal.3.weight",
-            "direct_pose_leg_terminal.3.bias",
-        ):
-            target_tensor = model_sd.get(key, None)
-            converted = _copy_tensor_if_compatible(
-                state_dict,
-                target_key=key,
-                target_tensor=target_tensor,
-                source_tensor=target_tensor,
-            ) or converted
+    model_sd = model.state_dict()
+    for key in (
+        "direct_pose_leg_terminal.0.weight",
+        "direct_pose_leg_terminal.0.bias",
+        "direct_pose_leg_terminal.3.weight",
+        "direct_pose_leg_terminal.3.bias",
+    ):
+        target_tensor = model_sd.get(key, None)
+        converted = _copy_tensor_if_compatible(
+            state_dict,
+            target_key=key,
+            target_tensor=target_tensor,
+            source_tensor=target_tensor,
+        ) or converted
 
     idx_pairs = [("direct_pose_leg_out_idx", idx_leg), ("direct_pose_nonleg_out_idx", idx_nonleg)]
     if arm_split:
@@ -1593,7 +1544,7 @@ def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_
         converted = _normalize_split_index_buffer(state_dict, key, idx_tgt) or converted
 
     if has_old:
-        copy_specs = [(leg_weight_key, leg_last.weight, idx_leg_use)]
+        copy_specs = [("direct_pose_leg_terminal.6.weight", leg_last.weight, idx_leg_use)]
         if arm_split:
             copy_specs.extend([
                 ("direct_pose_out_arm.weight", arm_head.weight, idx_arm_use),
@@ -1611,7 +1562,7 @@ def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_
             ) or converted
 
     if has_old and torch.is_tensor(old_b):
-        copy_specs = [(leg_bias_key, leg_last.bias, idx_leg_use)]
+        copy_specs = [("direct_pose_leg_terminal.6.bias", leg_last.bias, idx_leg_use)]
         if arm_split:
             copy_specs.extend([
                 ("direct_pose_out_arm.bias", arm_head.bias, idx_arm_use),
@@ -1749,44 +1700,8 @@ def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_
         state_dict.pop("direct_pose_head.6.weight", None)
         state_dict.pop("direct_pose_head.6.bias", None)
     return converted
-def maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict(model: "EventMotionModel", state_dict: dict[str, Any]) -> bool:
-    if (not isinstance(state_dict, dict)) or getattr(model, "direct_pose_leg_terminal", None) is None:
-        return False
-    if not any(str(key).startswith("direct_pose_out_leg.") for key in state_dict.keys()):
-        return False
-    model_sd = model.state_dict()
-    converted = False
-    for key in (
-        "direct_pose_leg_terminal.0.weight",
-        "direct_pose_leg_terminal.0.bias",
-        "direct_pose_leg_terminal.3.weight",
-        "direct_pose_leg_terminal.3.bias",
-    ):
-        target_tensor = model_sd.get(key, None)
-        converted = _copy_tensor_if_compatible(
-            state_dict,
-            target_key=key,
-            target_tensor=target_tensor,
-            source_tensor=target_tensor,
-        ) or converted
-    converted = _copy_tensor_if_compatible(
-        state_dict,
-        target_key="direct_pose_leg_terminal.6.weight",
-        target_tensor=model_sd.get("direct_pose_leg_terminal.6.weight", None),
-        source_tensor=state_dict.get("direct_pose_out_leg.weight", None),
-    ) or converted
-    converted = _copy_tensor_if_compatible(
-        state_dict,
-        target_key="direct_pose_leg_terminal.6.bias",
-        target_tensor=model_sd.get("direct_pose_leg_terminal.6.bias", None),
-        source_tensor=state_dict.get("direct_pose_out_leg.bias", None),
-    ) or converted
-    removed_legacy = False
-    for key in list(state_dict.keys()):
-        if str(key).startswith("direct_pose_out_leg."):
-            state_dict.pop(key, None)
-            removed_legacy = True
-    return bool(converted or removed_legacy)
+
+
 def infer_event_clock_build_cfg(
     *,
     state_dict: dict[str, Any],
@@ -2155,7 +2070,6 @@ def resolve_event_motion_build_state_from_ckpt(
             use_phase_z=bool(direct_pose_cfg.use_phase_z),
             phase_z_mode=str(direct_pose_cfg.phase_z_mode),
             split_enable=bool(direct_pose_cfg.split_enable),
-            stepc_unified_leg_terminal=bool(direct_pose_cfg.stepc_unified_leg_terminal),
             arm_split_enable=bool(direct_pose_cfg.arm_split_enable),
             arm_bones=default_direct_pose_arm_bones,
             nonleg_proj_dim=int(direct_pose_cfg.nonleg_proj_dim),
