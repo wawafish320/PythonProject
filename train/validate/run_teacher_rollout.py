@@ -32,8 +32,9 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from train.training_MPL import MotionEventDataset, Trainer, validate_and_fix_model_, geodesic_R
+from train.configuration.norm_spec import NORM_SPEC_RUNTIME_PRETRAIN_KEYS, merge_norm_spec
 from train.geometry import rot6d_to_matrix, matrix_to_rot6d, reproject_rot6d, normalize_rot6d_delta
-from train.model_ckpt_compat import (
+from train.checkpoint.compat import (
     DirectPoseBuildOverrides,
     DirectPoseLoadCompatOptions,
     load_event_motion_ckpt_payload,
@@ -41,8 +42,7 @@ from train.model_ckpt_compat import (
     resolve_event_motion_build_state_from_ckpt,
 )
 from train.models import EventMotionModel, MotionJointLoss, STAGE6_3WAY_ARMCHAIN_BONES_CSV
-from train.layout import LayoutCenter, DataNormalizer
-from train.posttrain_common import NORM_SPEC_RUNTIME_PRETRAIN_KEYS, merge_norm_spec
+from train.data.layout import LayoutCenter, DataNormalizer
 from train.utils import resolve_device
 
 

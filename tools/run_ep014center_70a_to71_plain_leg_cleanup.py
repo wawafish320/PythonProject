@@ -69,6 +69,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from train import posttrain
+from train.posttrain_build_shell import _build_posttrain_model_from_ckpt
+from train.runtime.freeze import _freeze_all, _select_trainable_params, _unfreeze_for_train_mode
 
 
 RUN_DATE = "20260328"
@@ -217,15 +219,22 @@ def inspect_scope(*, config_json: Path, ckpt_in: Path, ds: Any) -> Dict[str, Any
     payload["posttrain_contacts_pretrain_clamp"] = PRETRAIN_CLAMP
     payload["posttrain_contacts_pretrain_affine_stats"] = str(AFFINE_STATS)
     cfg = posttrain._cfg_from_payload(payload)
-    model, direct_pose_feat_source, direct_pose_time_pe_dim, direct_pose_time_pe_base, direct_pose_split_enable, direct_pose_nonleg_proj_dim, direct_pose_leg_gate_mode_model, direct_pose_leg_gate_power_model = posttrain._build_posttrain_model_from_ckpt(
+    artifacts = _build_posttrain_model_from_ckpt(
         cfg=cfg,
         ds=ds,
         device=torch.device("cpu"),
     )
-    posttrain._freeze_all(model)
+    model = artifacts.model
+    _freeze_all(model)
     train_mode = posttrain._resolve_train_mode(cfg)
-    posttrain._unfreeze_for_train_mode(model, cfg, train_mode)
-    params, names = posttrain._select_trainable_params(model)
+    _unfreeze_for_train_mode(
+        model,
+        train_mode=train_mode,
+        direct_pose_leg_train_only=bool(getattr(cfg, "direct_pose_leg_train_only", False)),
+        direct_pose_leg_gate_train_only=bool(getattr(cfg, "direct_pose_leg_gate_train_only", False)),
+        direct_pose_nonleg_train_only=bool(getattr(cfg, "direct_pose_nonleg_train_only", False)),
+    )
+    params, names = _select_trainable_params(model)
     _, group_summaries = posttrain._resolve_optimizer_param_groups(cfg=cfg, params=params, names=names)
 
     instantiated: Dict[str, Any] = {}
@@ -243,13 +252,13 @@ def inspect_scope(*, config_json: Path, ckpt_in: Path, ds: Any) -> Dict[str, Any
         "ckpt_in": str(ckpt_in),
         "train_mode": train_mode,
         "resolved": {
-            "direct_pose_feat_source": str(direct_pose_feat_source),
-            "direct_pose_time_pe_dim": int(direct_pose_time_pe_dim),
-            "direct_pose_time_pe_base": float(direct_pose_time_pe_base),
-            "direct_pose_split_enable": bool(direct_pose_split_enable),
-            "direct_pose_nonleg_proj_dim": int(direct_pose_nonleg_proj_dim),
-            "direct_pose_leg_gate_mode_model": str(direct_pose_leg_gate_mode_model),
-            "direct_pose_leg_gate_power_model": float(direct_pose_leg_gate_power_model),
+            "direct_pose_feat_source": str(artifacts.direct_pose_feat_source),
+            "direct_pose_time_pe_dim": int(artifacts.direct_pose_time_pe_dim),
+            "direct_pose_time_pe_base": float(artifacts.direct_pose_time_pe_base),
+            "direct_pose_split_enable": bool(artifacts.direct_pose_split_enable),
+            "direct_pose_nonleg_proj_dim": int(artifacts.direct_pose_nonleg_proj_dim),
+            "direct_pose_leg_gate_mode_model": str(artifacts.direct_pose_leg_gate_mode_model),
+            "direct_pose_leg_gate_power_model": float(artifacts.direct_pose_leg_gate_power_model),
         },
         "instantiated_modules": instantiated,
         "trainable_param_names": list(names),

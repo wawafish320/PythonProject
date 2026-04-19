@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from .rotvec_semantics import require_standard_rotvec_spec
+from ..contracts.asset_semantics import require_standard_rotvec_spec
 
 __all__ = [
     "VectorTanhNormalizer",

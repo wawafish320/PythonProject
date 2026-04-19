@@ -5,7 +5,7 @@ import unittest
 
 import torch
 
-from train.model_ckpt_compat import (
+from train.checkpoint.compat import (
     maybe_upgrade_direct_pose_split_state_dict,
     maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict,
 )

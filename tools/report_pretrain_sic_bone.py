@@ -16,9 +16,9 @@ import torch
 import torch.nn as nn
 
 from train.geometry import geodesic_R, reproject_rot6d, rot6d_to_matrix
-from train.io import npz_scalar_to_str
+from train.data.io import npz_scalar_to_str
 from train.models import MotionEncoder, PeriodHead
-from train.normalizers import VectorTanhNormalizer, _make_angnorm_from_spec
+from train.data.normalizers import VectorTanhNormalizer, _make_angnorm_from_spec
 from train.pretrain_mpl_min import (
     InputProjectors,
     InputSlices,

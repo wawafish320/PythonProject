@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from .geometry import (
+from ..geometry import (
     rot6d_to_matrix,
     reproject_rot6d,
     angvel_vec_from_R_seq,
@@ -27,9 +27,9 @@ from .io import (
 )
 from .layout import DataNormalizer, LayoutCenter, normalize_layout as _normalize_layout, parse_layout_entry
 from .normalizers import VectorTanhNormalizer
-from .rotvec_semantics import require_standard_rotvec_spec
+from ..contracts.asset_semantics import require_standard_rotvec_spec
 from torch.utils.data._utils.collate import default_collate as _default_collate
-from .ttc import ttc_to_next_event_np
+from .contact_signals import ttc_to_next_event_np
 
 
 def _fix_firstdim_any(v, L: int):

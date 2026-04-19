@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import numpy as np
 import os
 import subprocess
 import sys
@@ -21,17 +22,14 @@ except ModuleNotFoundError:
 from train.posttrain import (
     _build_dataset_and_loader,
     _build_model_and_trainer,
-    _build_posttrain_model_from_ckpt,
     _build_rollout_mode_kwargs,
     _cfg_from_payload,
-    _freeze_all,
     _lambda_fusion_loss_rollout,
     _resolve_device,
     _resolve_train_mode,
-    _select_trainable_params,
-    _set_seed,
-    _unfreeze_for_train_mode,
 )
+from train.posttrain_build_shell import _build_posttrain_model_from_ckpt
+from train.runtime.freeze import _freeze_all, _select_trainable_params, _unfreeze_for_train_mode
 
 
 RUN_TAG = "20260402_arm_efficiency_audit"
@@ -88,6 +86,16 @@ BASELINE_REPLACE_GROUP = (
     / "eval_model_source"
     / "new70b_replace_lowdrift_group_summary.json"
 )
+
+
+def _set_seed(seed: int) -> None:
+    seed = int(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 BASELINE_REPLACE_LOG = (
     ROOT
     / "models"
@@ -609,11 +617,18 @@ def build_rollout_context(cfg_json: Path, ckpt_in: Path) -> Dict[str, Any]:
     _set_seed(int(cfg.seed))
     device = _resolve_device(cfg.device)
     norm_spec, ds, _ = _build_dataset_and_loader(cfg)
-    model, *_meta = _build_posttrain_model_from_ckpt(cfg=cfg, ds=ds, device=device)
+    artifacts = _build_posttrain_model_from_ckpt(cfg=cfg, ds=ds, device=device)
+    model = artifacts.model
     trainer = _build_model_and_trainer(cfg=cfg, ds=ds, model=model, norm_spec=norm_spec)
     train_mode = _resolve_train_mode(cfg)
     _freeze_all(model)
-    _unfreeze_for_train_mode(model, cfg, train_mode)
+    _unfreeze_for_train_mode(
+        model,
+        train_mode=train_mode,
+        direct_pose_leg_train_only=bool(getattr(cfg, "direct_pose_leg_train_only", False)),
+        direct_pose_leg_gate_train_only=bool(getattr(cfg, "direct_pose_leg_gate_train_only", False)),
+        direct_pose_nonleg_train_only=bool(getattr(cfg, "direct_pose_nonleg_train_only", False)),
+    )
     model.train()
     _params, _names = _select_trainable_params(model)
     loader = DataLoader(ds, batch_size=int(cfg.batch), shuffle=False, drop_last=True, num_workers=0)

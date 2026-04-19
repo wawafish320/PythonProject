@@ -33,7 +33,7 @@ from typing import Any, Dict, Tuple
 import numpy as np
 import torch
 
-from train.layout import LayoutCenter
+from train.data.layout import LayoutCenter
 from train.models import MotionJointLoss
 
 
@@ -151,4 +151,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

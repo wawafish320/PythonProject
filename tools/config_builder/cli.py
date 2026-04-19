@@ -4,7 +4,10 @@ import argparse
 from pathlib import Path
 from typing import Sequence
 
-from . import DatasetProfiler, TrainingConfigBuilder, dump_json, load_json
+from train.configuration.io import dump_json, load_json
+
+from .profile import DatasetProfiler
+from .stages import TrainingConfigBuilder
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

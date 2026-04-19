@@ -24,8 +24,8 @@ from .geometry import (
     root_relative_matrices,
     parent_relative_matrices,
 )
-from .layout import infer_rot_joint_count, parse_layout_entry, resolve_rot6d_slice
-from .model_ckpt_compat import (
+from .data.layout import infer_rot_joint_count, parse_layout_entry, resolve_rot6d_slice
+from .checkpoint.compat import (
     maybe_upgrade_direct_pose_split_state_dict,
     maybe_upgrade_direct_pose_stepc_leg_terminal_state_dict,
 )

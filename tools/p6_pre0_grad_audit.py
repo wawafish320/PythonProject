@@ -26,7 +26,7 @@ import numpy as np
 import torch
 
 from train.geometry import geodesic_R, reproject_rot6d, rot6d_to_matrix
-from train.posttrain_common import _freeze_all, _select_trainable_params, _unfreeze_direct_pose
+from train.runtime.freeze import _freeze_all, _select_trainable_params, _unfreeze_direct_pose
 from train.validate import run_freerun_cycles as rf
 
 

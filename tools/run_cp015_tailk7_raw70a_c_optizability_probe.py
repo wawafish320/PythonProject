@@ -29,6 +29,7 @@ except ModuleNotFoundError:
 
 from tools.audit_cp015_tailk7_plan_shortcut_takeover_mechanism import _branch_layout, _first_linear
 from train import posttrain as posttrain_mod
+from train.runtime.freeze import _select_trainable_params
 
 
 RUN_DATE = "20260407"
@@ -180,7 +181,7 @@ def _weight_or_grad_block_stats(weight: torch.Tensor, grad: torch.Tensor, sl: sl
 
 def build_optimizer(model: torch.nn.Module, cfg: Any) -> Tuple[List[torch.nn.Parameter], List[str], torch.optim.Optimizer]:
     train_mode = posttrain_mod._resolve_train_mode(cfg)
-    params, names = posttrain_mod._select_trainable_params(model)
+    params, names = _select_trainable_params(model)
     if not params:
         raise RuntimeError("no trainable params selected")
     overrides = posttrain_mod._combined_optimizer_param_group_overrides(cfg=cfg, model=model, train_mode=train_mode)

@@ -23,9 +23,9 @@ import numpy as np
 import torch
 
 from train.geometry import angvel_vec_from_R_seq, reproject_rot6d, rot6d_to_matrix
-from train.io import load_soft_contacts_from_json, npz_scalar_to_str
+from train.data.io import load_soft_contacts_from_json, npz_scalar_to_str
 from train.models import MotionEncoder, PeriodHead
-from train.normalizers import VectorTanhNormalizer, _make_angnorm_from_spec
+from train.data.normalizers import VectorTanhNormalizer, _make_angnorm_from_spec
 from train.pretrain_mpl_min import (
     StepHead,
     _get_fps_from_npz_or_json,

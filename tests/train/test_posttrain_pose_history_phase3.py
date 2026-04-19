@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest import mock
 import unittest
 
@@ -7,8 +8,11 @@ import torch
 import torch.nn as nn
 
 from train.history import PoseHistState
+from train import rollout_kernel as _rollout_kernel
 from train.posttrain import (
-    _apply_rollout_carry_state,
+    LambdaFusionAccum,
+    LambdaFusionFinalizeContext,
+    _lambda_fusion_finalize,
     _lambda_rollout_prepare_context,
     _rollout_step_common,
 )
@@ -22,6 +26,9 @@ class _NormalizerStub:
 
     def denorm_x(self, x: torch.Tensor, prev_raw: torch.Tensor | None = None) -> torch.Tensor:
         return x + 10.0
+
+    def x_to_y(self, x: torch.Tensor, dy: int) -> torch.Tensor:
+        return x[..., :dy]
 
 
 class _ModelStub(nn.Module):
@@ -75,7 +82,6 @@ class PosttrainPoseHistoryPhase3Test(unittest.TestCase):
                 trainer,
                 model,
                 batch,
-                columns=("c0", "c1"),
                 rollout_steps=2,
                 rollout_cycles=2,
                 include_boundary=False,
@@ -85,8 +91,8 @@ class PosttrainPoseHistoryPhase3Test(unittest.TestCase):
                 time_weight_max=1.0,
             )
 
-        self.assertEqual(prep["offset"], 1)
-        pose_hist_state = prep["state"]["pose_hist_state"]
+        self.assertEqual(prep.offset, 1)
+        pose_hist_state = prep.state["pose_hist_state"]
         self.assertIsInstance(pose_hist_state, PoseHistState)
         self.assertTrue(pose_hist_state.enabled)
         torch.testing.assert_close(pose_hist_state.buffer_norm, batch["pose_hist"][:, 1])
@@ -114,10 +120,8 @@ class PosttrainPoseHistoryPhase3Test(unittest.TestCase):
 
         with (
             mock.patch("train.posttrain._prepare_rollout_cond", return_value=(torch.ones(1, 1), None)),
-            mock.patch("train.posttrain._prepare_rollout_contacts_input", return_value=(None, None)),
-            mock.patch("train.posttrain._resolve_rollout_time_index", return_value=None),
-            mock.patch("train.posttrain._resolve_rollout_step_tensor", return_value=None),
-            mock.patch("train.posttrain._update_rollout_recurrent_state", return_value=None),
+            mock.patch("train.posttrain._rollout_kernel.prepare_rollout_contacts_input", return_value=None),
+            mock.patch("train.posttrain._rollout_kernel.update_rollout_recurrent_state", return_value=None),
         ):
             _rollout_step_common(
                 trainer,
@@ -181,7 +185,7 @@ class PosttrainPoseHistoryPhase3Test(unittest.TestCase):
         }
         y_next_raw = torch.tensor([[30.0, 31.0, 32.0, 90.0, 91.0, 92.0]], dtype=torch.float32)
 
-        _apply_rollout_carry_state(
+        _rollout_kernel.apply_rollout_carry_state(
             trainer,
             state,
             y_next_raw=y_next_raw,
@@ -196,6 +200,63 @@ class PosttrainPoseHistoryPhase3Test(unittest.TestCase):
             torch.tensor([[4.0, 5.0, 6.0, 30.0, 31.0, 32.0]], dtype=torch.float32),
         )
         torch.testing.assert_close(state["y_prev_raw"], y_next_raw)
+
+    def test_lambda_fusion_finalize_preserves_direct_contract_shape(self) -> None:
+        trainer = _make_trainer()
+        model = SimpleNamespace(direct_pose_leg_joint_names=["foot_l", "foot_r"])
+        finalize_ctx = LambdaFusionFinalizeContext(
+            trainer=trainer,
+            model=model,
+            objective="direct",
+            direct_pose_leg_align_weight=0.5,
+            direct_pose_leg_align_anchor_weight=0.25,
+            direct_nonleg_focus_requested=1,
+            direct_nonleg_focus_resolved=1,
+            direct_nonleg_focus_weight_use=1.5,
+            direct_nonleg_focus_applied=1.0,
+        )
+        accum = LambdaFusionAccum(
+            loss_terms=[torch.tensor(1.0, dtype=torch.float32)],
+            inc_terms=[torch.tensor(2.0, dtype=torch.float32)],
+            dir_terms=[torch.tensor(3.0, dtype=torch.float32)],
+            dir_base_terms=[torch.tensor(3.1, dtype=torch.float32)],
+            dir_leg_base_terms=[torch.tensor(1.2, dtype=torch.float32)],
+            dir_nonleg_base_terms=[torch.tensor(1.8, dtype=torch.float32)],
+            dir_nonleg_plain_terms=[torch.tensor(1.7, dtype=torch.float32)],
+            leg_align_terms=[torch.tensor(0.4, dtype=torch.float32)],
+            leg_align_frac_terms=[torch.tensor(0.6, dtype=torch.float32)],
+            leg_align_distal_terms=[torch.tensor(0.1, dtype=torch.float32)],
+            leg_align_distal_frac_terms=[torch.tensor(0.2, dtype=torch.float32)],
+            leg_align_proximal_terms=[torch.tensor(0.3, dtype=torch.float32)],
+            leg_align_proximal_frac_terms=[torch.tensor(0.4, dtype=torch.float32)],
+            lam_vals=[torch.tensor([[0.2, 0.8]], dtype=torch.float32)],
+            lam_eff_vals=[torch.tensor([[0.1, 0.7]], dtype=torch.float32)],
+            lam_rel_vals=[torch.tensor([[0.9, 0.95]], dtype=torch.float32)],
+        )
+
+        total, stats, aux_payload = _lambda_fusion_finalize(finalize_ctx=finalize_ctx, accum_ctx=accum)
+
+        self.assertTrue(torch.is_tensor(total))
+        self.assertTrue(
+            {
+                "blend_loss",
+                "dir_geo",
+                "dir_base",
+                "dir_leg_base",
+                "dir_nonleg_base",
+                "dir_group_norm_used",
+                "leg_align_loss",
+                "lambda_mean",
+                "lambda_eff_mean",
+                "lambda_rel_mean",
+                "total",
+            }.issubset(stats.keys())
+        )
+        self.assertIsInstance(aux_payload, dict)
+        self.assertIn("ema_update_payload", aux_payload)
+        self.assertIn("leg_align_grad_probe", aux_payload)
+        self.assertEqual(set(aux_payload["leg_align_grad_probe"].keys()), {"total", "distal", "proximal"})
+        self.assertTrue(all(torch.is_tensor(value) for value in aux_payload["leg_align_grad_probe"].values()))
 
 
 if __name__ == "__main__":

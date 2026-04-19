@@ -30,7 +30,8 @@
 
 这条 fresh 链路默认锁定：
 
-- `CONTACT_SOURCE=pretrain_contact`
+- posttrain contact source 在当前 mainline 中隐式固定为 `pretrain_contact`
+  - 不再通过 `--posttrain_contacts_source` CLI 显式传入
 - `CONTACT_CLAMP=1.0`
 - `ENCODER_BUNDLE=models/motion_encoder_equiv.pt.best.pt`
 - `AFFINE_STATS=debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json`
@@ -59,7 +60,6 @@ CPU_WRAPPER="$ROOT/debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exe
 BASE_CONFIG="$ROOT/config/exp_phase_DirectBranch_v1_d1_cp015_tailk7_rankmix_tw020_corridor_hold_tail15_phasea050_fixedsched_ep014center_control_denseckpt_seed2024_20260401.json"
 ENCODER_BUNDLE="$ROOT/models/motion_encoder_equiv.pt.best.pt"
 AFFINE_STATS="$ROOT/debug_output/_tmp_phaseb_affine_20260304/affine_fit_mix08/affine_stats.json"
-CONTACT_SOURCE="pretrain_contact"
 CONTACT_CLAMP="1.0"
 
 # Important: use the frozen 2026-04-12 stage configs that reproduced the
@@ -227,7 +227,6 @@ def dump(path_env: str, payload):
 common = {
     "encoder_bundle": os.environ["ENCODER_BUNDLE"],
     "device": "cpu",
-    "posttrain_contacts_source": os.environ["CONTACT_SOURCE"],
     "posttrain_contacts_pretrain_clamp": os.environ["CONTACT_CLAMP"],
     "posttrain_contacts_pretrain_affine_stats": os.environ["AFFINE_STATS"],
     "direct_pose_stepc_unified_leg_terminal": True,
@@ -338,7 +337,6 @@ test -f "$ROOT/tools/run_posttrain_nonleg_trunk_ablation.py"
   --ckpt_in "$BASETRAIN_CKPT" \
   --out_dir "$STAGE6_OUT_DIR" \
   --run_name "$STAGE6_RUN_NAME" \
-  --posttrain_contacts_source "$CONTACT_SOURCE" \
   --posttrain_contacts_pretrain_clamp "$CONTACT_CLAMP" \
   --encoder_bundle "$ENCODER_BUNDLE" \
   --posttrain_contacts_pretrain_affine_stats "$AFFINE_STATS" \
@@ -355,7 +353,6 @@ test -f "$STAGE6_CKPT"
   --ckpt_in "$STAGE6_CKPT" \
   --out_dir "$S70A_OUT_DIR" \
   --run_name "$S70A_RUN_NAME" \
-  --posttrain_contacts_source "$CONTACT_SOURCE" \
   --posttrain_contacts_pretrain_clamp "$CONTACT_CLAMP" \
   --encoder_bundle "$ENCODER_BUNDLE" \
   --posttrain_contacts_pretrain_affine_stats "$AFFINE_STATS" \
@@ -380,7 +377,6 @@ test -f "$WARMSTART_CKPT"
   --ckpt_in "$WARMSTART_CKPT" \
   --out_dir "$REPLACE_OUT_DIR" \
   --run_name "$REPLACE_RUN_NAME" \
-  --posttrain_contacts_source "$CONTACT_SOURCE" \
   --posttrain_contacts_pretrain_clamp "$CONTACT_CLAMP" \
   --encoder_bundle "$ENCODER_BUNDLE" \
   --posttrain_contacts_pretrain_affine_stats "$AFFINE_STATS" \
@@ -413,7 +409,6 @@ test -f "$S70R_CKPT"
   --ckpt_in "$S70R_CKPT" \
   --out_dir "$S71_OUT_DIR" \
   --run_name "$S71_RUN_NAME" \
-  --posttrain_contacts_source "$CONTACT_SOURCE" \
   --posttrain_contacts_pretrain_clamp "$CONTACT_CLAMP" \
   --encoder_bundle "$ENCODER_BUNDLE" \
   --posttrain_contacts_pretrain_affine_stats "$AFFINE_STATS" \
@@ -430,7 +425,6 @@ test -f "$S71_CKPT"
   --ckpt_in "$S71_CKPT" \
   --out_dir "$S72_OUT_DIR" \
   --run_name "$S72_RUN_NAME" \
-  --posttrain_contacts_source "$CONTACT_SOURCE" \
   --posttrain_contacts_pretrain_clamp "$CONTACT_CLAMP" \
   --encoder_bundle "$ENCODER_BUNDLE" \
   --posttrain_contacts_pretrain_affine_stats "$AFFINE_STATS" \
@@ -447,7 +441,6 @@ test -f "$S72_CKPT"
   --ckpt_in "$S72_CKPT" \
   --out_dir "$LAMBDA_OUT_DIR" \
   --run_name "$LAMBDA_RUN_NAME" \
-  --posttrain_contacts_source "$CONTACT_SOURCE" \
   --posttrain_contacts_pretrain_clamp "$CONTACT_CLAMP" \
   --encoder_bundle "$ENCODER_BUNDLE" \
   --posttrain_contacts_pretrain_affine_stats "$AFFINE_STATS" \
@@ -528,14 +521,14 @@ summary = {
         ),
         "stage6": stage_row(
             "stage6",
-            f'PYTHONPATH={os.environ["PYTHONPATH"]} {os.environ["CPU_WRAPPER"]} -m train.posttrain --config {os.environ["STAGE6_CFG"]} --ckpt_in {os.environ["BASETRAIN_CKPT"]} --out_dir {os.environ["STAGE6_OUT_DIR"]} --run_name {os.environ["STAGE6_RUN_NAME"]} --posttrain_contacts_source {os.environ["CONTACT_SOURCE"]} --posttrain_contacts_pretrain_clamp {os.environ["CONTACT_CLAMP"]} --encoder_bundle {os.environ["ENCODER_BUNDLE"]} --posttrain_contacts_pretrain_affine_stats {os.environ["AFFINE_STATS"]}',
+            f'PYTHONPATH={os.environ["PYTHONPATH"]} {os.environ["CPU_WRAPPER"]} -m train.posttrain --config {os.environ["STAGE6_CFG"]} --ckpt_in {os.environ["BASETRAIN_CKPT"]} --out_dir {os.environ["STAGE6_OUT_DIR"]} --run_name {os.environ["STAGE6_RUN_NAME"]} --posttrain_contacts_pretrain_clamp {os.environ["CONTACT_CLAMP"]} --encoder_bundle {os.environ["ENCODER_BUNDLE"]} --posttrain_contacts_pretrain_affine_stats {os.environ["AFFINE_STATS"]}',
             os.environ["BASETRAIN_CKPT"],
             os.environ["STAGE6_CKPT"],
             os.environ["STAGE6_GROUP"],
         ),
         "70a": stage_row(
             "70a",
-            f'PYTHONPATH={os.environ["PYTHONPATH"]} {os.environ["CPU_WRAPPER"]} -m train.posttrain --config {os.environ["S70A_CFG"]} --ckpt_in {os.environ["STAGE6_CKPT"]} --out_dir {os.environ["S70A_OUT_DIR"]} --run_name {os.environ["S70A_RUN_NAME"]} --posttrain_contacts_source {os.environ["CONTACT_SOURCE"]} --posttrain_contacts_pretrain_clamp {os.environ["CONTACT_CLAMP"]} --encoder_bundle {os.environ["ENCODER_BUNDLE"]} --posttrain_contacts_pretrain_affine_stats {os.environ["AFFINE_STATS"]}',
+            f'PYTHONPATH={os.environ["PYTHONPATH"]} {os.environ["CPU_WRAPPER"]} -m train.posttrain --config {os.environ["S70A_CFG"]} --ckpt_in {os.environ["STAGE6_CKPT"]} --out_dir {os.environ["S70A_OUT_DIR"]} --run_name {os.environ["S70A_RUN_NAME"]} --posttrain_contacts_pretrain_clamp {os.environ["CONTACT_CLAMP"]} --encoder_bundle {os.environ["ENCODER_BUNDLE"]} --posttrain_contacts_pretrain_affine_stats {os.environ["AFFINE_STATS"]}',
             os.environ["STAGE6_CKPT"],
             os.environ["S70A_CKPT"],
             os.environ["S70A_GROUP"],
@@ -549,7 +542,7 @@ summary = {
         ),
         "replace": stage_row(
             "replace",
-            f'PYTHONPATH={os.environ["PYTHONPATH"]} {os.environ["CPU_WRAPPER"]} -m train.posttrain --config {os.environ["REPLACE_CFG"]} --ckpt_in {os.environ["WARMSTART_CKPT"]} --out_dir {os.environ["REPLACE_OUT_DIR"]} --run_name {os.environ["REPLACE_RUN_NAME"]} --posttrain_contacts_source {os.environ["CONTACT_SOURCE"]} --posttrain_contacts_pretrain_clamp {os.environ["CONTACT_CLAMP"]} --encoder_bundle {os.environ["ENCODER_BUNDLE"]} --posttrain_contacts_pretrain_affine_stats {os.environ["AFFINE_STATS"]}',
+            f'PYTHONPATH={os.environ["PYTHONPATH"]} {os.environ["CPU_WRAPPER"]} -m train.posttrain --config {os.environ["REPLACE_CFG"]} --ckpt_in {os.environ["WARMSTART_CKPT"]} --out_dir {os.environ["REPLACE_OUT_DIR"]} --run_name {os.environ["REPLACE_RUN_NAME"]} --posttrain_contacts_pretrain_clamp {os.environ["CONTACT_CLAMP"]} --encoder_bundle {os.environ["ENCODER_BUNDLE"]} --posttrain_contacts_pretrain_affine_stats {os.environ["AFFINE_STATS"]}',
             os.environ["WARMSTART_CKPT"],
             os.environ["REPLACE_CKPT"],
             os.environ["REPLACE_GROUP"],
@@ -563,21 +556,21 @@ summary = {
         ),
         "71": stage_row(
             "71",
-            f'PYTHONPATH={os.environ["PYTHONPATH"]} {os.environ["CPU_WRAPPER"]} -m train.posttrain --config {os.environ["S71_CFG"]} --ckpt_in {os.environ["S70R_CKPT"]} --out_dir {os.environ["S71_OUT_DIR"]} --run_name {os.environ["S71_RUN_NAME"]} --posttrain_contacts_source {os.environ["CONTACT_SOURCE"]} --posttrain_contacts_pretrain_clamp {os.environ["CONTACT_CLAMP"]} --encoder_bundle {os.environ["ENCODER_BUNDLE"]} --posttrain_contacts_pretrain_affine_stats {os.environ["AFFINE_STATS"]}',
+            f'PYTHONPATH={os.environ["PYTHONPATH"]} {os.environ["CPU_WRAPPER"]} -m train.posttrain --config {os.environ["S71_CFG"]} --ckpt_in {os.environ["S70R_CKPT"]} --out_dir {os.environ["S71_OUT_DIR"]} --run_name {os.environ["S71_RUN_NAME"]} --posttrain_contacts_pretrain_clamp {os.environ["CONTACT_CLAMP"]} --encoder_bundle {os.environ["ENCODER_BUNDLE"]} --posttrain_contacts_pretrain_affine_stats {os.environ["AFFINE_STATS"]}',
             os.environ["S70R_CKPT"],
             os.environ["S71_CKPT"],
             os.environ["S71_GROUP"],
         ),
         "72": stage_row(
             "72",
-            f'PYTHONPATH={os.environ["PYTHONPATH"]} {os.environ["CPU_WRAPPER"]} -m train.posttrain --config {os.environ["S72_CFG"]} --ckpt_in {os.environ["S71_CKPT"]} --out_dir {os.environ["S72_OUT_DIR"]} --run_name {os.environ["S72_RUN_NAME"]} --posttrain_contacts_source {os.environ["CONTACT_SOURCE"]} --posttrain_contacts_pretrain_clamp {os.environ["CONTACT_CLAMP"]} --encoder_bundle {os.environ["ENCODER_BUNDLE"]} --posttrain_contacts_pretrain_affine_stats {os.environ["AFFINE_STATS"]}',
+            f'PYTHONPATH={os.environ["PYTHONPATH"]} {os.environ["CPU_WRAPPER"]} -m train.posttrain --config {os.environ["S72_CFG"]} --ckpt_in {os.environ["S71_CKPT"]} --out_dir {os.environ["S72_OUT_DIR"]} --run_name {os.environ["S72_RUN_NAME"]} --posttrain_contacts_pretrain_clamp {os.environ["CONTACT_CLAMP"]} --encoder_bundle {os.environ["ENCODER_BUNDLE"]} --posttrain_contacts_pretrain_affine_stats {os.environ["AFFINE_STATS"]}',
             os.environ["S71_CKPT"],
             os.environ["S72_CKPT"],
             os.environ["S72_GROUP"],
         ),
         "lambda": stage_row(
             "lambda",
-            f'PYTHONPATH={os.environ["PYTHONPATH"]} {os.environ["CPU_WRAPPER"]} -m train.posttrain --config {os.environ["LAMBDA_CFG"]} --ckpt_in {os.environ["S72_CKPT"]} --out_dir {os.environ["LAMBDA_OUT_DIR"]} --run_name {os.environ["LAMBDA_RUN_NAME"]} --posttrain_contacts_source {os.environ["CONTACT_SOURCE"]} --posttrain_contacts_pretrain_clamp {os.environ["CONTACT_CLAMP"]} --encoder_bundle {os.environ["ENCODER_BUNDLE"]} --posttrain_contacts_pretrain_affine_stats {os.environ["AFFINE_STATS"]}',
+            f'PYTHONPATH={os.environ["PYTHONPATH"]} {os.environ["CPU_WRAPPER"]} -m train.posttrain --config {os.environ["LAMBDA_CFG"]} --ckpt_in {os.environ["S72_CKPT"]} --out_dir {os.environ["LAMBDA_OUT_DIR"]} --run_name {os.environ["LAMBDA_RUN_NAME"]} --posttrain_contacts_pretrain_clamp {os.environ["CONTACT_CLAMP"]} --encoder_bundle {os.environ["ENCODER_BUNDLE"]} --posttrain_contacts_pretrain_affine_stats {os.environ["AFFINE_STATS"]}',
             os.environ["S72_CKPT"],
             os.environ["LAMBDA_CKPT"],
             os.environ["LAMBDA_GROUP"],
@@ -626,5 +619,5 @@ echo "$RUN_ROOT/run_context.json"
 ## 12. Notes / Caveats
 
 - 这份 runbook 是 **fresh basetrain ckpt_last donor** 版本，不是 canonical `ep014 donor` 版本。
-- `70R` 当前 runbook 直接调用 `tools/run_posttrain_nonleg_trunk_ablation.py`；如果后续这个工具与 `train.posttrain` 接口再次漂移，再重新评估是否需要临时 shim。
+- `70R` 当前 runbook 直接调用 `tools/run_posttrain_nonleg_trunk_ablation.py`；本文件默认以当前 `PostTrainModelArtifacts` / `_save_posttrain_outputs(...)` API 为准，如接口再次漂移，再重新评估是否需要临时 shim。
 - 如果你后续想把这条链路再封成单个 runner，优先把本文件中的变量名和 stage 命名直接复用。

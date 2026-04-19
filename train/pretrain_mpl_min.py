@@ -41,13 +41,13 @@ if __package__ is None or __package__ == "":
 from train.geometry import reproject_rot6d, rot6d_to_matrix, angvel_vec_from_R_seq  # noqa: E402
 from train.utils import build_mlp  # noqa: E402
 from train.models import MotionEncoder, PeriodHead  # noqa: E402
-from train.normalizers import (
+from train.data.normalizers import (
     VectorTanhNormalizer,
     AngvelNormalizer,
     _make_angnorm_from_spec,
 )  # noqa: E402
-from train.rotvec_semantics import stamp_standard_rotvec_spec  # noqa: E402
-from train.io import npz_scalar_to_str, load_soft_contacts_from_json as _load_soft_contacts_from_json  # noqa: E402
+from train.contracts.asset_semantics import stamp_standard_rotvec_spec  # noqa: E402
+from train.data.io import npz_scalar_to_str, load_soft_contacts_from_json as _load_soft_contacts_from_json  # noqa: E402
 
 
 # ----------------------------- small utils -----------------------------

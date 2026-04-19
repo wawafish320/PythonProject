@@ -25,8 +25,8 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from train.dataset import MotionEventDataset
-from train.posttrain_common import _merge_norm_spec
+from train.data.dataset import MotionEventDataset
+from train.configuration.norm_spec import merge_norm_spec
 from train.validate.run_freerun_cycles import FreeRunCycleRunner, _load_json, _resolve_npz_path
 
 
@@ -244,7 +244,7 @@ def _rebuild_batch_from_diag(
     if len(clip_ids) != len(starts) or not clip_ids:
         raise SystemExit(f"[FATAL] invalid clip/start lengths in {diag_pt}")
 
-    norm_spec = _merge_norm_spec(bundle.resolve(), pretrain_template.resolve())
+    norm_spec = merge_norm_spec(bundle.resolve(), pretrain_template.resolve(), pretrain_keys=None, strict=True)
     ds = MotionEventDataset(
         data_dir=str(data_root.resolve()),
         seq_len=int(seq_len),

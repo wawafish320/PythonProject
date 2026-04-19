@@ -29,8 +29,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from train.dataset import MotionEventDataset, make_fixedlen_collate
-from train.model_ckpt_compat import (
+from train.data.dataset import MotionEventDataset, make_fixedlen_collate
+from train.checkpoint.compat import (
     DirectPoseBuildOverrides,
     DirectPoseLoadCompatOptions,
     EventClockBuildOverrides,

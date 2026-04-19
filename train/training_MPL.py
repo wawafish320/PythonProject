@@ -11,7 +11,7 @@ import json
 import math as _math
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import SimpleNamespace
 from collections import deque
 from pathlib import Path
@@ -41,13 +41,17 @@ from .geometry import (
     gram_schmidt_renorm_np,
     _apply_so3_correction_to_delta_raw,
 )
-from .layout import (
+from .data.layout import (
     normalize_layout as _normalize_layout,
     layout_span as _layout_span,
 )
-from .rotvec_semantics import require_standard_rotvec_spec
-from .posttrain_common import _parse_pretrain_contact_affine_spec
-from .dataset import (
+from .configuration.norm_spec import (
+    ContactPretrainRuntime,
+    merge_norm_spec,
+    parse_pretrain_contact_affine_spec,
+    resolve_contact_pretrain_runtime,
+)
+from .data.dataset import (
     MotionEventDataset,
     ClipData,
     DatasetRuntimeArtifacts,
@@ -66,7 +70,7 @@ from .diagnostics import (
     history_drift_debug,
     test_gradient_connection,
 )
-from .io import (
+from .data.io import (
     load_soft_contacts_from_json as _load_soft_contacts_from_json,
     json_safe as _json_safe,
     write_json_payload as _write_json_payload_io,
@@ -88,15 +92,21 @@ from .utils import (
     pick_first_present,
     warn_once,
 )
-from .history import (
-    PoseHistState,
-    advance_pose_hist_state,
-    attach_adaptive_history_runtime,
-    init_pose_hist_state,
-    resolve_pose_hist_runtime_tensors,
-    resolve_pose_hist_input,
+from .history import attach_adaptive_history_runtime
+from . import rollout_kernel as _rollout_kernel
+from .rollout_kernel import (
+    RolloutExecutionState,
+    RolloutSequenceInputs,
+    RolloutStepInputs,
 )
-from .normalizers import normalize_cond_tensor, prepare_runtime_stat_tensor
+from .data.normalizers import normalize_cond_tensor, prepare_runtime_stat_tensor
+from .runtime_attach import (
+    SharedTrainerRuntime,
+    apply_contacts_pretrain_runtime,
+    apply_loss_runtime_from_trainer,
+    apply_shared_trainer_runtime,
+    resolve_shared_trainer_runtime,
+)
 
 import torch.nn as nn
 
@@ -109,99 +119,12 @@ from .models import (
     STAGE6_3WAY_ARMCHAIN_BONES,
     STAGE6_3WAY_ARMCHAIN_BONES_CSV,
 )
-from .model_ckpt_compat import resume_load_weights_compat as _resume_load_weights_compat
-from .model_ckpt_compat import attach_motion_encoder_bundle as _attach_motion_encoder_bundle
+from .checkpoint.compat import resume_load_weights_compat as _resume_load_weights_compat
+from .checkpoint.compat import attach_motion_encoder_bundle as _attach_motion_encoder_bundle
 
 
 _arg = get_global_arg
 _STATE_UPDATE_UNSET = object()
-
-
-@dataclass(frozen=True)
-class RolloutPredictionBuffers:
-    hidden_seq: Sequence[torch.Tensor]
-    period_pred: Sequence[torch.Tensor]
-    contacts_plan: Sequence[torch.Tensor]
-    contacts_plan_logits: Sequence[torch.Tensor]
-    out_direct: Sequence[torch.Tensor]
-    contacts_meas: Sequence[torch.Tensor]
-    contacts_err: Sequence[torch.Tensor]
-    event_clock_lambda_logit: Sequence[torch.Tensor]
-    event_clock_dynamic_prior: Sequence[torch.Tensor]
-    event_clock_delta_z: Sequence[torch.Tensor]
-
-
-@dataclass(frozen=True)
-class RolloutSequenceInputs:
-    state_seq: torch.Tensor
-    cond_seq: Optional[torch.Tensor] = None
-    cond_raw_seq: Optional[torch.Tensor] = None
-    contacts_seq: Optional[torch.Tensor] = None
-    angvel_seq: Optional[torch.Tensor] = None
-    pose_hist_seq: Optional[torch.Tensor] = None
-    gt_seq: Optional[torch.Tensor] = None
-
-
-def _new_rollout_prediction_buffers() -> RolloutPredictionBuffers:
-    return RolloutPredictionBuffers(
-        hidden_seq=[],
-        period_pred=[],
-        contacts_plan=[],
-        contacts_plan_logits=[],
-        out_direct=[],
-        contacts_meas=[],
-        contacts_err=[],
-        event_clock_lambda_logit=[],
-        event_clock_dynamic_prior=[],
-        event_clock_delta_z=[],
-    )
-
-
-@dataclass
-class RolloutExecutionState:
-    batch_size: int
-    total_steps: int
-    mode: str
-    allow_grad: bool
-    tf_ratio: float
-    ss_chunk_len: int
-    amp_enabled: bool
-    rot6d_slice: slice
-    rot6d_y_slice: slice
-    has_time_dim: Mapping[str, bool]
-    cond_norm_mu: Optional[torch.Tensor]
-    cond_norm_std: Optional[torch.Tensor]
-    enable_reprojection: bool
-    plan_enable: bool
-    time_base_local: Any
-    motion: torch.Tensor
-    motion_raw_local: Optional[torch.Tensor]
-    y_raw_local: Optional[torch.Tensor]
-    pose_hist_state: PoseHistState
-    ss_sel_hold: Optional[torch.Tensor] = None
-    plan_z: Optional[torch.Tensor] = None
-    meas_prev_prob: Optional[torch.Tensor] = None
-    prev_foot_pos_meas: Optional[torch.Tensor] = None
-    reprojection_applied_count: int = 0
-    last_attn: Optional[torch.Tensor] = None
-    latest_y_raw: Optional[torch.Tensor] = None
-    latest_cond_raw_for_env: Optional[torch.Tensor] = None
-    outs: List[torch.Tensor] = field(default_factory=list)
-    delta_preds: List[torch.Tensor] = field(default_factory=list)
-    buffers: RolloutPredictionBuffers = field(default_factory=_new_rollout_prediction_buffers)
-
-
-@dataclass(frozen=True)
-class RolloutStepInputs:
-    cond_input: Optional[torch.Tensor]
-    contacts_in_t: Optional[torch.Tensor]
-    angvel_t: Optional[torch.Tensor]
-    pose_history_t: Optional[torch.Tensor]
-    cond_raw_for_env: Any
-    prev_foot_pos_meas: Optional[torch.Tensor]
-    time_index_t: Optional[torch.Tensor]
-    rollout_step_t: Optional[torch.Tensor]
-    reprojection_applied: bool
 
 
 @dataclass(frozen=True)
@@ -226,39 +149,6 @@ class ValidationRuntimeContext:
 class FitCheckpointState:
     last_payload: Optional[Dict[str, Any]] = None
     last_ckpt: Optional[str] = None
-
-
-def _finalize_rollout_prediction_buffers(
-    preds: Dict[str, torch.Tensor],
-    buffers: RolloutPredictionBuffers,
-) -> None:
-    if buffers.hidden_seq:
-        preds["hidden_seq"] = torch.cat(list(buffers.hidden_seq), dim=1)
-    if buffers.period_pred:
-        preds["period_pred"] = torch.stack(
-            [p if p.dim() == 2 else p.squeeze(1) for p in buffers.period_pred],
-            dim=1,
-        )
-    for key, chunks in (
-        ("contacts_plan", buffers.contacts_plan),
-        ("contacts_plan_logits", buffers.contacts_plan_logits),
-        ("out_direct", buffers.out_direct),
-        ("contacts_meas", buffers.contacts_meas),
-        ("contacts_err", buffers.contacts_err),
-        ("event_clock_lambda_logit", buffers.event_clock_lambda_logit),
-        ("event_clock_dynamic_prior", buffers.event_clock_dynamic_prior),
-        ("event_clock_delta_z", buffers.event_clock_delta_z),
-    ):
-        if not chunks:
-            continue
-        try:
-            preds[key] = torch.cat(list(chunks), dim=1)
-        except (RuntimeError, TypeError, ValueError) as exc:
-            raise RuntimeError(
-                f"[RolloutFinalize] failed to concat preds['{key}'] with {len(chunks)} chunks"
-            ) from exc
-
-
 _PHASEC_WARN_ONCE_KEYS: set[str] = set()
 
 
@@ -443,6 +333,7 @@ class Trainer:
         self.pose_hist_scales: Optional[torch.Tensor] = None
         self.pose_hist_mu: Optional[torch.Tensor] = None
         self.pose_hist_std: Optional[torch.Tensor] = None
+        self.contacts_pretrain_runtime_attached: bool = False
         self.nan_grad_reports: int = 0
         self.nan_grad_report_limit: int = 5
         # yaw 诊断相关：仅在需要时打印有限次数的告警，避免刷屏
@@ -646,7 +537,24 @@ class Trainer:
         angvel_slice = getattr(self, 'angvel_x_slice', None)
         if not isinstance(angvel_slice, slice):
             angvel_slice = getattr(model, '_contact_meas_state_angvel_slice', None)
-        pre_clamp_raw = getattr(self, 'trainbase_contacts_pretrain_clamp', getattr(self, 'posttrain_contacts_pretrain_clamp', 1.0))
+        contacts_pretrain_runtime_attached = bool(getattr(self, 'contacts_pretrain_runtime_attached', False))
+        if contacts_pretrain_runtime_attached:
+            missing = [
+                field_name
+                for field_name in (
+                    'contacts_pretrain_clamp',
+                    'contacts_pretrain_affine_stats_spec',
+                    'contacts_pretrain_affine',
+                )
+                if not hasattr(self, field_name)
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"contacts_pretrain runtime attached but missing neutral attrs: {', '.join(missing)}"
+                )
+        pre_clamp_raw = getattr(self, 'contacts_pretrain_clamp', 1.0)
+        if contacts_pretrain_runtime_attached and pre_clamp_raw is None:
+            raise RuntimeError("contacts_pretrain runtime attached but contacts_pretrain_clamp is None")
         try:
             pre_clamp = float(pre_clamp_raw or 0.0)
         except (TypeError, ValueError):
@@ -661,9 +569,7 @@ class Trainer:
             angvel_slice=angvel_slice,
             clamp_val=float(pre_clamp),
         )
-        affine_spec = _parse_pretrain_contact_affine_spec(
-            getattr(self, 'trainbase_contacts_pretrain_affine', getattr(self, 'posttrain_contacts_pretrain_affine', None))
-        )
+        affine_spec = parse_pretrain_contact_affine_spec(getattr(self, 'contacts_pretrain_affine', None))
         try:
             with torch.no_grad():
                 hidden = enc(encoder_input.unsqueeze(1), return_summary=False)
@@ -1105,65 +1011,6 @@ class Trainer:
 
         return x_next
 
-    def _prepare_pose_hist_state(
-        self,
-        state_seq: torch.Tensor,
-        pose_hist_seq: Optional[torch.Tensor],
-        y_raw_local: Optional[torch.Tensor],
-        rot6d_y_slice: slice,
-    ) -> PoseHistState:
-        return init_pose_hist_state(
-            ref_tensor=state_seq,
-            pose_hist_seq=pose_hist_seq,
-            y_prev_raw=y_raw_local,
-            rot_slice=rot6d_y_slice,
-            pose_hist_len=int(getattr(self, "pose_hist_len", 0) or 0),
-            pose_hist_dim=int(getattr(self, "pose_hist_dim", 0) or 0),
-            params_fn=self._pose_hist_params,
-            force_disable=bool(getattr(self, "force_pose_hist_seq", False)),
-        )
-
-    def _select_rollout_frame(self, value: Any, *, step_idx: int, has_time_dim: bool, offset: int = 0) -> Any:
-        if has_time_dim and torch.is_tensor(value):
-            idx = min(value.shape[1] - 1, max(0, int(step_idx) + int(offset)))
-            return value[:, idx]
-        return value
-
-    def _resolve_rollout_step_angvel(
-        self,
-        rollout: RolloutExecutionState,
-        rollout_inputs: RolloutSequenceInputs,
-        *,
-        step_idx: int,
-    ) -> Optional[torch.Tensor]:
-        angvel_slice = getattr(self, "angvel_x_slice", None)
-        if bool(getattr(self, "use_freerun_state_sync", False)) and isinstance(angvel_slice, slice):
-            return rollout.motion[..., angvel_slice].detach()
-        return self._select_rollout_frame(
-            rollout_inputs.angvel_seq,
-            step_idx=step_idx,
-            has_time_dim=bool(rollout.has_time_dim['angvel']),
-        )
-
-    def _resolve_rollout_step_contacts(
-        self,
-        rollout: RolloutExecutionState,
-        *,
-        pose_history_t: Optional[torch.Tensor],
-    ) -> Optional[torch.Tensor]:
-        if not rollout.plan_enable:
-            return None
-        contacts_in_t = self._predict_pretrain_contacts_from_frozen(
-            motion_step_t=rollout.motion,
-            pose_hist_step_t=pose_history_t,
-        )
-        if contacts_in_t is None:
-            raise RuntimeError(
-                '[FATAL] basetrain rollout contact resolution now requires valid frozen encoder+contact_head '
-                'and runtime-compatible encoder input dimensions.'
-        )
-        return contacts_in_t
-
     def _resolve_rollout_gt_yaw(
         self,
         rollout: RolloutExecutionState,
@@ -1181,371 +1028,6 @@ class Trainer:
             )
             return self._infer_root_yaw_from_rot6d(state_raw)
         return None
-
-    def _resolve_rollout_step_cond_raw(
-        self,
-        rollout: RolloutExecutionState,
-        rollout_inputs: RolloutSequenceInputs,
-        *,
-        step_idx: int,
-    ) -> tuple[Any, Any, bool]:
-        cond_raw_t = self._select_rollout_frame(
-            rollout_inputs.cond_raw_seq,
-            step_idx=step_idx,
-            has_time_dim=bool(rollout.has_time_dim['cond_raw']),
-            offset=1,
-        )
-        cond_raw_for_model = cond_raw_t
-        reprojection_applied = False
-        if (
-            rollout.enable_reprojection
-            and int(step_idx) > 0
-            and rollout.mode in ('free', 'train_free', 'mixed')
-            and cond_raw_t is not None
-        ):
-            gt_yaw = self._resolve_rollout_gt_yaw(rollout, rollout_inputs, step_idx=step_idx)
-            pred_yaw = self._infer_root_yaw_from_rot6d(rollout.y_raw_local) if rollout.y_raw_local is not None else None
-            if gt_yaw is not None and pred_yaw is not None:
-                cond_raw_t_reprojected = self._reproject_cond_to_local_frame(cond_raw_t, gt_yaw, pred_yaw)
-                if cond_raw_t_reprojected is not None:
-                    cond_raw_for_model = cond_raw_t_reprojected
-                    reprojection_applied = True
-        return cond_raw_t, cond_raw_for_model, reprojection_applied
-
-    def _override_rollout_cond_input(
-        self,
-        cond_input: Optional[torch.Tensor],
-        cond_raw_for_model: Any,
-        rollout: RolloutExecutionState,
-        rollout_inputs: RolloutSequenceInputs,
-        *,
-        step_idx: int,
-    ) -> Optional[torch.Tensor]:
-        if cond_raw_for_model is not None:
-            cond_override = self._normalize_cond_from_raw(
-                cond_raw_for_model,
-                rollout.cond_norm_mu,
-                rollout.cond_norm_std,
-            )
-            if cond_override is not None:
-                return cond_override
-        if cond_input is None and rollout_inputs.cond_seq is not None:
-            return self._select_rollout_frame(
-                rollout_inputs.cond_seq,
-                step_idx=step_idx,
-                has_time_dim=bool(rollout.has_time_dim['cond']),
-            )
-        return cond_input
-
-    def _build_rollout_step_time_inputs(
-        self,
-        rollout: RolloutExecutionState,
-        *,
-        step_idx: int,
-    ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-        time_index_t = None
-        if rollout.time_base_local is not None:
-            try:
-                time_index_t = rollout.time_base_local + int(step_idx)
-            except (RuntimeError, TypeError, ValueError):
-                time_index_t = None
-        try:
-            step_norm = (
-                float(step_idx) / float(int(rollout.total_steps) - 1)
-                if int(rollout.total_steps) > 1
-                else 0.0
-            )
-            rollout_step_t = torch.full(
-                (rollout.motion.shape[0], 1, 1),
-                step_norm,
-                device=rollout.motion.device,
-                dtype=rollout.motion.dtype,
-            )
-        except (RuntimeError, TypeError, ValueError):
-            rollout_step_t = None
-        return time_index_t, rollout_step_t
-
-    def _resolve_rollout_step_inputs(
-        self,
-        rollout: RolloutExecutionState,
-        rollout_inputs: RolloutSequenceInputs,
-        *,
-        step_idx: int,
-    ) -> RolloutStepInputs:
-        cond_input = self._select_rollout_frame(
-            rollout_inputs.cond_seq,
-            step_idx=step_idx,
-            has_time_dim=bool(rollout.has_time_dim['cond']),
-        )
-        pose_history_t = resolve_pose_hist_input(
-            state=rollout.pose_hist_state,
-            pose_hist_seq=rollout_inputs.pose_hist_seq,
-            idx=int(step_idx),
-        )
-        contacts_in_t = self._resolve_rollout_step_contacts(rollout, pose_history_t=pose_history_t)
-        cond_raw_for_env, cond_raw_for_model, reprojection_applied = self._resolve_rollout_step_cond_raw(
-            rollout,
-            rollout_inputs,
-            step_idx=step_idx,
-        )
-        cond_input = self._override_rollout_cond_input(
-            cond_input,
-            cond_raw_for_model,
-            rollout,
-            rollout_inputs,
-            step_idx=step_idx,
-        )
-        time_index_t, rollout_step_t = self._build_rollout_step_time_inputs(rollout, step_idx=step_idx)
-        return RolloutStepInputs(
-            cond_input=cond_input,
-            contacts_in_t=contacts_in_t,
-            angvel_t=self._resolve_rollout_step_angvel(rollout, rollout_inputs, step_idx=step_idx),
-            pose_history_t=pose_history_t,
-            cond_raw_for_env=cond_raw_for_env,
-            prev_foot_pos_meas=rollout.prev_foot_pos_meas,
-            time_index_t=time_index_t,
-            rollout_step_t=rollout_step_t,
-            reprojection_applied=reprojection_applied,
-        )
-
-    def _update_rollout_carry_state(
-        self,
-        rollout: RolloutExecutionState,
-        rollout_inputs: RolloutSequenceInputs,
-        *,
-        step_idx: int,
-    ) -> None:
-        import torch
-
-        if rollout.motion_raw_local is None:
-            self._raise_norm_error("rollout 更新需要 DataNormalizer 提供 RAW 状态写回。")
-        free_raw = self._apply_free_carry(
-            rollout.motion_raw_local,
-            rollout.latest_y_raw,
-            cond_next_raw=rollout.latest_cond_raw_for_env,
-        )
-        free_raw = free_raw.clone() if rollout.allow_grad else free_raw.detach()
-        free_z = self._diag_norm_x(free_raw)
-        gt_next = rollout_inputs.state_seq[:, step_idx + 1]
-        ss_sel_hold = rollout.ss_sel_hold
-        if ss_sel_hold is None or rollout.ss_chunk_len <= 1 or (step_idx % rollout.ss_chunk_len == 0):
-            ss_sel_hold = (torch.rand(rollout.batch_size, device=self.device) < float(rollout.tf_ratio)).float().unsqueeze(-1)
-        sel = ss_sel_hold if ss_sel_hold.dtype == gt_next.dtype else ss_sel_hold.to(gt_next.dtype)
-        motion = sel * gt_next + (1.0 - sel) * free_z
-
-        try:
-            gt_raw_next = self.normalizer.denorm_x(gt_next, prev_raw=rollout.motion_raw_local)
-            motion_raw_local = sel * gt_raw_next + (1.0 - sel) * free_raw
-        except Exception as exc:
-            self._raise_norm_error("normalizer.denorm_x 在 rollout 更新时失败", exc)
-
-        y_raw_local = rollout.y_raw_local
-        if rollout_inputs.gt_seq is not None and rollout_inputs.gt_seq.dim() == 3:
-            try:
-                y_next = self._denorm(rollout_inputs.gt_seq[:, step_idx + 1]).detach()
-                y_raw_local = sel * y_next + (1.0 - sel) * y_raw_local
-            except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
-                _phasec_warn_once(
-                    "rollout/carry_gt_denorm",
-                    "failed to blend GT RAW carry in scheduled sampling; keeping model RAW carry",
-                    exc,
-                )
-
-        pose_hist_state = advance_pose_hist_state(
-            rollout.pose_hist_state,
-            y_next_raw=y_raw_local,
-            rot_slice=rollout.rot6d_y_slice,
-        )
-        rollout.motion = motion
-        rollout.motion_raw_local = motion_raw_local
-        rollout.y_raw_local = y_raw_local
-        rollout.ss_sel_hold = ss_sel_hold
-        rollout.pose_hist_state = pose_hist_state
-
-    def _resolve_rollout_initial_raw_state(
-        self,
-        state_seq: torch.Tensor,
-        gt_seq: Optional[torch.Tensor],
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], slice, slice]:
-        motion = state_seq[:, 0]
-        try:
-            motion_raw_local = self.normalizer.denorm_x(motion)
-        except Exception as exc:
-            self._raise_norm_error('normalizer.denorm_x 在 roll-out 初始化时失败', exc)
-
-        y_raw_local = None
-        dy = 0
-        if gt_seq is not None and gt_seq.dim() == 3:
-            y0 = gt_seq[:, 0]
-            dy = int(y0.shape[-1])
-            y_raw_local = self._denorm(y0)
-        if dy <= 0:
-            dy = int(getattr(self, 'Dy', 0) or (gt_seq.shape[-1] if gt_seq is not None else 0))
-        rot6d_slice = getattr(self.train_loader, 'rot6d_x_slice', None) if hasattr(self, 'train_loader') else None
-        if rot6d_slice is None:
-            rot6d_slice = getattr(self, 'rot6d_x_slice', None) or getattr(self, 'rot6d_slice', None)
-        if not isinstance(rot6d_slice, slice):
-            rot6d_slice = slice(0, motion.size(-1))
-        rot6d_y_slice = getattr(self, 'rot6d_y_slice', None) or rot6d_slice
-        if y_raw_local is None and motion_raw_local is not None and dy:
-            slice_len = rot6d_slice.stop - rot6d_slice.start
-            if slice_len != dy:
-                self._raise_norm_error('rollout 初始化 rot6d_x_slice 与 Dy 不匹配。')
-            y_raw_local = motion_raw_local[..., rot6d_slice].clone()
-        if y_raw_local is None and dy:
-            joint_count = dy // 6
-            if joint_count > 0:
-                zeros = state_seq.new_zeros((state_seq.shape[0], joint_count, 6))
-                y_raw_local = _rot6d_identity_like(zeros).view(state_seq.shape[0], dy)
-        return motion, motion_raw_local, y_raw_local, rot6d_slice, rot6d_y_slice
-
-    def _init_rollout_state(
-        self,
-        rollout_inputs: RolloutSequenceInputs,
-        *,
-        cond_norm_mu: Optional[torch.Tensor] = None,
-        cond_norm_std: Optional[torch.Tensor] = None,
-        mode: str = 'mixed',
-        tf_ratio: float = 1.0,
-        time_base: Any = None,
-    ) -> RolloutExecutionState:
-        state_seq = rollout_inputs.state_seq
-        gt_seq = rollout_inputs.gt_seq
-        batch_size, total_steps, _ = state_seq.shape
-        allow_grad = mode == 'train_free'
-        try:
-            ss_chunk_len = int(getattr(self, 'ss_chunk_len', 1) or 1)
-        except (TypeError, ValueError):
-            ss_chunk_len = 1
-        ss_chunk_len = max(1, ss_chunk_len)
-        motion, motion_raw_local, y_raw_local, rot6d_slice, rot6d_y_slice = self._resolve_rollout_initial_raw_state(
-            state_seq,
-            gt_seq,
-        )
-        has_time_dim = {
-            'cond': callable(getattr(rollout_inputs.cond_seq, 'dim', None)) and rollout_inputs.cond_seq.dim() == 3,
-            'cond_raw': callable(getattr(rollout_inputs.cond_raw_seq, 'dim', None)) and getattr(rollout_inputs.cond_raw_seq, 'dim', lambda: 0)() == 3,
-            'contacts': callable(getattr(rollout_inputs.contacts_seq, 'dim', None)) and rollout_inputs.contacts_seq.dim() == 3,
-            'angvel': callable(getattr(rollout_inputs.angvel_seq, 'dim', None)) and rollout_inputs.angvel_seq.dim() == 3,
-            'pose_hist': callable(getattr(rollout_inputs.pose_hist_seq, 'dim', None)) and rollout_inputs.pose_hist_seq.dim() == 3,
-        }
-        pose_hist_state = self._prepare_pose_hist_state(
-            state_seq,
-            rollout_inputs.pose_hist_seq,
-            y_raw_local,
-            rot6d_y_slice,
-        )
-
-        cond_norm_mu = self._prepare_cond_stat(cond_norm_mu, state_seq) if cond_norm_mu is not None else None
-        cond_norm_std = self._prepare_cond_stat(cond_norm_std, state_seq) if cond_norm_std is not None else None
-
-        enable_reprojection = bool(getattr(self, 'enable_cond_reprojection', True))
-        yaw_strategy = str(getattr(self, 'freerun_yaw_strategy', 'trajectory') or 'trajectory')
-        if yaw_strategy == 'trajectory':
-            enable_reprojection = False
-        time_base_local = time_base
-        if torch.is_tensor(time_base_local):
-            try:
-                time_base_local = time_base_local.to(device=state_seq.device)
-            except RuntimeError:
-                time_base_local = time_base
-
-        return RolloutExecutionState(
-            batch_size=batch_size,
-            total_steps=total_steps,
-            mode=mode,
-            allow_grad=allow_grad,
-            tf_ratio=float(tf_ratio),
-            ss_chunk_len=ss_chunk_len,
-            amp_enabled=bool(getattr(self, 'use_amp', False)),
-            rot6d_slice=rot6d_slice,
-            rot6d_y_slice=rot6d_y_slice,
-            has_time_dim=has_time_dim,
-            cond_norm_mu=cond_norm_mu,
-            cond_norm_std=cond_norm_std,
-            enable_reprojection=enable_reprojection,
-            plan_enable=bool(getattr(self.model, 'contact_plan_enable', False)),
-            time_base_local=time_base_local,
-            motion=motion,
-            motion_raw_local=motion_raw_local,
-            y_raw_local=y_raw_local,
-            pose_hist_state=pose_hist_state,
-        )
-
-    def _get_rollout_step_tensor(
-        self,
-        ret: Mapping[str, Any],
-        key: str,
-    ) -> Optional[torch.Tensor]:
-        value = ret.get(key, None)
-        if not torch.is_tensor(value):
-            return None
-        if value.dim() == 2:
-            return value.unsqueeze(1)
-        if value.dim() >= 3 and value.size(1) != 1:
-            return value[:, -1:, ...]
-        return value
-
-    def _update_rollout_plan_state(
-        self,
-        rollout: RolloutExecutionState,
-        ret: Mapping[str, Any],
-    ) -> None:
-        if not rollout.plan_enable:
-            return
-
-        contacts_plan = self._get_rollout_step_tensor(ret, 'contacts_plan')
-        if contacts_plan is not None:
-            rollout.buffers.contacts_plan.append(contacts_plan)
-
-        contacts_plan_logits = self._get_rollout_step_tensor(ret, 'contacts_plan_logits')
-        if contacts_plan_logits is not None:
-            rollout.buffers.contacts_plan_logits.append(contacts_plan_logits)
-
-        direct_out = self._get_rollout_step_tensor(ret, 'out_direct')
-        if direct_out is not None:
-            rollout.buffers.out_direct.append(direct_out)
-
-        plan_z_next = ret.get('plan_z_next', None)
-        if plan_z_next is not None:
-            if torch.is_tensor(plan_z_next) and not rollout.allow_grad:
-                plan_z_next = plan_z_next.detach()
-            rollout.plan_z = plan_z_next
-
-    def _record_rollout_step_outputs(
-        self,
-        rollout: RolloutExecutionState,
-        *,
-        y_norm: torch.Tensor,
-        delta_out: torch.Tensor,
-        period_pred: Optional[torch.Tensor],
-        ret: Mapping[str, Any],
-    ) -> None:
-        rollout.outs.append(y_norm)
-        rollout.delta_preds.append(delta_out)
-        if period_pred is not None:
-            rollout.buffers.period_pred.append(period_pred)
-
-        hidden_step = ret.get('h_final', None)
-        if torch.is_tensor(hidden_step):
-            if hidden_step.dim() == 1:
-                hidden_step = hidden_step.unsqueeze(0).unsqueeze(0)
-            elif hidden_step.dim() == 2:
-                hidden_step = hidden_step.unsqueeze(1)
-            elif hidden_step.dim() >= 3 and hidden_step.size(1) != 1:
-                hidden_step = hidden_step[:, -1:, ...]
-            rollout.buffers.hidden_seq.append(hidden_step)
-
-        for key, target in (
-            ('contacts_meas', rollout.buffers.contacts_meas),
-            ('contacts_err', rollout.buffers.contacts_err),
-            ('event_clock_lambda_logit', rollout.buffers.event_clock_lambda_logit),
-            ('event_clock_dynamic_prior', rollout.buffers.event_clock_dynamic_prior),
-            ('event_clock_delta_z', rollout.buffers.event_clock_delta_z),
-        ):
-            value = self._get_rollout_step_tensor(ret, key)
-            if value is not None:
-                target.append(value)
 
     def _compute_rollout_step_debug_stats(
         self,
@@ -1586,30 +1068,6 @@ class Trainer:
                 debug_stats['rot6d_geo_deg'] = None
         return debug_stats
 
-    def _run_rollout_model_step(
-        self,
-        rollout: RolloutExecutionState,
-        step_inputs: RolloutStepInputs,
-    ) -> tuple[Mapping[str, Any], torch.Tensor, Optional[torch.Tensor]]:
-        with self._amp_context(rollout.amp_enabled):
-            ret = self.model(
-                rollout.motion,
-                step_inputs.cond_input,
-                contacts=step_inputs.contacts_in_t,
-                angvel=step_inputs.angvel_t,
-                pose_history=step_inputs.pose_history_t,
-                plan_z=rollout.plan_z,
-                meas_logits_prev=rollout.meas_prev_prob,
-                time_index=step_inputs.time_index_t,
-                rollout_step=step_inputs.rollout_step_t,
-            )
-        if not isinstance(ret, dict):
-            raise RuntimeError("Model forward must return a dict with at least 'out'.")
-        delta_out = ret.get('delta', ret.get('out', None))
-        if delta_out is None:
-            raise RuntimeError("Model forward must return 'delta' tensor.")
-        return ret, delta_out, ret.get('period_pred', None)
-
     def _update_rollout_step_aux_state(
         self,
         rollout: RolloutExecutionState,
@@ -1620,7 +1078,7 @@ class Trainer:
         if step_inputs.reprojection_applied:
             rollout.reprojection_applied_count += 1
         rollout.last_attn = ret.get('attn', rollout.last_attn)
-        self._update_rollout_plan_state(rollout, ret)
+        _rollout_kernel.update_rollout_plan_state(rollout, ret)
         meas_prob_step = ret.get('contacts_meas', None)
         if torch.is_tensor(meas_prob_step):
             rollout.meas_prev_prob = meas_prob_step.detach()
@@ -1703,8 +1161,31 @@ class Trainer:
         *,
         step_idx: int,
     ) -> Dict[str, Optional[float]]:
-        step_inputs = self._resolve_rollout_step_inputs(rollout, rollout_inputs, step_idx=step_idx)
-        ret, delta_out, period_pred = self._run_rollout_model_step(rollout, step_inputs)
+        step_inputs = _rollout_kernel.resolve_rollout_step_inputs(
+            self,
+            rollout,
+            rollout_inputs,
+            step_idx=step_idx,
+            yaw_gt_fn=lambda idx: self._resolve_rollout_gt_yaw(
+                rollout,
+                rollout_inputs,
+                step_idx=int(idx),
+            ),
+            model=self.model,
+        )
+        with self._amp_context(rollout.amp_enabled):
+            ret, delta_out, period_pred = _rollout_kernel.forward_rollout_model_step(
+                self.model,
+                motion=rollout.motion,
+                cond_input=step_inputs.cond_input,
+                contacts_in_t=step_inputs.contacts_in_t,
+                angvel_t=step_inputs.angvel_t,
+                pose_history_t=step_inputs.pose_history_t,
+                plan_z=rollout.plan_z,
+                meas_logits_prev=rollout.meas_prev_prob,
+                time_index_t=step_inputs.time_index_t,
+                rollout_step_t=step_inputs.rollout_step_t,
+            )
         self._update_rollout_step_aux_state(rollout, step_inputs, ret)
         prev_raw_snapshot, y_raw = self._compose_rollout_step_raw(
             rollout,
@@ -1715,7 +1196,7 @@ class Trainer:
         )
         rollout.y_raw_local = y_raw.clone() if rollout.allow_grad else y_raw.detach()
         y_norm = self._norm_y(y_raw)
-        self._record_rollout_step_outputs(
+        _rollout_kernel.record_rollout_step_outputs(
             rollout,
             y_norm=y_norm,
             delta_out=delta_out,
@@ -1744,19 +1225,13 @@ class Trainer:
         if step_idx >= rollout.total_steps - 1:
             return
 
-        self._update_rollout_carry_state(
+        _rollout_kernel.update_rollout_carry_state(
+            self,
             rollout,
             rollout_inputs,
             step_idx=step_idx,
+            warn_once_fn=_phasec_warn_once,
         )
-
-    def _finalize_rollout_outputs(self, rollout: RolloutExecutionState) -> dict[str, torch.Tensor]:
-        preds = {
-            'out': torch.stack(rollout.outs, dim=1),
-            'delta': torch.stack(rollout.delta_preds, dim=1),
-        }
-        _finalize_rollout_prediction_buffers(preds, rollout.buffers)
-        return preds
 
     def _maybe_log_rollout_reprojection(self, rollout: RolloutExecutionState) -> None:
         if not (rollout.enable_reprojection and rollout.reprojection_applied_count > 0):
@@ -1805,7 +1280,8 @@ class Trainer:
             pose_hist_seq=pose_hist_seq,
             gt_seq=gt_seq,
         )
-        rollout = self._init_rollout_state(
+        rollout = _rollout_kernel.init_rollout_execution_state(
+            self,
             rollout_inputs,
             cond_norm_mu=cond_norm_mu,
             cond_norm_std=cond_norm_std,
@@ -1819,7 +1295,7 @@ class Trainer:
                 step_diag_update = self._rollout_forward_step(rollout, rollout_inputs, step_idx=step_idx)
                 self._commit_rollout_diag_update(last_step_debug_stats=step_diag_update)
                 self._apply_scheduled_sampling_update(rollout, rollout_inputs, step_idx=step_idx)
-            preds = self._finalize_rollout_outputs(rollout)
+            preds = _rollout_kernel.finalize_rollout_outputs(rollout)
             self._maybe_log_rollout_reprojection(rollout)
             return preds, rollout.last_attn
         finally:
@@ -2825,26 +2301,12 @@ TRAIN_ENTRY_CONFIG_META_KEYS = {'dataset_profile', 'strategy_meta'}
 
 @dataclass(frozen=True)
 class TrainerRuntimeConfig:
-    norm_template_path: Optional[str]
-    bundle_json_path: Optional[str]
-    out_dir: str
+    shared: SharedTrainerRuntime
     direct_pose_grad_monitor_enable: bool
     direct_pose_grad_ratio_gate: float
-    full_config: Dict[str, Any]
-    pose_hist_len: int
-    pose_hist_dim: int
-    pose_hist_scales: Optional[torch.Tensor]
-    pose_hist_mu: Optional[torch.Tensor]
-    pose_hist_std: Optional[torch.Tensor]
-    bone_hz: float
-    fps: float
-    trainbase_contacts_pretrain_clamp: float
-    trainbase_contacts_pretrain_affine_stats: Optional[str]
-    trainbase_contacts_pretrain_affine: Optional[Dict[str, Any]]
+    contacts_pretrain: ContactPretrainRuntime
     diag_topk: int
     diag_thr: float
-    yaw_forward_axis: int
-    yaw_forward_axis_offset: float
     teacher_eval_max_batches: Optional[int]
     ss_chunk_len: int
     tf_mode: str
@@ -2860,8 +2322,112 @@ class TrainerRuntimeConfig:
     hyperparam_scheduler: Any
     freerun_debug_path: Optional[str]
     enable_grad_connection_test: bool
-    current_run_name: str
 
+
+def _resolve_freerun_stage_schedule(spec: Any) -> list[Any]:
+    try:
+        freerun_stage_schedule = _parse_stage_schedule(spec)
+    except Exception as exc:
+        freerun_stage_schedule = []
+        print(
+            f"[StageSchedule][WARN] failed to parse freerun_stage_schedule ({exc}); fallback to empty schedule."
+        )
+    _assert_no_legacy_loss_keys_in_schedule(
+        freerun_stage_schedule,
+        context='freerun_stage_schedule',
+    )
+    _assert_no_removed_trainbase_stage_keys(
+        freerun_stage_schedule,
+        context='freerun_stage_schedule',
+    )
+    return freerun_stage_schedule
+
+
+def _resolve_trainer_runtime_config(
+    args: argparse.Namespace,
+    trainer: Trainer,
+    dataset_artifacts: DatasetRuntimeArtifacts,
+    norm_template_path: Optional[Path],
+    bundle_json_path: Optional[str],
+    out_dir: Path,
+    resolved_config: Dict[str, Any],
+    run_name: str,
+) -> TrainerRuntimeConfig:
+    shared_runtime = resolve_shared_trainer_runtime(
+        dataset_artifacts=dataset_artifacts,
+        trainer_default_yaw_forward_axis=int(getattr(trainer, 'yaw_forward_axis', 2)),
+        yaw_forward_axis_override=args.yaw_forward_axis,
+        yaw_forward_offset_deg_override=args.yaw_forward_offset,
+        norm_template_path=norm_template_path,
+        bundle_json_path=bundle_json_path,
+        out_dir=out_dir,
+        full_config=resolved_config,
+        current_run_name=run_name,
+    )
+    contact_pretrain_runtime = resolve_contact_pretrain_runtime(
+        clamp_raw=getattr(args, 'trainbase_contacts_pretrain_clamp', 1.0),
+        affine_stats_raw=getattr(args, 'trainbase_contacts_pretrain_affine_stats', None),
+        warn=True,
+        warn_prefix='[MPL]',
+    )
+    eval_monitor = {
+        'direct_pose_grad_monitor_enable': bool(args.direct_pose_grad_monitor_enable),
+        'direct_pose_grad_ratio_gate': float(args.direct_pose_grad_ratio_gate or 0.35),
+        'diag_topk': int(args.diag_topk or 8),
+        'diag_thr': float(args.diag_thr or 8.0),
+        'teacher_eval_max_batches': args.teacher_eval_max_batches,
+    }
+    history_schedule = {
+        'ss_chunk_len': int(getattr(args, 'ss_chunk_len', getattr(trainer, 'ss_chunk_len', 1)) or 1),
+        'tf_mode': args.tf_mode,
+        'tf_start_epoch': int(args.tf_start_epoch),
+        'tf_end_epoch': int(args.tf_end_epoch),
+        'tf_max': float(args.tf_max),
+        'tf_min': float(args.tf_min),
+        'history_debug_steps': int(args.history_debug_steps or 0),
+        'history_dropout_prob': float(args.history_dropout_prob or 0.0),
+        'history_dropout_prob_min': 0.05,
+        'history_dropout_prob_max': 0.30,
+        'freerun_stage_schedule': _resolve_freerun_stage_schedule(args.freerun_stage_schedule),
+        'hyperparam_scheduler': None,
+        'freerun_debug_path': args.freerun_debug_path,
+        'enable_grad_connection_test': not bool(args.no_grad_conn_test),
+    }
+    return TrainerRuntimeConfig(
+        shared=shared_runtime,
+        contacts_pretrain=contact_pretrain_runtime,
+        **eval_monitor,
+        **history_schedule,
+    )
+
+
+def _apply_trainer_runtime_config(trainer: Trainer, runtime_cfg: TrainerRuntimeConfig) -> None:
+    apply_shared_trainer_runtime(trainer, runtime_cfg.shared)
+    apply_contacts_pretrain_runtime(
+        trainer,
+        owner_prefix='trainbase',
+        runtime=runtime_cfg.contacts_pretrain,
+    )
+    renamed_fields = {}
+    direct_field_groups = (
+        (
+            'direct_pose_grad_monitor_enable', 'direct_pose_grad_ratio_gate', 'diag_topk', 'diag_thr',
+            'teacher_eval_max_batches',
+        ),
+        (
+            'ss_chunk_len', 'tf_mode', 'tf_start_epoch', 'tf_end_epoch', 'tf_max', 'tf_min',
+            'history_debug_steps', 'history_dropout_prob', 'history_dropout_prob_min', 'history_dropout_prob_max',
+            'freerun_stage_schedule', 'hyperparam_scheduler', 'freerun_debug_path', 'enable_grad_connection_test',
+        ),
+    )
+    for trainer_attr, runtime_field in renamed_fields.items():
+        setattr(trainer, trainer_attr, getattr(runtime_cfg, runtime_field))
+    for direct_fields in direct_field_groups:
+        for field_name in direct_fields:
+            setattr(trainer, field_name, getattr(runtime_cfg, field_name))
+
+
+# ===== Basetrain Entry Shell Band (Step 2) =====
 
 @dataclass(frozen=True)
 class TrainEntryContext:
@@ -3267,143 +2833,6 @@ def _parse_train_entry_args(argv: Optional[Sequence[str]] = None) -> argparse.Na
     return parsed_args
 
 
-def _resolve_freerun_stage_schedule(spec: Any) -> list[Any]:
-    try:
-        freerun_stage_schedule = _parse_stage_schedule(spec)
-    except Exception as exc:
-        freerun_stage_schedule = []
-        print(
-            f"[StageSchedule][WARN] failed to parse freerun_stage_schedule ({exc}); fallback to empty schedule."
-        )
-    _assert_no_legacy_loss_keys_in_schedule(
-        freerun_stage_schedule,
-        context='freerun_stage_schedule',
-    )
-    _assert_no_removed_trainbase_stage_keys(
-        freerun_stage_schedule,
-        context='freerun_stage_schedule',
-    )
-    return freerun_stage_schedule
-
-def _resolve_trainer_runtime_config(
-    args: argparse.Namespace,
-    trainer: Trainer,
-    dataset_artifacts: DatasetRuntimeArtifacts,
-    norm_template_path: Optional[Path],
-    bundle_json_path: Optional[str],
-    out_dir: Path,
-    resolved_config: Dict[str, Any],
-    run_name: str,
-) -> TrainerRuntimeConfig:
-    ds_train = dataset_artifacts.dataset
-    pose_hist_scales, pose_hist_mu, pose_hist_std = resolve_pose_hist_runtime_tensors(ds_train)
-    pose_hist_len = int(dataset_artifacts.pose_hist_len)
-    pose_hist_dim = int(dataset_artifacts.pose_hist_dim)
-    fps = float(dataset_artifacts.fps)
-    forward_axis_override = args.yaw_forward_axis
-    if forward_axis_override is not None:
-        yaw_forward_axis = int(forward_axis_override)
-    elif dataset_artifacts.forward_axis is not None:
-        yaw_forward_axis = int(dataset_artifacts.forward_axis)
-    else:
-        yaw_forward_axis = int(getattr(trainer, 'yaw_forward_axis', 2))
-    offset_override = args.yaw_forward_offset
-    if offset_override is not None:
-        yaw_forward_axis_offset = float(_math.radians(float(offset_override)))
-    else:
-        yaw_forward_axis_offset = float(dataset_artifacts.forward_axis_offset)
-    try:
-        trainbase_contacts_pretrain_clamp = float(getattr(args, 'trainbase_contacts_pretrain_clamp', 1.0) or 0.0)
-    except Exception:
-        trainbase_contacts_pretrain_clamp = 1.0
-    if (not _math.isfinite(float(trainbase_contacts_pretrain_clamp))) or float(trainbase_contacts_pretrain_clamp) < 0.0:
-        trainbase_contacts_pretrain_clamp = 1.0
-    trainbase_contacts_pretrain_affine_stats = getattr(args, 'trainbase_contacts_pretrain_affine_stats', None)
-    trainbase_contacts_pretrain_affine = _parse_pretrain_contact_affine_spec(trainbase_contacts_pretrain_affine_stats)
-    if trainbase_contacts_pretrain_affine_stats not in (None, '') and trainbase_contacts_pretrain_affine is None:
-        print('[MPL][WARN] failed to parse --trainbase_contacts_pretrain_affine_stats; continuing without affine calibration.')
-    output_metadata = {
-        'norm_template_path': str(norm_template_path) if norm_template_path else None,
-        'bundle_json_path': bundle_json_path,
-        'out_dir': str(out_dir),
-        'full_config': resolved_config,
-        'current_run_name': run_name,
-    }
-    normalizer_layout = {
-        'pose_hist_len': pose_hist_len, 'pose_hist_dim': pose_hist_dim,
-        'pose_hist_scales': pose_hist_scales, 'pose_hist_mu': pose_hist_mu, 'pose_hist_std': pose_hist_std,
-        'bone_hz': fps, 'fps': fps,
-    }
-    contact_runtime = {
-        'trainbase_contacts_pretrain_clamp': float(trainbase_contacts_pretrain_clamp),
-        'trainbase_contacts_pretrain_affine_stats': (
-            str(trainbase_contacts_pretrain_affine_stats).strip() if trainbase_contacts_pretrain_affine_stats not in (None, '') else None
-        ),
-        'trainbase_contacts_pretrain_affine': trainbase_contacts_pretrain_affine,
-    }
-    eval_monitor = {
-        'direct_pose_grad_monitor_enable': bool(args.direct_pose_grad_monitor_enable),
-        'direct_pose_grad_ratio_gate': float(args.direct_pose_grad_ratio_gate or 0.35),
-        'diag_topk': int(args.diag_topk or 8),
-        'diag_thr': float(args.diag_thr or 8.0),
-        'yaw_forward_axis': yaw_forward_axis,
-        'yaw_forward_axis_offset': yaw_forward_axis_offset,
-        'teacher_eval_max_batches': args.teacher_eval_max_batches,
-    }
-    history_schedule = {
-        'ss_chunk_len': int(getattr(args, 'ss_chunk_len', getattr(trainer, 'ss_chunk_len', 1)) or 1),
-        'tf_mode': args.tf_mode,
-        'tf_start_epoch': int(args.tf_start_epoch),
-        'tf_end_epoch': int(args.tf_end_epoch),
-        'tf_max': float(args.tf_max),
-        'tf_min': float(args.tf_min),
-        'history_debug_steps': int(args.history_debug_steps or 0),
-        'history_dropout_prob': float(args.history_dropout_prob or 0.0),
-        'history_dropout_prob_min': 0.05,
-        'history_dropout_prob_max': 0.30,
-        'freerun_stage_schedule': _resolve_freerun_stage_schedule(args.freerun_stage_schedule),
-        'hyperparam_scheduler': None,
-        'freerun_debug_path': args.freerun_debug_path,
-        'enable_grad_connection_test': not bool(args.no_grad_conn_test),
-    }
-    return TrainerRuntimeConfig(
-        **output_metadata,
-        **normalizer_layout,
-        **contact_runtime,
-        **eval_monitor,
-        **history_schedule,
-    )
-
-
-def _apply_trainer_runtime_config(trainer: Trainer, runtime_cfg: TrainerRuntimeConfig) -> None:
-    renamed_fields = {
-        '_norm_template_path': 'norm_template_path',
-        '_bundle_json_path': 'bundle_json_path',
-        'trainbase_contacts_pretrain_affine_stats_spec': 'trainbase_contacts_pretrain_affine_stats',
-        '_current_run_name': 'current_run_name',
-    }
-    direct_field_groups = (
-        ('out_dir', 'full_config', 'pose_hist_len', 'pose_hist_dim', 'pose_hist_scales', 'pose_hist_mu', 'pose_hist_std', 'bone_hz', 'fps'),
-        (
-            'trainbase_contacts_pretrain_clamp', 'trainbase_contacts_pretrain_affine',
-        ),
-        (
-            'direct_pose_grad_monitor_enable', 'direct_pose_grad_ratio_gate', 'diag_topk', 'diag_thr', 'yaw_forward_axis',
-            'yaw_forward_axis_offset', 'teacher_eval_max_batches',
-        ),
-        (
-            'ss_chunk_len', 'tf_mode', 'tf_start_epoch', 'tf_end_epoch', 'tf_max', 'tf_min',
-            'history_debug_steps', 'history_dropout_prob', 'history_dropout_prob_min', 'history_dropout_prob_max',
-            'freerun_stage_schedule', 'hyperparam_scheduler', 'freerun_debug_path', 'enable_grad_connection_test',
-        ),
-    )
-    for trainer_attr, runtime_field in renamed_fields.items():
-        setattr(trainer, trainer_attr, getattr(runtime_cfg, runtime_field))
-    for direct_fields in direct_field_groups:
-        for field_name in direct_fields:
-            setattr(trainer, field_name, getattr(runtime_cfg, field_name))
-
-
 def _build_direct_pose_options(args: argparse.Namespace) -> DirectPoseBuildOptions:
     arm_bones_raw = getattr(args, 'direct_pose_arm_bones', None)
     arm_split_enable = bool(args.direct_pose_arm_split_enable)
@@ -3417,9 +2846,7 @@ def _build_direct_pose_options(args: argparse.Namespace) -> DirectPoseBuildOptio
         nonleg_proj_dim=int(args.direct_pose_nonleg_proj_dim or 0),
     )
 
-def _build_train_components() -> TrainEntryContext:
-    args = _parse_train_entry_args()
-
+def _build_train_entry_context(args: argparse.Namespace) -> TrainEntryContext:
     train_paths = expand_paths_from_specs(args.train_files)
     if not train_paths:
         if args.data and os.path.isdir(args.data):
@@ -3437,46 +2864,19 @@ def _build_train_components() -> TrainEntryContext:
         else torch.device('cpu')
     )
 
-    def _load_json_spec(path_str: Optional[str], label: str) -> Any:
-        if not path_str:
-            return None
-        path = Path(path_str).expanduser()
-        if not path.is_file():
-            print(f"[Spec][WARN] {label} not found at {path}")
-            return None
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            print(f"[Spec] Loaded {label}: {path}")
-            return data
-        except Exception as err:
-            print(f"[Spec][WARN] failed to read {label} {path}: {err}")
-            return None
-
     norm_template_arg = args.norm_template
     norm_template_path = Path(norm_template_arg).expanduser() if norm_template_arg else None
-    norm_spec = _load_json_spec(norm_template_arg, 'norm_template')
+    pretrain_template_arg = args.pretrain_template
+    pretrain_template_path = Path(pretrain_template_arg).expanduser() if pretrain_template_arg else None
+    norm_spec = merge_norm_spec(
+        norm_template_path,
+        pretrain_template_path,
+        strict=False,
+        warn=True,
+        warn_prefix='[Spec]',
+    ) if norm_template_path is not None else None
     if norm_spec is None:
         raise SystemExit(f"[FATAL] norm_template 缺失或无效，请确认路径：{norm_template_path}")
-    require_standard_rotvec_spec(norm_spec, context=f"norm_template {norm_template_path}")
-    pretrain_template_arg = args.pretrain_template
-    pretrain_spec = _load_json_spec(pretrain_template_arg, 'pretrain_template')
-    if pretrain_spec is not None:
-        require_standard_rotvec_spec(
-            pretrain_spec,
-            context=f"pretrain_template {Path(pretrain_template_arg).expanduser() if pretrain_template_arg else 'None'}",
-        )
-        for key in (
-            'MuAngVel',
-            'StdAngVel',
-            'tanh_scales_angvel',
-            'pose_hist_len',
-            'tanh_scales_pose_hist',
-            'MuPoseHist',
-            'StdPoseHist',
-        ):
-            if key in pretrain_spec and pretrain_spec[key] is not None:
-                norm_spec[key] = pretrain_spec[key]
     return TrainEntryContext(
         args=args,
         train_paths=train_paths,
@@ -3486,6 +2886,11 @@ def _build_train_components() -> TrainEntryContext:
         norm_template_path=norm_template_path,
         norm_spec=norm_spec,
     )
+
+
+def _build_train_components(argv: Optional[Sequence[str]] = None) -> TrainEntryContext:
+    args = _parse_train_entry_args(argv)
+    return _build_train_entry_context(args)
 
 
 def _build_train_loaders(train_ctx: TrainEntryContext) -> TrainDataArtifacts:
@@ -3821,6 +3226,41 @@ def _build_train_loss_and_trainer(
     )
 
 
+def _sync_train_entry_loss_runtime(build_artifacts: TrainBuildArtifacts) -> None:
+    apply_loss_runtime_from_trainer(
+        build_artifacts.loss_fn,
+        build_artifacts.trainer,
+        copy_bundle_meta=True,
+        warn_once_fn=_phasec_warn_once,
+        warn_key="train_entry/loss_meta_from_bundle",
+        warn_message="failed to copy bundle meta onto loss_fn.meta",
+    )
+
+
+def _attach_train_entry_runtime(
+    train_ctx: TrainEntryContext,
+    train_data: TrainDataArtifacts,
+    build_artifacts: TrainBuildArtifacts,
+) -> None:
+    dataset_artifacts = build_and_attach_dataset_runtime(
+        build_artifacts.trainer,
+        train_data.ds_train,
+        bundle_path=build_artifacts.bundle_json_path,
+    )
+    runtime_cfg = _resolve_trainer_runtime_config(
+        args=train_ctx.args,
+        trainer=build_artifacts.trainer,
+        dataset_artifacts=dataset_artifacts,
+        norm_template_path=train_ctx.norm_template_path,
+        bundle_json_path=build_artifacts.bundle_json_path,
+        out_dir=train_ctx.out_dir,
+        resolved_config=build_artifacts.resolved_config,
+        run_name=train_ctx.run_name,
+    )
+    _apply_trainer_runtime_config(build_artifacts.trainer, runtime_cfg)
+    _sync_train_entry_loss_runtime(build_artifacts)
+
+
 def _run_postfit_actions(
     train_ctx: TrainEntryContext,
     train_data: TrainDataArtifacts,
@@ -3874,49 +3314,20 @@ def train_entry():
     model_artifacts = _build_train_model(train_ctx, train_data)
     _prepare_train_model_runtime(train_ctx, train_data, model_artifacts)
     build_artifacts = _build_train_loss_and_trainer(train_ctx, train_data, model_artifacts)
-    args = train_ctx.args
-
-    bundle_path = _arg('bundle_json', None)
-    dataset_artifacts = build_and_attach_dataset_runtime(
-        build_artifacts.trainer,
-        train_data.ds_train,
-        bundle_path=bundle_path,
-    )
-    runtime_cfg = _resolve_trainer_runtime_config(
-        args=args,
-        trainer=build_artifacts.trainer,
-        dataset_artifacts=dataset_artifacts,
-        norm_template_path=train_ctx.norm_template_path,
-        bundle_json_path=build_artifacts.bundle_json_path,
-        out_dir=train_ctx.out_dir,
-        resolved_config=build_artifacts.resolved_config,
-        run_name=train_ctx.run_name,
-    )
-    _apply_trainer_runtime_config(build_artifacts.trainer, runtime_cfg)
-    build_artifacts.loss_fn.mu_y = getattr(build_artifacts.trainer, 'mu_y', None)
-    build_artifacts.loss_fn.std_y = getattr(build_artifacts.trainer, 'std_y', None)
-    if getattr(build_artifacts.trainer, '_bundle_meta', None):
-        try:
-            build_artifacts.loss_fn.meta = dict(build_artifacts.trainer._bundle_meta)
-        except (TypeError, ValueError, RuntimeError) as exc:
-            _phasec_warn_once(
-                "train_entry/loss_meta_from_bundle",
-                "failed to copy bundle meta onto loss_fn.meta",
-                exc,
-            )
+    _attach_train_entry_runtime(train_ctx, train_data, build_artifacts)
 
     _norm_debug_once(
         build_artifacts.trainer,
         train_data.train_loader,
-        thr=float(args.diag_thr),
-        topk=int(args.diag_topk),
+        thr=float(train_ctx.args.diag_thr),
+        topk=int(train_ctx.args.diag_topk),
         print_to_console=False,
     )
 
     build_artifacts.trainer.fit(
         train_data.train_loader,
-        epochs=args.epochs,
-        log_every=args.log_every,
+        epochs=train_ctx.args.epochs,
+        log_every=train_ctx.args.log_every,
         out_dir=str(train_ctx.out_dir),
         run_name=train_ctx.run_name,
     )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from train.model_ckpt_contract import (
+from train.checkpoint.contract import (
     normalize_contact_plan_init_mode,
     normalize_direct_pose_feat_source,
     normalize_direct_pose_leg_gate_mode,

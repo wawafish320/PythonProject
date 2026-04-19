@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 import torch  # ensure torch is bound before any inner scope uses it
 
-from train.model_ckpt_compat import (
+from train.checkpoint.compat import (
     ContactPlanBuildOverrides,
     DirectPoseBuildOverrides,
     DirectPoseLoadCompatOptions,
@@ -47,6 +47,7 @@ from train.model_ckpt_compat import (
     prepare_event_motion_ckpt_state_for_load,
     resolve_event_motion_build_state_from_ckpt,
 )
+from train.configuration.norm_spec import NORM_SPEC_RUNTIME_PRETRAIN_KEYS, merge_norm_spec
 from train.validate.contact_meas_whitebox import compute_contact_meas_whitebox
 from train.training_MPL import MotionEventDataset, Trainer, geodesic_R, validate_and_fix_model_
 from train.geometry import matrix_to_rot6d, reproject_rot6d, rot6d_to_matrix, so3_exp_map, so3_log_map
@@ -59,9 +60,8 @@ from train.history import (
     resolve_pose_hist_input,
 )
 from train.models import EventMotionModel, MotionJointLoss
-from train.layout import LayoutCenter, DataNormalizer
-from train.posttrain_common import NORM_SPEC_RUNTIME_PRETRAIN_KEYS, merge_norm_spec
-from train.ttc import ttc_to_next_event_np
+from train.data.layout import LayoutCenter, DataNormalizer
+from train.data.contact_signals import ttc_to_next_event_np
 from train.utils import resolve_device
 
 

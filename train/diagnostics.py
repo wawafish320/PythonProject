@@ -17,7 +17,7 @@ from .geometry import (
     rot6d_to_matrix,
     wrap_to_pi_torch,
 )
-from .io import speed_from_X_layout as _speed_from_X_layout
+from .data.io import speed_from_X_layout as _speed_from_X_layout
 from .models import DEFAULT_DIRECT_POSE_LEG_BONES, STAGE6_3WAY_ARMCHAIN_BONES
 from .utils import grad_norm_of_module, safe_int_scalar, warn_once
 

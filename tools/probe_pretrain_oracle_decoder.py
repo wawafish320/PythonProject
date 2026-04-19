@@ -39,7 +39,7 @@ from tools.report_pretrain_sic_bone import (  # noqa: E402
 )
 from train.geometry import geodesic_R, reproject_rot6d, rot6d_to_matrix  # noqa: E402
 from train.models import DEFAULT_DIRECT_POSE_LEG_BONES  # noqa: E402
-from train.normalizers import _make_angnorm_from_spec  # noqa: E402
+from train.data.normalizers import _make_angnorm_from_spec  # noqa: E402
 from train.pretrain_mpl_min import InputProjectors, InputSlices  # noqa: E402
 from train.utils import build_mlp  # noqa: E402
 

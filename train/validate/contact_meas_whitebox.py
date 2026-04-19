@@ -8,7 +8,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 import torch
 
 from train.geometry import fk_positions_from_rot6d, reproject_rot6d
-from train.layout import resolve_layout_slice
+from train.data.layout import resolve_layout_slice
 
 
 _STATE_UPDATE_UNSET = object()

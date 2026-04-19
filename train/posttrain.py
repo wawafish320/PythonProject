@@ -18,7 +18,7 @@ import argparse
 import math
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
@@ -27,7 +27,7 @@ import torch
 import torch.nn.functional as F
 
 from train.configuration.io import dump_json, load_json
-from train.dataset import (
+from train.data.dataset import (
     MotionEventDataset,
     build_and_attach_dataset_runtime,
     build_motion_dataloader,
@@ -42,35 +42,27 @@ from train.geometry import (
     so3_exp_map,
     so3_log_map,
 )
-from train.history import (
-    PoseHistState,
-    advance_pose_hist_state,
-    init_pose_hist_state,
-    resolve_pose_hist_input,
-)
-from train.io import config_to_jsonable as _cfg_to_jsonable
-from train.model_ckpt_compat import (
-    DirectPoseBuildConfig,
-    DirectPoseBuildOverrides,
-    DirectPoseLoadCompatOptions,
-    EventClockBuildOverrides,
-    LambdaFusionBuildOverrides,
-    attach_motion_encoder_bundle as _attach_motion_encoder_bundle,
-    apply_direct_pose_ckpt_compat as _apply_direct_pose_ckpt_compat,
-    infer_event_clock_build_cfg as _infer_event_clock_build_cfg,
-    infer_lambda_fusion_build_cfg as _infer_lambda_fusion_build_cfg,
-    resolve_direct_pose_build_cfg as _resolve_direct_pose_build_cfg,
+from train import rollout_kernel as _rollout_kernel
+from train import posttrain_build_shell as _posttrain_build_shell
+from train.data.io import config_to_jsonable as _cfg_to_jsonable
+from train.configuration.norm_spec import (
+    ContactPretrainRuntime,
+    merge_norm_spec,
+    resolve_contact_pretrain_runtime,
 )
 from train.models import EventMotionModel, MotionJointLoss
-from train.posttrain_common import (
-    _enable_modules,
-    _freeze_all,
-    _merge_norm_spec,
-    _parse_pretrain_contact_affine_spec,
-    _select_trainable_params,
-    _unfreeze_direct_pose,
+from train.runtime_attach import (
+    apply_contacts_pretrain_runtime,
+    apply_loss_runtime_from_trainer,
+    apply_shared_trainer_runtime,
+    resolve_shared_trainer_runtime,
 )
-from train.training_MPL import Trainer, validate_and_fix_model_
+from train.runtime.freeze import (
+    _freeze_all,
+    _select_trainable_params,
+    _unfreeze_for_train_mode,
+)
+from train.training_MPL import Trainer
 from train.utils import (
     apply_cli_overrides as _apply_cli_overrides_shared,
     as_bool as _as_bool,
@@ -783,120 +775,23 @@ def _prepare_rollout_cond(
     enable_reprojection: bool,
     yaw_gt_fn: Optional[Callable[[int], Optional[torch.Tensor]]],
 ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-    cond_t = cond_seq[:, idx] if (torch.is_tensor(cond_seq) and cond_seq.dim() == 3) else cond_seq
-    cond_raw_step = None
-    if torch.is_tensor(cond_raw_tgt):
-        if cond_raw_tgt.dim() == 3:
-            if include_boundary:
-                idx_raw = int((int(idx) + 1) % max(1, int(cycle_len)))
-            else:
-                idx_raw = min(int(cond_raw_tgt.shape[1]) - 1, int(idx) + 1)
-            cond_raw_step = cond_raw_tgt[:, idx_raw]
-        else:
-            cond_raw_step = cond_raw_tgt
-
-    cond_raw_for_model = cond_raw_step
-    if enable_reprojection and int(t) > 0 and torch.is_tensor(cond_raw_step):
-        yaw_gt = None
-        if callable(yaw_gt_fn):
-            try:
-                yaw_gt = yaw_gt_fn(int(idx))
-            except Exception:
-                yaw_gt = None
-        yaw_pred = None
-        try:
-            yaw_pred = trainer._infer_root_yaw_from_rot6d(y_prev_raw)
-        except Exception:
-            yaw_pred = None
-        if yaw_gt is not None and yaw_pred is not None:
-            cond_proj = trainer._reproject_cond_to_local_frame(cond_raw_step, yaw_gt, yaw_pred)
-            if cond_proj is not None:
-                cond_raw_for_model = cond_proj
-
-    if cond_raw_for_model is not None:
-        try:
-            cond_override = trainer._normalize_cond_from_raw(cond_raw_for_model, cond_norm_mu, cond_norm_std)
-        except Exception:
-            cond_override = None
-        if cond_override is not None:
-            cond_t = cond_override
-    return cond_t, cond_raw_step
-
-
-def _prepare_rollout_contacts_input(
-    trainer: Trainer,
-    model: EventMotionModel,
-    *,
-    motion_t: torch.Tensor,
-    pose_hist_t: Optional[torch.Tensor],
-) -> Optional[torch.Tensor]:
-
-    plan_enable = bool(getattr(model, "contact_plan_enable", False))
-
-    contacts_in_t = None
-    if plan_enable:
-        fn = getattr(trainer, '_predict_pretrain_contacts_from_frozen', None)
-        if callable(fn):
-            try:
-                contacts_in_t = fn(motion_step_t=motion_t, pose_hist_step_t=pose_hist_t)
-            except Exception:
-                contacts_in_t = None
-        if contacts_in_t is None:
-            raise RuntimeError(
-                "[FATAL] rollout contact resolution requires valid frozen encoder+contact_head "
-                "and runtime-compatible encoder input dimensions."
-            )
-    return contacts_in_t
-
-
-def _update_rollout_recurrent_state(
-    model: EventMotionModel,
-    ret: Dict[str, Any],
-    state: Dict[str, Any],
-) -> None:
-    if bool(getattr(model, "contact_plan_enable", False)):
-        try:
-            z_next = ret.get("plan_z_next", None)
-            if torch.is_tensor(z_next):
-                state["plan_z"] = z_next.detach()
-        except Exception:
-            pass
-    try:
-        mlog = ret.get("contacts_meas_logits", None)
-        if torch.is_tensor(mlog):
-            if mlog.dim() == 3:
-                state["meas_logits_prev"] = mlog[:, -1].detach()
-            elif mlog.dim() == 2:
-                state["meas_logits_prev"] = mlog.detach()
-    except Exception:
-        pass
-
-
-def _apply_rollout_carry_state(
-    trainer: Trainer,
-    state: Dict[str, Any],
-    *,
-    y_next_raw: torch.Tensor,
-    cond_raw_step: Optional[torch.Tensor],
-) -> None:
-    cond_env = cond_raw_step if torch.is_tensor(cond_raw_step) else None
-    motion_raw = trainer._apply_free_carry(state["motion_raw"], y_next_raw, cond_next_raw=cond_env)
-    motion_raw = torch.nan_to_num(motion_raw, nan=0.0, posinf=1e6, neginf=-1e6)
-    motion = trainer._diag_norm_x(motion_raw)
-    state["motion_raw"] = motion_raw
-    state["motion"] = motion
-
-    pose_hist_state = state.get("pose_hist_state", None)
-    if not isinstance(pose_hist_state, PoseHistState):
-        pose_hist_state = PoseHistState(enabled=False, length=0, dim=0, stride=0)
-    state["pose_hist_state"] = advance_pose_hist_state(
-        pose_hist_state,
-        y_next_raw=y_next_raw,
-        rot_slice=state.get("rot_slice", None),
+    cond_t, cond_raw_step, _, _ = _rollout_kernel.prepare_rollout_cond(
+        trainer,
+        cond_seq=cond_seq,
+        cond_raw_seq=cond_raw_tgt,
+        cond_norm_mu=cond_norm_mu,
+        cond_norm_std=cond_norm_std,
+        step_idx=int(t),
+        cond_idx=int(idx),
+        cond_has_time_dim=bool(torch.is_tensor(cond_seq) and cond_seq.dim() == 3),
+        cond_raw_has_time_dim=bool(torch.is_tensor(cond_raw_tgt) and cond_raw_tgt.dim() == 3),
+        include_boundary=bool(include_boundary),
+        cycle_len=int(cycle_len),
+        y_prev_raw=y_prev_raw,
+        allow_reprojection=bool(enable_reprojection and int(t) > 0),
+        yaw_gt_fn=yaw_gt_fn,
     )
-
-    state["y_prev_raw"] = y_next_raw
-
+    return cond_t, cond_raw_step
 
 def _rollout_step_common(
     trainer: Trainer,
@@ -922,9 +817,6 @@ def _rollout_step_common(
 ) -> Dict[str, Any]:
     motion = state["motion"]
     y_prev_raw = state["y_prev_raw"]
-    device = motion.device
-    dtype = motion.dtype
-    B = int(motion.shape[0])
 
     cond_t, cond_raw_step = _prepare_rollout_cond(
         trainer,
@@ -941,75 +833,54 @@ def _rollout_step_common(
         yaw_gt_fn=yaw_gt_fn,
     )
 
-    if getattr(trainer, "use_freerun_state_sync", False) and isinstance(getattr(trainer, "angvel_x_slice", None), slice):
-        angvel_t = motion[..., trainer.angvel_x_slice].detach()
-    else:
-        angvel_t = angvel_seq[:, idx] if (torch.is_tensor(angvel_seq) and angvel_seq.dim() == 3) else angvel_seq
+    angvel_t = _rollout_kernel.resolve_rollout_step_angvel(
+        trainer,
+        motion=motion,
+        angvel_seq=angvel_seq,
+        step_idx=int(idx),
+        has_time_dim=bool(torch.is_tensor(angvel_seq) and angvel_seq.dim() == 3),
+    )
 
-    pose_hist_state = state.get("pose_hist_state", None)
-    if not isinstance(pose_hist_state, PoseHistState):
-        pose_hist_state = PoseHistState(enabled=False, length=0, dim=0, stride=0)
-    pose_hist_t = resolve_pose_hist_input(
-        state=pose_hist_state,
+    _, pose_hist_t = _rollout_kernel.resolve_rollout_pose_history(
+        pose_hist_state=state.get("pose_hist_state", None),
         pose_hist_seq=pose_hist_seq,
         idx=int(idx),
     )
 
-    inp_motion = motion.unsqueeze(1)
-    inp_cond = cond_t.unsqueeze(1) if torch.is_tensor(cond_t) and cond_t.dim() == 2 else cond_t
-    inp_angvel = angvel_t.unsqueeze(1) if torch.is_tensor(angvel_t) and angvel_t.dim() == 2 else angvel_t
-    inp_pose_hist = pose_hist_t.unsqueeze(1) if torch.is_tensor(pose_hist_t) and pose_hist_t.dim() == 2 else pose_hist_t
-
-    contacts_in_t = _prepare_rollout_contacts_input(
+    contacts_in_t = _rollout_kernel.prepare_rollout_contacts_input(
         trainer,
         model,
         motion_t=motion,
         pose_hist_t=pose_hist_t,
     )
 
-    time_index_mode = str(time_index_mode)
-    if time_index_mode == "none":
-        time_index_t = None
-    elif time_index_mode == "cycle":
-        time_index_t = int(idx)
-        if time_base is not None:
-            try:
-                time_index_t = time_base + int(idx)
-            except Exception:
-                pass
-    else:
-        time_index_t = int(idx)
-        if time_base is not None:
-            try:
-                time_index_t = time_base + int(idx)
-            except Exception:
-                time_index_t = int(idx)
-        else:
-            time_index_t = int(t)
-    rollout_step_t = None
-    try:
-        if int(total_steps) > 1:
-            step_norm = float(t) / float(int(total_steps) - 1)
-        else:
-            step_norm = 0.0
-        rollout_step_t = torch.full((B, 1, 1), step_norm, device=device, dtype=dtype)
-    except Exception:
-        rollout_step_t = None
+    time_base_local, time_index_seed = _rollout_kernel.resolve_rollout_time_controls(
+        time_index_mode=str(time_index_mode),
+        time_base=time_base,
+        frame_idx=int(idx),
+        rollout_step_idx=int(t),
+    )
+    time_index_t, rollout_step_t = _rollout_kernel.build_rollout_step_time_inputs(
+        motion,
+        total_steps=int(total_steps),
+        step_idx=int(t),
+        time_base=time_base_local,
+        time_index_seed=time_index_seed,
+    )
 
-    ret = model(
-        inp_motion,
-        inp_cond,
-        contacts=contacts_in_t,
-        angvel=inp_angvel,
-        pose_history=inp_pose_hist,
+    ret, _, _ = _rollout_kernel.forward_rollout_model_step(
+        model,
+        motion=motion.unsqueeze(1),
+        cond_input=_rollout_kernel.ensure_rollout_time_axis(cond_t),
+        contacts_in_t=contacts_in_t,
+        angvel_t=_rollout_kernel.ensure_rollout_time_axis(angvel_t),
+        pose_history_t=_rollout_kernel.ensure_rollout_time_axis(pose_hist_t),
         plan_z=state.get("plan_z", None),
         meas_logits_prev=state.get("meas_logits_prev", None),
-        time_index=time_index_t,
-        rollout_step=rollout_step_t,
+        time_index_t=time_index_t,
+        rollout_step_t=rollout_step_t,
     )
-    if not isinstance(ret, dict):
-        raise RuntimeError("Model forward must return a dict.")
-    _update_rollout_recurrent_state(model, ret, state)
+    _rollout_kernel.update_rollout_recurrent_state(model, ret, state)
 
     return {
         "ret": ret,
@@ -1036,6 +907,236 @@ def _record_posttrain_soft_fail(trainer: Trainer, key: str) -> None:
     setattr(trainer, "_posttrain_soft_fail_counts", store)
 
 
+@dataclass(frozen=True)
+class LambdaRolloutPrepContext:
+    device: torch.device
+    dtype: torch.dtype
+    motion_seq: torch.Tensor
+    gt_seq: torch.Tensor
+    cond_seq: Optional[torch.Tensor]
+    cond_raw_tgt: Optional[torch.Tensor]
+    cond_norm_mu: Optional[torch.Tensor]
+    cond_norm_std: Optional[torch.Tensor]
+    contacts_seq: Optional[torch.Tensor]
+    angvel_seq: Optional[torch.Tensor]
+    pose_hist_seq: Optional[torch.Tensor]
+    B: int
+    T: int
+    Dy: int
+    steps: int
+    rollout_cycles: int
+    include_boundary: bool
+    cycle_len: int
+    total_steps: int
+    offset: int
+    y0_raw: Optional[torch.Tensor]
+    rot_slice: slice
+    rot_len: int
+    J: int
+    std_y: torch.Tensor
+    state: Dict[str, Any]
+    step_weights: torch.Tensor
+    boundary_steps: int
+    boundary_weighted_sum: float
+
+
+@dataclass(frozen=True)
+class LambdaRolloutNonLegFocusContext:
+    direct_nonleg_focus_mask_j: Optional[torch.Tensor]
+    direct_nonleg_focus_requested: int
+    direct_nonleg_focus_resolved: int
+    direct_nonleg_focus_weight_use: float
+    direct_nonleg_focus_applied: float
+
+
+@dataclass(frozen=True)
+class LambdaRolloutRegParams:
+    gate_sup_weight: float
+    gate_sup_start: int
+    tau_rad: float
+    margin_rad: float
+    direct_group_norm_enable: bool
+    direct_group_w_leg: float
+    direct_group_w_nonleg: float
+    direct_group_beta: float
+    direct_group_ratio_min: float
+    direct_group_ratio_max: float
+    direct_group_eps: float
+
+
+@dataclass(frozen=True)
+class LambdaRolloutRuntimeContext:
+    trainer: Trainer
+    model: EventMotionModel
+    state: Dict[str, Any]
+    total_steps: int
+    cycle_len: int
+    include_boundary: bool
+    steps: int
+    offset: int
+    time_index_mode: str
+    time_base: Any
+    enable_reprojection: bool
+    detach_rollout_state: bool
+    yaw_gt_fn: Optional[Callable[[int], Optional[torch.Tensor]]]
+    columns: Tuple[str, str]
+    B: int
+    J: int
+    objective: str
+    y0_raw: Optional[torch.Tensor]
+    gt_seq: torch.Tensor
+    device: torch.device
+    dtype: torch.dtype
+    rot_len: int
+
+
+@dataclass(frozen=True)
+class LambdaRolloutDataContext:
+    cond_seq: Optional[torch.Tensor]
+    cond_raw_tgt: Optional[torch.Tensor]
+    cond_norm_mu: Optional[torch.Tensor]
+    cond_norm_std: Optional[torch.Tensor]
+    angvel_seq: Optional[torch.Tensor]
+    pose_hist_seq: Optional[torch.Tensor]
+    contacts_seq: Optional[torch.Tensor]
+    step_weights: torch.Tensor
+    std_y: torch.Tensor
+    rot_slice: slice
+
+
+@dataclass(frozen=True)
+class LambdaRolloutWeights:
+    contact_meas_weight: float
+    direct_pose_leg_align_weight: float
+    direct_pose_leg_align_oracle_min_deg: float
+    direct_pose_leg_align_oracle_weight_deg: float
+    direct_pose_leg_align_mode: str
+    direct_pose_leg_align_mag_weight: float
+    direct_pose_leg_align_res_weight: float
+    direct_pose_leg_align_sign_weight: float
+    direct_pose_leg_align_cos_thresh: float
+    direct_pose_leg_align_target_joints: Optional[str]
+    direct_pose_leg_align_anchor_joints: Optional[str]
+    direct_pose_leg_align_anchor_weight: float
+    direct_pose_leg_gate_sup_weight: float
+    direct_pose_loss_leg_split: bool
+    direct_nonleg_focus_mask_j: Optional[torch.Tensor]
+    direct_nonleg_focus_resolved: int
+    direct_nonleg_focus_weight_use: float
+    gate_sup_weight: float
+    gate_sup_start: int
+    tau_rad: float
+    margin_rad: float
+    lambda_plan_entropy_weight: float
+    lambda_plan_dyn_weight: float
+    lambda_early_weight: float
+    lambda_early_steps: int
+    lambda_entropy_weight: float
+    lambda_smooth_weight: float
+    lambda_monotonic_weight: float
+
+
+@dataclass
+class LambdaFusionAccum:
+    loss_terms: list[torch.Tensor] = field(default_factory=list)
+    inc_terms: list[torch.Tensor] = field(default_factory=list)
+    dir_terms: list[torch.Tensor] = field(default_factory=list)
+    dir_base_terms: list[torch.Tensor] = field(default_factory=list)
+    dir_leg_base_terms: list[torch.Tensor] = field(default_factory=list)
+    dir_nonleg_base_terms: list[torch.Tensor] = field(default_factory=list)
+    dir_nonleg_plain_terms: list[torch.Tensor] = field(default_factory=list)
+    leg_gate_sup_terms: list[torch.Tensor] = field(default_factory=list)
+    leg_gate_sup_tgt_frac_terms: list[torch.Tensor] = field(default_factory=list)
+    leg_gate_sup_pred_mean_terms: list[torch.Tensor] = field(default_factory=list)
+    leg_align_terms: list[torch.Tensor] = field(default_factory=list)
+    leg_align_frac_terms: list[torch.Tensor] = field(default_factory=list)
+    leg_align_joint_num_terms: list[torch.Tensor] = field(default_factory=list)
+    leg_align_joint_den_terms: list[torch.Tensor] = field(default_factory=list)
+    leg_align_joint_frac_terms: list[torch.Tensor] = field(default_factory=list)
+    leg_align_distal_terms: list[torch.Tensor] = field(default_factory=list)
+    leg_align_distal_frac_terms: list[torch.Tensor] = field(default_factory=list)
+    leg_align_proximal_terms: list[torch.Tensor] = field(default_factory=list)
+    leg_align_proximal_frac_terms: list[torch.Tensor] = field(default_factory=list)
+    leg_align_anchor_terms: list[torch.Tensor] = field(default_factory=list)
+    leg_align_anchor_frac_terms: list[torch.Tensor] = field(default_factory=list)
+    ent_terms: list[torch.Tensor] = field(default_factory=list)
+    smooth_terms: list[torch.Tensor] = field(default_factory=list)
+    early_terms: list[torch.Tensor] = field(default_factory=list)
+    mono_terms: list[torch.Tensor] = field(default_factory=list)
+    plan_ent_terms: list[torch.Tensor] = field(default_factory=list)
+    plan_dyn_terms: list[torch.Tensor] = field(default_factory=list)
+    plan_ent_stat_terms: list[torch.Tensor] = field(default_factory=list)
+    plan_dyn_stat_terms: list[torch.Tensor] = field(default_factory=list)
+    meas_terms: list[torch.Tensor] = field(default_factory=list)
+    lam_vals: list[torch.Tensor] = field(default_factory=list)
+    lam_eff_vals: list[torch.Tensor] = field(default_factory=list)
+    lam_rel_vals: list[torch.Tensor] = field(default_factory=list)
+    boundary_blend_terms: list[torch.Tensor] = field(default_factory=list)
+    boundary_inc_terms: list[torch.Tensor] = field(default_factory=list)
+    boundary_dir_terms: list[torch.Tensor] = field(default_factory=list)
+    boundary_lam_terms: list[torch.Tensor] = field(default_factory=list)
+    boundary_lam_eff_terms: list[torch.Tensor] = field(default_factory=list)
+    boundary_r_terms: list[torch.Tensor] = field(default_factory=list)
+    gate_sup_terms: list[torch.Tensor] = field(default_factory=list)
+    gate_sup_frac_terms: list[torch.Tensor] = field(default_factory=list)
+    gate_sup_acc_num_terms: list[torch.Tensor] = field(default_factory=list)
+    gate_sup_acc_den_terms: list[torch.Tensor] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class LambdaFusionFinalizeContext:
+    trainer: Trainer
+    model: EventMotionModel
+    objective: str
+    direct_pose_leg_gate_sup_weight: float = 0.0
+    direct_pose_leg_align_weight: float = 0.0
+    direct_pose_leg_align_anchor_weight: float = 0.0
+    lambda_entropy_weight: float = 0.0
+    lambda_smooth_weight: float = 0.0
+    lambda_early_weight: float = 0.0
+    lambda_monotonic_weight: float = 0.0
+    lambda_plan_entropy_weight: float = 0.0
+    lambda_plan_dyn_weight: float = 0.0
+    contact_meas_weight: float = 0.0
+    include_boundary: bool = False
+    random_offset: bool = False
+    offset: int = 0
+    boundary_weight: float = 0.0
+    boundary_steps: int = 0
+    boundary_weighted_sum: float = 0.0
+    direct_nonleg_focus_requested: int = 0
+    direct_nonleg_focus_resolved: int = 0
+    direct_nonleg_focus_weight_use: float = 1.0
+    direct_nonleg_focus_applied: float = 0.0
+    meas_used_logits: bool = False
+    gate_sup_weight: float = 0.0
+    direct_group_norm_enable: bool = False
+    direct_group_w_leg: float = 1.0
+    direct_group_w_nonleg: float = 1.0
+    direct_group_beta: float = 0.95
+    direct_group_ratio_min: float = 0.2
+    direct_group_ratio_max: float = 5.0
+    direct_group_eps: float = 1e-6
+
+
+@dataclass
+class LambdaRolloutStepState:
+    meas_used_logits: bool
+    direct_nonleg_focus_applied: float
+    lam_prev: Optional[torch.Tensor]
+    lam_prev_monot: Optional[torch.Tensor]
+    plan_prev: Optional[torch.Tensor]
+
+
+@dataclass
+class LambdaRolloutStepContext:
+    runtime: LambdaRolloutRuntimeContext
+    data: LambdaRolloutDataContext
+    weights: LambdaRolloutWeights
+    accum: LambdaFusionAccum
+    state_vars: LambdaRolloutStepState
+
+
 def _lambda_rollout_prepare_context(
     trainer: Trainer,
     model: EventMotionModel,
@@ -1048,7 +1149,7 @@ def _lambda_rollout_prepare_context(
     random_offset: bool,
     time_weight_mode: str,
     time_weight_max: float,
-) -> Dict[str, Any]:
+) -> LambdaRolloutPrepContext:
     device = trainer.device
     dtype = next(model.parameters()).dtype
 
@@ -1126,14 +1227,12 @@ def _lambda_rollout_prepare_context(
     motion = motion_seq[:, int(offset)]
     motion_raw = trainer.normalizer.denorm_x(motion)
     y_prev_raw = trainer.normalizer.x_to_y(motion_raw, Dy)
-    pose_hist_state = init_pose_hist_state(
-        ref_tensor=motion_seq,
+    pose_hist_state = _rollout_kernel.prepare_rollout_pose_hist_state(
+        trainer,
+        state_seq=motion_seq,
         pose_hist_seq=pose_hist_seq,
-        y_prev_raw=y_prev_raw,
-        rot_slice=rot_slice,
-        pose_hist_len=int(getattr(trainer, "pose_hist_len", 0) or 0),
-        pose_hist_dim=int(getattr(trainer, "pose_hist_dim", 0) or 0),
-        params_fn=trainer._pose_hist_params,
+        y_raw_local=y_prev_raw,
+        rot6d_y_slice=rot_slice,
         offset=int(offset),
     )
     state: Dict[str, Any] = {
@@ -1170,37 +1269,37 @@ def _lambda_rollout_prepare_context(
             boundary_weighted_sum = float(step_weights[boundary_mask].sum().detach().cpu().item())
         except _ROLLOUT_SOFT_FAIL_ERRORS: _record_posttrain_soft_fail(trainer, "prep_boundary_weights"); boundary_steps = 0; boundary_weighted_sum = 0.0
 
-    return {
-        "device": device,
-        "dtype": dtype,
-        "motion_seq": motion_seq,
-        "gt_seq": gt_seq,
-        "cond_seq": cond_seq,
-        "cond_raw_tgt": cond_raw_tgt,
-        "cond_norm_mu": cond_norm_mu,
-        "cond_norm_std": cond_norm_std,
-        "contacts_seq": contacts_seq,
-        "angvel_seq": angvel_seq,
-        "pose_hist_seq": pose_hist_seq,
-        "B": int(B),
-        "T": int(T),
-        "Dy": int(Dy),
-        "steps": int(steps),
-        "rollout_cycles": int(rollout_cycles),
-        "include_boundary": bool(include_boundary),
-        "cycle_len": int(cycle_len),
-        "total_steps": int(total_steps),
-        "offset": int(offset),
-        "y0_raw": y0_raw,
-        "rot_slice": rot_slice,
-        "rot_len": int(rot_len),
-        "J": int(J),
-        "std_y": std_y,
-        "state": state,
-        "step_weights": step_weights,
-        "boundary_steps": int(boundary_steps),
-        "boundary_weighted_sum": float(boundary_weighted_sum),
-    }
+    return LambdaRolloutPrepContext(
+        device=device,
+        dtype=dtype,
+        motion_seq=motion_seq,
+        gt_seq=gt_seq,
+        cond_seq=cond_seq,
+        cond_raw_tgt=cond_raw_tgt,
+        cond_norm_mu=cond_norm_mu,
+        cond_norm_std=cond_norm_std,
+        contacts_seq=contacts_seq,
+        angvel_seq=angvel_seq,
+        pose_hist_seq=pose_hist_seq,
+        B=int(B),
+        T=int(T),
+        Dy=int(Dy),
+        steps=int(steps),
+        rollout_cycles=int(rollout_cycles),
+        include_boundary=bool(include_boundary),
+        cycle_len=int(cycle_len),
+        total_steps=int(total_steps),
+        offset=int(offset),
+        y0_raw=y0_raw,
+        rot_slice=rot_slice,
+        rot_len=int(rot_len),
+        J=int(J),
+        std_y=std_y,
+        state=state,
+        step_weights=step_weights,
+        boundary_steps=int(boundary_steps),
+        boundary_weighted_sum=float(boundary_weighted_sum),
+    )
 
 
 def _lambda_rollout_resolve_nonleg_focus(
@@ -1211,7 +1310,7 @@ def _lambda_rollout_resolve_nonleg_focus(
     direct_pose_nonleg_focus_weight: float,
     J: int,
     device: torch.device,
-) -> Dict[str, Any]:
+) -> LambdaRolloutNonLegFocusContext:
     # Optional: focus selected non-leg bones by increasing their contribution inside L_nonleg.
     direct_nonleg_focus_mask_j = None
     direct_nonleg_focus_requested = 0
@@ -1267,13 +1366,13 @@ def _lambda_rollout_resolve_nonleg_focus(
                 direct_nonleg_focus_resolved = int(mask_j.sum().detach().cpu().item())
         except _ROLLOUT_SOFT_FAIL_ERRORS: _record_posttrain_soft_fail(trainer, "resolve_nonleg_index"); direct_nonleg_focus_mask_j = None; direct_nonleg_focus_resolved = 0
 
-    return {
-        "direct_nonleg_focus_mask_j": direct_nonleg_focus_mask_j,
-        "direct_nonleg_focus_requested": int(direct_nonleg_focus_requested),
-        "direct_nonleg_focus_resolved": int(direct_nonleg_focus_resolved),
-        "direct_nonleg_focus_weight_use": float(direct_nonleg_focus_weight_use),
-        "direct_nonleg_focus_applied": float(direct_nonleg_focus_applied),
-    }
+    return LambdaRolloutNonLegFocusContext(
+        direct_nonleg_focus_mask_j=direct_nonleg_focus_mask_j,
+        direct_nonleg_focus_requested=int(direct_nonleg_focus_requested),
+        direct_nonleg_focus_resolved=int(direct_nonleg_focus_resolved),
+        direct_nonleg_focus_weight_use=float(direct_nonleg_focus_weight_use),
+        direct_nonleg_focus_applied=float(direct_nonleg_focus_applied),
+    )
 
 
 def _lambda_rollout_build_reg_params(
@@ -1291,7 +1390,7 @@ def _lambda_rollout_build_reg_params(
     direct_pose_loss_group_norm_ratio_min: float,
     direct_pose_loss_group_norm_ratio_max: float,
     direct_pose_loss_group_norm_eps: float,
-) -> Dict[str, Any]:
+) -> LambdaRolloutRegParams:
     # ---- Stage2: optional gate supervision (λ logits) ----
     gate_sup_weight = float(lambda_gate_sup_weight or 0.0)
     gate_sup_start = int(lambda_gate_sup_start_step or 0)
@@ -1342,19 +1441,19 @@ def _lambda_rollout_build_reg_params(
     if (not math.isfinite(direct_group_eps)) or direct_group_eps <= 0.0:
         direct_group_eps = 1e-6
 
-    return {
-        "gate_sup_weight": float(gate_sup_weight),
-        "gate_sup_start": int(gate_sup_start),
-        "tau_rad": float(tau_rad),
-        "margin_rad": float(margin_rad),
-        "direct_group_norm_enable": bool(direct_group_norm_enable),
-        "direct_group_w_leg": float(direct_group_w_leg),
-        "direct_group_w_nonleg": float(direct_group_w_nonleg),
-        "direct_group_beta": float(direct_group_beta),
-        "direct_group_ratio_min": float(direct_group_ratio_min),
-        "direct_group_ratio_max": float(direct_group_ratio_max),
-        "direct_group_eps": float(direct_group_eps),
-    }
+    return LambdaRolloutRegParams(
+        gate_sup_weight=float(gate_sup_weight),
+        gate_sup_start=int(gate_sup_start),
+        tau_rad=float(tau_rad),
+        margin_rad=float(margin_rad),
+        direct_group_norm_enable=bool(direct_group_norm_enable),
+        direct_group_w_leg=float(direct_group_w_leg),
+        direct_group_w_nonleg=float(direct_group_w_nonleg),
+        direct_group_beta=float(direct_group_beta),
+        direct_group_ratio_min=float(direct_group_ratio_min),
+        direct_group_ratio_max=float(direct_group_ratio_max),
+        direct_group_eps=float(direct_group_eps),
+    )
 
 
 def _sanitize_metric_key_suffix(name: str, *, default: str) -> str:
@@ -1633,7 +1732,7 @@ def _lambda_rollout_decode_model_outputs(*, ret: Dict[str, Any], objective: str,
     return delta_norm, direct_norm, lam
 
 
-def _lambda_rollout_accumulate_plan_terms(*, trainer: Trainer, ret: Dict[str, Any], weights: Dict[str, Any], accum: Dict[str, Any], lam_eff: torch.Tensor, plan_prev: Optional[torch.Tensor], step_weight: torch.Tensor, B: int) -> Optional[torch.Tensor]:
+def _lambda_rollout_accumulate_plan_terms(*, trainer: Trainer, ret: Dict[str, Any], weights: LambdaRolloutWeights, accum: LambdaFusionAccum, lam_eff: torch.Tensor, plan_prev: Optional[torch.Tensor], step_weight: torch.Tensor, B: int) -> Optional[torch.Tensor]:
     plan_step = None
     try:
         plan_step = ret.get("contacts_plan", None)
@@ -1646,31 +1745,31 @@ def _lambda_rollout_accumulate_plan_terms(*, trainer: Trainer, ret: Dict[str, An
         _record_posttrain_soft_fail(trainer, "unroll_contacts_plan_decode")
         plan_step = None
 
-    if (float(weights["lambda_plan_entropy_weight"] or 0.0) <= 0.0 and float(weights["lambda_plan_dyn_weight"] or 0.0) <= 0.0) or (not torch.is_tensor(plan_step)):
+    if (float(weights.lambda_plan_entropy_weight or 0.0) <= 0.0 and float(weights.lambda_plan_dyn_weight or 0.0) <= 0.0) or (not torch.is_tensor(plan_step)):
         return plan_prev
 
     lam_eff_mean = lam_eff.mean(dim=-1)
     try:
         plan_det = plan_step.detach()
         ent = _lambda_entropy(plan_det).mean(dim=-1)
-        accum["plan_ent_stat_terms"].append(ent.mean() * step_weight)
-        if float(weights["lambda_plan_entropy_weight"] or 0.0) > 0.0:
-            accum["plan_ent_terms"].append((lam_eff_mean * ent).mean() * step_weight)
+        accum.plan_ent_stat_terms.append(ent.mean() * step_weight)
+        if float(weights.lambda_plan_entropy_weight or 0.0) > 0.0:
+            accum.plan_ent_terms.append((lam_eff_mean * ent).mean() * step_weight)
     except _ROLLOUT_SOFT_FAIL_ERRORS:
         _record_posttrain_soft_fail(trainer, "unroll_plan_entropy")
     try:
         plan_det = plan_step.detach()
         dyn = (plan_det - plan_prev).abs().mean(dim=-1) if torch.is_tensor(plan_prev) and plan_prev.shape == plan_step.shape else plan_det.new_zeros((B,))
-        accum["plan_dyn_stat_terms"].append(dyn.mean() * step_weight)
-        if float(weights["lambda_plan_dyn_weight"] or 0.0) > 0.0:
-            accum["plan_dyn_terms"].append((lam_eff_mean * dyn).mean() * step_weight)
+        accum.plan_dyn_stat_terms.append(dyn.mean() * step_weight)
+        if float(weights.lambda_plan_dyn_weight or 0.0) > 0.0:
+            accum.plan_dyn_terms.append((lam_eff_mean * dyn).mean() * step_weight)
         return plan_det
     except _ROLLOUT_SOFT_FAIL_ERRORS:
         _record_posttrain_soft_fail(trainer, "unroll_plan_dynamics")
         return plan_step.detach()
 
 
-def _lambda_rollout_accumulate_direct_objective(*, trainer: Trainer, model: EventMotionModel, weights: Dict[str, Any], accum: Dict[str, Any], objective: str, e_dir: torch.Tensor, step_weight: torch.Tensor, J: int, direct_nonleg_focus_applied: float) -> float:
+def _lambda_rollout_accumulate_direct_objective(*, trainer: Trainer, model: EventMotionModel, weights: LambdaRolloutWeights, accum: LambdaFusionAccum, objective: str, e_dir: torch.Tensor, step_weight: torch.Tensor, J: int, direct_nonleg_focus_applied: float) -> float:
     e_dir_use = e_dir.mean()
     if objective == "direct":
         root_idx = int(getattr(getattr(trainer, "loss_fn", None), "root_idx", 0) or 0)
@@ -1684,7 +1783,7 @@ def _lambda_rollout_accumulate_direct_objective(*, trainer: Trainer, model: Even
             e = e_dir
         e_dir_use = e.mean()
         L_leg_base = L_nonleg_base = L_nonleg_plain = None
-        if bool(weights["direct_pose_loss_leg_split"]):
+        if bool(weights.direct_pose_loss_leg_split):
             leg_idx = getattr(model, "direct_pose_leg_joint_idx_tensor", None)
             if torch.is_tensor(leg_idx) and int(leg_idx.numel()) > 0:
                 try:
@@ -1699,31 +1798,31 @@ def _lambda_rollout_accumulate_direct_objective(*, trainer: Trainer, model: Even
                         L_leg_base = e_leg.mean()
                         L_nonleg_plain = e_nonleg.mean()
                         L_nonleg_base = L_nonleg_plain
-                        if torch.is_tensor(weights["direct_nonleg_focus_mask_j"]) and int(weights["direct_nonleg_focus_resolved"]) > 0 and abs(float(weights["direct_nonleg_focus_weight_use"]) - 1.0) > 1e-12:
-                            focus_mask = weights["direct_nonleg_focus_mask_j"][nr_mask] if torch.is_tensor(nr_mask) and nr_mask.shape == weights["direct_nonleg_focus_mask_j"].shape else weights["direct_nonleg_focus_mask_j"]
+                        if torch.is_tensor(weights.direct_nonleg_focus_mask_j) and int(weights.direct_nonleg_focus_resolved) > 0 and abs(float(weights.direct_nonleg_focus_weight_use) - 1.0) > 1e-12:
+                            focus_mask = weights.direct_nonleg_focus_mask_j[nr_mask] if torch.is_tensor(nr_mask) and nr_mask.shape == weights.direct_nonleg_focus_mask_j.shape else weights.direct_nonleg_focus_mask_j
                             if focus_mask.shape == leg_mask.shape:
                                 focus_nonleg = focus_mask[~leg_mask]
                                 if bool(focus_nonleg.any().detach().cpu().item()):
                                     w_non = torch.ones((int(e_nonleg.shape[-1]),), device=e_nonleg.device, dtype=e_nonleg.dtype)
-                                    w_non = torch.where(focus_nonleg, w_non * w_non.new_tensor(float(weights["direct_nonleg_focus_weight_use"])), w_non)
+                                    w_non = torch.where(focus_nonleg, w_non * w_non.new_tensor(float(weights.direct_nonleg_focus_weight_use)), w_non)
                                     L_nonleg_base = ((e_nonleg * w_non.unsqueeze(0)).sum(dim=-1) / w_non.sum().clamp_min(1e-6)).mean()
                                     direct_nonleg_focus_applied = 1.0
                         e_dir_use = L_nonleg_base + L_leg_base
                 except _ROLLOUT_SOFT_FAIL_ERRORS:
                     _record_posttrain_soft_fail(trainer, "unroll_direct_leg_split")
-        accum["dir_base_terms"].append(e_dir_use * step_weight)
+        accum.dir_base_terms.append(e_dir_use * step_weight)
         if torch.is_tensor(L_leg_base):
-            accum["dir_leg_base_terms"].append(L_leg_base * step_weight)
+            accum.dir_leg_base_terms.append(L_leg_base * step_weight)
         if torch.is_tensor(L_nonleg_base):
-            accum["dir_nonleg_base_terms"].append(L_nonleg_base * step_weight)
+            accum.dir_nonleg_base_terms.append(L_nonleg_base * step_weight)
         if torch.is_tensor(L_nonleg_plain):
-            accum["dir_nonleg_plain_terms"].append(L_nonleg_plain * step_weight)
-    accum["dir_terms"].append(e_dir_use * step_weight)
+            accum.dir_nonleg_plain_terms.append(L_nonleg_plain * step_weight)
+    accum.dir_terms.append(e_dir_use * step_weight)
     return float(direct_nonleg_focus_applied)
 
 
-def _lambda_rollout_accumulate_gate_supervision(*, trainer: Trainer, ret: Dict[str, Any], accum: Dict[str, Any], weights: Dict[str, Any], e_inc: torch.Tensor, e_dir: torch.Tensor, step_weight: torch.Tensor, t: int, B: int, J: int) -> None:
-    if float(weights["gate_sup_weight"]) <= 0.0 or int(t) < int(weights["gate_sup_start"]):
+def _lambda_rollout_accumulate_gate_supervision(*, trainer: Trainer, ret: Dict[str, Any], accum: LambdaFusionAccum, weights: LambdaRolloutWeights, e_inc: torch.Tensor, e_dir: torch.Tensor, step_weight: torch.Tensor, t: int, B: int, J: int) -> None:
+    if float(weights.gate_sup_weight) <= 0.0 or int(t) < int(weights.gate_sup_start):
         return
     lam_logits = ret.get("lambda_fusion_logits", None)
     if not torch.is_tensor(lam_logits):
@@ -1735,8 +1834,8 @@ def _lambda_rollout_accumulate_gate_supervision(*, trainer: Trainer, ret: Dict[s
     try:
         with torch.no_grad():
             delta = (e_inc - e_dir).detach()
-            lam_star = torch.sigmoid(delta / float(weights["tau_rad"])).detach()
-            mask = (delta.abs() >= float(weights["margin_rad"])).to(dtype=lam_star.dtype) if float(weights["margin_rad"]) > 0.0 else torch.ones_like(lam_star)
+            lam_star = torch.sigmoid(delta / float(weights.tau_rad)).detach()
+            mask = (delta.abs() >= float(weights.margin_rad)).to(dtype=lam_star.dtype) if float(weights.margin_rad) > 0.0 else torch.ones_like(lam_star)
         if lam_logits.shape[-1] == 1:
             lam_star, mask = lam_star.mean(dim=-1, keepdim=True), mask.mean(dim=-1, keepdim=True)
         elif lam_logits.shape[-1] != J:
@@ -1747,44 +1846,44 @@ def _lambda_rollout_accumulate_gate_supervision(*, trainer: Trainer, ret: Dict[s
         mask = mask.to(device=lam_logits.device, dtype=lam_logits.dtype)
         bce = F.binary_cross_entropy_with_logits(lam_logits, lam_star, reduction="none")
         mask_sum = mask.sum()
-        accum["gate_sup_terms"].append(((bce * mask).sum() / mask_sum.clamp_min(1e-6)) * step_weight)
-        accum["gate_sup_frac_terms"].append(mask.mean() * step_weight)
+        accum.gate_sup_terms.append(((bce * mask).sum() / mask_sum.clamp_min(1e-6)) * step_weight)
+        accum.gate_sup_frac_terms.append(mask.mean() * step_weight)
         with torch.no_grad():
             pred = (torch.sigmoid(lam_logits) > 0.5).to(dtype=mask.dtype)
             tgt = (lam_star > 0.5).to(dtype=mask.dtype)
-            accum["gate_sup_acc_num_terms"].append(((pred == tgt).to(dtype=mask.dtype) * mask).sum() * step_weight)
-            accum["gate_sup_acc_den_terms"].append(mask_sum * step_weight)
+            accum.gate_sup_acc_num_terms.append(((pred == tgt).to(dtype=mask.dtype) * mask).sum() * step_weight)
+            accum.gate_sup_acc_den_terms.append(mask_sum * step_weight)
     except _ROLLOUT_SOFT_FAIL_ERRORS:
         _record_posttrain_soft_fail(trainer, "unroll_gate_supervision")
 
 
-def _lambda_rollout_unroll_single_step(*, t: int, ctx: Dict[str, Any]) -> None:
-    runtime = ctx["runtime"]
-    data = ctx["data"]
-    weights = ctx["weights"]
-    accum = ctx["accum"]
-    state_vars = ctx["state_vars"]
+def _lambda_rollout_unroll_single_step(*, t: int, ctx: LambdaRolloutStepContext) -> None:
+    runtime = ctx.runtime
+    data = ctx.data
+    weights = ctx.weights
+    accum = ctx.accum
+    state_vars = ctx.state_vars
 
-    trainer = runtime["trainer"]
-    model = runtime["model"]
-    state = runtime["state"]
-    total_steps = int(runtime["total_steps"])
-    cycle_len = int(runtime["cycle_len"])
-    include_boundary = bool(runtime["include_boundary"])
-    steps = int(runtime["steps"])
-    offset = int(runtime["offset"])
-    B = int(runtime["B"])
-    J = int(runtime["J"])
-    objective = str(runtime["objective"])
-    rot_len = int(runtime["rot_len"])
-    rot_slice = data["rot_slice"]
-    step_weights = data["step_weights"]
+    trainer = runtime.trainer
+    model = runtime.model
+    state = runtime.state
+    total_steps = int(runtime.total_steps)
+    cycle_len = int(runtime.cycle_len)
+    include_boundary = bool(runtime.include_boundary)
+    steps = int(runtime.steps)
+    offset = int(runtime.offset)
+    B = int(runtime.B)
+    J = int(runtime.J)
+    objective = str(runtime.objective)
+    rot_len = int(runtime.rot_len)
+    rot_slice = data.rot_slice
+    step_weights = data.step_weights
 
-    meas_used_logits = bool(state_vars["meas_used_logits"])
-    direct_nonleg_focus_applied = float(state_vars["direct_nonleg_focus_applied"])
-    lam_prev = state_vars["lam_prev"]
-    lam_prev_monot = state_vars["lam_prev_monot"]
-    plan_prev = state_vars["plan_prev"]
+    meas_used_logits = bool(state_vars.meas_used_logits)
+    direct_nonleg_focus_applied = float(state_vars.direct_nonleg_focus_applied)
+    lam_prev = state_vars.lam_prev
+    lam_prev_monot = state_vars.lam_prev_monot
+    plan_prev = state_vars.plan_prev
 
     denom = cycle_len if include_boundary else steps
     idx = int((offset + int(t)) % max(1, int(denom)))
@@ -1795,19 +1894,19 @@ def _lambda_rollout_unroll_single_step(*, t: int, ctx: Dict[str, Any]) -> None:
         t=int(t),
         idx=int(idx),
         total_steps=total_steps,
-        cond_seq=data["cond_seq"],
-        cond_raw_tgt=data["cond_raw_tgt"],
-        cond_norm_mu=data["cond_norm_mu"],
-        cond_norm_std=data["cond_norm_std"],
-        angvel_seq=data["angvel_seq"],
-        pose_hist_seq=data["pose_hist_seq"],
-        time_index_mode=runtime["time_index_mode"],
-        time_base=runtime["time_base"],
-        enable_reprojection=bool(runtime["enable_reprojection"]),
+        cond_seq=data.cond_seq,
+        cond_raw_tgt=data.cond_raw_tgt,
+        cond_norm_mu=data.cond_norm_mu,
+        cond_norm_std=data.cond_norm_std,
+        angvel_seq=data.angvel_seq,
+        pose_hist_seq=data.pose_hist_seq,
+        time_index_mode=runtime.time_index_mode,
+        time_base=runtime.time_base,
+        enable_reprojection=bool(runtime.enable_reprojection),
         include_boundary=include_boundary,
         cycle_len=cycle_len,
-        yaw_gt_fn=runtime["yaw_gt_fn"],
-        detach_rollout_state=bool(runtime["detach_rollout_state"]),
+        yaw_gt_fn=runtime.yaw_gt_fn,
+        detach_rollout_state=bool(runtime.detach_rollout_state),
     )
     ret = step_common["ret"]
     contacts_in_t = step_common["contacts_in_t"]
@@ -1817,9 +1916,9 @@ def _lambda_rollout_unroll_single_step(*, t: int, ctx: Dict[str, Any]) -> None:
 
     delta_norm, direct_norm, lam = _lambda_rollout_decode_model_outputs(ret=ret, objective=objective, B=B, J=J)
 
-    if contacts_in_t is None and float(data["contact_meas_weight"] or 0.0) > 0.0 and torch.is_tensor(data["contacts_seq"]):
+    if contacts_in_t is None and float(weights.contact_meas_weight or 0.0) > 0.0 and torch.is_tensor(data.contacts_seq):
         try:
-            contacts_seq = data["contacts_seq"]
+            contacts_seq = data.contacts_seq
             gt_c_t = contacts_seq[:, idx] if contacts_seq.dim() == 3 else contacts_seq
             meas_logits = ret.get("contacts_meas_logits", None)
             if torch.is_tensor(meas_logits):
@@ -1828,22 +1927,22 @@ def _lambda_rollout_unroll_single_step(*, t: int, ctx: Dict[str, Any]) -> None:
                 if torch.is_tensor(gt_c_t) and gt_c_t.shape == meas_logits.shape:
                     meas_used_logits = True
                     gt = gt_c_t.clamp(0.0, 1.0)
-                    accum["meas_terms"].append(F.binary_cross_entropy_with_logits(meas_logits, gt) * step_weights[t])
+                    accum.meas_terms.append(F.binary_cross_entropy_with_logits(meas_logits, gt) * step_weights[t])
         except _ROLLOUT_SOFT_FAIL_ERRORS: _record_posttrain_soft_fail(trainer, "unroll_contact_meas_logits")
 
-    delta_raw = delta_norm * data["std_y"]
+    delta_raw = delta_norm * data.std_y
     prev6 = reproject_rot6d(y_prev_raw[..., rot_slice]).view(B, J, 6)
-    R_prev = rot6d_to_matrix(prev6, columns=runtime["columns"])
+    R_prev = rot6d_to_matrix(prev6, columns=runtime.columns)
 
-    if include_boundary and runtime["y0_raw"] is not None and int(idx) == (cycle_len - 1):
-        gt_raw = runtime["y0_raw"]
+    if include_boundary and runtime.y0_raw is not None and int(idx) == (cycle_len - 1):
+        gt_raw = runtime.y0_raw
     else:
-        gt_raw = trainer._denorm(runtime["gt_seq"][:, idx])
+        gt_raw = trainer._denorm(runtime.gt_seq[:, idx])
     gt6 = reproject_rot6d(gt_raw[..., rot_slice]).view(B, J, 6)
-    R_gt = rot6d_to_matrix(gt6, columns=runtime["columns"])
+    R_gt = rot6d_to_matrix(gt6, columns=runtime.columns)
 
-    delta6 = normalize_rot6d_delta(delta_raw[..., rot_slice], columns=runtime["columns"])
-    R_delta = rot6d_to_matrix(delta6, columns=runtime["columns"])
+    delta6 = normalize_rot6d_delta(delta_raw[..., rot_slice], columns=runtime.columns)
+    R_delta = rot6d_to_matrix(delta6, columns=runtime.columns)
     R_inc = torch.matmul(R_delta, R_prev)
 
     direct_raw_base = trainer._denorm(direct_norm)
@@ -1855,43 +1954,43 @@ def _lambda_rollout_unroll_single_step(*, t: int, ctx: Dict[str, Any]) -> None:
         R_gt=R_gt,
         B=B,
         J=J,
-        device=runtime["device"],
-        dtype=runtime["dtype"],
-        columns=runtime["columns"],
+        device=runtime.device,
+        dtype=runtime.dtype,
+        columns=runtime.columns,
         rot_slice=rot_slice,
         rot_len=rot_len,
-        direct_pose_leg_align_weight=float(weights["direct_pose_leg_align_weight"]),
-        direct_pose_leg_align_oracle_min_deg=float(weights["direct_pose_leg_align_oracle_min_deg"]),
-        direct_pose_leg_align_oracle_weight_deg=float(weights["direct_pose_leg_align_oracle_weight_deg"]),
-        direct_pose_leg_align_mode=str(weights["direct_pose_leg_align_mode"]),
-        direct_pose_leg_align_mag_weight=float(weights["direct_pose_leg_align_mag_weight"]),
-        direct_pose_leg_align_res_weight=float(weights["direct_pose_leg_align_res_weight"]),
-        direct_pose_leg_align_sign_weight=float(weights["direct_pose_leg_align_sign_weight"]),
-        direct_pose_leg_align_cos_thresh=float(weights["direct_pose_leg_align_cos_thresh"]),
-        direct_pose_leg_align_target_joints=weights["direct_pose_leg_align_target_joints"],
-        direct_pose_leg_align_anchor_joints=weights["direct_pose_leg_align_anchor_joints"],
-        direct_pose_leg_align_anchor_weight=float(weights["direct_pose_leg_align_anchor_weight"]),
-        direct_pose_leg_gate_sup_weight=float(weights["direct_pose_leg_gate_sup_weight"]),
+        direct_pose_leg_align_weight=float(weights.direct_pose_leg_align_weight),
+        direct_pose_leg_align_oracle_min_deg=float(weights.direct_pose_leg_align_oracle_min_deg),
+        direct_pose_leg_align_oracle_weight_deg=float(weights.direct_pose_leg_align_oracle_weight_deg),
+        direct_pose_leg_align_mode=str(weights.direct_pose_leg_align_mode),
+        direct_pose_leg_align_mag_weight=float(weights.direct_pose_leg_align_mag_weight),
+        direct_pose_leg_align_res_weight=float(weights.direct_pose_leg_align_res_weight),
+        direct_pose_leg_align_sign_weight=float(weights.direct_pose_leg_align_sign_weight),
+        direct_pose_leg_align_cos_thresh=float(weights.direct_pose_leg_align_cos_thresh),
+        direct_pose_leg_align_target_joints=weights.direct_pose_leg_align_target_joints,
+        direct_pose_leg_align_anchor_joints=weights.direct_pose_leg_align_anchor_joints,
+        direct_pose_leg_align_anchor_weight=float(weights.direct_pose_leg_align_anchor_weight),
+        direct_pose_leg_gate_sup_weight=float(weights.direct_pose_leg_gate_sup_weight),
         step_weight=step_weights[t],
-        leg_align_terms=accum["leg_align_terms"],
-        leg_align_frac_terms=accum["leg_align_frac_terms"],
-        leg_align_joint_num_terms=accum["leg_align_joint_num_terms"],
-        leg_align_joint_den_terms=accum["leg_align_joint_den_terms"],
-        leg_align_joint_frac_terms=accum["leg_align_joint_frac_terms"],
-        leg_align_distal_terms=accum["leg_align_distal_terms"],
-        leg_align_distal_frac_terms=accum["leg_align_distal_frac_terms"],
-        leg_align_proximal_terms=accum["leg_align_proximal_terms"],
-        leg_align_proximal_frac_terms=accum["leg_align_proximal_frac_terms"],
-        leg_align_anchor_terms=accum["leg_align_anchor_terms"],
-        leg_align_anchor_frac_terms=accum["leg_align_anchor_frac_terms"],
-        leg_gate_sup_terms=accum["leg_gate_sup_terms"],
-        leg_gate_sup_tgt_frac_terms=accum["leg_gate_sup_tgt_frac_terms"],
-        leg_gate_sup_pred_mean_terms=accum["leg_gate_sup_pred_mean_terms"],
+        leg_align_terms=accum.leg_align_terms,
+        leg_align_frac_terms=accum.leg_align_frac_terms,
+        leg_align_joint_num_terms=accum.leg_align_joint_num_terms,
+        leg_align_joint_den_terms=accum.leg_align_joint_den_terms,
+        leg_align_joint_frac_terms=accum.leg_align_joint_frac_terms,
+        leg_align_distal_terms=accum.leg_align_distal_terms,
+        leg_align_distal_frac_terms=accum.leg_align_distal_frac_terms,
+        leg_align_proximal_terms=accum.leg_align_proximal_terms,
+        leg_align_proximal_frac_terms=accum.leg_align_proximal_frac_terms,
+        leg_align_anchor_terms=accum.leg_align_anchor_terms,
+        leg_align_anchor_frac_terms=accum.leg_align_anchor_frac_terms,
+        leg_gate_sup_terms=accum.leg_gate_sup_terms,
+        leg_gate_sup_tgt_frac_terms=accum.leg_gate_sup_tgt_frac_terms,
+        leg_gate_sup_pred_mean_terms=accum.leg_gate_sup_pred_mean_terms,
     )
     dir6 = reproject_rot6d(direct_raw_base[..., rot_slice]).view(B, J, 6)
-    R_dir = rot6d_to_matrix(dir6, columns=runtime["columns"])
+    R_dir = rot6d_to_matrix(dir6, columns=runtime.columns)
 
-    lam = lam.to(device=runtime["device"], dtype=runtime["dtype"])
+    lam = lam.to(device=runtime.device, dtype=runtime.dtype)
     if lam.ndim == 2 and lam.shape[-1] == 1:
         lam = lam.expand(B, J)
     if lam.shape[-1] != J:
@@ -1912,10 +2011,10 @@ def _lambda_rollout_unroll_single_step(*, t: int, ctx: Dict[str, Any]) -> None:
     if lam_eff is None or (not torch.is_tensor(lam_eff)):
         lam_eff = lam_raw
 
-    accum["lam_vals"].append(lam_raw.detach())
-    accum["lam_eff_vals"].append(lam_eff.detach())
+    accum.lam_vals.append(lam_raw.detach())
+    accum.lam_eff_vals.append(lam_eff.detach())
     if torch.is_tensor(lam_rel):
-        accum["lam_rel_vals"].append(lam_rel.detach())
+        accum.lam_rel_vals.append(lam_rel.detach())
 
     plan_prev = _lambda_rollout_accumulate_plan_terms(trainer=trainer, ret=ret, weights=weights, accum=accum, lam_eff=lam_eff, plan_prev=plan_prev, step_weight=step_weights[t], B=B)
 
@@ -1927,67 +2026,72 @@ def _lambda_rollout_unroll_single_step(*, t: int, ctx: Dict[str, Any]) -> None:
     e_inc = _geodesic_R_safe(R_inc, R_gt)
     e_dir = _geodesic_R_safe(R_dir, R_gt)
     w_step = step_weights[t]
-    accum["loss_terms"].append(e_blend.mean() * w_step)
-    accum["inc_terms"].append(e_inc.mean() * w_step)
+    accum.loss_terms.append(e_blend.mean() * w_step)
+    accum.inc_terms.append(e_inc.mean() * w_step)
     direct_nonleg_focus_applied = _lambda_rollout_accumulate_direct_objective(trainer=trainer, model=model, weights=weights, accum=accum, objective=objective, e_dir=e_dir, step_weight=w_step, J=J, direct_nonleg_focus_applied=direct_nonleg_focus_applied)
     _lambda_rollout_accumulate_gate_supervision(trainer=trainer, ret=ret, accum=accum, weights=weights, e_inc=e_inc, e_dir=e_dir, step_weight=w_step, t=t, B=B, J=J)
 
     if include_boundary and int(idx) == (cycle_len - 1):
         try:
-            accum["boundary_blend_terms"].append(_geodesic_R_safe(R_blend, R_gt).mean().detach())
-            accum["boundary_inc_terms"].append(_geodesic_R_safe(R_inc, R_gt).mean().detach())
-            accum["boundary_dir_terms"].append(_geodesic_R_safe(R_dir, R_gt).mean().detach())
-            accum["boundary_lam_terms"].append(lam_raw.mean().detach())
-            accum["boundary_lam_eff_terms"].append(lam_eff.mean().detach())
+            accum.boundary_blend_terms.append(_geodesic_R_safe(R_blend, R_gt).mean().detach())
+            accum.boundary_inc_terms.append(_geodesic_R_safe(R_inc, R_gt).mean().detach())
+            accum.boundary_dir_terms.append(_geodesic_R_safe(R_dir, R_gt).mean().detach())
+            accum.boundary_lam_terms.append(lam_raw.mean().detach())
+            accum.boundary_lam_eff_terms.append(lam_eff.mean().detach())
             if torch.is_tensor(lam_rel):
-                accum["boundary_r_terms"].append(lam_rel.mean().detach())
+                accum.boundary_r_terms.append(lam_rel.mean().detach())
         except _ROLLOUT_SOFT_FAIL_ERRORS: _record_posttrain_soft_fail(trainer, "unroll_boundary_stats")
 
-    if float(weights["lambda_early_weight"] or 0.0) > 0.0 and int(weights["lambda_early_steps"] or 0) > 0 and int(t) < int(weights["lambda_early_steps"]):
-        accum["early_terms"].append(lam_eff.mean() * w_step)
-    if float(weights["lambda_entropy_weight"] or 0.0) > 0.0:
-        accum["ent_terms"].append((-_lambda_entropy(lam_eff).mean()) * w_step)
-    if float(weights["lambda_smooth_weight"] or 0.0) > 0.0:
+    if float(weights.lambda_early_weight or 0.0) > 0.0 and int(weights.lambda_early_steps or 0) > 0 and int(t) < int(weights.lambda_early_steps):
+        accum.early_terms.append(lam_eff.mean() * w_step)
+    if float(weights.lambda_entropy_weight or 0.0) > 0.0:
+        accum.ent_terms.append((-_lambda_entropy(lam_eff).mean()) * w_step)
+    if float(weights.lambda_smooth_weight or 0.0) > 0.0:
         if lam_prev is not None:
-            accum["smooth_terms"].append(((lam_eff - lam_prev).pow(2).mean()) * w_step)
+            accum.smooth_terms.append(((lam_eff - lam_prev).pow(2).mean()) * w_step)
         lam_prev = lam_eff.detach()
-    if float(weights["lambda_monotonic_weight"] or 0.0) > 0.0:
+    if float(weights.lambda_monotonic_weight or 0.0) > 0.0:
         if lam_prev_monot is not None:
-            accum["mono_terms"].append(F.relu(lam_prev_monot - lam_eff).mean() * w_step)
+            accum.mono_terms.append(F.relu(lam_prev_monot - lam_eff).mean() * w_step)
         lam_prev_monot = lam_eff.detach()
 
-    rot_next6d = matrix_to_rot6d(R_blend, columns=runtime["columns"]).view(B, rot_len)
+    rot_next6d = matrix_to_rot6d(R_blend, columns=runtime.columns).view(B, rot_len)
     y_next_raw = y_prev_raw + delta_raw
     y_next_raw = y_next_raw.clone()
     y_next_raw[..., rot_slice] = rot_next6d
-    if bool(runtime["detach_rollout_state"]):
+    if bool(runtime.detach_rollout_state):
         y_next_raw = y_next_raw.detach()
     if t < total_steps - 1:
-        _apply_rollout_carry_state(trainer, state, y_next_raw=y_next_raw, cond_raw_step=cond_raw_step)
+        _rollout_kernel.apply_rollout_carry_state(
+            trainer,
+            state,
+            y_next_raw=y_next_raw,
+            cond_raw_step=cond_raw_step,
+        )
 
-    state_vars["meas_used_logits"] = bool(meas_used_logits)
-    state_vars["direct_nonleg_focus_applied"] = float(direct_nonleg_focus_applied)
-    state_vars["lam_prev"] = lam_prev
-    state_vars["lam_prev_monot"] = lam_prev_monot
-    state_vars["plan_prev"] = plan_prev
+    state_vars.meas_used_logits = bool(meas_used_logits)
+    state_vars.direct_nonleg_focus_applied = float(direct_nonleg_focus_applied)
+    state_vars.lam_prev = lam_prev
+    state_vars.lam_prev_monot = lam_prev_monot
+    state_vars.plan_prev = plan_prev
 
 
 def _lambda_fusion_run_unroll(
     *,
     runtime_ctx: Dict[str, Any],
-    weights_ctx: Dict[str, Any],
-    accum_ctx: Dict[str, Any],
-    state_vars: Dict[str, Any],
+    weights_ctx: LambdaRolloutWeights,
+    accum_ctx: LambdaFusionAccum,
+    state_vars: LambdaRolloutStepState,
 ) -> Tuple[bool, float]:
     trainer = runtime_ctx["trainer"]
     model = runtime_ctx["model"]
     batch = runtime_ctx["batch"]
-    prep_ctx = runtime_ctx["prep_ctx"]
-    include_boundary = bool(prep_ctx["include_boundary"])
-    cycle_len = int(prep_ctx["cycle_len"])
-    y0_raw = prep_ctx["y0_raw"]
-    gt_seq = prep_ctx["gt_seq"]
-    device = prep_ctx["device"]
+    prep_ctx: LambdaRolloutPrepContext = runtime_ctx["prep_ctx"]
+    include_boundary = bool(prep_ctx.include_boundary)
+    cycle_len = int(prep_ctx.cycle_len)
+    y0_raw = prep_ctx.y0_raw
+    gt_seq = prep_ctx.gt_seq
+    device = prep_ctx.device
     time_base = None
     if isinstance(batch, dict):
         base = batch.get("start", None)
@@ -2011,60 +2115,59 @@ def _lambda_fusion_run_unroll(
             _record_posttrain_soft_fail(trainer, "run_unroll_yaw_gt")
             return None
 
-    unroll_ctx = {
-        "runtime": {
-            "trainer": trainer,
-            "model": model,
-            "state": prep_ctx["state"],
-            "total_steps": int(prep_ctx["total_steps"]),
-            "cycle_len": int(prep_ctx["cycle_len"]),
-            "include_boundary": bool(prep_ctx["include_boundary"]),
-            "steps": int(prep_ctx["steps"]),
-            "offset": int(prep_ctx["offset"]),
-            "time_index_mode": str(time_index_mode),
-            "time_base": time_base,
-            "enable_reprojection": bool(runtime_ctx["enable_reprojection"]),
-            "detach_rollout_state": bool(runtime_ctx["detach_rollout_state"]),
-            "yaw_gt_fn": _yaw_gt_from_gt,
-            "columns": runtime_ctx["columns"],
-            "B": int(prep_ctx["B"]),
-            "J": int(prep_ctx["J"]),
-            "objective": str(runtime_ctx["objective"]),
-            "y0_raw": prep_ctx["y0_raw"],
-            "gt_seq": prep_ctx["gt_seq"],
-            "device": prep_ctx["device"],
-            "dtype": prep_ctx["dtype"],
-            "rot_len": int(prep_ctx["rot_len"]),
-        },
-        "data": {
-            "cond_seq": prep_ctx["cond_seq"],
-            "cond_raw_tgt": prep_ctx["cond_raw_tgt"],
-            "cond_norm_mu": prep_ctx["cond_norm_mu"],
-            "cond_norm_std": prep_ctx["cond_norm_std"],
-            "angvel_seq": prep_ctx["angvel_seq"],
-            "pose_hist_seq": prep_ctx["pose_hist_seq"],
-            "contacts_seq": prep_ctx["contacts_seq"],
-            "contact_meas_weight": float(weights_ctx["contact_meas_weight"]),
-            "step_weights": prep_ctx["step_weights"],
-            "std_y": prep_ctx["std_y"],
-            "rot_slice": prep_ctx["rot_slice"],
-        },
-        "weights": weights_ctx,
-        "accum": accum_ctx,
-        "state_vars": state_vars,
-    }
-    total_steps = int(unroll_ctx["runtime"]["total_steps"])
+    unroll_ctx = LambdaRolloutStepContext(
+        runtime=LambdaRolloutRuntimeContext(
+            trainer=trainer,
+            model=model,
+            state=prep_ctx.state,
+            total_steps=int(prep_ctx.total_steps),
+            cycle_len=int(prep_ctx.cycle_len),
+            include_boundary=bool(prep_ctx.include_boundary),
+            steps=int(prep_ctx.steps),
+            offset=int(prep_ctx.offset),
+            time_index_mode=str(time_index_mode),
+            time_base=time_base,
+            enable_reprojection=bool(runtime_ctx["enable_reprojection"]),
+            detach_rollout_state=bool(runtime_ctx["detach_rollout_state"]),
+            yaw_gt_fn=_yaw_gt_from_gt,
+            columns=runtime_ctx["columns"],
+            B=int(prep_ctx.B),
+            J=int(prep_ctx.J),
+            objective=str(runtime_ctx["objective"]),
+            y0_raw=prep_ctx.y0_raw,
+            gt_seq=prep_ctx.gt_seq,
+            device=prep_ctx.device,
+            dtype=prep_ctx.dtype,
+            rot_len=int(prep_ctx.rot_len),
+        ),
+        data=LambdaRolloutDataContext(
+            cond_seq=prep_ctx.cond_seq,
+            cond_raw_tgt=prep_ctx.cond_raw_tgt,
+            cond_norm_mu=prep_ctx.cond_norm_mu,
+            cond_norm_std=prep_ctx.cond_norm_std,
+            angvel_seq=prep_ctx.angvel_seq,
+            pose_hist_seq=prep_ctx.pose_hist_seq,
+            contacts_seq=prep_ctx.contacts_seq,
+            step_weights=prep_ctx.step_weights,
+            std_y=prep_ctx.std_y,
+            rot_slice=prep_ctx.rot_slice,
+        ),
+        weights=weights_ctx,
+        accum=accum_ctx,
+        state_vars=state_vars,
+    )
+    total_steps = int(unroll_ctx.runtime.total_steps)
     for t in range(total_steps):
         _lambda_rollout_unroll_single_step(t=int(t), ctx=unroll_ctx)
-    return bool(state_vars["meas_used_logits"]), float(state_vars["direct_nonleg_focus_applied"])
+    return bool(state_vars.meas_used_logits), float(state_vars.direct_nonleg_focus_applied)
 
 
-def _finalize_direct_group_norm(*, finalize_ctx: Dict[str, Any], trainer: Trainer, blend_loss_total: torch.Tensor, objective: str, dir_geo: torch.Tensor, dir_leg_base_terms: list[torch.Tensor], dir_nonleg_base_terms: list[torch.Tensor], dir_leg_base: torch.Tensor, dir_nonleg_base: torch.Tensor) -> tuple[torch.Tensor, Dict[str, float], Optional[Dict[str, Any]]]:
+def _finalize_direct_group_norm(*, finalize_ctx: LambdaFusionFinalizeContext, trainer: Trainer, blend_loss_total: torch.Tensor, objective: str, dir_geo: torch.Tensor, dir_leg_base_terms: list[torch.Tensor], dir_nonleg_base_terms: list[torch.Tensor], dir_leg_base: torch.Tensor, dir_nonleg_base: torch.Tensor) -> tuple[torch.Tensor, Dict[str, float], Optional[Dict[str, Any]]]:
     nan_value, zero_value = blend_loss_total.new_tensor(float("nan")), blend_loss_total.new_tensor(0.0)
     leg = nonleg = leg_ema = nonleg_ema = leg_raw = nonleg_raw = leg_clamped = nonleg_clamped = nan_value
     leg_hit_min = leg_hit_max = nonleg_hit_min = nonleg_hit_max = leg_hit_any = nonleg_hit_any = zero_value
     used, ema_update_payload = 0.0, None
-    if objective == "direct" and bool(finalize_ctx["direct_group_norm_enable"]) and dir_leg_base_terms and dir_nonleg_base_terms:
+    if objective == "direct" and bool(finalize_ctx.direct_group_norm_enable) and dir_leg_base_terms and dir_nonleg_base_terms:
         try:
             ema_state = getattr(trainer, "_direct_pose_group_norm_ema", None)
             if not isinstance(ema_state, dict):
@@ -2086,20 +2189,20 @@ def _finalize_direct_group_norm(*, finalize_ctx: Dict[str, Any], trainer: Traine
                     _record_posttrain_soft_fail(trainer, "finalize_group_norm_ema_nonleg_finite")
                     non_ema_ok = False
             ema_non_prev = dir_nonleg_base.detach() if not non_ema_ok else ema_non_prev.to(device=dir_nonleg_base.device, dtype=dir_nonleg_base.dtype)
-            leg_raw = dir_leg_base / ema_leg_prev.clamp_min(float(finalize_ctx["direct_group_eps"]))
-            nonleg_raw = dir_nonleg_base / ema_non_prev.clamp_min(float(finalize_ctx["direct_group_eps"]))
-            leg = leg_clamped = leg_raw.clamp(float(finalize_ctx["direct_group_ratio_min"]), float(finalize_ctx["direct_group_ratio_max"]))
-            nonleg = nonleg_clamped = nonleg_raw.clamp(float(finalize_ctx["direct_group_ratio_min"]), float(finalize_ctx["direct_group_ratio_max"]))
-            leg_hit_min = (leg_raw <= float(finalize_ctx["direct_group_ratio_min"])).to(dtype=dir_leg_base.dtype)
-            leg_hit_max = (leg_raw >= float(finalize_ctx["direct_group_ratio_max"])).to(dtype=dir_leg_base.dtype)
-            nonleg_hit_min = (nonleg_raw <= float(finalize_ctx["direct_group_ratio_min"])).to(dtype=dir_nonleg_base.dtype)
-            nonleg_hit_max = (nonleg_raw >= float(finalize_ctx["direct_group_ratio_max"])).to(dtype=dir_nonleg_base.dtype)
+            leg_raw = dir_leg_base / ema_leg_prev.clamp_min(float(finalize_ctx.direct_group_eps))
+            nonleg_raw = dir_nonleg_base / ema_non_prev.clamp_min(float(finalize_ctx.direct_group_eps))
+            leg = leg_clamped = leg_raw.clamp(float(finalize_ctx.direct_group_ratio_min), float(finalize_ctx.direct_group_ratio_max))
+            nonleg = nonleg_clamped = nonleg_raw.clamp(float(finalize_ctx.direct_group_ratio_min), float(finalize_ctx.direct_group_ratio_max))
+            leg_hit_min = (leg_raw <= float(finalize_ctx.direct_group_ratio_min)).to(dtype=dir_leg_base.dtype)
+            leg_hit_max = (leg_raw >= float(finalize_ctx.direct_group_ratio_max)).to(dtype=dir_leg_base.dtype)
+            nonleg_hit_min = (nonleg_raw <= float(finalize_ctx.direct_group_ratio_min)).to(dtype=dir_nonleg_base.dtype)
+            nonleg_hit_max = (nonleg_raw >= float(finalize_ctx.direct_group_ratio_max)).to(dtype=dir_nonleg_base.dtype)
             leg_hit_any, nonleg_hit_any = torch.maximum(leg_hit_min, leg_hit_max), torch.maximum(nonleg_hit_min, nonleg_hit_max)
             leg_ema, nonleg_ema = ema_leg_prev, ema_non_prev
-            dir_geo = float(finalize_ctx["direct_group_w_leg"]) * leg + float(finalize_ctx["direct_group_w_nonleg"]) * nonleg
+            dir_geo = float(finalize_ctx.direct_group_w_leg) * leg + float(finalize_ctx.direct_group_w_nonleg) * nonleg
             used = 1.0
             with torch.no_grad():
-                beta = float(finalize_ctx["direct_group_beta"])
+                beta = float(finalize_ctx.direct_group_beta)
                 ema_update_payload = dict(ema_state, leg=(beta * ema_leg_prev + (1.0 - beta) * dir_leg_base.detach()).detach(), nonleg=(beta * ema_non_prev + (1.0 - beta) * dir_nonleg_base.detach()).detach())
         except _ROLLOUT_SOFT_FAIL_ERRORS:
             _record_posttrain_soft_fail(trainer, "finalize_group_norm_main")
@@ -2123,8 +2226,8 @@ def _finalize_direct_group_norm(*, finalize_ctx: Dict[str, Any], trainer: Traine
         "dir_group_norm_nonleg_hit_max": _metric(nonleg_hit_max, 0.0),
         "dir_group_norm_leg_hit_any": _metric(leg_hit_any, 0.0),
         "dir_group_norm_nonleg_hit_any": _metric(nonleg_hit_any, 0.0),
-        "dir_group_norm_w_leg": float(finalize_ctx["direct_group_w_leg"]),
-        "dir_group_norm_w_nonleg": float(finalize_ctx["direct_group_w_nonleg"]),
+        "dir_group_norm_w_leg": float(finalize_ctx.direct_group_w_leg),
+        "dir_group_norm_w_nonleg": float(finalize_ctx.direct_group_w_nonleg),
     }, ema_update_payload
 
 
@@ -2179,61 +2282,35 @@ def _summarize_lambda_finalize_stats(*, trainer: Trainer, lam_vals: list[torch.T
 
 def _lambda_fusion_finalize(
     *,
-    finalize_ctx: Dict[str, Any],
-    accum_ctx: Dict[str, Any],
+    finalize_ctx: LambdaFusionFinalizeContext,
+    accum_ctx: LambdaFusionAccum,
 ) -> Tuple[torch.Tensor, Dict[str, float], Optional[Dict[str, Any]]]:
-    f = finalize_ctx
-    trainer = f["trainer"]
-    model = f["model"]
-    objective = str(f["objective"])
-    include_boundary = bool(f["include_boundary"])
-    random_offset = bool(f["random_offset"])
-    meas_used_logits = bool(f["meas_used_logits"])
-    offset = int(f["offset"])
-    boundary_steps = int(f["boundary_steps"])
-    direct_nonleg_focus_requested = int(f["direct_nonleg_focus_requested"])
-    direct_nonleg_focus_resolved = int(f["direct_nonleg_focus_resolved"])
-    (
-        gate_sup_weight, direct_pose_leg_gate_sup_weight,
-        direct_pose_leg_align_weight, lambda_entropy_weight, lambda_smooth_weight, lambda_early_weight,
-        lambda_monotonic_weight, lambda_plan_entropy_weight, lambda_plan_dyn_weight, contact_meas_weight,
-        boundary_weight, boundary_weighted_sum, direct_nonleg_focus_weight_use, direct_nonleg_focus_applied,
-    ) = (
-        float(f[k]) for k in (
-            "gate_sup_weight",
-            "direct_pose_leg_gate_sup_weight", "direct_pose_leg_align_weight", "lambda_entropy_weight",
-            "lambda_smooth_weight", "lambda_early_weight", "lambda_monotonic_weight", "lambda_plan_entropy_weight",
-            "lambda_plan_dyn_weight", "contact_meas_weight", "boundary_weight", "boundary_weighted_sum",
-            "direct_nonleg_focus_weight_use", "direct_nonleg_focus_applied",
-        )
-    )
-    (
-        loss_terms, inc_terms, dir_terms, dir_base_terms, dir_leg_base_terms, dir_nonleg_base_terms, dir_nonleg_plain_terms,
-        leg_gate_sup_terms, leg_gate_sup_tgt_frac_terms, leg_gate_sup_pred_mean_terms,
-        leg_align_terms, leg_align_frac_terms, leg_align_joint_num_terms, leg_align_joint_den_terms,
-        leg_align_joint_frac_terms, leg_align_distal_terms, leg_align_distal_frac_terms,
-        leg_align_proximal_terms, leg_align_proximal_frac_terms, leg_align_anchor_terms, leg_align_anchor_frac_terms,
-        ent_terms, smooth_terms, early_terms, mono_terms, plan_ent_terms,
-        plan_dyn_terms, plan_ent_stat_terms, plan_dyn_stat_terms, meas_terms, lam_vals, lam_eff_vals, lam_rel_vals,
-        boundary_blend_terms, boundary_inc_terms, boundary_dir_terms, boundary_lam_terms, boundary_lam_eff_terms,
-        boundary_r_terms, gate_sup_terms, gate_sup_frac_terms, gate_sup_acc_num_terms, gate_sup_acc_den_terms,
-    ) = (
-        accum_ctx[k]
-        for k in (
-            "loss_terms", "inc_terms", "dir_terms", "dir_base_terms", "dir_leg_base_terms", "dir_nonleg_base_terms",
-            "dir_nonleg_plain_terms", "leg_gate_sup_terms", "leg_gate_sup_tgt_frac_terms",
-            "leg_gate_sup_pred_mean_terms", "leg_align_terms", "leg_align_frac_terms", "leg_align_joint_num_terms",
-            "leg_align_joint_den_terms", "leg_align_joint_frac_terms", "leg_align_distal_terms",
-            "leg_align_distal_frac_terms", "leg_align_proximal_terms", "leg_align_proximal_frac_terms",
-            "leg_align_anchor_terms", "leg_align_anchor_frac_terms", "ent_terms", "smooth_terms",
-            "early_terms", "mono_terms", "plan_ent_terms", "plan_dyn_terms", "plan_ent_stat_terms", "plan_dyn_stat_terms",
-            "meas_terms", "lam_vals", "lam_eff_vals", "lam_rel_vals", "boundary_blend_terms", "boundary_inc_terms",
-            "boundary_dir_terms", "boundary_lam_terms", "boundary_lam_eff_terms", "boundary_r_terms", "gate_sup_terms",
-            "gate_sup_frac_terms", "gate_sup_acc_num_terms", "gate_sup_acc_den_terms",
-        )
-    )
+    trainer = finalize_ctx.trainer
+    model = finalize_ctx.model
+    objective = str(finalize_ctx.objective)
+    include_boundary = bool(finalize_ctx.include_boundary)
+    random_offset = bool(finalize_ctx.random_offset)
+    meas_used_logits = bool(finalize_ctx.meas_used_logits)
+    offset = int(finalize_ctx.offset)
+    boundary_steps = int(finalize_ctx.boundary_steps)
+    direct_nonleg_focus_requested = int(finalize_ctx.direct_nonleg_focus_requested)
+    direct_nonleg_focus_resolved = int(finalize_ctx.direct_nonleg_focus_resolved)
+    gate_sup_weight = float(finalize_ctx.gate_sup_weight)
+    direct_pose_leg_gate_sup_weight = float(finalize_ctx.direct_pose_leg_gate_sup_weight)
+    direct_pose_leg_align_weight = float(finalize_ctx.direct_pose_leg_align_weight)
+    lambda_entropy_weight = float(finalize_ctx.lambda_entropy_weight)
+    lambda_smooth_weight = float(finalize_ctx.lambda_smooth_weight)
+    lambda_early_weight = float(finalize_ctx.lambda_early_weight)
+    lambda_monotonic_weight = float(finalize_ctx.lambda_monotonic_weight)
+    lambda_plan_entropy_weight = float(finalize_ctx.lambda_plan_entropy_weight)
+    lambda_plan_dyn_weight = float(finalize_ctx.lambda_plan_dyn_weight)
+    contact_meas_weight = float(finalize_ctx.contact_meas_weight)
+    boundary_weight = float(finalize_ctx.boundary_weight)
+    boundary_weighted_sum = float(finalize_ctx.boundary_weighted_sum)
+    direct_nonleg_focus_weight_use = float(finalize_ctx.direct_nonleg_focus_weight_use)
+    direct_nonleg_focus_applied = float(finalize_ctx.direct_nonleg_focus_applied)
 
-    blend_loss_total = torch.stack(loss_terms).sum()
+    blend_loss_total = torch.stack(accum_ctx.loss_terms).sum()
     zero = blend_loss_total.new_tensor(0.0)
 
     def _sum_terms(terms: list[torch.Tensor]) -> torch.Tensor:
@@ -2245,32 +2322,32 @@ def _lambda_fusion_finalize(
     term_totals = {
         name: _sum_terms(terms)
         for name, terms in (
-            ("inc_geo", inc_terms),
-            ("dir_geo", dir_terms),
-            ("dir_base", dir_base_terms),
-            ("dir_leg_base", dir_leg_base_terms),
-            ("dir_nonleg_base", dir_nonleg_base_terms),
-            ("dir_nonleg_plain", dir_nonleg_plain_terms),
-            ("gate_sup_loss", gate_sup_terms),
-            ("gate_sup_frac", gate_sup_frac_terms),
-            ("leg_gate_sup_loss", leg_gate_sup_terms),
-            ("leg_gate_sup_tgt_frac", leg_gate_sup_tgt_frac_terms),
-            ("leg_gate_sup_pred_mean", leg_gate_sup_pred_mean_terms),
-            ("leg_align_loss", leg_align_terms),
-            ("leg_align_frac", leg_align_frac_terms),
-            ("leg_align_distal_loss", leg_align_distal_terms),
-            ("leg_align_distal_frac", leg_align_distal_frac_terms),
-            ("leg_align_proximal_loss", leg_align_proximal_terms),
-            ("leg_align_proximal_frac", leg_align_proximal_frac_terms),
-            ("leg_align_anchor_loss", leg_align_anchor_terms),
-            ("leg_align_anchor_frac", leg_align_anchor_frac_terms),
-            ("entropy_loss", ent_terms),
-            ("smooth_loss", smooth_terms),
-            ("early_loss", early_terms),
-            ("mono_loss", mono_terms),
-            ("plan_ent_loss", plan_ent_terms),
-            ("plan_dyn_loss", plan_dyn_terms),
-            ("contact_meas_loss", meas_terms),
+            ("inc_geo", accum_ctx.inc_terms),
+            ("dir_geo", accum_ctx.dir_terms),
+            ("dir_base", accum_ctx.dir_base_terms),
+            ("dir_leg_base", accum_ctx.dir_leg_base_terms),
+            ("dir_nonleg_base", accum_ctx.dir_nonleg_base_terms),
+            ("dir_nonleg_plain", accum_ctx.dir_nonleg_plain_terms),
+            ("gate_sup_loss", accum_ctx.gate_sup_terms),
+            ("gate_sup_frac", accum_ctx.gate_sup_frac_terms),
+            ("leg_gate_sup_loss", accum_ctx.leg_gate_sup_terms),
+            ("leg_gate_sup_tgt_frac", accum_ctx.leg_gate_sup_tgt_frac_terms),
+            ("leg_gate_sup_pred_mean", accum_ctx.leg_gate_sup_pred_mean_terms),
+            ("leg_align_loss", accum_ctx.leg_align_terms),
+            ("leg_align_frac", accum_ctx.leg_align_frac_terms),
+            ("leg_align_distal_loss", accum_ctx.leg_align_distal_terms),
+            ("leg_align_distal_frac", accum_ctx.leg_align_distal_frac_terms),
+            ("leg_align_proximal_loss", accum_ctx.leg_align_proximal_terms),
+            ("leg_align_proximal_frac", accum_ctx.leg_align_proximal_frac_terms),
+            ("leg_align_anchor_loss", accum_ctx.leg_align_anchor_terms),
+            ("leg_align_anchor_frac", accum_ctx.leg_align_anchor_frac_terms),
+            ("entropy_loss", accum_ctx.ent_terms),
+            ("smooth_loss", accum_ctx.smooth_terms),
+            ("early_loss", accum_ctx.early_terms),
+            ("mono_loss", accum_ctx.mono_terms),
+            ("plan_ent_loss", accum_ctx.plan_ent_terms),
+            ("plan_dyn_loss", accum_ctx.plan_dyn_terms),
+            ("contact_meas_loss", accum_ctx.meas_terms),
         )
     }
     inc_geo = term_totals["inc_geo"]
@@ -2280,13 +2357,13 @@ def _lambda_fusion_finalize(
     dir_nonleg_base = term_totals["dir_nonleg_base"]
     dir_nonleg_plain = term_totals["dir_nonleg_plain"]
     dir_geo, dir_group_norm_stats, ema_update_payload = _finalize_direct_group_norm(
-        finalize_ctx=f,
+        finalize_ctx=finalize_ctx,
         trainer=trainer,
         blend_loss_total=blend_loss_total,
         objective=objective,
         dir_geo=dir_geo,
-        dir_leg_base_terms=dir_leg_base_terms,
-        dir_nonleg_base_terms=dir_nonleg_base_terms,
+        dir_leg_base_terms=accum_ctx.dir_leg_base_terms,
+        dir_nonleg_base_terms=accum_ctx.dir_nonleg_base_terms,
         dir_leg_base=dir_leg_base,
         dir_nonleg_base=dir_nonleg_base,
     )
@@ -2295,12 +2372,12 @@ def _lambda_fusion_finalize(
     gate_sup_loss = term_totals["gate_sup_loss"]
     gate_sup_frac = term_totals["gate_sup_frac"]
     gate_sup_acc = None
-    if gate_sup_terms:
+    if accum_ctx.gate_sup_terms:
         total = total + float(gate_sup_weight) * gate_sup_loss
-    if gate_sup_acc_num_terms and gate_sup_acc_den_terms:
+    if accum_ctx.gate_sup_acc_num_terms and accum_ctx.gate_sup_acc_den_terms:
         try:
-            num = torch.stack(gate_sup_acc_num_terms).sum()
-            den = torch.stack(gate_sup_acc_den_terms).sum()
+            num = torch.stack(accum_ctx.gate_sup_acc_num_terms).sum()
+            den = torch.stack(accum_ctx.gate_sup_acc_den_terms).sum()
             gate_sup_acc = torch.where(den > 0.0, num / den.clamp_min(1e-6), den.new_tensor(float("nan"))).detach()
         except (RuntimeError, ValueError, TypeError):
             _record_posttrain_soft_fail(trainer, "finalize_gate_sup_acc")
@@ -2309,7 +2386,7 @@ def _lambda_fusion_finalize(
     leg_gate_sup_loss = term_totals["leg_gate_sup_loss"]
     leg_gate_sup_tgt_frac = term_totals["leg_gate_sup_tgt_frac"]
     leg_gate_sup_pred_mean = term_totals["leg_gate_sup_pred_mean"]
-    if leg_gate_sup_terms:
+    if accum_ctx.leg_gate_sup_terms:
         total = total + float(direct_pose_leg_gate_sup_weight or 0.0) * leg_gate_sup_loss
 
     leg_align_loss = term_totals["leg_align_loss"]
@@ -2320,23 +2397,23 @@ def _lambda_fusion_finalize(
     leg_align_proximal_frac = term_totals["leg_align_proximal_frac"]
     leg_align_anchor_loss = term_totals["leg_align_anchor_loss"]
     leg_align_anchor_frac = term_totals["leg_align_anchor_frac"]
-    if leg_align_terms:
+    if accum_ctx.leg_align_terms:
         total = total + float(direct_pose_leg_align_weight or 0.0) * leg_align_loss
     leg_align_joint_stats = _finalize_leg_align_joint_stats(
         trainer=trainer,
         model=model,
-        leg_align_joint_num_terms=leg_align_joint_num_terms,
-        leg_align_joint_den_terms=leg_align_joint_den_terms,
-        leg_align_joint_frac_terms=leg_align_joint_frac_terms,
+        leg_align_joint_num_terms=accum_ctx.leg_align_joint_num_terms,
+        leg_align_joint_den_terms=accum_ctx.leg_align_joint_den_terms,
+        leg_align_joint_frac_terms=accum_ctx.leg_align_joint_frac_terms,
     )
     for terms, weight, key in (
-        (ent_terms, lambda_entropy_weight, "entropy_loss"),
-        (smooth_terms, lambda_smooth_weight, "smooth_loss"),
-        (early_terms, lambda_early_weight, "early_loss"),
-        (mono_terms, lambda_monotonic_weight, "mono_loss"),
-        (plan_ent_terms, lambda_plan_entropy_weight, "plan_ent_loss"),
-        (plan_dyn_terms, lambda_plan_dyn_weight, "plan_dyn_loss"),
-        (meas_terms, contact_meas_weight, "contact_meas_loss"),
+        (accum_ctx.ent_terms, lambda_entropy_weight, "entropy_loss"),
+        (accum_ctx.smooth_terms, lambda_smooth_weight, "smooth_loss"),
+        (accum_ctx.early_terms, lambda_early_weight, "early_loss"),
+        (accum_ctx.mono_terms, lambda_monotonic_weight, "mono_loss"),
+        (accum_ctx.plan_ent_terms, lambda_plan_entropy_weight, "plan_ent_loss"),
+        (accum_ctx.plan_dyn_terms, lambda_plan_dyn_weight, "plan_dyn_loss"),
+        (accum_ctx.meas_terms, contact_meas_weight, "contact_meas_loss"),
     ):
         if terms:
             total = total + float(weight or 0.0) * term_totals[key]
@@ -2346,15 +2423,15 @@ def _lambda_fusion_finalize(
     mono_loss = term_totals["mono_loss"]
     plan_ent_loss = term_totals["plan_ent_loss"]
     plan_dyn_loss = term_totals["plan_dyn_loss"]
-    contact_meas_loss = term_totals["contact_meas_loss"] if meas_terms else None
+    contact_meas_loss = term_totals["contact_meas_loss"] if accum_ctx.meas_terms else None
 
     lambda_stats = _summarize_lambda_finalize_stats(
         trainer=trainer,
-        lam_vals=lam_vals,
-        lam_eff_vals=lam_eff_vals,
-        lam_rel_vals=lam_rel_vals,
+        lam_vals=accum_ctx.lam_vals,
+        lam_eff_vals=accum_ctx.lam_eff_vals,
+        lam_rel_vals=accum_ctx.lam_rel_vals,
     )
-    anchor_weight = float(f.get("direct_pose_leg_align_anchor_weight", 0.0) or 0.0)
+    anchor_weight = float(finalize_ctx.direct_pose_leg_align_anchor_weight or 0.0)
 
     stats = {
         "dir_nonleg_focus_requested": float(direct_nonleg_focus_requested),
@@ -2409,9 +2486,9 @@ def _lambda_fusion_finalize(
         stats["boundary_steps"] = float(boundary_steps or 0)
         stats["boundary_weighted_sum"] = float(boundary_weighted_sum or 0.0)
         for key, terms in (
-            ("boundary_blend_geo", boundary_blend_terms), ("boundary_inc_geo", boundary_inc_terms),
-            ("boundary_dir_geo", boundary_dir_terms), ("boundary_lambda_mean", boundary_lam_terms),
-            ("boundary_lambda_eff_mean", boundary_lam_eff_terms), ("boundary_r_mean", boundary_r_terms),
+            ("boundary_blend_geo", accum_ctx.boundary_blend_terms), ("boundary_inc_geo", accum_ctx.boundary_inc_terms),
+            ("boundary_dir_geo", accum_ctx.boundary_dir_terms), ("boundary_lambda_mean", accum_ctx.boundary_lam_terms),
+            ("boundary_lambda_eff_mean", accum_ctx.boundary_lam_eff_terms), ("boundary_r_mean", accum_ctx.boundary_r_terms),
         ):
             if not terms:
                 continue
@@ -2419,7 +2496,7 @@ def _lambda_fusion_finalize(
                 stats[key] = float(torch.stack(terms).mean().detach().cpu())
             except (RuntimeError, ValueError, TypeError):
                 _record_posttrain_soft_fail(trainer, f"finalize_boundary_{key}")
-    for key, terms in (("plan_entropy_mean", plan_ent_stat_terms), ("plan_dyn_mean", plan_dyn_stat_terms)):
+    for key, terms in (("plan_entropy_mean", accum_ctx.plan_ent_stat_terms), ("plan_dyn_mean", accum_ctx.plan_dyn_stat_terms)):
         if not terms:
             continue
         try:
@@ -2512,12 +2589,12 @@ def _lambda_fusion_loss_rollout(
         time_weight_mode=time_weight_mode,
         time_weight_max=time_weight_max,
     )
-    device = prep_ctx["device"]
-    include_boundary = bool(prep_ctx["include_boundary"])
-    offset = int(prep_ctx["offset"])
-    J = int(prep_ctx["J"])
-    boundary_steps = int(prep_ctx["boundary_steps"])
-    boundary_weighted_sum = float(prep_ctx["boundary_weighted_sum"])
+    device = prep_ctx.device
+    include_boundary = bool(prep_ctx.include_boundary)
+    offset = int(prep_ctx.offset)
+    J = int(prep_ctx.J)
+    boundary_steps = int(prep_ctx.boundary_steps)
+    boundary_weighted_sum = float(prep_ctx.boundary_weighted_sum)
     # ---- Resolve rollout-side weighting / regularization knobs ----
     nonleg_focus_ctx = _lambda_rollout_resolve_nonleg_focus(
         trainer,
@@ -2527,26 +2604,12 @@ def _lambda_fusion_loss_rollout(
         J=J,
         device=device,
     )
-    direct_nonleg_focus_mask_j = nonleg_focus_ctx["direct_nonleg_focus_mask_j"]
-    direct_nonleg_focus_requested = int(nonleg_focus_ctx["direct_nonleg_focus_requested"])
-    direct_nonleg_focus_resolved = int(nonleg_focus_ctx["direct_nonleg_focus_resolved"])
-    direct_nonleg_focus_weight_use = float(nonleg_focus_ctx["direct_nonleg_focus_weight_use"])
-    direct_nonleg_focus_applied = float(nonleg_focus_ctx["direct_nonleg_focus_applied"])
-    accum_ctx = {
-        key: []
-        for key in (
-            "loss_terms", "inc_terms", "dir_terms", "dir_base_terms", "dir_leg_base_terms", "dir_nonleg_base_terms",
-            "dir_nonleg_plain_terms", "leg_gate_sup_terms", "leg_gate_sup_tgt_frac_terms",
-            "leg_gate_sup_pred_mean_terms", "leg_align_terms", "leg_align_frac_terms", "leg_align_joint_num_terms",
-            "leg_align_joint_den_terms", "leg_align_joint_frac_terms", "leg_align_distal_terms",
-            "leg_align_distal_frac_terms", "leg_align_proximal_terms", "leg_align_proximal_frac_terms",
-            "leg_align_anchor_terms", "leg_align_anchor_frac_terms", "ent_terms", "smooth_terms",
-            "early_terms", "mono_terms", "plan_ent_terms", "plan_dyn_terms", "plan_ent_stat_terms", "plan_dyn_stat_terms",
-            "meas_terms", "lam_vals", "lam_eff_vals", "lam_rel_vals", "boundary_blend_terms", "boundary_inc_terms", "boundary_dir_terms",
-            "boundary_lam_terms", "boundary_lam_eff_terms", "boundary_r_terms", "gate_sup_terms", "gate_sup_frac_terms",
-            "gate_sup_acc_num_terms", "gate_sup_acc_den_terms",
-        )
-    }
+    direct_nonleg_focus_mask_j = nonleg_focus_ctx.direct_nonleg_focus_mask_j
+    direct_nonleg_focus_requested = int(nonleg_focus_ctx.direct_nonleg_focus_requested)
+    direct_nonleg_focus_resolved = int(nonleg_focus_ctx.direct_nonleg_focus_resolved)
+    direct_nonleg_focus_weight_use = float(nonleg_focus_ctx.direct_nonleg_focus_weight_use)
+    direct_nonleg_focus_applied = float(nonleg_focus_ctx.direct_nonleg_focus_applied)
+    accum_ctx = LambdaFusionAccum()
     enable_reprojection = bool(getattr(trainer, "enable_cond_reprojection", True))
     reg_ctx = _lambda_rollout_build_reg_params(
         trainer,
@@ -2563,46 +2626,83 @@ def _lambda_fusion_loss_rollout(
         direct_pose_loss_group_norm_ratio_max=direct_pose_loss_group_norm_ratio_max,
         direct_pose_loss_group_norm_eps=direct_pose_loss_group_norm_eps,
     )
-    weights_ctx = {
-        "contact_meas_weight": contact_meas_weight, "direct_pose_leg_align_weight": direct_pose_leg_align_weight,
-        "direct_pose_leg_align_oracle_min_deg": direct_pose_leg_align_oracle_min_deg,
-        "direct_pose_leg_align_oracle_weight_deg": direct_pose_leg_align_oracle_weight_deg,
-        "direct_pose_leg_align_mode": direct_pose_leg_align_mode, "direct_pose_leg_align_mag_weight": direct_pose_leg_align_mag_weight,
-        "direct_pose_leg_align_res_weight": direct_pose_leg_align_res_weight, "direct_pose_leg_align_sign_weight": direct_pose_leg_align_sign_weight,
-        "direct_pose_leg_align_cos_thresh": direct_pose_leg_align_cos_thresh,
-        "direct_pose_leg_align_target_joints": direct_pose_leg_align_target_joints,
-        "direct_pose_leg_align_anchor_joints": direct_pose_leg_align_anchor_joints,
-        "direct_pose_leg_align_anchor_weight": direct_pose_leg_align_anchor_weight,
-        "direct_pose_leg_gate_sup_weight": direct_pose_leg_gate_sup_weight,
-        "direct_pose_loss_leg_split": direct_pose_loss_leg_split, "direct_nonleg_focus_mask_j": direct_nonleg_focus_mask_j,
-        "direct_nonleg_focus_resolved": direct_nonleg_focus_resolved, "direct_nonleg_focus_weight_use": direct_nonleg_focus_weight_use,
-        "gate_sup_weight": float(reg_ctx["gate_sup_weight"]), "gate_sup_start": int(reg_ctx["gate_sup_start"]),
-        "tau_rad": float(reg_ctx["tau_rad"]), "margin_rad": float(reg_ctx["margin_rad"]),
-        "lambda_plan_entropy_weight": lambda_plan_entropy_weight, "lambda_plan_dyn_weight": lambda_plan_dyn_weight,
-        "lambda_early_weight": lambda_early_weight, "lambda_early_steps": lambda_early_steps,
-        "lambda_entropy_weight": lambda_entropy_weight, "lambda_smooth_weight": lambda_smooth_weight,
-        "lambda_monotonic_weight": lambda_monotonic_weight,
-    }
-    state_vars = {"meas_used_logits": False, "direct_nonleg_focus_applied": direct_nonleg_focus_applied, "lam_prev": None, "lam_prev_monot": None, "plan_prev": None}
+    weights_ctx = LambdaRolloutWeights(
+        contact_meas_weight=float(contact_meas_weight),
+        direct_pose_leg_align_weight=float(direct_pose_leg_align_weight),
+        direct_pose_leg_align_oracle_min_deg=float(direct_pose_leg_align_oracle_min_deg),
+        direct_pose_leg_align_oracle_weight_deg=float(direct_pose_leg_align_oracle_weight_deg),
+        direct_pose_leg_align_mode=str(direct_pose_leg_align_mode),
+        direct_pose_leg_align_mag_weight=float(direct_pose_leg_align_mag_weight),
+        direct_pose_leg_align_res_weight=float(direct_pose_leg_align_res_weight),
+        direct_pose_leg_align_sign_weight=float(direct_pose_leg_align_sign_weight),
+        direct_pose_leg_align_cos_thresh=float(direct_pose_leg_align_cos_thresh),
+        direct_pose_leg_align_target_joints=direct_pose_leg_align_target_joints,
+        direct_pose_leg_align_anchor_joints=direct_pose_leg_align_anchor_joints,
+        direct_pose_leg_align_anchor_weight=float(direct_pose_leg_align_anchor_weight),
+        direct_pose_leg_gate_sup_weight=float(direct_pose_leg_gate_sup_weight),
+        direct_pose_loss_leg_split=bool(direct_pose_loss_leg_split),
+        direct_nonleg_focus_mask_j=direct_nonleg_focus_mask_j,
+        direct_nonleg_focus_resolved=int(direct_nonleg_focus_resolved),
+        direct_nonleg_focus_weight_use=float(direct_nonleg_focus_weight_use),
+        gate_sup_weight=float(reg_ctx.gate_sup_weight),
+        gate_sup_start=int(reg_ctx.gate_sup_start),
+        tau_rad=float(reg_ctx.tau_rad),
+        margin_rad=float(reg_ctx.margin_rad),
+        lambda_plan_entropy_weight=float(lambda_plan_entropy_weight),
+        lambda_plan_dyn_weight=float(lambda_plan_dyn_weight),
+        lambda_early_weight=float(lambda_early_weight),
+        lambda_early_steps=int(lambda_early_steps),
+        lambda_entropy_weight=float(lambda_entropy_weight),
+        lambda_smooth_weight=float(lambda_smooth_weight),
+        lambda_monotonic_weight=float(lambda_monotonic_weight),
+    )
+    state_vars = LambdaRolloutStepState(
+        meas_used_logits=False,
+        direct_nonleg_focus_applied=float(direct_nonleg_focus_applied),
+        lam_prev=None,
+        lam_prev_monot=None,
+        plan_prev=None,
+    )
     runtime_ctx = {
         "trainer": trainer, "model": model, "batch": batch, "prep_ctx": prep_ctx, "time_index_mode": time_index_mode,
         "enable_reprojection": enable_reprojection, "detach_rollout_state": detach_rollout_state, "columns": columns, "objective": objective,
     }
     meas_used_logits, direct_nonleg_focus_applied = _lambda_fusion_run_unroll(runtime_ctx=runtime_ctx, weights_ctx=weights_ctx, accum_ctx=accum_ctx, state_vars=state_vars)
     # ---- Finalize aggregated losses / stats ----
-    finalize_ctx = {
-        "trainer": trainer, "model": model, "objective": objective,
-        "direct_pose_leg_gate_sup_weight": direct_pose_leg_gate_sup_weight, "direct_pose_leg_align_weight": direct_pose_leg_align_weight,
-        "direct_pose_leg_align_anchor_weight": direct_pose_leg_align_anchor_weight,
-        "lambda_entropy_weight": lambda_entropy_weight, "lambda_smooth_weight": lambda_smooth_weight, "lambda_early_weight": lambda_early_weight,
-        "lambda_monotonic_weight": lambda_monotonic_weight, "lambda_plan_entropy_weight": lambda_plan_entropy_weight,
-        "lambda_plan_dyn_weight": lambda_plan_dyn_weight, "contact_meas_weight": contact_meas_weight, "include_boundary": include_boundary,
-        "random_offset": random_offset, "offset": offset, "boundary_weight": boundary_weight, "boundary_steps": boundary_steps,
-        "boundary_weighted_sum": boundary_weighted_sum, "direct_nonleg_focus_requested": direct_nonleg_focus_requested,
-        "direct_nonleg_focus_resolved": direct_nonleg_focus_resolved, "direct_nonleg_focus_weight_use": direct_nonleg_focus_weight_use,
-        "direct_nonleg_focus_applied": direct_nonleg_focus_applied,
-        "meas_used_logits": meas_used_logits, **reg_ctx,
-    }
+    finalize_ctx = LambdaFusionFinalizeContext(
+        trainer=trainer,
+        model=model,
+        objective=objective,
+        direct_pose_leg_gate_sup_weight=float(direct_pose_leg_gate_sup_weight),
+        direct_pose_leg_align_weight=float(direct_pose_leg_align_weight),
+        direct_pose_leg_align_anchor_weight=float(direct_pose_leg_align_anchor_weight),
+        lambda_entropy_weight=float(lambda_entropy_weight),
+        lambda_smooth_weight=float(lambda_smooth_weight),
+        lambda_early_weight=float(lambda_early_weight),
+        lambda_monotonic_weight=float(lambda_monotonic_weight),
+        lambda_plan_entropy_weight=float(lambda_plan_entropy_weight),
+        lambda_plan_dyn_weight=float(lambda_plan_dyn_weight),
+        contact_meas_weight=float(contact_meas_weight),
+        include_boundary=bool(include_boundary),
+        random_offset=bool(random_offset),
+        offset=int(offset),
+        boundary_weight=float(boundary_weight),
+        boundary_steps=int(boundary_steps),
+        boundary_weighted_sum=float(boundary_weighted_sum),
+        direct_nonleg_focus_requested=int(direct_nonleg_focus_requested),
+        direct_nonleg_focus_resolved=int(direct_nonleg_focus_resolved),
+        direct_nonleg_focus_weight_use=float(direct_nonleg_focus_weight_use),
+        direct_nonleg_focus_applied=float(direct_nonleg_focus_applied),
+        meas_used_logits=bool(meas_used_logits),
+        gate_sup_weight=float(reg_ctx.gate_sup_weight),
+        direct_group_norm_enable=bool(reg_ctx.direct_group_norm_enable),
+        direct_group_w_leg=float(reg_ctx.direct_group_w_leg),
+        direct_group_w_nonleg=float(reg_ctx.direct_group_w_nonleg),
+        direct_group_beta=float(reg_ctx.direct_group_beta),
+        direct_group_ratio_min=float(reg_ctx.direct_group_ratio_min),
+        direct_group_ratio_max=float(reg_ctx.direct_group_ratio_max),
+        direct_group_eps=float(reg_ctx.direct_group_eps),
+    )
     return _lambda_fusion_finalize(finalize_ctx=finalize_ctx, accum_ctx=accum_ctx)
 
 
@@ -2907,21 +3007,6 @@ def _format_posttrain_step_msg(
     raise ValueError(f"Unknown train_mode={train_mode!r}")
 
 
-def _unfreeze_for_train_mode(model: EventMotionModel, cfg: PostTrainConfig, train_mode: str) -> None:
-    if train_mode == "direct":
-        _unfreeze_direct_pose(
-            model,
-            leg_only=bool(getattr(cfg, "direct_pose_leg_train_only", False)),
-            leg_gate_only=bool(getattr(cfg, "direct_pose_leg_gate_train_only", False)),
-            nonleg_only=bool(getattr(cfg, "direct_pose_nonleg_train_only", False)),
-        )
-        return
-    if train_mode == "lambda":
-        _enable_modules(model, ("lambda_fusion_head",))
-        return
-    raise ValueError(f"Unknown train_mode={train_mode!r}")
-
-
 def _apply_posttrain_cli_overrides(payload: Dict[str, Any], args: argparse.Namespace) -> None:
     if args.paths is not None:
         payload["paths"] = args.paths or None
@@ -3101,21 +3186,89 @@ def _run_training_loop(*, cfg: PostTrainConfig, train_mode: str, model: EventMot
         print(f"[posttrain][epoch {epoch}] avg_total={avg:.6f} ok_steps={ok_steps} skipped={bad_steps}")
     return log_rows
 
-@dataclass
-class PostTrainModelArtifacts:
-    model: EventMotionModel
-    direct_pose_feat_source: str
-    direct_pose_time_pe_dim: int
-    direct_pose_time_pe_base: float
-    direct_pose_use_phase_z: bool
-    direct_pose_phase_z_mode: str
-    direct_pose_split_enable: bool
-    direct_pose_nonleg_proj_dim: int
-    direct_pose_leg_gate_mode_model: str
-    direct_pose_leg_gate_power_model: float
+@dataclass(frozen=True)
+class PosttrainLocalRuntimeOverlay:
+    contact_meas_gate_by_hit_override: Optional[bool]
+    contact_meas_vxy_mode: str
+    contact_meas_ground_z_mode: str
+    contact_meas_ground_z_beta: float
+    contact_meas_ground_z_window: int
+    contact_meas_ground_z_quantile: float
+    contact_meas_ground_z_max_up_m: float
+    contact_meas_ground_z_max_down_m: float
+    contacts_pretrain: ContactPretrainRuntime
+    lambda_reliability_mode: str
+    lambda_reliability_warmup_steps: int
+    lambda_reliability_contact_err_max: float
+    lambda_reliability_warmup_joint_scales: Any
 
 
-def _save_posttrain_outputs(*, cfg: PostTrainConfig, artifacts: PostTrainModelArtifacts, log_rows: list[dict[str, Any]]) -> Path:
+def _resolve_posttrain_contact_meas_gate_override(raw_value: Any) -> Optional[bool]:
+    gate_raw = str(raw_value or "auto").strip().lower()
+    if gate_raw in ("true", "1", "yes", "y"):
+        return True
+    if gate_raw in ("false", "0", "no", "n"):
+        return False
+    return None
+
+
+def _resolve_posttrain_ground_z_slew_limits_m(cfg: PostTrainConfig) -> tuple[float, float]:
+    try:
+        up_cm = float(getattr(cfg, "contact_meas_ground_z_slew_up_cm", 0.0) or 0.0)
+        down_cm = float(getattr(cfg, "contact_meas_ground_z_slew_down_cm", 0.0) or 0.0)
+    except Exception:
+        up_cm, down_cm = 0.0, 0.0
+    return max(0.0, up_cm) / 100.0, max(0.0, down_cm) / 100.0
+
+
+def _resolve_posttrain_local_runtime_overlay(cfg: PostTrainConfig) -> PosttrainLocalRuntimeOverlay:
+    gate_override = _resolve_posttrain_contact_meas_gate_override(getattr(cfg, "contact_meas_gate_by_hit", "auto"))
+    ground_z_max_up_m, ground_z_max_down_m = _resolve_posttrain_ground_z_slew_limits_m(cfg)
+
+    contact_pretrain_runtime = resolve_contact_pretrain_runtime(
+        clamp_raw=getattr(cfg, "posttrain_contacts_pretrain_clamp", 1.0),
+        affine_stats_raw=getattr(cfg, "posttrain_contacts_pretrain_affine_stats", None),
+        warn=False,
+    )
+    return PosttrainLocalRuntimeOverlay(
+        contact_meas_gate_by_hit_override=gate_override,
+        contact_meas_vxy_mode=str(getattr(cfg, "contact_meas_vxy_mode", "abs") or "abs").strip().lower(),
+        contact_meas_ground_z_mode=str(getattr(cfg, "contact_meas_ground_z_mode", "window") or "window").strip().lower(),
+        contact_meas_ground_z_beta=float(getattr(cfg, "contact_meas_ground_z_beta", 0.05) or 0.05),
+        contact_meas_ground_z_window=int(getattr(cfg, "contact_meas_ground_z_window", 5) or 5),
+        contact_meas_ground_z_quantile=float(getattr(cfg, "contact_meas_ground_z_quantile", 0.2) or 0.2),
+        contact_meas_ground_z_max_up_m=float(ground_z_max_up_m),
+        contact_meas_ground_z_max_down_m=float(ground_z_max_down_m),
+        contacts_pretrain=contact_pretrain_runtime,
+        lambda_reliability_mode=str(cfg.lambda_reliability_mode or "none"),
+        lambda_reliability_warmup_steps=int(cfg.lambda_reliability_warmup_steps or 0),
+        lambda_reliability_contact_err_max=float(cfg.lambda_reliability_contact_err_max or 1.0),
+        lambda_reliability_warmup_joint_scales=cfg.lambda_reliability_warmup_joint_scales,
+    )
+
+
+def _apply_posttrain_local_runtime_overlay(
+    trainer: Trainer,
+    overlay: PosttrainLocalRuntimeOverlay,
+) -> None:
+    apply_contacts_pretrain_runtime(
+        trainer,
+        owner_prefix="posttrain",
+        runtime=overlay.contacts_pretrain,
+    )
+    for overlay_field in fields(overlay):
+        field_name = str(overlay_field.name)
+        if field_name == "contacts_pretrain":
+            continue
+        setattr(trainer, field_name, getattr(overlay, field_name))
+
+
+def _save_posttrain_outputs(
+    *,
+    cfg: PostTrainConfig,
+    artifacts: _posttrain_build_shell.PostTrainModelArtifacts,
+    log_rows: list[dict[str, Any]],
+) -> Path:
     model = artifacts.model
     cfg_jsonable = _cfg_to_jsonable(cfg)
     cfg_jsonable["direct_pose_feat_source"] = str(artifacts.direct_pose_feat_source)
@@ -3140,7 +3293,12 @@ def _save_posttrain_outputs(*, cfg: PostTrainConfig, artifacts: PostTrainModelAr
 
 
 def _build_dataset_and_loader(cfg: PostTrainConfig) -> tuple[dict[str, Any], MotionEventDataset, Any]:
-    norm_spec = _merge_norm_spec(cfg.bundle_json.expanduser().resolve(), cfg.pretrain_template)
+    norm_spec = merge_norm_spec(
+        cfg.bundle_json.expanduser().resolve(),
+        cfg.pretrain_template,
+        pretrain_keys=None,
+        strict=True,
+    )
     ds = build_motion_dataset(
         data_dir=str(cfg.data.expanduser().resolve()),
         seq_len=max(2, int(cfg.seq_len)),
@@ -3149,16 +3307,7 @@ def _build_dataset_and_loader(cfg: PostTrainConfig) -> tuple[dict[str, Any], Mot
         index_mode=str(getattr(cfg, "dataset_index_mode", "sliding") or "sliding"),
         is_train=True,
     )
-    if len(ds) <= 0:
-        clip_lens: list[tuple[str, int]] = []
-        for clip in getattr(ds, "clips", []) or []:
-            try:
-                clip_lens.append((str(getattr(clip, "npz_path", "?")), int(getattr(clip, "X", np.zeros((0,))).shape[0])))
-            except Exception:
-                pass
-        clip_lens.sort(key=lambda x: x[1])
-        hint = f" Smallest clips: {', '.join([f'{Path(p).name}:{n}' for p, n in clip_lens[:5]])}." if clip_lens else ""
-        raise SystemExit(f"[FATAL] posttrain dataset has 0 samples. seq_len={cfg.seq_len} is likely too large or paths/data are wrong." + hint + " Try lowering --seq_len or passing --paths to restrict to longer clips.")
+    _assert_posttrain_dataset_has_samples(ds=ds, seq_len=int(cfg.seq_len))
     loader = build_motion_dataloader(
         ds,
         batch_size=int(cfg.batch),
@@ -3166,14 +3315,40 @@ def _build_dataset_and_loader(cfg: PostTrainConfig) -> tuple[dict[str, Any], Mot
         drop_last=True,
         num_workers=0,
     )
-    if len(loader) <= 0:
-        raise SystemExit(f"[FATAL] posttrain DataLoader has 0 batches (len(dataset)={len(ds)}, batch={int(cfg.batch)}, drop_last=True). Lower --batch or use more/longer --paths (or reduce --seq_len).")
+    _assert_posttrain_loader_has_batches(loader=loader, ds=ds, batch=int(cfg.batch))
     return norm_spec, ds, _iter_infinite(loader)
 
 
-def _build_model_and_trainer(*, cfg: PostTrainConfig, ds: MotionEventDataset, model: EventMotionModel, norm_spec: dict[str, Any]) -> Trainer:
-    loss_fn = MotionJointLoss(output_layout=getattr(ds, "output_layout", None), fps=float(getattr(ds, "fps", 60.0) or 60.0), rot6d_spec=getattr(ds, "rot6d_spec", None) or {}, meta=getattr(ds, "meta", None) or {})
-    trainer = Trainer(model=model, loss_fn=loss_fn, lr=float(getattr(cfg, "lr", 1e-4) or 1e-4), grad_clip=0.0, weight_decay=float(getattr(cfg, "weight_decay", 0.0) or 0.0), use_amp=False, accum_steps=1, pin_memory=False)
+def _collect_posttrain_clip_lengths(ds: MotionEventDataset) -> list[tuple[str, int]]:
+    clip_lens: list[tuple[str, int]] = []
+    for clip in getattr(ds, "clips", []) or []:
+        try:
+            clip_lens.append((str(getattr(clip, "npz_path", "?")), int(getattr(clip, "X", np.zeros((0,))).shape[0])))
+        except Exception:
+            pass
+    clip_lens.sort(key=lambda x: x[1])
+    return clip_lens
+
+
+def _format_posttrain_empty_dataset_hint(ds: MotionEventDataset) -> str:
+    clip_lens = _collect_posttrain_clip_lengths(ds)
+    return f" Smallest clips: {', '.join([f'{Path(p).name}:{n}' for p, n in clip_lens[:5]])}." if clip_lens else ""
+
+
+def _assert_posttrain_dataset_has_samples(*, ds: MotionEventDataset, seq_len: int) -> None:
+    if len(ds) > 0:
+        return
+    hint = _format_posttrain_empty_dataset_hint(ds)
+    raise SystemExit(f"[FATAL] posttrain dataset has 0 samples. seq_len={seq_len} is likely too large or paths/data are wrong." + hint + " Try lowering --seq_len or passing --paths to restrict to longer clips.")
+
+
+def _assert_posttrain_loader_has_batches(*, loader: Any, ds: MotionEventDataset, batch: int) -> None:
+    if len(loader) > 0:
+        return
+    raise SystemExit(f"[FATAL] posttrain DataLoader has 0 batches (len(dataset)={len(ds)}, batch={batch}, drop_last=True). Lower --batch or use more/longer --paths (or reduce --seq_len).")
+
+
+def _sync_posttrain_bone_names(*, trainer: Trainer, loss_fn: MotionJointLoss, ds: MotionEventDataset) -> None:
     try:
         bone_names_ds = list(getattr(ds, "bone_names", []) or [])
         if bone_names_ds:
@@ -3184,46 +3359,40 @@ def _build_model_and_trainer(*, cfg: PostTrainConfig, ds: MotionEventDataset, mo
                 setattr(loss_fn, "bone_names", bone_names_ds)
     except Exception:
         pass
+
+
+def _build_posttrain_loss_and_trainer(*, cfg: PostTrainConfig, ds: MotionEventDataset, model: EventMotionModel) -> Trainer:
+    loss_fn = MotionJointLoss(output_layout=getattr(ds, "output_layout", None), fps=float(getattr(ds, "fps", 60.0) or 60.0), rot6d_spec=getattr(ds, "rot6d_spec", None) or {}, meta=getattr(ds, "meta", None) or {})
+    trainer = Trainer(model=model, loss_fn=loss_fn, lr=float(getattr(cfg, "lr", 1e-4) or 1e-4), grad_clip=0.0, weight_decay=float(getattr(cfg, "weight_decay", 0.0) or 0.0), use_amp=False, accum_steps=1, pin_memory=False)
+    _sync_posttrain_bone_names(trainer=trainer, loss_fn=loss_fn, ds=ds)
+    return trainer
+
+
+def _attach_posttrain_trainer_runtime(*, cfg: PostTrainConfig, ds: MotionEventDataset, trainer: Trainer, norm_spec: dict[str, Any]) -> None:
     dataset_artifacts = build_and_attach_dataset_runtime(
         trainer,
         ds,
         bundle_path=str(cfg.bundle_json.expanduser().resolve()),
         norm_spec=norm_spec,
     )
-    try:
-        setattr(loss_fn, "mu_y", dataset_artifacts.mu_y)
-        setattr(loss_fn, "std_y", dataset_artifacts.std_y)
-    except Exception:
-        pass
-
-    gate_raw = str(getattr(cfg, "contact_meas_gate_by_hit", "auto") or "auto").strip().lower()
-    trainer.contact_meas_gate_by_hit_override = True if gate_raw in ("true", "1", "yes", "y") else False if gate_raw in ("false", "0", "no", "n") else None
-    trainer.contact_meas_vxy_mode = str(getattr(cfg, "contact_meas_vxy_mode", "abs") or "abs").strip().lower()
-    trainer.contact_meas_ground_z_mode = str(getattr(cfg, "contact_meas_ground_z_mode", "window") or "window").strip().lower()
-    trainer.contact_meas_ground_z_beta = float(getattr(cfg, "contact_meas_ground_z_beta", 0.05) or 0.05)
-    trainer.contact_meas_ground_z_window = int(getattr(cfg, "contact_meas_ground_z_window", 5) or 5)
-    trainer.contact_meas_ground_z_quantile = float(getattr(cfg, "contact_meas_ground_z_quantile", 0.2) or 0.2)
-    try:
-        up_cm, down_cm = float(getattr(cfg, "contact_meas_ground_z_slew_up_cm", 0.0) or 0.0), float(getattr(cfg, "contact_meas_ground_z_slew_down_cm", 0.0) or 0.0)
-    except Exception:
-        up_cm, down_cm = 0.0, 0.0
-    trainer.contact_meas_ground_z_max_up_m = max(0.0, up_cm) / 100.0
-    trainer.contact_meas_ground_z_max_down_m = max(0.0, down_cm) / 100.0
-    try:
-        clamp_k = float(getattr(cfg, "posttrain_contacts_pretrain_clamp", 1.0) or 0.0)
-    except Exception:
-        clamp_k = 1.0
-    if (not math.isfinite(float(clamp_k))) or float(clamp_k) < 0.0:
-        clamp_k = 1.0
-    trainer.posttrain_contacts_pretrain_clamp = float(clamp_k)
-    trainer.posttrain_contacts_pretrain_affine_stats_spec = getattr(cfg, "posttrain_contacts_pretrain_affine_stats", None)
-    trainer.posttrain_contacts_pretrain_affine = _parse_pretrain_contact_affine_spec(
-        trainer.posttrain_contacts_pretrain_affine_stats_spec
+    apply_shared_trainer_runtime(
+        trainer,
+        resolve_shared_trainer_runtime(
+            dataset_artifacts=dataset_artifacts,
+            trainer_default_yaw_forward_axis=int(getattr(trainer, "yaw_forward_axis", 2)),
+            bundle_json_path=cfg.bundle_json.expanduser().resolve(),
+            out_dir=cfg.out_dir,
+            full_config=_cfg_to_jsonable(cfg),
+            current_run_name=cfg.run_name,
+        ),
     )
-    trainer.lambda_reliability_mode = str(cfg.lambda_reliability_mode or "none")
-    trainer.lambda_reliability_warmup_steps = int(cfg.lambda_reliability_warmup_steps or 0)
-    trainer.lambda_reliability_contact_err_max = float(cfg.lambda_reliability_contact_err_max or 1.0)
-    trainer.lambda_reliability_warmup_joint_scales = cfg.lambda_reliability_warmup_joint_scales
+    apply_loss_runtime_from_trainer(trainer.loss_fn, trainer)
+    _apply_posttrain_local_runtime_overlay(trainer, _resolve_posttrain_local_runtime_overlay(cfg))
+
+
+def _build_model_and_trainer(*, cfg: PostTrainConfig, ds: MotionEventDataset, model: EventMotionModel, norm_spec: dict[str, Any]) -> Trainer:
+    trainer = _build_posttrain_loss_and_trainer(cfg=cfg, ds=ds, model=model)
+    _attach_posttrain_trainer_runtime(cfg=cfg, ds=ds, trainer=trainer, norm_spec=norm_spec)
     return trainer
 
 _POSTTRAIN_ARG_SPECS_PATHS_AND_DATA = (
@@ -3624,358 +3793,6 @@ def _build_posttrain_arg_parser() -> argparse.ArgumentParser:
     return ap
 
 
-@dataclass
-class PostTrainModelBuildState:
-    """Resolved model-build inputs derived from checkpoint, dataset, and CLI policy."""
-
-    ckpt_posttrain_cfg: Optional[dict[str, Any]]
-    state_dict: dict[str, Any]
-    width: int
-
-    contact_dim: int
-    angvel_dim: int
-    pose_hist_dim: int
-
-    contact_plan_enable: bool
-    contact_plan_hidden: int
-    contact_plan_inject: str
-    contact_plan_time_pe_dim: int
-    contact_plan_init_mode: str
-    contact_plan_init_hidden: int
-    contact_plan_init_dropout: float
-
-    use_event_clock: bool
-    event_clock_hidden_dim: int
-    event_clock_gate_hidden_dim: int
-    event_clock_max_delta: float
-    period_dim_init: int
-
-    direct_pose_cfg: DirectPoseBuildConfig
-
-    lambda_fusion_enable: bool
-    lambda_fusion_mode: str
-    lambda_fusion_hidden: int
-    lambda_fusion_dropout: float
-    lambda_fusion_logit_init: float
-    lambda_fusion_use_rollout_step: bool
-
-    direct_pose_leg_gate_mode_model: str
-    direct_pose_leg_gate_power_model: float
-
-
-def _resolve_posttrain_model_build_state(*, cfg: PostTrainConfig, ds: MotionEventDataset) -> PostTrainModelBuildState:
-    """Resolve checkpoint-backed model build state for posttrain instantiation."""
-    # ---- Checkpoint load / raw state sanitize ----
-    ckpt = torch.load(cfg.ckpt_in.expanduser(), map_location="cpu")
-    ckpt_posttrain_payload = ckpt.get("posttrain_cfg", None) if isinstance(ckpt, dict) else None
-    ckpt_posttrain_cfg: Optional[dict[str, Any]] = ckpt_posttrain_payload if isinstance(ckpt_posttrain_payload, dict) else None
-    raw_model_state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
-    state_dict = {
-        key: value for key, value in raw_model_state.items() if not (
-            key.startswith("frozen_encoder.")
-            or key.startswith("frozen_period_head.")
-            or key.startswith("contact_plan_input_proj.")
-        )
-    }
-    shared_encoder_weight = state_dict["shared_encoder.0.weight"]
-    width = int(shared_encoder_weight.shape[0])
-    shared_encoder_in_dim = int(shared_encoder_weight.shape[1])
-    period_dim = int(state_dict["period_encoder.weight"].shape[1]) if "period_encoder.weight" in state_dict else 0
-    # ---- Dataset / base dims ----
-    contact_dim = int(getattr(ds, "contact_dim", 0) or 0)
-    angvel_dim = int(getattr(ds, "angvel_dim", 0) or 0)
-    pose_hist_dim = int(getattr(ds, "pose_hist_dim", 0) or 0)
-    cond_dim = int(ds.Dc)
-    dataset_base_in_dim = int(ds.Dx) + int(ds.Dc)
-    extra_in_dim = int(max(0, shared_encoder_in_dim - dataset_base_in_dim))
-    # ---- Contact plan infer ----
-    contact_plan_has_weights = any(key.startswith("contact_plan_cell.") for key in state_dict.keys())
-    contact_plan_hidden = None
-    if contact_plan_has_weights and "contact_plan_cell.weight_ih" in state_dict:
-        try:
-            contact_plan_hidden = int(state_dict["contact_plan_cell.weight_ih"].shape[0] // 3)
-        except Exception:
-            contact_plan_hidden = None
-    if contact_plan_hidden is None:
-        contact_plan_hidden = int(extra_in_dim) if extra_in_dim > 0 else 64
-
-    contact_plan_inject = "none"
-    if extra_in_dim == 0:
-        contact_plan_inject = "none"
-    elif contact_dim > 0 and extra_in_dim == contact_dim:
-        contact_plan_inject = "contacts"
-    elif contact_plan_hidden > 0 and extra_in_dim == int(contact_plan_hidden):
-        contact_plan_inject = "plan_z"
-    elif extra_in_dim > 0 and contact_plan_has_weights:
-        # Fallback: assume plan_z injection with hidden==extra_in (should rarely happen).
-        contact_plan_inject = "plan_z"
-        contact_plan_hidden = int(extra_in_dim)
-    contact_plan_time_pe_dim = 0
-    try:
-        contact_plan_time_head_weight = state_dict.get("contact_plan_time_head.weight", None)
-        if torch.is_tensor(contact_plan_time_head_weight) and contact_plan_time_head_weight.ndim == 2:
-            contact_plan_time_pe_dim = int(contact_plan_time_head_weight.shape[1])
-    except Exception:
-        contact_plan_time_pe_dim = 0
-    contact_plan_init_mode = str(getattr(cfg, "contact_plan_init_mode", "learnable") or "learnable")
-    contact_plan_init_hidden = int(getattr(cfg, "contact_plan_init_hidden", 128) or 128)
-    contact_plan_init_dropout = float(getattr(cfg, "contact_plan_init_dropout", 0.0) or 0.0)
-    contact_plan_init_has_weights = any(key.startswith("contact_plan_init_head.") for key in state_dict.keys())
-    if contact_plan_init_has_weights:
-        if str(contact_plan_init_mode).lower().strip() not in ("obs", "learnable+obs", "learnable_obs", "obs+learnable"):
-            print("[posttrain][WARN] checkpoint has contact_plan_init_head weights; overriding contact_plan_init_mode -> learnable+obs.")
-            contact_plan_init_mode = "learnable+obs"
-        contact_plan_init_weight = state_dict.get("contact_plan_init_head.1.weight", None)
-        if torch.is_tensor(contact_plan_init_weight) and contact_plan_init_weight.ndim == 2:
-            contact_plan_init_hidden = int(contact_plan_init_weight.shape[0])
-    # ---- Direct pose infer ----
-    direct_pose_cfg = _resolve_direct_pose_build_cfg(
-        out_motion_dim=int(ds.Dy),
-        state_dict=state_dict,
-        ckpt_posttrain_cfg=ckpt_posttrain_cfg,
-        contact_dim=contact_dim,
-        cond_dim=cond_dim,
-        width=width,
-        overrides=DirectPoseBuildOverrides(
-            train_direct_pose=bool(getattr(cfg, "train_direct_pose", False)),
-            direct_pose_reinit=bool(getattr(cfg, "direct_pose_reinit", False)),
-            hidden_override=getattr(cfg, "direct_pose_hidden_override", None),
-            meas_mode_override=getattr(cfg, "direct_pose_meas_mode_override", None),
-            feat_source=str(getattr(cfg, "direct_pose_feat_source", "auto") or "auto"),
-            time_pe_dim=int(getattr(cfg, "direct_pose_time_pe_dim", -1)),
-            time_pe_base=float(getattr(cfg, "direct_pose_time_pe_base", 10000.0) or 10000.0),
-            use_phase_z=bool(getattr(cfg, "direct_pose_use_phase_z", False)),
-            phase_z_mode=str(getattr(cfg, "direct_pose_phase_z_mode", "concat") or "concat"),
-            split_enable=bool(getattr(cfg, "direct_pose_split_enable", False)),
-            stepc_unified_leg_terminal=bool(getattr(cfg, "direct_pose_stepc_unified_leg_terminal", False)),
-            arm_split_enable=bool(getattr(cfg, "direct_pose_arm_split_enable", False)),
-            arm_bones=getattr(cfg, "direct_pose_arm_bones", None),
-            nonleg_proj_dim=max(0, int(getattr(cfg, "direct_pose_nonleg_proj_dim", 0) or 0)),
-        ),
-    )
-    contact_plan_enable = bool(contact_plan_has_weights or direct_pose_cfg.enable or (extra_in_dim > 0 and contact_dim > 0 and cond_dim > 0))
-    # ---- Event clock infer ----
-    event_clock_cfg = _infer_event_clock_build_cfg(
-        state_dict=state_dict,
-        contact_dim=contact_dim,
-        period_dim=period_dim,
-        overrides=EventClockBuildOverrides(
-            mode=str(getattr(cfg, "event_clock", "auto") or "auto"),
-            hidden_dim=getattr(cfg, "event_clock_hidden_dim", None),
-            gate_hidden_dim=getattr(cfg, "event_clock_gate_hidden_dim", None),
-            max_delta=float(getattr(cfg, "event_clock_max_delta", 0.5) or 0.5),
-            has_encoder_bundle=bool(
-                cfg.encoder_bundle is not None and cfg.encoder_bundle.expanduser().is_file()
-            ),
-        ),
-    )
-    # ---- Lambda fusion infer ----
-    lambda_fusion_cfg = _infer_lambda_fusion_build_cfg(
-        state_dict=state_dict,
-        width=width,
-        contact_dim=contact_dim,
-        contact_plan_enable=contact_plan_enable,
-        overrides=LambdaFusionBuildOverrides(
-            train_lambda_head=bool(getattr(cfg, "train_lambda_head", False)),
-            mode=str(getattr(cfg, "lambda_fusion_mode", "per_joint") or "per_joint"),
-            hidden=int(getattr(cfg, "lambda_fusion_hidden", 128) or 128),
-            dropout=float(getattr(cfg, "lambda_fusion_dropout", 0.0) or 0.0),
-            logit_init=float(getattr(cfg, "lambda_fusion_logit_init", -2.0) or -2.0),
-            use_rollout_step=bool(getattr(cfg, "lambda_fusion_use_rollout_step", False)),
-        ),
-    )
-    direct_pose_leg_gate_mode_raw = str(getattr(cfg, "direct_pose_leg_gate_mode", "none") or "none").strip().lower()
-    direct_pose_leg_gate_mode_model = _DIRECT_POSE_LEG_GATE_ALIAS_MAP.get(direct_pose_leg_gate_mode_raw, direct_pose_leg_gate_mode_raw)
-    if direct_pose_leg_gate_mode_model not in _DIRECT_POSE_LEG_GATE_CHOICES:
-        direct_pose_leg_gate_mode_model = "none"
-        print(
-            f"[posttrain][WARN] unrecognized direct_pose_leg_gate_mode={direct_pose_leg_gate_mode_raw!r}; using 'none'. "
-            "Set explicit 'none'/'learned'/'scale'."
-        )
-    else:
-        direct_pose_leg_gate_mode_model = str(direct_pose_leg_gate_mode_model)
-    try:
-        direct_pose_leg_gate_power_model = float(getattr(cfg, "direct_pose_leg_gate_power", 1.0) or 1.0)
-    except Exception:
-        direct_pose_leg_gate_power_model = 1.0
-    if (not math.isfinite(direct_pose_leg_gate_power_model)) or direct_pose_leg_gate_power_model <= 0.0:
-        direct_pose_leg_gate_power_model = 1.0
-    # ---- Final build state assembly ----
-    return PostTrainModelBuildState(
-        ckpt_posttrain_cfg=ckpt_posttrain_cfg, state_dict=state_dict, width=width,
-        contact_dim=contact_dim, angvel_dim=angvel_dim, pose_hist_dim=pose_hist_dim,
-        contact_plan_enable=bool(contact_plan_enable), contact_plan_hidden=int(contact_plan_hidden or 64),
-        contact_plan_inject=str(contact_plan_inject), contact_plan_time_pe_dim=int(contact_plan_time_pe_dim),
-        contact_plan_init_mode=str(contact_plan_init_mode), contact_plan_init_hidden=int(contact_plan_init_hidden),
-        contact_plan_init_dropout=float(contact_plan_init_dropout),
-        use_event_clock=bool(event_clock_cfg.use_event_clock), event_clock_hidden_dim=int(event_clock_cfg.hidden_dim),
-        event_clock_gate_hidden_dim=int(event_clock_cfg.gate_hidden_dim), event_clock_max_delta=float(event_clock_cfg.max_delta),
-        period_dim_init=int(event_clock_cfg.period_dim_init),
-        direct_pose_cfg=direct_pose_cfg,
-        lambda_fusion_enable=bool(lambda_fusion_cfg.enable), lambda_fusion_mode=str(lambda_fusion_cfg.mode),
-        lambda_fusion_hidden=int(lambda_fusion_cfg.hidden),
-        lambda_fusion_dropout=float(lambda_fusion_cfg.dropout),
-        lambda_fusion_logit_init=float(lambda_fusion_cfg.logit_init),
-        lambda_fusion_use_rollout_step=bool(lambda_fusion_cfg.use_rollout_step),
-        direct_pose_leg_gate_mode_model=str(direct_pose_leg_gate_mode_model), direct_pose_leg_gate_power_model=float(direct_pose_leg_gate_power_model),
-    )
-
-
-def _instantiate_posttrain_model(*, cfg: PostTrainConfig, ds: MotionEventDataset, device: torch.device, build_state: PostTrainModelBuildState) -> EventMotionModel:
-    direct_pose_cfg = build_state.direct_pose_cfg
-    model = EventMotionModel(
-        in_state_dim=int(ds.Dx), out_motion_dim=int(ds.Dy), cond_dim=int(ds.Dc),
-        period_dim=int(build_state.period_dim_init), hidden_dim=int(build_state.width),
-        num_layers=int(cfg.depth), num_heads=int(cfg.num_heads), dropout=float(cfg.dropout), context_len=int(cfg.context_len),
-        contact_dim=int(build_state.contact_dim), angvel_dim=int(build_state.angvel_dim), pose_hist_dim=int(build_state.pose_hist_dim),
-        state_layout=getattr(ds, "state_layout", None),
-        bone_names=getattr(ds, "bone_names", None),
-        output_layout=getattr(ds, "output_layout", None),
-        contact_plan_enable=bool(build_state.contact_plan_enable), contact_plan_hidden=int(build_state.contact_plan_hidden),
-        contact_plan_dropout=0.0, contact_plan_inject=str(build_state.contact_plan_inject), contact_plan_inject_detach=True,
-        contact_plan_time_pe_dim=int(build_state.contact_plan_time_pe_dim), contact_plan_init_mode=str(build_state.contact_plan_init_mode),
-        contact_plan_init_hidden=int(build_state.contact_plan_init_hidden),
-        contact_plan_init_dropout=float(build_state.contact_plan_init_dropout),
-        use_event_clock=bool(build_state.use_event_clock), event_clock_max_delta=float(build_state.event_clock_max_delta),
-        event_clock_hidden_dim=int(build_state.event_clock_hidden_dim),
-        event_clock_gate_hidden_dim=int(build_state.event_clock_gate_hidden_dim),
-        direct_pose_enable=bool(direct_pose_cfg.enable), direct_pose_hidden=int(direct_pose_cfg.hidden), direct_pose_dropout=0.0,
-        direct_pose_detach_plan=True, direct_pose_meas_mode=str(direct_pose_cfg.meas_mode), direct_pose_meas_drop_prob=0.0,
-        direct_pose_meas_noise_std=0.0, direct_pose_plan_drop_prob=0.0, direct_pose_feat_source=str(direct_pose_cfg.feat_source),
-        direct_pose_time_pe_dim=int(direct_pose_cfg.time_pe_dim), direct_pose_time_pe_base=float(direct_pose_cfg.time_pe_base),
-        direct_pose_use_phase_z=bool(direct_pose_cfg.use_phase_z), direct_pose_phase_z_mode=str(direct_pose_cfg.phase_z_mode),
-        direct_pose_split_enable=bool(direct_pose_cfg.split_enable),
-        direct_pose_stepc_unified_leg_terminal=bool(direct_pose_cfg.stepc_unified_leg_terminal),
-        direct_pose_nonleg_proj_dim=int(direct_pose_cfg.nonleg_proj_dim), direct_pose_arm_split_enable=bool(direct_pose_cfg.arm_split_enable), direct_pose_arm_bones=direct_pose_cfg.arm_bones,
-        direct_pose_leg_enable=bool(getattr(cfg, "direct_pose_leg_enable", False)),
-        direct_pose_leg_bones=getattr(cfg, "direct_pose_leg_bones", None),
-        direct_pose_leg_mode=str(getattr(cfg, "direct_pose_leg_mode", "rot6d_add") or "rot6d_add"),
-        direct_pose_leg_stopgrad_main=bool(getattr(cfg, "direct_pose_leg_stopgrad_main", False)),
-        direct_pose_leg_detach_feat=bool(getattr(cfg, "direct_pose_leg_detach_feat", False)),
-        direct_pose_leg_max_deg=float(getattr(cfg, "direct_pose_leg_max_deg", 0.0) or 0.0),
-        direct_pose_leg_gate_mode=str(build_state.direct_pose_leg_gate_mode_model),
-        direct_pose_leg_gate_power=float(build_state.direct_pose_leg_gate_power_model),
-        direct_pose_leg_scale_log_clip=float(getattr(cfg, "direct_pose_leg_scale_log_clip", 4.0) or 4.0),
-        direct_pose_leg_scale_clamp_k=float(getattr(cfg, "direct_pose_leg_scale_clamp_k", 0.0) or 0.0),
-        lambda_fusion_enable=bool(build_state.lambda_fusion_enable), lambda_fusion_mode=str(build_state.lambda_fusion_mode),
-        lambda_fusion_hidden=int(build_state.lambda_fusion_hidden), lambda_fusion_dropout=float(build_state.lambda_fusion_dropout),
-        lambda_fusion_detach_err=True, lambda_fusion_logit_init=float(build_state.lambda_fusion_logit_init),
-        lambda_fusion_use_rollout_step=bool(build_state.lambda_fusion_use_rollout_step),
-    ).to(device)
-    validate_and_fix_model_(model, int(ds.Dx), int(ds.Dc))
-    return model
-
-
-def _load_posttrain_checkpoint_into_model(*, cfg: PostTrainConfig, model: EventMotionModel, build_state: PostTrainModelBuildState) -> None:
-    direct_pose_cfg = build_state.direct_pose_cfg
-    state_dict = build_state.state_dict
-    if cfg.encoder_bundle is not None and cfg.encoder_bundle.expanduser().is_file():
-        _attach_motion_encoder_bundle(
-            model,
-            torch.load(str(cfg.encoder_bundle.expanduser()), map_location="cpu"),
-        )
-
-    _apply_direct_pose_ckpt_compat(
-        state_dict=state_dict,
-        model=model,
-        ckpt_posttrain_cfg=build_state.ckpt_posttrain_cfg,
-        contact_dim=int(build_state.contact_dim),
-        direct_pose_cfg=direct_pose_cfg,
-        load_options=DirectPoseLoadCompatOptions(
-            train_direct_pose=bool(getattr(cfg, "train_direct_pose", False)),
-            leg_enable=bool(getattr(cfg, "direct_pose_leg_enable", False)),
-            leg_bones=getattr(cfg, "direct_pose_leg_bones", None),
-        ),
-    )
-
-    model.load_state_dict(state_dict, strict=False)
-
-    if cfg.train_direct_pose:
-        if getattr(model, "direct_pose_head", None) is None:
-            raise SystemExit("[FATAL] direct_pose_head is not instantiated; cannot train direct pose expert.")
-        leg_only = bool(getattr(cfg, "direct_pose_leg_train_only", False))
-        leg_gate_only = bool(getattr(cfg, "direct_pose_leg_gate_train_only", False))
-        nonleg_only = bool(getattr(cfg, "direct_pose_nonleg_train_only", False))
-        if nonleg_only and (leg_only or leg_gate_only):
-            raise SystemExit(
-                "[FATAL] direct_pose_nonleg_train_only=true is incompatible with leg train_only modes. "
-                "Pick exactly one train_only mode."
-            )
-        if (leg_only or leg_gate_only) and getattr(model, "direct_pose_leg_head", None) is None:
-            raise SystemExit(
-                "[FATAL] direct_pose_leg_*_train_only=true but no leg head is instantiated. "
-                "Enable direct_pose_leg_enable and provide valid direct_pose_leg_bones."
-            )
-        has_nonleg_branch = (
-            getattr(model, "direct_pose_out_nonleg", None) is not None
-            or (
-                getattr(model, "direct_pose_out_arm", None) is not None
-                and getattr(model, "direct_pose_out_else", None) is not None
-            )
-        )
-        if nonleg_only and (not has_nonleg_branch):
-            raise SystemExit(
-                "[FATAL] direct_pose_nonleg_train_only=true but no non-leg branch is instantiated. "
-                "Enable direct_pose_split_enable (optionally with direct_pose_arm_split_enable)."
-            )
-        if bool(leg_gate_only):
-            has_leg_gate = (getattr(model, "direct_pose_leg_gate_head", None) is not None) or (
-                getattr(model, "direct_pose_leg_gate_head_shared", None) is not None
-            )
-            if not has_leg_gate:
-                raise SystemExit(
-                    "[FATAL] direct_pose_leg_gate_train_only=true but no leg gate/scale head is instantiated. "
-                    "Set direct_pose_leg_gate_mode='learned'/'scale' and enable direct_pose_leg_enable with valid bones."
-                )
-        if float(getattr(cfg, "direct_pose_leg_gate_sup_weight", 0.0) or 0.0) > 0.0:
-            leg_mode = str(getattr(model, "direct_pose_leg_mode", "rot6d_add") or "rot6d_add").strip().lower()
-            if leg_mode != "so3":
-                raise SystemExit(
-                    "[FATAL] direct_pose_leg_gate_sup_weight>0 requires direct_pose_leg_mode='so3' "
-                    f"(got {leg_mode!r})."
-                )
-            has_leg_gate = (getattr(model, "direct_pose_leg_gate_head", None) is not None) or (
-                getattr(model, "direct_pose_leg_gate_head_shared", None) is not None
-            )
-            if not has_leg_gate:
-                raise SystemExit(
-                    "[FATAL] direct_pose_leg_gate_sup_weight>0 but no learned leg gate head is instantiated. "
-                    "Set direct_pose_leg_gate_mode='learned' and enable direct_pose_leg_enable with valid bones."
-                )
-    if cfg.train_lambda_head:
-        if getattr(model, "direct_pose_head", None) is None:
-            raise SystemExit("[FATAL] Stage2 needs direct_pose_head (out_direct), but checkpoint/model does not enable it.")
-        if getattr(model, "lambda_fusion_head", None) is None:
-            raise SystemExit("[FATAL] Stage2 needs lambda_fusion_head, but it is not instantiated.")
-
-    if cfg.so3_corr_gate_logit_reset is not None:
-        logit = getattr(model, "so3_corr_gate_logit", None)
-        if torch.is_tensor(logit):
-            with torch.no_grad():
-                logit.fill_(float(cfg.so3_corr_gate_logit_reset))
-            print(f"[posttrain] reset so3_corr_gate_logit={float(cfg.so3_corr_gate_logit_reset):.4f}")
-
-
-def _build_posttrain_model_from_ckpt(*, cfg: PostTrainConfig, ds: MotionEventDataset, device: torch.device) -> PostTrainModelArtifacts:
-    build_state = _resolve_posttrain_model_build_state(cfg=cfg, ds=ds)
-    model = _instantiate_posttrain_model(cfg=cfg, ds=ds, device=device, build_state=build_state)
-    _load_posttrain_checkpoint_into_model(cfg=cfg, model=model, build_state=build_state)
-    direct_pose_cfg = build_state.direct_pose_cfg
-
-    return PostTrainModelArtifacts(
-        model=model,
-        direct_pose_feat_source=str(direct_pose_cfg.feat_source),
-        direct_pose_time_pe_dim=int(direct_pose_cfg.time_pe_dim),
-        direct_pose_time_pe_base=float(direct_pose_cfg.time_pe_base),
-        direct_pose_use_phase_z=bool(direct_pose_cfg.use_phase_z),
-        direct_pose_phase_z_mode=str(direct_pose_cfg.phase_z_mode),
-        direct_pose_split_enable=bool(direct_pose_cfg.split_enable),
-        direct_pose_nonleg_proj_dim=int(direct_pose_cfg.nonleg_proj_dim),
-        direct_pose_leg_gate_mode_model=str(build_state.direct_pose_leg_gate_mode_model),
-        direct_pose_leg_gate_power_model=float(build_state.direct_pose_leg_gate_power_model),
-    )
-
-
 def main() -> None:
     ap = _build_posttrain_arg_parser()
     args = ap.parse_args()
@@ -4001,7 +3818,7 @@ def main() -> None:
     os.makedirs(cfg.out_dir, exist_ok=True)
 
     norm_spec, ds, batch_iter = _build_dataset_and_loader(cfg)
-    artifacts = _build_posttrain_model_from_ckpt(cfg=cfg, ds=ds, device=device)
+    artifacts = _posttrain_build_shell._build_posttrain_model_from_ckpt(cfg=cfg, ds=ds, device=device)
     model = artifacts.model
 
     # ---- Runtime contracts / trainer ----
@@ -4020,7 +3837,13 @@ def main() -> None:
 
     # ---- Train runtime ----
     _freeze_all(model)
-    _unfreeze_for_train_mode(model, cfg, train_mode)
+    _unfreeze_for_train_mode(
+        model,
+        train_mode=train_mode,
+        direct_pose_leg_train_only=bool(getattr(cfg, "direct_pose_leg_train_only", False)),
+        direct_pose_leg_gate_train_only=bool(getattr(cfg, "direct_pose_leg_gate_train_only", False)),
+        direct_pose_nonleg_train_only=bool(getattr(cfg, "direct_pose_nonleg_train_only", False)),
+    )
     model.train()
 
     params, names = _select_trainable_params(model)

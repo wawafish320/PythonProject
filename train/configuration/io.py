@@ -1,3 +1,8 @@
+"""Runtime configuration JSON I/O helpers.
+
+This module only reads and writes config JSON objects.
+"""
+
 from __future__ import annotations
 
 import json

@@ -20,7 +20,7 @@ from train.geometry import (
     so3_exp_map,
     so3_log_map,
 )
-from train.rotvec_semantics import (
+from train.contracts.asset_semantics import (
     require_standard_rotvec_bundle,
     require_standard_rotvec_spec,
 )

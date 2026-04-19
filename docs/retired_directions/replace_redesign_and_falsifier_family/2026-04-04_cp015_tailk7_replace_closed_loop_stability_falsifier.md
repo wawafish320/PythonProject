@@ -1067,8 +1067,8 @@ L_global
 
 ### 11.4 实际训练命令
 
-```bash
-python3 tools/run_cp015_tailk7_donor_hidden_dynamics_followup.py --force
+```text
+historical note: this stage originally used a dedicated donor-hidden-dynamics follow-up script; that probe was later deleted during the 2026-04-18 posttrain compat cleanup.
 ```
 
 这个脚本实际做了两件事：
@@ -1330,16 +1330,9 @@ L_global
 
 #### donor continuation + lane F 组装
 
-```bash
-python3 tools/run_cp015_tailk7_donor_dynamics_gain_followup.py \
-  --device cpu \
-  --epochs 2 \
-  --steps-per-epoch 60 \
-  --lr 3e-05 \
-  --transition-aux-weight 2.0 \
-  --transition-global-weight 0.1 \
-  --transition-cosine-weight 0.25 \
-  --transition-magnitude-weight 0.5 \
+```text
+historical note: this stage originally used a dedicated donor-dynamics-gain follow-up script; that probe was later deleted during the 2026-04-18 posttrain compat cleanup.
+```
   --focus-cycle-min 1 \
   --focus-sic-lo 11 \
   --focus-sic-hi 43 \
@@ -8228,9 +8221,9 @@ P1 里最重要的一个反问是：
 
 ### E.9 same-input module attribution / module-swap inference
 
-运行脚本：
+运行脚本（历史记录）：
 
-- `python3 tools/analyze_cp015_tailk7_same_input_module_attribution.py --device cpu`
+- same-input module attribution originally used a dedicated probe script that was later deleted during the 2026-04-18 posttrain compat cleanup.
 - summary: `debug_output/_tmp_cp015_tailk7_same_input_module_attribution_20260407/summary.json`
 
 关键结果（这里的 `delta_l2` 是当前 probe 使用的 **RMS-normalized L2**，与上文 raw L2 量纲不同）：
@@ -8282,9 +8275,9 @@ P1 里最重要的一个反问是：
 - 是否存在解释力更强的 **nonleg-first staged path**
 - `direct_pose_head`、arm/else proj、leg modules 在 staged graph 中到底分别扮演什么角色
 
-运行脚本（同一 deterministic single-step / first-forward probe）：
+运行脚本（历史记录，同一 deterministic single-step / first-forward probe）：
 
-- `python3 tools/analyze_cp015_tailk7_same_input_module_attribution.py --device cpu`
+- same-input attribution / staged-search originally used a dedicated probe script that was later deleted during the 2026-04-18 posttrain compat cleanup.
 - updated summary: `debug_output/_tmp_cp015_tailk7_same_input_module_attribution_20260407/summary.json`
 
 脚本在原有 same-input attribution 基础上新增了：

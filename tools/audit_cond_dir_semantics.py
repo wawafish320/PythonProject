@@ -25,8 +25,8 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from train.dataset import MotionEventDataset
-from train.posttrain_common import _merge_norm_spec
+from train.data.dataset import MotionEventDataset
+from train.configuration.norm_spec import merge_norm_spec
 
 
 def _safe_float(x: Any) -> float:
@@ -50,7 +50,7 @@ def _corr(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _load_dataset(data_root: Path, bundle: Path, pretrain_template: Path, seq_len: int) -> MotionEventDataset:
-    norm_spec = _merge_norm_spec(bundle.resolve(), pretrain_template.resolve())
+    norm_spec = merge_norm_spec(bundle.resolve(), pretrain_template.resolve(), pretrain_keys=None, strict=True)
     ds = MotionEventDataset(
         data_dir=str(data_root.resolve()),
         seq_len=int(seq_len),

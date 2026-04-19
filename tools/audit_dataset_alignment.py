@@ -32,7 +32,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from train.io import load_soft_contacts_from_json, npz_scalar_to_str  # noqa: E402
+from train.data.io import load_soft_contacts_from_json, npz_scalar_to_str  # noqa: E402
 
 
 def _expand_specs(specs: Sequence[str], *, want_suffix: str) -> List[Path]:
@@ -432,4 +432,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -63,7 +63,7 @@ python -m train.convert_json_to_npz raw_data --out raw_data/processed_data --mer
 ### Step 2) 生成/更新训练配置（profile + build）
 
 ```bash
-python -m train.configuration --profile \
+python -m tools.config_builder --profile \
   --base-config config/exp_phase_mpl.json \
   --output config/exp_phase_mpl.json
 ```
@@ -71,7 +71,7 @@ python -m train.configuration --profile \
 只预览不落盘：
 
 ```bash
-python -m train.configuration --profile --dry-run \
+python -m tools.config_builder --profile --dry-run \
   --base-config config/exp_phase_mpl.json \
   --output config/exp_phase_mpl.json
 ```
@@ -387,10 +387,9 @@ python -m train.export_onnx_from_ckpt \
 | 数据集与增强 | `train/dataset.py` |
 | 几何工具 | `train/geometry.py` |
 | 评估工具 | `train/eval_utils.py` |
-| 配置构建入口（wrapper） | `train/train_configurator.py` |
-| 配置 CLI | `train/configuration/cli.py` |
-| 数据 profile | `train/configuration/profile.py` |
-| 阶段构建 | `train/configuration/stages.py` |
+| 配置 CLI | `tools/config_builder/cli.py` |
+| 数据 profile | `tools/config_builder/profile.py` |
+| 阶段构建 | `tools/config_builder/stages.py` |
 | JSON→NPZ 转换 | `train/convert_json_to_npz.py` |
 | ONNX 导出 | `train/export_onnx_from_ckpt.py` |
 

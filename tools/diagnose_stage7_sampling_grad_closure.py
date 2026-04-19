@@ -28,8 +28,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from train.dataset import MotionEventDataset
-from train.validate.run_freerun_cycles import FreeRunCycleRunner, _merge_norm_spec
+from train.data.dataset import MotionEventDataset
+from train.configuration.norm_spec import merge_norm_spec
+from train.validate.run_freerun_cycles import FreeRunCycleRunner
 
 
 @dataclass
@@ -1132,7 +1133,12 @@ def main() -> None:
     cfg = _load_json(Path(args.config_json).expanduser())
     bundle_path = Path(args.bundle).expanduser()
     pretrain_path = Path(args.pretrain_template).expanduser()
-    norm_spec = _merge_norm_spec(bundle_path, pretrain_path if pretrain_path.is_file() else None)
+    norm_spec = merge_norm_spec(
+        bundle_path,
+        pretrain_path if pretrain_path.is_file() else None,
+        pretrain_keys=None,
+        strict=True,
+    )
 
     seq_len = int(args.seq_len) if args.seq_len is not None else int(cfg.get("seq_len", 60))
     data_dir = str(cfg.get("data") or "raw_data/processed_data")

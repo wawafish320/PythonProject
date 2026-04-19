@@ -34,7 +34,8 @@ if str(_ROOT) not in sys.path:
 
 import diagnose_cond_rho_c5_signsplit as signsplit
 import diagnose_cond_rho_delta as base
-from train.dataset import MotionEventDataset
+from train.configuration.norm_spec import merge_norm_spec
+from train.data.dataset import MotionEventDataset
 
 
 def _safe_float(x: Any) -> float:
@@ -148,7 +149,7 @@ def _build_clip_path_by_id(
     bundle: Path,
     pretrain_template: Path,
 ) -> Dict[int, str]:
-    norm_spec = base._merge_norm_spec(bundle.resolve(), pretrain_template.resolve())
+    norm_spec = merge_norm_spec(bundle.resolve(), pretrain_template.resolve(), pretrain_keys=None, strict=True)
     ds = MotionEventDataset(
         data_dir=str(data_root.resolve()),
         seq_len=int(seq_len),

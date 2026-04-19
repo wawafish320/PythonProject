@@ -23,8 +23,11 @@ METRIC_KEYS = (
     "gate_sup_loss",
 )
 
-DEFAULT_DIRECT_CONFIG = "config/posttrain_WalkF_stage6_direct_cond_anchor_splitfirst_3way_arm_pe32h512_20260227.json"
-DEFAULT_LAMBDA_CONFIG = "config/posttrain_WalkF_stage7_lambda_final_calib_20260226_fromsplitfirst_fullcompat.json"
+# Defaults intentionally point at current-snapshot smoke fixtures with locally
+# available artifacts. Historical stage6/stage7 configs can still be passed via
+# --direct_config / --lambda_config when those checkpoints are present.
+DEFAULT_DIRECT_CONFIG = "config/posttrain_step6_direct_runtime_overlay_smoke_20260419.json"
+DEFAULT_LAMBDA_CONFIG = "config/posttrain_step6_lambda_lowlr72_embedded_smoke_20260419.json"
 DEFAULT_OUT_DIR = "models/__tmp_posttrain_smoke"
 
 
@@ -86,6 +89,70 @@ def _compare_metrics(current: Dict[str, float], baseline: Dict[str, float], tol:
     return failures
 
 
+def _load_config_payload(config_path: Path) -> dict[str, Any]:
+    payload = json.loads(config_path.read_text())
+    if not isinstance(payload, dict):
+        raise TypeError(f"Config must contain a JSON object: {config_path}")
+    return payload
+
+
+def _as_path(value: Any) -> Path:
+    return Path(str(value)).expanduser()
+
+
+def _iter_path_values(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [item for item in value if item is not None]
+    return [value]
+
+
+def _find_missing_case_artifacts(case: _Case) -> list[tuple[str, Path]]:
+    missing: list[tuple[str, Path]] = []
+    if not case.config_path.is_file():
+        return [("config", case.config_path)]
+
+    payload = _load_config_payload(case.config_path)
+    required_scalar_keys = (
+        "ckpt_in",
+        "bundle_json",
+        "pretrain_template",
+        "encoder_bundle",
+        "posttrain_contacts_pretrain_affine_stats",
+        "data",
+    )
+    for key in required_scalar_keys:
+        raw_value = payload.get(key)
+        if raw_value in (None, ""):
+            continue
+        path = _as_path(raw_value)
+        if not path.exists():
+            missing.append((key, path))
+
+    for idx, raw_value in enumerate(_iter_path_values(payload.get("paths"))):
+        path = _as_path(raw_value)
+        if not path.exists():
+            missing.append((f"paths[{idx}]", path))
+    return missing
+
+
+def _assert_case_artifacts_available(cases: list[_Case]) -> None:
+    blocked: list[str] = []
+    for case in cases:
+        missing = _find_missing_case_artifacts(case)
+        if not missing:
+            continue
+        blocked.append(f"[{case.mode}] {case.config_path}")
+        for label, path in missing:
+            blocked.append(f"  - missing {label}: {path}")
+    if blocked:
+        print("[step6][BLOCKED] required local artifacts are missing:")
+        for line in blocked:
+            print(line)
+        raise SystemExit(2)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Run Step6 minimal posttrain regression checks.")
     ap.add_argument("--python", default=sys.executable, help="Python executable used to run train.posttrain.")
@@ -134,11 +201,10 @@ def main() -> None:
     env = dict(os.environ)
     env["PYTHONPATH"] = "."
 
+    _assert_case_artifacts_available(cases)
+
     all_failures: list[str] = []
     for case in cases:
-        if not case.config_path.is_file():
-            raise FileNotFoundError(f"Config not found: {case.config_path}")
-
         cmd = [
             str(args.python),
             "-m",

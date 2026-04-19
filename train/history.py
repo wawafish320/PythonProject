@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .normalizers import VectorTanhNormalizerTorch
+from .data.normalizers import VectorTanhNormalizerTorch
 
 
 PoseHistParamsFn = Callable[

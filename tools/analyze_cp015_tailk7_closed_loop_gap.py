@@ -22,8 +22,6 @@ from train.models import DEFAULT_DIRECT_POSE_LEG_BONES, STAGE6_3WAY_ARMCHAIN_BON
 from train.training_MPL import RolloutSequenceInputs
 from train.validate.run_freerun_cycles import (
     FreeRunCycleRunner,
-    _apply_direct_arm_residual_correction_norm,
-    _apply_direct_leg_so3_correction_norm,
     _build_full_cycle_sample,
     _load_json,
     _run_freerun_cycles,

@@ -23,7 +23,7 @@ from pathlib import Path
 if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from train.rotvec_semantics import (
+from train.contracts.asset_semantics import (
     STANDARD_ANGVEL_SEMANTICS,
     STANDARD_ROTVEC_SEMANTICS,
     stamp_standard_rotvec_spec,

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 """
-Unified IO helpers for loading metadata, derived arrays, and dataset-specific signals.
+Dataset/runtime data I/O helpers.
 
-This module merges io_utils.py and layout_io.py helpers so callers have a single
-import surface: `from train.io import ...`.
+This module only handles dataset/source metadata, trajectory arrays, and runtime data helpers.
 """
 
 import json
@@ -16,7 +15,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 import numpy as np
 import torch
 
-from .layout import normalize_layout, canonicalize_state_layout
+from train.data.layout import normalize_layout, canonicalize_state_layout
 
 __all__ = [
     "load_soft_contacts_from_json",
@@ -230,7 +229,7 @@ def speed_from_X_layout(X: np.ndarray, state_layout: Dict[str, Any]) -> Optional
             return None
 
         try:
-            from .layout import parse_layout_entry
+            from train.data.layout import parse_layout_entry
 
             sl = parse_layout_entry(state_layout.get("RootVelocity"), "RootVelocity")
         except Exception:

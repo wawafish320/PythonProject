@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import torch
 import torch.nn as nn
-from .utils import warn_once
+from ..utils import warn_once
 
 if TYPE_CHECKING:
-    from .models import EventMotionModel
+    from ..models import EventMotionModel
 
 __all__ = [
     "ContactPlanBuildConfig",
@@ -343,8 +343,8 @@ def attach_motion_encoder_bundle(
     *,
     map_location: str | torch.device = "cpu",
 ) -> dict[str, Any]:
-    from .models import MotionEncoder, PeriodHead
-    from .rotvec_semantics import require_standard_rotvec_bundle
+    from ..models import MotionEncoder, PeriodHead
+    from ..contracts.asset_semantics import require_standard_rotvec_bundle
 
     payload = (
         torch.load(bundle, map_location=map_location)

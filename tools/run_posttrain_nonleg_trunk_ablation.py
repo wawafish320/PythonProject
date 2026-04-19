@@ -6,10 +6,22 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List
 
+import numpy as np
 import torch
 import torch.nn as nn
 
 import train.posttrain as posttrain
+from train.posttrain_build_shell import _build_posttrain_model_from_ckpt
+from train.runtime.freeze import _freeze_all, _select_trainable_params, _unfreeze_for_train_mode
+from train.utils import resolve_device
+
+
+def _set_seed(seed: int) -> None:
+    seed = int(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def _enable_trunk(model: nn.Module, mode: str) -> List[str]:
@@ -71,36 +83,32 @@ def main() -> None:
     payload["save_step_ckpts"] = str(args.save_step_ckpts)
 
     cfg = posttrain._cfg_from_payload(payload)
-    posttrain._set_seed(cfg.seed)
-    device = posttrain._resolve_device(cfg.device)
+    _set_seed(cfg.seed)
+    device = resolve_device(cfg.device)
     os.makedirs(cfg.out_dir, exist_ok=True)
 
     norm_spec, ds, batch_iter = posttrain._build_dataset_and_loader(cfg)
-    (
-        model,
-        direct_pose_feat_source,
-        direct_pose_time_pe_dim,
-        direct_pose_time_pe_base,
-        direct_pose_use_phase_z,
-        direct_pose_phase_z_mode,
-        direct_pose_split_enable,
-        direct_pose_nonleg_proj_dim,
-        direct_pose_leg_gate_mode_model,
-        direct_pose_leg_gate_power_model,
-    ) = posttrain._build_posttrain_model_from_ckpt(
+    artifacts = _build_posttrain_model_from_ckpt(
         cfg=cfg,
         ds=ds,
         device=device,
     )
+    model = artifacts.model
     trainer = posttrain._build_model_and_trainer(cfg=cfg, ds=ds, model=model, norm_spec=norm_spec)
     train_mode = posttrain._resolve_train_mode(cfg)
 
-    posttrain._freeze_all(model)
-    posttrain._unfreeze_for_train_mode(model, cfg, train_mode)
+    _freeze_all(model)
+    _unfreeze_for_train_mode(
+        model,
+        train_mode=train_mode,
+        direct_pose_leg_train_only=bool(getattr(cfg, "direct_pose_leg_train_only", False)),
+        direct_pose_leg_gate_train_only=bool(getattr(cfg, "direct_pose_leg_gate_train_only", False)),
+        direct_pose_nonleg_train_only=bool(getattr(cfg, "direct_pose_nonleg_train_only", False)),
+    )
     extra_names = _enable_trunk(model, str(args.trunk_mode))
     model.train()
 
-    params, names = posttrain._select_trainable_params(model)
+    params, names = _select_trainable_params(model)
     if not params:
         raise SystemExit("[FATAL] no trainable params selected")
     print(f"[ablation] trunk_mode={args.trunk_mode} extra_trainable={len(extra_names)}")
@@ -148,20 +156,7 @@ def main() -> None:
         l2sp_pairs=[],
         l2sp_weight=0.0,
     )
-    ckpt_out = posttrain._save_posttrain_outputs(
-        cfg=cfg,
-        model=model,
-        log_rows=log_rows,
-        direct_pose_feat_source=direct_pose_feat_source,
-        direct_pose_time_pe_dim=direct_pose_time_pe_dim,
-        direct_pose_time_pe_base=direct_pose_time_pe_base,
-        direct_pose_use_phase_z=direct_pose_use_phase_z,
-        direct_pose_phase_z_mode=direct_pose_phase_z_mode,
-        direct_pose_split_enable=direct_pose_split_enable,
-        direct_pose_nonleg_proj_dim=direct_pose_nonleg_proj_dim,
-        direct_pose_leg_gate_mode_model=direct_pose_leg_gate_mode_model,
-        direct_pose_leg_gate_power_model=direct_pose_leg_gate_power_model,
-    )
+    ckpt_out = posttrain._save_posttrain_outputs(cfg=cfg, artifacts=artifacts, log_rows=log_rows)
     print(f"[ablation][OK] saved: {ckpt_out}")
 
 

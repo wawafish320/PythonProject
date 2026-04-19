@@ -295,7 +295,7 @@ def _extract_posehist_fk(
         import torch
 
         from train.geometry import fk_positions_from_rot6d
-        from train.normalizers import VectorTanhNormalizerTorch
+        from train.data.normalizers import VectorTanhNormalizerTorch
 
         norm_t = torch.from_numpy(pose_hist_norm)
         vt = VectorTanhNormalizerTorch(
