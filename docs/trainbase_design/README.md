@@ -9,6 +9,8 @@
 - 仍有上下文价值的结构级说明
 - 不等同于当前 global canonical posttrain 入口
 
-当前 canonical posttrain 入口仍是：
+当前 canonical 入口：
 
-- `docs/posttrain_pipeline.md`
+- basetrain 当前架构 / 设计思路：`docs/basetrain_pipeline.md`
+- posttrain canonical chain：`docs/posttrain_pipeline.md`
+- 代码归属红线（写代码前自检）：`train/MODULE_BOUNDARIES.md`

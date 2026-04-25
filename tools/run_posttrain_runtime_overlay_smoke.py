@@ -68,6 +68,7 @@ def _load_fixture_payload(spec: FixtureSpec) -> dict[str, Any]:
         payload = dict(ckpt["posttrain_cfg"])
 
     payload["ckpt_in"] = str(spec.ckpt_in)
+    payload["load_context"] = "resume"
     if spec.encoder_bundle is not None:
         payload["encoder_bundle"] = str(spec.encoder_bundle)
     if spec.paths is not None:

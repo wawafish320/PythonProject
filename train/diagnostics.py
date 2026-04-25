@@ -3,12 +3,12 @@ from __future__ import annotations
 import math as _math
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
 
+from . import rollout_kernel as _rollout_kernel
 from .geometry import (
     _root_relative_matrices,
     angvel_vec_from_R_seq,
@@ -23,6 +23,71 @@ from .utils import grad_norm_of_module, safe_int_scalar, warn_once
 
 
 _DIAG_WARN_ONCE_KEYS: set[str] = set()
+
+
+@dataclass(frozen=True)
+class DiagnosticsRuntimeConfig:
+    diag_scope: str
+    rot6d_y: Optional[slice]
+    rv_x: Optional[slice]
+    rot6d_x: Optional[slice]
+    yaw_x_slice: Optional[slice]
+    eval_align_root: bool
+    root_idx: int
+    up_axis: int
+    fps_eval: float
+    contact_threshold: float
+    diag_input_stats: bool
+    yaw_forward_axis_offset: float
+    mag_rel_beta: float
+    mag_rel_threshold: float
+    angvel_eps: float
+    angvel_dir_threshold: float
+    deg: float
+    bone_names: Sequence[str]
+    angvel_slice: Optional[slice]
+
+
+def resolve_diagnostics_runtime_config(
+    trainer: Any,
+    *,
+    bone_names: Sequence[str] = (),
+) -> DiagnosticsRuntimeConfig:
+    cond_runtime = _rollout_kernel.resolve_rollout_cond_runtime_config(trainer)
+    free_carry_cfg = _rollout_kernel.resolve_free_carry_runtime_config(trainer)
+    yaw_x_slice = getattr(trainer, "yaw_x_slice", None)
+    if not isinstance(yaw_x_slice, slice):
+        yaw_x_slice = None
+    fps_eval = getattr(trainer, "bone_hz", None)
+    if fps_eval is None:
+        fps_eval = getattr(trainer, "fps", 60.0)
+    root_idx = cond_runtime.root_idx
+    if getattr(trainer, "eval_root_idx", None) is None:
+        try:
+            root_idx = int(getattr(trainer, "root_idx", root_idx) or root_idx)
+        except Exception:
+            pass
+    return DiagnosticsRuntimeConfig(
+        diag_scope=str(getattr(trainer, "_diag_scope", "free_run")),
+        rot6d_y=cond_runtime.rot_slice,
+        rv_x=free_carry_cfg.rootvel_x_slice,
+        rot6d_x=free_carry_cfg.rot6d_x_slice,
+        yaw_x_slice=yaw_x_slice,
+        eval_align_root=bool(getattr(trainer, "eval_align_root0", True)),
+        root_idx=root_idx,
+        up_axis=cond_runtime.up_axis,
+        fps_eval=float(fps_eval or 60.0),
+        contact_threshold=float(getattr(trainer, "foot_contact_threshold", 1.5)),
+        diag_input_stats=bool(getattr(trainer, "diag_input_stats", False)),
+        yaw_forward_axis_offset=cond_runtime.offset,
+        mag_rel_beta=float(getattr(trainer, "eval_angvel_beta", 0.25) or 0.25),
+        mag_rel_threshold=float(getattr(trainer, "eval_angvel_mag_threshold", 0.10) or 0.10),
+        angvel_eps=float(getattr(trainer, "angvel_eps", 1e-6) or 1e-6),
+        angvel_dir_threshold=float(getattr(trainer, "angvel_dir_threshold", 0.1) or 0.1),
+        deg=180.0 / _math.pi,
+        bone_names=tuple(str(name) for name in bone_names),
+        angvel_slice=free_carry_cfg.angvel_x_slice,
+    )
 
 
 def _diag_warn_once(key: str, message: str, exc: Optional[BaseException] = None) -> None:
@@ -694,7 +759,7 @@ def _collect_diag_sequences(trainer, *, predsX, motion_seq, batch) -> FreeRunDia
 def _compute_input_drift_metrics(
     trainer,
     result: Dict[str, Any],
-    cfg: SimpleNamespace,
+    cfg: DiagnosticsRuntimeConfig,
     seqs: FreeRunDiagSequences,
     *,
     period_seq_pred,
@@ -873,7 +938,7 @@ def _summarize_angvel_dir(
 def _compute_contact_and_angvel_metrics(
     trainer,
     result: Dict[str, Any],
-    cfg: SimpleNamespace,
+    cfg: DiagnosticsRuntimeConfig,
     seqs: FreeRunDiagSequences,
     *,
     predY,
@@ -1185,7 +1250,7 @@ def _compute_contact_and_angvel_metrics(
 def _compute_keybone_metrics(
     trainer,
     result: Dict[str, Any],
-    cfg: SimpleNamespace,
+    cfg: DiagnosticsRuntimeConfig,
     state: FreeRunDiagKinematics,
 ) -> None:
     if not cfg.bone_names:
@@ -1366,26 +1431,7 @@ def diagnose_free_run(
     result: Dict[str, Any] = {
         "MSEnormY": float(torch.mean((predY - gtY) ** 2).item()),
     }
-    cfg = SimpleNamespace(
-        diag_scope=str(getattr(trainer, "_diag_scope", "free_run")),
-        rot6d_y=getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None),
-        rv_x=getattr(trainer, "rootvel_x_slice", None),
-        rot6d_x=getattr(trainer, "rot6d_x_slice", None) or getattr(trainer, "rot6d_slice", None),
-        eval_align_root=bool(getattr(trainer, "eval_align_root0", True)),
-        root_idx=int(getattr(trainer, "eval_root_idx", getattr(trainer, "root_idx", 0))),
-        up_axis=int(getattr(trainer, "eval_up_axis", getattr(trainer, "_up_axis", 2))),
-        fps_eval=float(getattr(trainer, "bone_hz", getattr(trainer, "fps", 60.0))),
-        contact_threshold=float(getattr(trainer, "foot_contact_threshold", 1.5)),
-        diag_input_stats=bool(getattr(trainer, "diag_input_stats", False)),
-        yaw_forward_axis_offset=float(getattr(trainer, "yaw_forward_axis_offset", 0.0) or 0.0),
-        mag_rel_beta=float(getattr(trainer, "eval_angvel_beta", 0.25) or 0.25),
-        mag_rel_threshold=float(getattr(trainer, "eval_angvel_mag_threshold", 0.10) or 0.10),
-        angvel_eps=float(getattr(trainer, "angvel_eps", 1e-6) or 1e-6),
-        angvel_dir_threshold=float(getattr(trainer, "angvel_dir_threshold", 0.1) or 0.1),
-        deg=180.0 / _math.pi,
-        bone_names=bone_names,
-        angvel_slice=getattr(trainer, "angvel_x_slice", None),
-    )
+    cfg = resolve_diagnostics_runtime_config(trainer, bone_names=bone_names)
 
     seqs = _collect_diag_sequences(trainer, predsX=predsX, motion_seq=motion_seq, batch=batch)
     _compute_input_drift_metrics(trainer, result, cfg, seqs, period_seq_pred=period_seq_pred)
@@ -1517,7 +1563,8 @@ def _compute_history_drift_geo_local_stats(
     gt_raw: torch.Tensor,
     pred_raw: torch.Tensor,
 ) -> Optional[Dict[str, Any]]:
-    rot_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
+    diag_cfg = resolve_diagnostics_runtime_config(trainer)
+    rot_slice = diag_cfg.rot6d_y
     if not isinstance(rot_slice, slice):
         return None
     rot_width = int(rot_slice.stop - rot_slice.start)
@@ -1527,7 +1574,7 @@ def _compute_history_drift_geo_local_stats(
     joint_count = rot_width // 6
     gt_m = rot6d_to_matrix(reproject_rot6d(gt_raw[..., rot_slice].reshape(batch_size * steps, joint_count, 6))).view(batch_size, steps, joint_count, 3, 3)
     pred_m = rot6d_to_matrix(reproject_rot6d(pred_raw[..., rot_slice].reshape(batch_size * steps, joint_count, 6))).view(batch_size, steps, joint_count, 3, 3)
-    root_idx = int(getattr(trainer, "eval_root_idx", getattr(trainer, "root_idx", 0)))
+    root_idx = diag_cfg.root_idx
     pred_root = _root_relative_matrices(pred_m, root_idx)
     gt_root = _root_relative_matrices(gt_m, root_idx)
     joint_weights = trainer._joint_weights(pred_root, joint_count)
@@ -1776,8 +1823,9 @@ def collect_freerun_step_debug_record(
     delta_norm: Optional[torch.Tensor],
 ) -> Optional[Dict[str, Any]]:
     rec: Dict[str, Any] = {"step": int(step_idx)}
-    yaw_sl = getattr(trainer, "yaw_x_slice", None)
-    rootvel_sl = getattr(trainer, "rootvel_x_slice", None)
+    diag_cfg = resolve_diagnostics_runtime_config(trainer)
+    yaw_sl = diag_cfg.yaw_x_slice
+    rootvel_sl = diag_cfg.rv_x
     if isinstance(yaw_sl, slice) and motion_raw is not None and gt_motion_raw is not None:
         deg = 180.0 / torch.pi
         yaw_pred = motion_raw[..., yaw_sl]

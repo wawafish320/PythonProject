@@ -24,7 +24,8 @@ from .eval_utils import evaluate_teacher
 from .geometry import (
     rot6d_to_matrix,
     matrix_to_rot6d,
-    compose_rot6d_delta,
+    compose_delta_raw_to_next,
+    blend_rot6d_raw_with_lambda,
     geodesic_R,
     so3_exp_map,
     so3_log_map,
@@ -35,11 +36,9 @@ from .geometry import (
     _matrix_log_map,
     normalize_rot6d_delta,
     _rot6d_identity_like,
-    root_yaw_from_rot6d_torch,
+    root_yaw_from_raw_rot6d,
     wrap_to_pi_np as _wrap_to_pi_np,
-    wrap_to_pi_torch,
     gram_schmidt_renorm_np,
-    _apply_so3_correction_to_delta_raw,
 )
 from .data.layout import (
     normalize_layout as _normalize_layout,
@@ -99,7 +98,7 @@ from .rollout_kernel import (
     RolloutSequenceInputs,
     RolloutStepInputs,
 )
-from .data.normalizers import normalize_cond_tensor, prepare_runtime_stat_tensor
+from .data.normalizers import prepare_runtime_stat_tensor
 from .runtime_attach import (
     SharedTrainerRuntime,
     apply_contacts_pretrain_runtime,
@@ -121,6 +120,12 @@ from .models import (
 )
 from .checkpoint.compat import resume_load_weights_compat as _resume_load_weights_compat
 from .checkpoint.compat import attach_motion_encoder_bundle as _attach_motion_encoder_bundle
+from .checkpoint.fingerprint import (
+    build_basetrain_build_trace_manifest,
+    build_checkpoint_fingerprint_metadata,
+    build_event_motion_model_io_signature_manifest,
+    build_event_motion_model_module_graph_manifest,
+)
 
 
 _arg = get_global_arg
@@ -164,6 +169,35 @@ def _phasec_warn_once(
         message=message,
         exc=exc,
     )
+
+
+def _build_basetrain_train_policy_manifest(trainer: Any) -> Dict[str, Any]:
+    def _int_attr(name: str, default: int = 0) -> int:
+        try:
+            return int(getattr(trainer, name, default) or default)
+        except (TypeError, ValueError):
+            return int(default)
+
+    def _float_attr(name: str, default: float = 0.0) -> float:
+        try:
+            value = float(getattr(trainer, name, default) or default)
+        except (TypeError, ValueError):
+            value = float(default)
+        return float(value if _math.isfinite(value) else default)
+
+    return {
+        "tf_mode": str(getattr(trainer, "tf_mode", "") or ""),
+        "tf_start_epoch": _int_attr("tf_start_epoch", 0),
+        "tf_end_epoch": _int_attr("tf_end_epoch", 0),
+        "tf_max": _float_attr("tf_max", 0.0),
+        "tf_min": _float_attr("tf_min", 0.0),
+        "ss_chunk_len": _int_attr("ss_chunk_len", 1),
+        "history_dropout_prob": _float_attr("history_dropout_prob", 0.0),
+        "history_dropout_prob_min": _float_attr("history_dropout_prob_min", 0.0),
+        "history_dropout_prob_max": _float_attr("history_dropout_prob_max", 0.0),
+        "enable_grad_connection_test": bool(getattr(trainer, "enable_grad_connection_test", False)),
+        "freerun_stage_schedule": list(getattr(trainer, "freerun_stage_schedule", []) or []),
+    }
 
 
 LEGACY_LOSS_KEYS: tuple[str, ...] = (
@@ -460,19 +494,6 @@ class Trainer:
             stat_t = stat_t.expand(ref_tensor.size(0), -1).contiguous()
         return stat_t
 
-    def _normalize_cond_from_raw(
-        self,
-        cond_raw: Optional[torch.Tensor],
-        cond_mu: Optional[torch.Tensor],
-        cond_std: Optional[torch.Tensor],
-    ) -> Optional[torch.Tensor]:
-        return normalize_cond_tensor(
-            cond_raw,
-            cond_mu,
-            cond_std,
-            cond_norm_clip=float(getattr(self, 'cond_norm_clip', 6.0) or 0.0),
-        )
-
     def _pose_hist_params(self, ref: torch.Tensor) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Returns pose-history normalizer tensors aligned with the reference tensor's device/dtype.
@@ -483,35 +504,6 @@ class Trainer:
         mu = prepare_runtime_stat_tensor(self.pose_hist_mu, ref_tensor=ref)
         std = prepare_runtime_stat_tensor(self.pose_hist_std, ref_tensor=ref)
         return scales, mu, std
-
-    def _infer_root_yaw_from_rot6d(self, y_denorm: "torch.Tensor"):
-        ry = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
-        if not isinstance(ry, slice):
-            return None
-        try:
-            rot_flat = y_denorm[..., ry]
-        except Exception:
-            return None
-        if rot_flat.numel() == 0:
-            return None
-        J = (ry.stop - ry.start) // 6
-        if J <= 0:
-            return None
-        try:
-            rot6d = rot_flat.view(rot_flat.shape[0], J, 6)
-        except Exception:
-            return None
-        root_idx = int(getattr(self, 'eval_root_idx', 0))
-        up_axis = int(getattr(self, 'eval_up_axis', getattr(self, '_up_axis', 2)))
-        forward_axis = int(getattr(self, 'yaw_forward_axis', 2))
-        return root_yaw_from_rot6d_torch(
-            rot6d,
-            forward_axis=forward_axis,
-            up_axis=up_axis,
-            offset=float(getattr(self, 'yaw_forward_axis_offset', 0.0)),
-            root_idx=root_idx,
-            reproject=True,
-        )
 
     def _predict_pretrain_contacts_from_frozen(
         self,
@@ -630,12 +622,18 @@ class Trainer:
                     "failed to apply StdY scaling for delta compose; using unscaled delta_norm",
                     exc,
                 )
-        rot_slice = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
+        rot_slice = getattr(self, 'rot6d_y_slice', None)
+        if not isinstance(rot_slice, slice):
+            rot_slice = getattr(self, 'rot6d_slice', None)
         if not isinstance(rot_slice, slice):
             rot_slice = slice(0, y_prev_raw.shape[-1])
         rot_len = int(rot_slice.stop - rot_slice.start)
         if rot_len % 6 != 0:
             self._raise_norm_error(f"compose_delta_to_raw: rot_slice 长度 {rot_len} 不是 6 的倍数。")
+        columns = getattr(self.loss_fn, '_rot6d_columns', ("X", "Z"))
+        cols = tuple(columns) if isinstance(columns, (list, tuple)) and len(columns) >= 2 else ("X", "Z")
+        gate_val = 0.0
+        max_deg = 0.0
 
         if omega_hat is not None:
             gate_val = so3_gate
@@ -646,14 +644,16 @@ class Trainer:
             if max_deg is None:
                 max_deg = float(getattr(self, 'so3_corr_max_deg', 20.0) or 20.0)
             try:
-                delta_raw = _apply_so3_correction_to_delta_raw(
+                return compose_delta_raw_to_next(
+                    y_prev_raw,
                     delta_raw,
                     rot_slice=rot_slice,
                     omega_hat=omega_hat,
+                    columns=cols,
                     gate_val=float(gate_val or 0.0),
                     max_deg=float(max_deg or 0.0),
-                    columns=getattr(self.loss_fn, '_rot6d_columns', ("X", "Z")),
                     omega_detach=bool(omega_detach),
+                    reproject=False,
                 )
             except (RuntimeError, TypeError, ValueError) as exc:
                 _phasec_warn_once(
@@ -662,20 +662,19 @@ class Trainer:
                     exc,
                 )
         try:
-            rot_next = compose_rot6d_delta(
-                y_prev_raw[..., rot_slice],
-                delta_raw[..., rot_slice],
-                reproject_result=False,
+            return compose_delta_raw_to_next(
+                y_prev_raw,
+                delta_raw,
+                rot_slice=rot_slice,
+                columns=cols,
+                omega_hat=None,
+                gate_val=float(gate_val or 0.0),
+                max_deg=float(max_deg or 0.0),
+                omega_detach=bool(omega_detach),
+                reproject=False,
             )
         except Exception as e:
             self._raise_norm_error("compose_rot6d_delta 失败", e)
-
-        if rot_len == y_prev_raw.shape[-1]:
-            return rot_next
-        tail_prev = y_prev_raw[..., rot_slice.stop:]
-        tail_delta = delta_raw[..., rot_slice.stop:]
-        tail_next = tail_prev + tail_delta
-        return torch.cat([rot_next, tail_next], dim=-1)
 
     def _mul_lambda_reliability(
         self,
@@ -830,7 +829,9 @@ class Trainer:
         if direct_norm.dim() != 2 or direct_norm.shape[0] != y_inc_raw.shape[0]:
             return y_inc_raw
 
-        rot_slice = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
+        rot_slice = getattr(self, 'rot6d_y_slice', None)
+        if not isinstance(rot_slice, slice):
+            rot_slice = getattr(self, 'rot6d_slice', None)
         if not isinstance(rot_slice, slice):
             rot_slice = slice(0, y_inc_raw.shape[-1])
         rot_len = int(rot_slice.stop - rot_slice.start)
@@ -848,14 +849,9 @@ class Trainer:
         cols = tuple(columns) if isinstance(columns, (list, tuple)) and len(columns) >= 2 else ("X", "Z")
 
         try:
-            inc6 = reproject_rot6d(y_inc_raw[..., rot_slice]).view(y_inc_raw.shape[0], J, 6)
-            dir6 = reproject_rot6d(direct_raw[..., rot_slice]).view(y_inc_raw.shape[0], J, 6)
-            R_inc = rot6d_to_matrix(inc6, columns=cols)
-            R_dir = rot6d_to_matrix(dir6, columns=cols)
+            lam = lambda_fusion
         except Exception:
             return y_inc_raw
-
-        lam = lambda_fusion
         try:
             if lam.dim() == 1 and lam.shape[0] == y_inc_raw.shape[0]:
                 lam = lam.unsqueeze(-1)
@@ -872,144 +868,15 @@ class Trainer:
             return y_inc_raw
 
         try:
-            R_res = torch.matmul(R_dir, R_inc.transpose(-1, -2))
-            omega = so3_log_map(R_res)
-            R_step = torch.matmul(so3_exp_map(omega * lam.unsqueeze(-1)), R_inc)
-            rot_blend6 = matrix_to_rot6d(R_step, columns=cols).reshape(y_inc_raw.shape[0], rot_len)
-            y_blend = y_inc_raw.clone()
-            y_blend[..., rot_slice] = rot_blend6
-            return y_blend
+            return blend_rot6d_raw_with_lambda(
+                y_inc_raw,
+                direct_raw,
+                lam,
+                rot_slice=rot_slice,
+                columns=cols,
+            )
         except Exception:
             return y_inc_raw
-
-    def _reproject_cond_to_local_frame(self, cond_raw, yaw_gt, yaw_pred):
-        """
-        将条件信息（目标方向/速度）重投影到模型预测的局部坐标系。
-
-        参数:
-            cond_raw: [B, cond_dim] 原始条件，格式: [..., dir_x, dir_y, speed]
-            yaw_gt: [B] 或 [B, 1] GT的根骨朝向（世界坐标系）
-            yaw_pred: [B] 或 [B, 1] 模型预测的根骨朝向（世界坐标系）
-
-        返回:
-            重投影后的 cond_raw，方向分量旋转到模型的局部坐标系
-        """
-        if cond_raw is None:
-            return None
-
-        import torch
-
-        device = cond_raw.device
-        dtype = cond_raw.dtype
-
-        # 确保 yaw 是 [B] 形状
-        if yaw_gt.dim() > 1:
-            yaw_gt = yaw_gt.squeeze(-1)
-        if yaw_pred.dim() > 1:
-            yaw_pred = yaw_pred.squeeze(-1)
-
-        # 计算朝向偏差：Δyaw = yaw_pred - yaw_gt
-        delta_yaw = yaw_pred - yaw_gt
-        delta_yaw = wrap_to_pi_torch(delta_yaw)  # 归一化到 [-π, π]
-
-        # 解析 cond_raw: [...action_dims, dir_x, dir_y, speed]
-        cond_dim = cond_raw.shape[-1]
-        if cond_dim < 3:
-            self._raise_norm_error("_reproject_cond_to_local_frame cond_raw 最少需要 [dir_x, dir_y, speed]")
-
-        action_dim = cond_dim - 3
-        cond_reprojected = cond_raw.clone()
-
-        # 提取方向分量
-        dir_world = cond_raw[..., action_dim:action_dim + 2]  # [B, 2]
-
-        # 将方向旋转 -Δyaw，转换到模型的局部坐标系
-        # 旋转矩阵: [[cos(-θ), -sin(-θ)], [sin(-θ), cos(-θ)]]
-        cos_delta = torch.cos(-delta_yaw)
-        sin_delta = torch.sin(-delta_yaw)
-
-        dir_local_x = dir_world[..., 0] * cos_delta - dir_world[..., 1] * sin_delta
-        dir_local_y = dir_world[..., 0] * sin_delta + dir_world[..., 1] * cos_delta
-
-        # 写回重投影后的方向
-        cond_reprojected[..., action_dim] = dir_local_x
-        cond_reprojected[..., action_dim + 1] = dir_local_y
-
-        # 速度保持不变（标量，与朝向无关）
-
-        return cond_reprojected
-
-    def _apply_free_carry(self, x_prev, y_denorm, cond_next_raw=None):
-        """
-        将模型预测的 Y(raw) 写回下一帧的 X(raw)，并根据 cond 信息更新根部位置/速度。
-        """
-        x_next = x_prev.clone()
-        import torch, math
-        device = x_prev.device
-        dtype = x_prev.dtype
-
-        # --- 1) 写回骨骼旋转 ---
-        rx = getattr(self, 'rot6d_x_slice', None) or getattr(self, 'rot6d_slice', None)
-        ry = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
-        if not (isinstance(rx, slice) and isinstance(ry, slice)):
-            self._raise_norm_error("_apply_free_carry 缺少 rot6d 切片")
-        if (rx.stop - rx.start) != (ry.stop - ry.start):
-            self._raise_norm_error("_apply_free_carry rot6d 区间长度不一致")
-        x_next[..., rx] = y_denorm[..., ry]
-
-        # 预解析 cond 原始信息：动作维度 + dir(2) + speed(1) —— 必须存在
-        if cond_next_raw is None:
-            self._raise_norm_error("_apply_free_carry 缺少 cond_next_raw（应包含方向与速度信息）")
-        cond_raw = torch.as_tensor(cond_next_raw, device=device, dtype=dtype)
-        if cond_raw.dim() == 1:
-            cond_raw = cond_raw.unsqueeze(0)
-        if cond_raw.shape[0] != x_prev.shape[0]:
-            cond_raw = cond_raw.expand(x_prev.shape[0], -1)
-        cond_dim = cond_raw.shape[-1]
-        if cond_dim < 3:
-            self._raise_norm_error("_apply_free_carry cond_next_raw 最少需要 [dir_x, dir_y, speed]")
-        action_dim = max(0, cond_dim - 3)
-        cond_dir = cond_raw[..., action_dim:action_dim + 2]
-        cond_speed = cond_raw[..., action_dim + 2]
-
-        # cond_dir 已是世界系（转换脚本 convert_json_to_npz 已旋到 UE 世界坐标）
-        cond_dir_world = cond_dir
-        dir_norm = cond_dir_world.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-        dir_unit_world = cond_dir_world / dir_norm
-
-        # --- 3) 衍生角速度 ---
-        av_sl = getattr(self, 'angvel_x_slice', None)
-        if isinstance(av_sl, slice):
-            J = (rx.stop - rx.start) // 6
-            if J <= 0:
-                self._raise_norm_error("_apply_free_carry rot6d 切片无有效关节")
-            prev6 = x_prev[..., rx].reshape(x_prev.shape[0], J, 6)
-            curr6 = x_next[..., rx].reshape(x_prev.shape[0], J, 6)
-            Rp = rot6d_to_matrix(prev6)
-            Rc = rot6d_to_matrix(curr6)
-            Rseq = torch.stack([Rp, Rc], dim=1)
-            fps = float(getattr(self, 'bone_hz', 60.0) or 60.0)
-            w = angvel_vec_from_R_seq(Rseq, fps=fps)[:, -1]
-            x_next[..., av_sl] = w.reshape(x_prev.shape[0], J * 3)
-
-        # --- 4) 根部速度/位置 ---
-        rootvel_sl = getattr(self, 'rootvel_x_slice', None)
-        rootpos_sl = getattr(self, 'rootpos_x_slice', None)
-        if not isinstance(rootvel_sl, slice):
-            self._raise_norm_error("_apply_free_carry 缺少 RootVelocity 切片")
-        vel_world = dir_unit_world * cond_speed.unsqueeze(-1)
-        vel_world = vel_world[..., : (rootvel_sl.stop - rootvel_sl.start)]
-        x_next[..., rootvel_sl] = vel_world
-
-        if not isinstance(rootpos_sl, slice):
-            self._raise_norm_error("_apply_free_carry 缺少 RootPosition 切片")
-        dt = 1.0 / max(float(getattr(self, 'bone_hz', 60.0) or 60.0), 1e-6)
-        pos = x_prev[..., rootpos_sl].clone()
-        step = vel_world[..., :min(2, vel_world.shape[-1])] * dt
-        pos[..., :step.shape[-1]] = pos[..., :step.shape[-1]] + step
-        x_next[..., rootpos_sl] = pos
-
-        return x_next
 
     def _resolve_rollout_gt_yaw(
         self,
@@ -1018,15 +885,32 @@ class Trainer:
         *,
         step_idx: int,
     ) -> Optional[torch.Tensor]:
+        runtime_cfg = _rollout_kernel.resolve_rollout_cond_runtime_config(self)
         if rollout_inputs.gt_seq is not None and rollout.has_time_dim.get('cond_raw'):
             gt_idx = min(rollout_inputs.gt_seq.shape[1] - 1, int(step_idx))
-            return self._infer_root_yaw_from_rot6d(self._denorm(rollout_inputs.gt_seq[:, gt_idx]))
+            return root_yaw_from_raw_rot6d(
+                self._denorm(rollout_inputs.gt_seq[:, gt_idx]),
+                rot_slice=runtime_cfg.rot_slice,
+                root_idx=runtime_cfg.root_idx,
+                up_axis=runtime_cfg.up_axis,
+                forward_axis=runtime_cfg.forward_axis,
+                offset=runtime_cfg.offset,
+                reproject=True,
+            )
         if rollout_inputs.state_seq is not None:
             state_raw = self.normalizer.denorm_x(
                 rollout_inputs.state_seq[:, int(step_idx)],
                 prev_raw=rollout.motion_raw_local,
             )
-            return self._infer_root_yaw_from_rot6d(state_raw)
+            return root_yaw_from_raw_rot6d(
+                state_raw,
+                rot_slice=runtime_cfg.rot_slice,
+                root_idx=runtime_cfg.root_idx,
+                up_axis=runtime_cfg.up_axis,
+                forward_axis=runtime_cfg.forward_axis,
+                offset=runtime_cfg.offset,
+                reproject=True,
+            )
         return None
 
     def _compute_rollout_step_debug_stats(
@@ -1056,7 +940,9 @@ class Trainer:
         if torch.is_tensor(gt_seq) and gt_seq.dim() == 3 and pred_raw_local is not None:
             try:
                 gt_frame = self._denorm(gt_seq[:, min(step_idx + 1, gt_seq.shape[1] - 1)])
-                rot_slice = getattr(self, 'rot6d_y_slice', None) or getattr(self, 'rot6d_slice', None)
+                rot_slice = getattr(self, 'rot6d_y_slice', None)
+                if not isinstance(rot_slice, slice):
+                    rot_slice = getattr(self, 'rot6d_slice', None)
                 if isinstance(rot_slice, slice):
                     pred_block = pred_raw_local[:, rot_slice].reshape(pred_raw_local.shape[0], -1, 6)
                     gt_block = gt_frame[:, rot_slice].reshape(gt_frame.shape[0], -1, 6)
@@ -2201,6 +2087,15 @@ class Trainer:
         full_config = getattr(self, 'full_config', None)
         if isinstance(full_config, Mapping):
             payload['config'] = dict(full_config)
+        payload.update(
+            build_checkpoint_fingerprint_metadata(
+                io_signature=build_event_motion_model_io_signature_manifest(self.model),
+                module_graph=build_event_motion_model_module_graph_manifest(self.model),
+                build_trace=build_basetrain_build_trace_manifest(),
+                state_dict=model_state,
+                train_policy=_build_basetrain_train_policy_manifest(self),
+            )
+        )
         return payload
 
     def _save_fit_checkpoint_payload(

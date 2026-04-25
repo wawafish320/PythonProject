@@ -48,9 +48,17 @@ from train.checkpoint.compat import (
     resolve_event_motion_build_state_from_ckpt,
 )
 from train.configuration.norm_spec import NORM_SPEC_RUNTIME_PRETRAIN_KEYS, merge_norm_spec
+from train import rollout_kernel as _rollout_kernel
 from train.validate.contact_meas_whitebox import compute_contact_meas_whitebox
 from train.training_MPL import MotionEventDataset, Trainer, geodesic_R, validate_and_fix_model_
-from train.geometry import matrix_to_rot6d, reproject_rot6d, rot6d_to_matrix, so3_exp_map, so3_log_map
+from train.geometry import (
+    matrix_to_rot6d,
+    reproject_rot6d,
+    root_yaw_from_raw_rot6d,
+    rot6d_to_matrix,
+    so3_exp_map,
+    so3_log_map,
+)
 from train.history import (
     PoseHistState,
     advance_pose_hist_state_with_tail,
@@ -124,6 +132,401 @@ def _resolve_direct_pose_leg_idx_tensor(model: Any, *, device: torch.device) -> 
     return None
 
 
+def _normalize_direct_pose_hint_source(raw: Any, *, allow_whitebox: bool) -> str:
+    source = str(raw or "model").strip().lower()
+    if source in ("", "model", "default", "as_is", "asis"):
+        return "model"
+    if allow_whitebox and source in ("whitebox", "wb"):
+        return "whitebox"
+    if source in ("gt", "teacher"):
+        return "gt"
+    if source in ("softgt", "soft_gt", "soft-gt"):
+        return "softgt"
+    if source in ("zero", "ignore", "none", "null"):
+        return "zero"
+    return "model"
+
+
+def _normalize_direct_pose_leg_ablate_mode(raw: Any) -> str:
+    mode = str(raw or "none").strip().lower()
+    if mode in ("", "none", "off", "disable", "disabled"):
+        return "none"
+    if mode in ("0", "zero", "zeros"):
+        return "zero"
+    if mode in ("roll", "roll_batch", "shift", "shift_batch"):
+        return "roll_batch"
+    if mode in ("roll_time", "shift_time"):
+        return "roll_time"
+    return "none"
+
+
+def _apply_eval_runtime_controls_from_owner(
+    model: Any,
+    owner: Any,
+    *,
+    meas_override: Optional[torch.Tensor] = None,
+    plan_override: Optional[torch.Tensor] = None,
+) -> None:
+    model.set_eval_runtime_controls(
+        direct_pose_meas_override=meas_override,
+        direct_pose_plan_override=plan_override,
+        direct_pose_leg_cross_leg_ablate_mode=str(
+            getattr(owner, "direct_pose_leg_cross_leg_ablate", "none") or "none"
+        ),
+        direct_pose_leg_side_plan_other_ablate_mode=str(
+            getattr(owner, "direct_pose_leg_side_plan_other_ablate", "none") or "none"
+        ),
+        contact_plan_inject_scale=float(getattr(owner, "contact_plan_inject_scale", 1.0)),
+        contact_plan_time_bias_scale=float(getattr(owner, "contact_plan_time_bias_scale", 1.0)),
+        debug_contact_plan_logits_decomp=bool(getattr(owner, "log_contact_plan_logits_decomp", False)),
+    )
+
+
+def _build_contact_step_entry_base(
+    *,
+    gt_mean: Optional[float],
+    gt_abs_mean: Optional[float],
+    gt_per_c: Optional[List[float]],
+    gt_next_mean: Optional[float],
+    gt_next_abs_mean: Optional[float],
+    gt_next_per_c: Optional[List[float]],
+    contacts_meas_source_cfg: Any,
+    contacts_meas_source_applied: Any,
+    plan_mean: Optional[float],
+    plan_abs_mean: Optional[float],
+    plan_per_c: Optional[List[float]],
+    meas_mean: Optional[float],
+    meas_abs_mean: Optional[float],
+    meas_per_c: Optional[List[float]],
+    plan_logits_mean: Optional[float],
+    plan_logits_std: Optional[float],
+    plan_logits_per_c: Optional[List[float]],
+    plan_logits_base_per_c: Optional[List[float]],
+    plan_logits_phase_per_c: Optional[List[float]],
+    plan_logits_time_per_c: Optional[List[float]],
+    plan_logits_raw_per_c: Optional[List[float]],
+    meas_logits_mean: Optional[float],
+    meas_logits_std: Optional[float],
+    meas_logits_per_c: Optional[List[float]],
+    angvel_mean: Optional[float],
+    angvel_abs_mean: Optional[float],
+    angvel_std: Optional[float],
+    pose_hist_mean: Optional[float],
+    pose_hist_abs_mean: Optional[float],
+    pose_hist_std: Optional[float],
+    plan_lr_absdiff_mean: Optional[float],
+    plan_lr_diff_std: Optional[float],
+    meas_lr_absdiff_mean: Optional[float],
+    meas_lr_diff_std: Optional[float],
+    gt_lr_absdiff_mean: Optional[float],
+    gt_lr_diff_std: Optional[float],
+    gt_next_lr_absdiff_mean: Optional[float],
+    gt_next_lr_diff_std: Optional[float],
+    err_abs_mean: Optional[float],
+    err_abs_per_c: Optional[List[float]],
+    err_per_c: Optional[List[float]],
+    plan_gt_abs_mean: Optional[float],
+    meas_gt_abs_mean: Optional[float],
+    plan_gt_abs_per_c: Optional[List[float]],
+    meas_gt_abs_per_c: Optional[List[float]],
+) -> Dict[str, Any]:
+    return {
+        "ContactGTMean": gt_mean,
+        "ContactGTAbsMean": gt_abs_mean,
+        "ContactGTPerC": gt_per_c,
+        "ContactGTNextMean": gt_next_mean,
+        "ContactGTNextAbsMean": gt_next_abs_mean,
+        "ContactGTNextPerC": gt_next_per_c,
+        "ContactsMeasSource": str(contacts_meas_source_cfg),
+        "ContactsMeasSourceApplied": str(contacts_meas_source_applied),
+        "ContactPlanMean": plan_mean,
+        "ContactPlanAbsMean": plan_abs_mean,
+        "ContactPlanPerC": plan_per_c,
+        "ContactMeasMean": meas_mean,
+        "ContactMeasAbsMean": meas_abs_mean,
+        "ContactMeasPerC": meas_per_c,
+        "ContactPlanLogitsMean": plan_logits_mean,
+        "ContactPlanLogitsStd": plan_logits_std,
+        "ContactPlanLogitsPerC": plan_logits_per_c,
+        "ContactPlanLogitsBasePerC": plan_logits_base_per_c,
+        "ContactPlanLogitsPhasePerC": plan_logits_phase_per_c,
+        "ContactPlanLogitsTimePerC": plan_logits_time_per_c,
+        "ContactPlanLogitsRawPerC": plan_logits_raw_per_c,
+        "ContactMeasLogitsMean": meas_logits_mean,
+        "ContactMeasLogitsStd": meas_logits_std,
+        "ContactMeasLogitsPerC": meas_logits_per_c,
+        "AngvelMean": angvel_mean,
+        "AngvelAbsMean": angvel_abs_mean,
+        "AngvelStd": angvel_std,
+        "PoseHistMean": pose_hist_mean,
+        "PoseHistAbsMean": pose_hist_abs_mean,
+        "PoseHistStd": pose_hist_std,
+        "ContactPlanLRAbsDiffMean": plan_lr_absdiff_mean,
+        "ContactPlanLRDiffStd": plan_lr_diff_std,
+        "ContactMeasLRAbsDiffMean": meas_lr_absdiff_mean,
+        "ContactMeasLRDiffStd": meas_lr_diff_std,
+        "ContactGTLRAbsDiffMean": gt_lr_absdiff_mean,
+        "ContactGTLRDiffStd": gt_lr_diff_std,
+        "ContactGTNextLRAbsDiffMean": gt_next_lr_absdiff_mean,
+        "ContactGTNextLRDiffStd": gt_next_lr_diff_std,
+        "ContactErrAbsMean": err_abs_mean,
+        "ContactErrAbsPerC": err_abs_per_c,
+        "ContactErrPerC": err_per_c,
+        "ContactPlanGtAbsMean": plan_gt_abs_mean,
+        "ContactMeasGtAbsMean": meas_gt_abs_mean,
+        "ContactPlanGtAbsPerC": plan_gt_abs_per_c,
+        "ContactMeasGtAbsPerC": meas_gt_abs_per_c,
+    }
+
+
+def _contact_override_debug_per_c(
+    value: Any,
+    *,
+    refs: Sequence[Any] = (),
+) -> Optional[List[float]]:
+    if isinstance(value, str):
+        if value.strip().lower() in ("ignore", "zero", "none"):
+            channels = None
+            for ref in refs:
+                if torch.is_tensor(ref) and ref.ndim == 2:
+                    channels = int(ref.shape[-1])
+                    break
+            if channels is not None and channels > 0:
+                return [0.0 for _ in range(channels)]
+        return None
+    if not torch.is_tensor(value):
+        return None
+    ov = value
+    if ov.ndim == 3 and ov.size(1) == 1:
+        ov = ov[:, 0]
+    if ov.ndim == 2:
+        return ov.mean(dim=0).detach().cpu().tolist()
+    return None
+
+
+def _attach_contact_runtime_debug(
+    contact_entry: Dict[str, Any],
+    *,
+    phase_reset_source: Any,
+    ttc_event_kind: Any,
+    ttc_gt_step: Optional[torch.Tensor],
+    ttc_gt_valid_step: Optional[torch.Tensor],
+    ttc_state_step: Optional[torch.Tensor],
+    ttc_event_step: Optional[torch.Tensor],
+    contacts_in_t: Any,
+    direct_meas_source_eff: Any,
+    direct_meas_override: Any,
+    direct_plan_source_eff: Any,
+    direct_plan_override: Any,
+    refs: Sequence[Any],
+) -> None:
+    try:
+        contact_entry["PhaseResetSource"] = str(phase_reset_source)
+        contact_entry["TTCEventKind"] = str(ttc_event_kind)
+        contact_entry["TTCGTPerC"] = (
+            ttc_gt_step.mean(dim=0).detach().cpu().tolist() if torch.is_tensor(ttc_gt_step) else None
+        )
+        contact_entry["TTCGTValidPerC"] = (
+            ttc_gt_valid_step.to(dtype=torch.float32).mean(dim=0).detach().cpu().tolist()
+            if torch.is_tensor(ttc_gt_valid_step)
+            else None
+        )
+        contact_entry["TTCStatePerC"] = (
+            ttc_state_step.mean(dim=0).detach().cpu().tolist() if torch.is_tensor(ttc_state_step) else None
+        )
+        contact_entry["TTCEventPerC"] = (
+            ttc_event_step.to(dtype=torch.float32).mean(dim=0).detach().cpu().tolist()
+            if torch.is_tensor(ttc_event_step)
+            else None
+        )
+    except Exception:
+        pass
+    try:
+        contact_entry["ContactsMeasOverridePerC"] = _contact_override_debug_per_c(contacts_in_t)
+    except Exception:
+        pass
+    try:
+        contact_entry["DirectMeasSource"] = str(direct_meas_source_eff)
+        contact_entry["DirectMeasOverridePerC"] = _contact_override_debug_per_c(
+            direct_meas_override,
+            refs=refs,
+        )
+    except Exception:
+        pass
+    try:
+        contact_entry["DirectPlanSource"] = str(direct_plan_source_eff)
+        contact_entry["DirectPlanOverridePerC"] = _contact_override_debug_per_c(
+            direct_plan_override,
+            refs=refs,
+        )
+    except Exception:
+        pass
+
+
+def _merge_contact_step_into_metrics_entry(
+    entry: Dict[str, Any],
+    contact_step: Any,
+) -> None:
+    if not isinstance(contact_step, dict):
+        return
+    for key in (
+        "ContactGTMean",
+        "ContactGTAbsMean",
+        "ContactGTPerC",
+        "ContactGTNextMean",
+        "ContactGTNextAbsMean",
+        "ContactGTNextPerC",
+        "ContactsMeasSource",
+        "ContactsMeasSourceApplied",
+        "ContactsMeasOverridePerC",
+        "ContactPlanMean",
+        "ContactPlanAbsMean",
+        "ContactPlanPerC",
+        "ContactPlanLogitsMean",
+        "ContactPlanLogitsStd",
+        "ContactPlanLogitsPerC",
+        "ContactPlanLogitsBasePerC",
+        "ContactPlanLogitsTimePerC",
+        "ContactPlanLogitsRawPerC",
+        "ContactMeasMean",
+        "ContactMeasAbsMean",
+        "ContactMeasPerC",
+        "ContactMeasLogitsMean",
+        "ContactMeasLogitsStd",
+        "ContactMeasLogitsPerC",
+        "AngvelMean",
+        "AngvelAbsMean",
+        "AngvelStd",
+        "PoseHistMean",
+        "PoseHistAbsMean",
+        "PoseHistStd",
+        "PlanZNorm",
+        "PhaseZNorm",
+        "PhaseZShape",
+        "PhaseBinN",
+        "PhaseZInSinCosPerC",
+        "PhaseAngleInRadPerC",
+        "PhaseAngleInDegPerC",
+        "PhaseZInPerCNorm",
+        "PhaseBinInPerC",
+        "PhaseAngleInTdRadPerC",
+        "PhaseAngleInTdDegPerC",
+        "PhaseBinInTdPerC",
+        "PhaseZSinCosPerC",
+        "PhaseAngleRadPerC",
+        "PhaseAngleDegPerC",
+        "PhaseZPerCNorm",
+        "PhaseBinPerC",
+        "PhaseEventAgePerC",
+        "PhaseEventAgeMean",
+        "PhaseResetSource",
+        "TTCEventKind",
+        "TTCGTPerC",
+        "TTCGTValidPerC",
+        "TTCStatePerC",
+        "TTCEventPerC",
+        "ContactPlanLRAbsDiffMean",
+        "ContactPlanLRDiffStd",
+        "ContactMeasLRAbsDiffMean",
+        "ContactMeasLRDiffStd",
+        "ContactGTLRAbsDiffMean",
+        "ContactGTLRDiffStd",
+        "ContactGTNextLRAbsDiffMean",
+        "ContactGTNextLRDiffStd",
+        "ContactErrAbsMean",
+        "ContactPlanGtAbsMean",
+        "ContactMeasGtAbsMean",
+        "DirectMeasSource",
+        "DirectMeasOverridePerC",
+        "DirectPlanSource",
+        "DirectPlanOverridePerC",
+        "So3GateWarmup",
+        "So3GateErrRef",
+        "So3GateErrEff",
+        "So3GateBase",
+        "So3GateMode",
+        "So3GateScale",
+        "So3GateOverride",
+        "ContactMeasHeadSwapPoseL2",
+        "ContactMeasHeadSwapAngvelL2",
+        "ContactMeasHeadSwapLogitsPPPerC",
+        "ContactMeasHeadSwapLogitsPGPerC",
+        "ContactMeasHeadSwapLogitsGPPerC",
+        "ContactMeasHeadSwapLogitsGGPerC",
+        "ContactMeasHeadSwapMaxAbsDiffToModelLogits",
+        "ContactMeasHeadSwapError",
+    ):
+        if key in contact_step:
+            entry[key] = contact_step.get(key)
+    for key in (
+        "ContactErrAbsPerC",
+        "ContactErrPerC",
+        "ContactPlanGtAbsPerC",
+        "ContactMeasGtAbsPerC",
+    ):
+        if key in contact_step:
+            entry[key] = contact_step.get(key)
+    if "ContactMeasWhitebox" in contact_step:
+        entry["ContactMeasWhitebox"] = contact_step.get("ContactMeasWhitebox")
+
+
+def _contact_override_zeros(
+    *,
+    model: Any,
+    batch_size: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    fallback: Optional[torch.Tensor] = None,
+) -> Optional[torch.Tensor]:
+    try:
+        contact_dim = int(getattr(model, "contact_dim", 0) or 0)
+    except Exception:
+        contact_dim = 0
+    if contact_dim <= 0 and torch.is_tensor(fallback) and int(fallback.shape[-1]) > 0:
+        contact_dim = int(fallback.shape[-1])
+    if contact_dim <= 0:
+        return None
+    return torch.zeros((int(batch_size), int(contact_dim)), device=device, dtype=dtype)
+
+
+def _resolve_direct_pose_hint_override(
+    *,
+    model: Any,
+    source: str,
+    kind: str,
+    batch_size: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    teacher_contacts_step: Optional[torch.Tensor],
+    whitebox_contacts_step: Optional[torch.Tensor],
+    softgt_map,
+) -> Optional[torch.Tensor]:
+    source_norm = _normalize_direct_pose_hint_source(source, allow_whitebox=(kind == "meas"))
+    fallback = whitebox_contacts_step if torch.is_tensor(whitebox_contacts_step) else teacher_contacts_step
+    if source_norm == "zero":
+        if kind == "meas":
+            mode = str(getattr(model, "direct_pose_meas_mode", "concat") or "concat").strip().lower()
+            if mode == "mode_select":
+                return None
+        return _contact_override_zeros(
+            model=model,
+            batch_size=batch_size,
+            device=device,
+            dtype=dtype,
+            fallback=fallback,
+        )
+    if source_norm == "whitebox":
+        return whitebox_contacts_step if torch.is_tensor(whitebox_contacts_step) else None
+    if source_norm == "gt":
+        return teacher_contacts_step if torch.is_tensor(teacher_contacts_step) else None
+    if source_norm == "softgt":
+        if not torch.is_tensor(teacher_contacts_step):
+            return None
+        mapped = softgt_map(teacher_contacts_step, kind=kind)
+        return mapped if torch.is_tensor(mapped) else teacher_contacts_step
+    return None
+
+
 def _select_pose_hist_initial_norm(
     pose_hist_seq: Optional[torch.Tensor],
     *,
@@ -149,13 +552,12 @@ def _init_eval_pose_hist_state(
     device: torch.device,
     dtype: torch.dtype,
 ) -> PoseHistState:
-    pose_hist_len = int(getattr(trainer, "pose_hist_len", 0) or 0)
-    pose_hist_dim = int(getattr(trainer, "pose_hist_dim", 0) or 0)
+    pose_hist_cfg = _rollout_kernel.resolve_pose_hist_runtime_config(trainer)
     initial_norm = _select_pose_hist_initial_norm(
         pose_hist_seq,
         step=step,
         batch_size=int(ref_tensor.shape[0]),
-        pose_hist_dim=pose_hist_dim,
+        pose_hist_dim=pose_hist_cfg.pose_hist_dim,
         device=device,
         dtype=dtype,
     )
@@ -164,9 +566,9 @@ def _init_eval_pose_hist_state(
         pose_hist_seq=initial_norm,
         y_prev_raw=None,
         rot_slice=None,
-        pose_hist_len=pose_hist_len,
-        pose_hist_dim=pose_hist_dim,
-        params_fn=trainer._pose_hist_params,
+        pose_hist_len=pose_hist_cfg.pose_hist_len,
+        pose_hist_dim=pose_hist_cfg.pose_hist_dim,
+        params_fn=pose_hist_cfg.params_fn,
     )
 
 
@@ -470,7 +872,8 @@ def _apply_direct_leg_so3_correction_norm(
     if direct_raw is None or (not torch.is_tensor(direct_raw)) or direct_raw.shape != direct_norm.shape:
         return direct_norm
 
-    rot_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
+    cond_runtime = _rollout_kernel.resolve_rollout_cond_runtime_config(trainer)
+    rot_slice = cond_runtime.rot_slice
     if not isinstance(rot_slice, slice):
         rot_slice = slice(0, direct_raw.shape[-1])
     rot_len = int(rot_slice.stop - rot_slice.start)
@@ -654,9 +1057,15 @@ class FreeRunCycleRunner:
             self.contact_plan_init_mode_override = mode
         self.contact_plan_init_hidden_override = getattr(args, "contact_plan_init_hidden", None)
         self.contact_plan_init_dropout_override = getattr(args, "contact_plan_init_dropout", None)
-        self.direct_pose_meas_source = str(getattr(args, "direct_pose_meas_source", "model") or "model").strip().lower()
+        self.direct_pose_meas_source = _normalize_direct_pose_hint_source(
+            getattr(args, "direct_pose_meas_source", "model"),
+            allow_whitebox=True,
+        )
         self.direct_pose_meas_warmup_steps = max(0, int(getattr(args, "direct_pose_meas_warmup_steps", 0) or 0))
-        self.direct_pose_plan_source = str(getattr(args, "direct_pose_plan_source", "model") or "model").strip().lower()
+        self.direct_pose_plan_source = _normalize_direct_pose_hint_source(
+            getattr(args, "direct_pose_plan_source", "model"),
+            allow_whitebox=False,
+        )
         # Optional: distribution-matched "soft-GT" hint mapping for direct plan/meas overrides.
         self.direct_pose_softgt_stats_spec = getattr(args, "direct_pose_softgt_stats", None)
         self.direct_pose_softgt_stats = None
@@ -675,12 +1084,12 @@ class FreeRunCycleRunner:
         except Exception:
             self.direct_pose_softgt_stats = None
         # Cross-leg feature ablations (evaluation-time only).
-        self.direct_pose_leg_cross_leg_ablate = str(
-            getattr(args, "direct_pose_leg_cross_leg_ablate", "none") or "none"
-        ).strip().lower()
-        self.direct_pose_leg_side_plan_other_ablate = str(
-            getattr(args, "direct_pose_leg_side_plan_other_ablate", "none") or "none"
-        ).strip().lower()
+        self.direct_pose_leg_cross_leg_ablate = _normalize_direct_pose_leg_ablate_mode(
+            getattr(args, "direct_pose_leg_cross_leg_ablate", "none")
+        )
+        self.direct_pose_leg_side_plan_other_ablate = _normalize_direct_pose_leg_ablate_mode(
+            getattr(args, "direct_pose_leg_side_plan_other_ablate", "none")
+        )
         # Ablation: override the runtime contacts_meas used by contacts_err / Event-Clock (and thus λ diagnostics).
         # This is a *runtime* switch only (no weight changes).
         self.contacts_meas_source = str(getattr(args, "contacts_meas_source", "model") or "model").strip().lower()
@@ -1121,36 +1530,9 @@ class FreeRunCycleRunner:
         missing, unexpected = model.load_state_dict(prepared_state_dict, strict=False)
         if missing or unexpected:
             print(f"[FreeRun][WARN] state_dict mismatch: missing={missing}, unexpected={unexpected}")
-        # Eval-time ablations for diagnosing "baseline direction capability".
-        try:
-            setattr(model, "direct_pose_leg_cross_leg_ablate", str(getattr(self, "direct_pose_leg_cross_leg_ablate", "none") or "none"))
-        except Exception:
-            pass
-        try:
-            setattr(
-                model,
-                "direct_pose_leg_side_plan_other_ablate",
-                str(getattr(self, "direct_pose_leg_side_plan_other_ablate", "none") or "none"),
-            )
-        except Exception:
-            pass
-        try:
-            setattr(model, "contact_plan_inject_scale", float(getattr(self, "contact_plan_inject_scale", 1.0)))
-        except Exception:
-            pass
-        try:
-            setattr(
-                model,
-                "contact_plan_time_bias_scale",
-                float(getattr(self, "contact_plan_time_bias_scale", 1.0)),
-            )
-        except Exception:
-            pass
-        if bool(getattr(self, "log_contact_plan_logits_decomp", False)):
-            try:
-                setattr(model, "debug_contact_plan_logits_decomp", True)
-            except Exception:
-                pass
+        # Eval-only direct/contact diagnostics are driven through a thin runtime
+        # control bundle; model-side code only applies tensor-level overrides.
+        _apply_eval_runtime_controls_from_owner(model, self)
         model.eval()
 
         loss_fn = MotionJointLoss(
@@ -1209,6 +1591,11 @@ class FreeRunCycleRunner:
         trainer.direct_pose_meas_source = str(getattr(self, "direct_pose_meas_source", "model") or "model")
         trainer.direct_pose_meas_warmup_steps = int(getattr(self, "direct_pose_meas_warmup_steps", 0) or 0)
         trainer.direct_pose_plan_source = str(getattr(self, "direct_pose_plan_source", "model") or "model")
+        trainer.direct_pose_leg_cross_leg_ablate = str(getattr(self, "direct_pose_leg_cross_leg_ablate", "none") or "none")
+        trainer.direct_pose_leg_side_plan_other_ablate = str(
+            getattr(self, "direct_pose_leg_side_plan_other_ablate", "none") or "none"
+        )
+        trainer.log_contact_plan_logits_decomp = bool(getattr(self, "log_contact_plan_logits_decomp", False))
         trainer.direct_pose_softgt_stats = getattr(self, "direct_pose_softgt_stats", None)
         trainer.direct_pose_softgt_stats_spec = getattr(self, "direct_pose_softgt_stats_spec", None)
         trainer.contacts_meas_source = str(getattr(self, "contacts_meas_source", "model") or "model")
@@ -1901,11 +2288,30 @@ def _run_freerun_cycles(
     if cond_norm_std is not None:
         cond_norm_std = trainer._prepare_cond_stat(cond_norm_std, state_seq)
 
+    cond_runtime = _rollout_kernel.resolve_rollout_cond_runtime_config(trainer)
+    free_carry_cfg = _rollout_kernel.resolve_free_carry_runtime_config(trainer)
+
+    def _rot_y_slice_or(width: int) -> slice:
+        return cond_runtime.rot_slice if isinstance(cond_runtime.rot_slice, slice) else slice(0, int(width))
+
+    def _rot_x_slice_or(width: int) -> slice:
+        return (
+            free_carry_cfg.rot6d_x_slice
+            if isinstance(free_carry_cfg.rot6d_x_slice, slice)
+            else slice(0, int(width))
+        )
+
+    def _clamp_eval_root_idx(joint_count: int) -> int:
+        if int(joint_count) <= 0:
+            return 0
+        return max(0, min(int(joint_count) - 1, int(cond_runtime.root_idx)))
+
     # Pose-history buffer (mirror Trainer._rollout_sequence behavior)
-    pose_hist_len = int(getattr(trainer, "pose_hist_len", 0) or 0)
-    pose_hist_dim = int(getattr(trainer, "pose_hist_dim", 0) or 0)
-    pose_hist_stride = pose_hist_dim // pose_hist_len if pose_hist_len > 0 else 0
-    pose_hist_enabled = pose_hist_len > 0 and pose_hist_dim > 0 and pose_hist_stride > 0
+    pose_hist_cfg = _rollout_kernel.resolve_pose_hist_runtime_config(trainer)
+    pose_hist_len = pose_hist_cfg.pose_hist_len
+    pose_hist_dim = pose_hist_cfg.pose_hist_dim
+    pose_hist_stride = pose_hist_cfg.pose_hist_stride
+    pose_hist_enabled = pose_hist_cfg.enabled
     pose_hist_source_raw = str(pose_hist_source or "buffer").strip().lower()
     if pose_hist_source_raw in ("seq", "gt", "teacher"):
         pose_hist_source = "seq"
@@ -1989,9 +2395,9 @@ def _run_freerun_cycles(
                 try:
                     x0_raw = trainer.normalizer.denorm_x(state_seq[:, 0])
                     x1_raw = trainer.normalizer.denorm_x(state_seq[:, int(T_cycle) - 1])
-                    rootpos_sl = getattr(trainer, "rootpos_x_slice", None)
-                    rootvel_sl = getattr(trainer, "rootvel_x_slice", None)
-                    angvel_sl = getattr(trainer, "angvel_x_slice", None)
+                    rootpos_sl = free_carry_cfg.rootpos_x_slice
+                    rootvel_sl = free_carry_cfg.rootvel_x_slice
+                    angvel_sl = free_carry_cfg.angvel_x_slice
                     if isinstance(rootpos_sl, slice):
                         seam_closure["root_pos_raw"] = _pair_stats(x0_raw[..., rootpos_sl], x1_raw[..., rootpos_sl])
                     if isinstance(rootvel_sl, slice):
@@ -2640,7 +3046,7 @@ def _run_freerun_cycles(
     except Exception:
         y_raw_prev = None
     if y_raw_prev is None and motion_raw is not None:
-        rot6d_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
+        rot6d_slice = cond_runtime.rot_slice
         if isinstance(rot6d_slice, slice):
             slice_len = rot6d_slice.stop - rot6d_slice.start
             if slice_len == gt_seq.shape[-1]:
@@ -2873,21 +3279,10 @@ def _run_freerun_cycles(
     prev_foot_pos_meas = None
 
     # Rotation slice/J for lambda fusion shape checks.
-    rot_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
-    if not isinstance(rot_slice, slice):
-        rot_slice = slice(0, gt_seq.shape[-1])
+    rot_slice = _rot_y_slice_or(int(gt_seq.shape[-1]))
     rot_len = int(rot_slice.stop - rot_slice.start)
     J = (rot_len // 6) if (rot_len > 0 and (rot_len % 6) == 0) else 0
-    cols = ("X", "Z")
-    try:
-        columns = getattr(getattr(trainer, "loss_fn", None), "_rot6d_columns", ("X", "Z"))
-        if isinstance(columns, (list, tuple)) and len(columns) >= 2:
-            a = str(columns[0]).strip().upper()
-            b = str(columns[1]).strip().upper()
-            if a in ("X", "Y", "Z") and b in ("X", "Y", "Z") and a != b:
-                cols = (a, b)
-    except Exception:
-        cols = ("X", "Z")
+    cols = free_carry_cfg.columns
 
     pose_hist_hybrid_boundary_carry = bool(pose_hist_hybrid_boundary_carry)
     pose_hist_hybrid_enabled = False
@@ -2928,11 +3323,12 @@ def _run_freerun_cycles(
             raise ValueError(
                 "pose_hist hybrid boundary carry prototype only supports external contacts_meas_source "
                 f"(got {contacts_meas_source_base!r})."
-            )
+        )
         donor_model = getattr(donor_trainer, "model", None)
         if donor_model is None:
             raise ValueError("pose_hist hybrid donor trainer is missing model.")
-        donor_rot_slice = getattr(donor_trainer, "rot6d_y_slice", None) or getattr(donor_trainer, "rot6d_slice", None)
+        donor_cond_runtime = _rollout_kernel.resolve_rollout_cond_runtime_config(donor_trainer)
+        donor_rot_slice = donor_cond_runtime.rot_slice
         if not isinstance(donor_rot_slice, slice):
             donor_rot_slice = slice(0, gt_seq.shape[-1])
         donor_rot_len = int(donor_rot_slice.stop - donor_rot_slice.start)
@@ -2953,10 +3349,9 @@ def _run_freerun_cycles(
         ):
             raise ValueError("pose_hist hybrid donor leg joint set does not match current model leg joint set.")
 
-        donor_pose_hist_len = int(getattr(donor_trainer, "pose_hist_len", 0) or 0)
-        donor_pose_hist_dim = int(getattr(donor_trainer, "pose_hist_dim", 0) or 0)
-        donor_pose_hist_stride = donor_pose_hist_dim // donor_pose_hist_len if donor_pose_hist_len > 0 else 0
-        donor_pose_hist_enabled = donor_pose_hist_len > 0 and donor_pose_hist_dim > 0 and donor_pose_hist_stride > 0
+        donor_pose_hist_cfg = _rollout_kernel.resolve_pose_hist_runtime_config(donor_trainer)
+        donor_pose_hist_stride = donor_pose_hist_cfg.pose_hist_stride
+        donor_pose_hist_enabled = donor_pose_hist_cfg.enabled
         if (not donor_pose_hist_enabled) or int(donor_pose_hist_stride) != int(pose_hist_stride):
             raise ValueError(
                 "pose_hist hybrid donor pose_history layout mismatch: "
@@ -3105,8 +3500,9 @@ def _run_freerun_cycles(
                 donor_gt_motion_raw = None
         donor_state["gt_motion_raw"] = donor_gt_motion_raw
 
-        if getattr(dtr, "use_freerun_state_sync", False) and isinstance(getattr(dtr, "angvel_x_slice", None), slice):
-            donor_angvel_t = donor_motion[..., dtr.angvel_x_slice].detach()
+        donor_free_carry_cfg = _rollout_kernel.resolve_free_carry_runtime_config(dtr)
+        if getattr(dtr, "use_freerun_state_sync", False) and isinstance(donor_free_carry_cfg.angvel_x_slice, slice):
+            donor_angvel_t = donor_motion[..., donor_free_carry_cfg.angvel_x_slice].detach()
         else:
             donor_angvel_t = angvel_seq[:, step_t] if (angvel_seq is not None and angvel_seq.dim() == 3) else angvel_seq
 
@@ -3123,7 +3519,6 @@ def _run_freerun_cycles(
             )
 
         donor_cond_input = cond_seq[:, step_t] if (cond_seq is not None and cond_seq.dim() == 3) else cond_seq
-        donor_cond_raw_for_model = cond_raw_step_shared
         enable_reproj_donor = (cond_reprojection != "off")
         if cond_reprojection == "auto":
             try:
@@ -3133,40 +3528,46 @@ def _run_freerun_cycles(
                     enable_reproj_donor = False
             except Exception:
                 enable_reproj_donor = False
-        if enable_reproj_donor and donor_cond_raw_for_model is not None and step_t > 0:
-            donor_yaw_gt = None
+        donor_cond_runtime = _rollout_kernel.resolve_rollout_cond_runtime_config(dtr)
+        donor_yaw_gt = None
+        if enable_reproj_donor and cond_raw_step_shared is not None and step_t > 0:
             if gt_seq is not None and gt_seq.dim() == 3:
                 try:
                     donor_gt_idx = min(gt_seq.shape[1] - 1, step_t)
                     donor_gt_raw_frame = dtr._denorm(gt_seq[:, donor_gt_idx])
-                    donor_yaw_gt = dtr._infer_root_yaw_from_rot6d(donor_gt_raw_frame)
-                except Exception:
-                    donor_yaw_gt = None
-            donor_pred_yaw = dtr._infer_root_yaw_from_rot6d(donor_y_raw_prev) if donor_y_raw_prev is not None else None
-            if donor_yaw_gt is not None and donor_pred_yaw is not None:
-                try:
-                    donor_reproj = dtr._reproject_cond_to_local_frame(
-                        donor_cond_raw_for_model,
-                        donor_yaw_gt,
-                        donor_pred_yaw,
+                    donor_yaw_gt = root_yaw_from_raw_rot6d(
+                        donor_gt_raw_frame,
+                        rot_slice=donor_cond_runtime.rot_slice,
+                        root_idx=donor_cond_runtime.root_idx,
+                        up_axis=donor_cond_runtime.up_axis,
+                        forward_axis=donor_cond_runtime.forward_axis,
+                        offset=donor_cond_runtime.offset,
+                        reproject=True,
                     )
                 except Exception:
-                    donor_reproj = None
-                if donor_reproj is not None:
-                    donor_cond_raw_for_model = donor_reproj
-        if donor_cond_raw_for_model is not None:
-            donor_cond_override = dtr._normalize_cond_from_raw(donor_cond_raw_for_model, cond_norm_mu, cond_norm_std)
-            if donor_cond_override is not None:
-                donor_cond_input = donor_cond_override
+                    donor_yaw_gt = None
+        donor_cond_input, donor_cond_raw_for_model, _ = _rollout_kernel.prepare_cond_input_from_raw(
+            base_cond_input=donor_cond_input,
+            cond_raw_step=cond_raw_step_shared,
+            cond_norm_mu=cond_norm_mu,
+            cond_norm_std=cond_norm_std,
+            cond_norm_clip=donor_cond_runtime.cond_norm_clip,
+            allow_reprojection=bool(enable_reproj_donor and step_t > 0),
+            yaw_gt=donor_yaw_gt,
+            y_prev_raw=donor_y_raw_prev,
+            rot_slice=donor_cond_runtime.rot_slice,
+            root_idx=donor_cond_runtime.root_idx,
+            up_axis=donor_cond_runtime.up_axis,
+            forward_axis=donor_cond_runtime.forward_axis,
+            offset=donor_cond_runtime.offset,
+        )
 
-        try:
-            setattr(dmodel, "direct_pose_meas_override", direct_meas_override_step)
-        except Exception:
-            pass
-        try:
-            setattr(dmodel, "direct_pose_plan_override", direct_plan_override_step)
-        except Exception:
-            pass
+        _apply_eval_runtime_controls_from_owner(
+            dmodel,
+            dtr,
+            meas_override=direct_meas_override_step if torch.is_tensor(direct_meas_override_step) else None,
+            plan_override=direct_plan_override_step if torch.is_tensor(direct_plan_override_step) else None,
+        )
 
         donor_meas_prev_in = donor_state["meas_prev_prob"]
         with amp_ctx:
@@ -3279,27 +3680,46 @@ def _run_freerun_cycles(
         donor_y_used_raw = donor_y_blend_raw if bool(lambda_fusion_apply) else donor_y_inc_raw
         donor_state["y_raw_prev"] = donor_y_used_raw.detach() if torch.is_tensor(donor_y_used_raw) else None
 
-        if donor_motion_raw is not None:
-            donor_motion_raw = dtr._apply_free_carry(donor_motion_raw, donor_y_used_raw, cond_next_raw=cond_raw_step_shared).detach()
-            donor_motion = dtr._diag_norm_x(donor_motion_raw)
-            if bool(freerun_x_gt) and torch.is_tensor(donor_gt_motion_raw) and donor_gt_motion_raw.shape == donor_motion_raw.shape:
+        if donor_motion_raw is None:
+            dtr._raise_norm_error("pose_hist hybrid donor free carry 需要 RAW motion state。")
+        donor_free_carry_cfg = _rollout_kernel.resolve_free_carry_runtime_config(dtr)
+        donor_rot6d_y_slice = (
+            donor_free_carry_cfg.rot6d_y_slice
+            if isinstance(donor_free_carry_cfg.rot6d_y_slice, slice)
+            else donor_rot_slice
+        )
+        try:
+            donor_motion_raw = _rollout_kernel.apply_free_carry_raw(
+                x_prev=donor_motion_raw,
+                y_next_raw=donor_y_used_raw,
+                cond_next_raw=cond_raw_step_shared,
+                rot6d_x_slice=donor_free_carry_cfg.rot6d_x_slice,
+                rot6d_y_slice=donor_rot6d_y_slice,
+                angvel_x_slice=donor_free_carry_cfg.angvel_x_slice,
+                rootvel_x_slice=donor_free_carry_cfg.rootvel_x_slice,
+                rootpos_x_slice=donor_free_carry_cfg.rootpos_x_slice,
+                bone_hz=donor_free_carry_cfg.bone_hz,
+                columns=donor_free_carry_cfg.columns,
+            ).detach()
+        except (RuntimeError, TypeError, ValueError) as exc:
+            dtr._raise_norm_error("pose_hist hybrid donor free carry 写回失败", exc)
+        donor_motion = dtr._diag_norm_x(donor_motion_raw)
+        if bool(freerun_x_gt) and torch.is_tensor(donor_gt_motion_raw) and donor_gt_motion_raw.shape == donor_motion_raw.shape:
+            try:
+                donor_motion_raw = donor_gt_motion_raw.detach()
+                donor_motion = dtr._diag_norm_x(donor_motion_raw)
+            except Exception:
+                pass
+        elif bool(freerun_x_gt_except_rot6d) and torch.is_tensor(donor_gt_motion_raw) and donor_gt_motion_raw.shape == donor_motion_raw.shape:
+            donor_rx = donor_free_carry_cfg.rot6d_x_slice
+            if isinstance(donor_rx, slice):
                 try:
-                    donor_motion_raw = donor_gt_motion_raw.detach()
+                    donor_hybrid_x = donor_gt_motion_raw.detach().clone()
+                    donor_hybrid_x[..., donor_rx] = donor_motion_raw[..., donor_rx]
+                    donor_motion_raw = donor_hybrid_x
                     donor_motion = dtr._diag_norm_x(donor_motion_raw)
                 except Exception:
                     pass
-            elif bool(freerun_x_gt_except_rot6d) and torch.is_tensor(donor_gt_motion_raw) and donor_gt_motion_raw.shape == donor_motion_raw.shape:
-                donor_rx = getattr(dtr, "rot6d_x_slice", None) or getattr(dtr, "rot6d_slice", None)
-                if isinstance(donor_rx, slice):
-                    try:
-                        donor_hybrid_x = donor_gt_motion_raw.detach().clone()
-                        donor_hybrid_x[..., donor_rx] = donor_motion_raw[..., donor_rx]
-                        donor_motion_raw = donor_hybrid_x
-                        donor_motion = dtr._diag_norm_x(donor_motion_raw)
-                    except Exception:
-                        pass
-        else:
-            donor_motion = dtr._apply_free_carry(donor_motion, donor_y_used_raw, cond_next_raw=None).detach()
         donor_state["motion"] = donor_motion
         donor_state["motion_raw"] = donor_motion_raw
 
@@ -3375,9 +3795,8 @@ def _run_freerun_cycles(
         grad_drop_wrap = _flag_on(direct_leg_omega_grad_drop_wrap)
 
         # Joint mask (exclude root) matches DirectGeoLocalDeg definition.
-        root_idx_eval = int(getattr(trainer, "eval_root_idx", 0) or 0)
+        root_idx_eval = _clamp_eval_root_idx(int(J))
         if int(J) > 0:
-            root_idx_eval = max(0, min(int(J) - 1, int(root_idx_eval)))
             direct_leg_omega_grad_joint_mask = torch.ones(int(J), device=device, dtype=torch.bool)
             direct_leg_omega_grad_joint_mask[int(root_idx_eval)] = False
 
@@ -3453,7 +3872,7 @@ def _run_freerun_cycles(
     rot_gain_joint_indices: List[int] = []
     rot_gain_joint_names: List[str] = []
     rot_gain_bone_names: List[str] = []
-    rot_gain_root_idx = int(getattr(trainer, "eval_root_idx", 0) or 0)
+    rot_gain_root_idx = _clamp_eval_root_idx(int(J))
     if debug_rot_gain and int(J) > 0:
         try:
             loss_fn = getattr(trainer, "loss_fn", None)
@@ -3873,8 +4292,8 @@ def _run_freerun_cycles(
             ttc_event_step = None
 
         cond_input = cond_seq[:, t] if (cond_seq is not None and cond_seq.dim() == 3) else cond_seq
-        if getattr(trainer, "use_freerun_state_sync", False) and isinstance(getattr(trainer, "angvel_x_slice", None), slice):
-            angvel_t = motion[..., trainer.angvel_x_slice].detach()
+        if getattr(trainer, "use_freerun_state_sync", False) and isinstance(free_carry_cfg.angvel_x_slice, slice):
+            angvel_t = motion[..., free_carry_cfg.angvel_x_slice].detach()
         else:
             angvel_t = angvel_seq[:, t] if (angvel_seq is not None and angvel_seq.dim() == 3) else angvel_seq
         if pose_hist_enabled:
@@ -3924,22 +4343,36 @@ def _run_freerun_cycles(
                     enable_reproj = False
             except Exception:
                 enable_reproj = False
-        if enable_reproj and cond_raw_for_model is not None and t > 0:
-            yaw_gt = None
+        cond_runtime = _rollout_kernel.resolve_rollout_cond_runtime_config(trainer)
+        yaw_gt = None
+        if enable_reproj and cond_raw_step is not None and t > 0:
             if gt_seq is not None and gt_seq.dim() == 3:
                 gt_idx = min(gt_seq.shape[1] - 1, t)
                 gt_raw_frame = trainer._denorm(gt_seq[:, gt_idx])
-                yaw_gt = trainer._infer_root_yaw_from_rot6d(gt_raw_frame)
-            pred_yaw = trainer._infer_root_yaw_from_rot6d(y_raw_prev) if y_raw_prev is not None else None
-            if yaw_gt is not None and pred_yaw is not None:
-                reproj = trainer._reproject_cond_to_local_frame(cond_raw_for_model, yaw_gt, pred_yaw)
-                if reproj is not None:
-                    cond_raw_for_model = reproj
-
-        if cond_raw_for_model is not None:
-            cond_override = trainer._normalize_cond_from_raw(cond_raw_for_model, cond_norm_mu, cond_norm_std)
-            if cond_override is not None:
-                cond_input = cond_override
+                yaw_gt = root_yaw_from_raw_rot6d(
+                    gt_raw_frame,
+                    rot_slice=cond_runtime.rot_slice,
+                    root_idx=cond_runtime.root_idx,
+                    up_axis=cond_runtime.up_axis,
+                    forward_axis=cond_runtime.forward_axis,
+                    offset=cond_runtime.offset,
+                    reproject=True,
+                )
+        cond_input, cond_raw_for_model, _ = _rollout_kernel.prepare_cond_input_from_raw(
+            base_cond_input=cond_input,
+            cond_raw_step=cond_raw_step,
+            cond_norm_mu=cond_norm_mu,
+            cond_norm_std=cond_norm_std,
+            cond_norm_clip=cond_runtime.cond_norm_clip,
+            allow_reprojection=bool(enable_reproj and t > 0),
+            yaw_gt=yaw_gt,
+            y_prev_raw=y_raw_prev,
+            rot_slice=cond_runtime.rot_slice,
+            root_idx=cond_runtime.root_idx,
+            up_axis=cond_runtime.up_axis,
+            forward_axis=cond_runtime.forward_axis,
+            offset=cond_runtime.offset,
+        )
 
         dev_type = getattr(device, "type", "cpu")
         if dev_type == "mps":
@@ -3984,7 +4417,10 @@ def _run_freerun_cycles(
 
         # Optional: override which contacts signal the *direct* head uses as phase hint.
         # This does NOT affect contacts_err/Event-Clock/λ unless you also override --contacts_meas_source.
-        direct_meas_source_eff = str(getattr(trainer, "direct_pose_meas_source", "model") or "model").strip().lower()
+        direct_meas_source_eff = _normalize_direct_pose_hint_source(
+            getattr(trainer, "direct_pose_meas_source", "model"),
+            allow_whitebox=True,
+        )
         direct_meas_warmup = int(getattr(trainer, "direct_pose_meas_warmup_steps", 0) or 0)
         step_idx = int(t - start_t)
         if direct_meas_warmup > 0 and step_idx >= direct_meas_warmup:
@@ -4010,7 +4446,7 @@ def _run_freerun_cycles(
         need_wb = (contacts_meas_source_cfg in ("whitebox", "wb")) or (
             bool(plan_enable)
             and (
-                (direct_meas_source_eff in ("whitebox", "wb"))
+                (direct_meas_source_eff == "whitebox")
                 or (init_mode in ("obs", "learnable+obs") and plan_z is None and step_idx == 0)
                 or log_wb
             )
@@ -4192,62 +4628,49 @@ def _run_freerun_cycles(
                 # Keep baseline path unchanged on any failure.
                 pass
 
-        direct_meas_override = None
-        if direct_meas_source_eff in ("zero", "ignore", "none"):
-            direct_meas_override = "ignore"
-        elif direct_meas_source_eff in ("whitebox", "wb"):
-            direct_meas_override = contacts_wb_t
-        elif direct_meas_source_eff in ("gt", "teacher"):
-            try:
-                if torch.is_tensor(contacts_seq) and contacts_seq.dim() == 3 and contacts_seq.shape[0] == motion.shape[0]:
-                    idx0 = min(int(contacts_seq.shape[1]) - 1, int(t))
-                    direct_meas_override = contacts_seq[:, idx0]
-            except Exception:
-                direct_meas_override = None
-        elif direct_meas_source_eff in ("softgt", "soft_gt", "soft-gt"):
-            try:
-                if torch.is_tensor(contacts_seq) and contacts_seq.dim() == 3 and contacts_seq.shape[0] == motion.shape[0]:
-                    idx0 = min(int(contacts_seq.shape[1]) - 1, int(t))
-                    gt_c = contacts_seq[:, idx0]
-                    mapped = _softgt_map(gt_c, kind="meas")
-                    direct_meas_override = mapped if torch.is_tensor(mapped) else gt_c
-            except Exception:
-                direct_meas_override = None
-        else:
-            direct_meas_override = None
+        teacher_contacts_t = None
         try:
-            setattr(model, "direct_pose_meas_override", direct_meas_override)
+            if torch.is_tensor(contacts_seq) and contacts_seq.dim() == 3 and contacts_seq.shape[0] == motion.shape[0]:
+                idx0 = min(int(contacts_seq.shape[1]) - 1, int(t))
+                teacher_contacts_t = contacts_seq[:, idx0]
         except Exception:
-            pass
+            teacher_contacts_t = None
+
+        direct_meas_override = _resolve_direct_pose_hint_override(
+            model=model,
+            source=direct_meas_source_eff,
+            kind="meas",
+            batch_size=int(motion.shape[0]),
+            device=device,
+            dtype=motion.dtype,
+            teacher_contacts_step=teacher_contacts_t,
+            whitebox_contacts_step=contacts_wb_t,
+            softgt_map=_softgt_map,
+        )
 
         # Optional: override which contacts *plan* the direct head uses (ablation: direct upper bound).
         # This does NOT affect contacts_plan/contacts_err/lambda (only direct hint).
-        direct_plan_source_eff = str(getattr(trainer, "direct_pose_plan_source", "model") or "model").strip().lower()
-        direct_plan_override = None
-        if direct_plan_source_eff in ("zero", "ignore", "none"):
-            direct_plan_override = "ignore"
-        elif direct_plan_source_eff in ("gt", "teacher"):
-            try:
-                if torch.is_tensor(contacts_seq) and contacts_seq.dim() == 3 and contacts_seq.shape[0] == motion.shape[0]:
-                    idx0 = min(int(contacts_seq.shape[1]) - 1, int(t))
-                    direct_plan_override = contacts_seq[:, idx0]
-            except Exception:
-                direct_plan_override = None
-        elif direct_plan_source_eff in ("softgt", "soft_gt", "soft-gt"):
-            try:
-                if torch.is_tensor(contacts_seq) and contacts_seq.dim() == 3 and contacts_seq.shape[0] == motion.shape[0]:
-                    idx0 = min(int(contacts_seq.shape[1]) - 1, int(t))
-                    gt_c = contacts_seq[:, idx0]
-                    mapped = _softgt_map(gt_c, kind="plan")
-                    direct_plan_override = mapped if torch.is_tensor(mapped) else gt_c
-            except Exception:
-                direct_plan_override = None
-        else:
-            direct_plan_override = None
-        try:
-            setattr(model, "direct_pose_plan_override", direct_plan_override)
-        except Exception:
-            pass
+        direct_plan_source_eff = _normalize_direct_pose_hint_source(
+            getattr(trainer, "direct_pose_plan_source", "model"),
+            allow_whitebox=False,
+        )
+        direct_plan_override = _resolve_direct_pose_hint_override(
+            model=model,
+            source=direct_plan_source_eff,
+            kind="plan",
+            batch_size=int(motion.shape[0]),
+            device=device,
+            dtype=motion.dtype,
+            teacher_contacts_step=teacher_contacts_t,
+            whitebox_contacts_step=None,
+            softgt_map=_softgt_map,
+        )
+        _apply_eval_runtime_controls_from_owner(
+            model,
+            trainer,
+            meas_override=direct_meas_override,
+            plan_override=direct_plan_override,
+        )
 
         # Event-Clock driver state uses the previous probability signal from external contacts.
         meas_prev_in = meas_prev_prob
@@ -5402,53 +5825,53 @@ def _run_freerun_cycles(
                         diff = (meas - gt_contacts).abs()
                         meas_gt_abs_mean = float(diff.mean().item())
                         meas_gt_abs_per_c = diff.mean(dim=0).detach().cpu().tolist()
-                contact_entry = {
-                    "ContactGTMean": gt_mean,
-                    "ContactGTAbsMean": gt_abs_mean,
-                    "ContactGTPerC": gt_per_c,
-                    "ContactGTNextMean": gt_next_mean,
-                    "ContactGTNextAbsMean": gt_next_abs_mean,
-                    "ContactGTNextPerC": gt_next_per_c,
-                    "ContactsMeasSource": str(contacts_meas_source_cfg),
-                    "ContactsMeasSourceApplied": str(contacts_meas_source_applied),
-                    "ContactPlanMean": plan_mean,
-                    "ContactPlanAbsMean": plan_abs_mean,
-                    "ContactPlanPerC": plan_per_c,
-                    "ContactMeasMean": meas_mean,
-                    "ContactMeasAbsMean": meas_abs_mean,
-                    "ContactMeasPerC": meas_per_c,
-                    "ContactPlanLogitsMean": plan_logits_mean,
-                    "ContactPlanLogitsStd": plan_logits_std,
-                    "ContactPlanLogitsPerC": plan_logits_per_c,
-                    "ContactPlanLogitsBasePerC": plan_logits_base_per_c,
-                    "ContactPlanLogitsPhasePerC": plan_logits_phase_per_c,
-                    "ContactPlanLogitsTimePerC": plan_logits_time_per_c,
-                    "ContactPlanLogitsRawPerC": plan_logits_raw_per_c,
-                    "ContactMeasLogitsMean": meas_logits_mean,
-                    "ContactMeasLogitsStd": meas_logits_std,
-                    "ContactMeasLogitsPerC": meas_logits_per_c,
-                    "AngvelMean": angvel_mean,
-                    "AngvelAbsMean": angvel_abs_mean,
-                    "AngvelStd": angvel_std,
-                    "PoseHistMean": pose_hist_mean,
-                    "PoseHistAbsMean": pose_hist_abs_mean,
-                    "PoseHistStd": pose_hist_std,
-                    "ContactPlanLRAbsDiffMean": plan_lr_absdiff_mean,
-                    "ContactPlanLRDiffStd": plan_lr_diff_std,
-                    "ContactMeasLRAbsDiffMean": meas_lr_absdiff_mean,
-                    "ContactMeasLRDiffStd": meas_lr_diff_std,
-                    "ContactGTLRAbsDiffMean": gt_lr_absdiff_mean,
-                    "ContactGTLRDiffStd": gt_lr_diff_std,
-                    "ContactGTNextLRAbsDiffMean": gt_next_lr_absdiff_mean,
-                    "ContactGTNextLRDiffStd": gt_next_lr_diff_std,
-                    "ContactErrAbsMean": err_abs_mean,
-                    "ContactErrAbsPerC": err_abs_per_c,
-                    "ContactErrPerC": err_per_c,
-                    "ContactPlanGtAbsMean": plan_gt_abs_mean,
-                    "ContactMeasGtAbsMean": meas_gt_abs_mean,
-                    "ContactPlanGtAbsPerC": plan_gt_abs_per_c,
-                    "ContactMeasGtAbsPerC": meas_gt_abs_per_c,
-                }
+                contact_entry = _build_contact_step_entry_base(
+                    gt_mean=gt_mean,
+                    gt_abs_mean=gt_abs_mean,
+                    gt_per_c=gt_per_c,
+                    gt_next_mean=gt_next_mean,
+                    gt_next_abs_mean=gt_next_abs_mean,
+                    gt_next_per_c=gt_next_per_c,
+                    contacts_meas_source_cfg=contacts_meas_source_cfg,
+                    contacts_meas_source_applied=contacts_meas_source_applied,
+                    plan_mean=plan_mean,
+                    plan_abs_mean=plan_abs_mean,
+                    plan_per_c=plan_per_c,
+                    meas_mean=meas_mean,
+                    meas_abs_mean=meas_abs_mean,
+                    meas_per_c=meas_per_c,
+                    plan_logits_mean=plan_logits_mean,
+                    plan_logits_std=plan_logits_std,
+                    plan_logits_per_c=plan_logits_per_c,
+                    plan_logits_base_per_c=plan_logits_base_per_c,
+                    plan_logits_phase_per_c=plan_logits_phase_per_c,
+                    plan_logits_time_per_c=plan_logits_time_per_c,
+                    plan_logits_raw_per_c=plan_logits_raw_per_c,
+                    meas_logits_mean=meas_logits_mean,
+                    meas_logits_std=meas_logits_std,
+                    meas_logits_per_c=meas_logits_per_c,
+                    angvel_mean=angvel_mean,
+                    angvel_abs_mean=angvel_abs_mean,
+                    angvel_std=angvel_std,
+                    pose_hist_mean=pose_hist_mean,
+                    pose_hist_abs_mean=pose_hist_abs_mean,
+                    pose_hist_std=pose_hist_std,
+                    plan_lr_absdiff_mean=plan_lr_absdiff_mean,
+                    plan_lr_diff_std=plan_lr_diff_std,
+                    meas_lr_absdiff_mean=meas_lr_absdiff_mean,
+                    meas_lr_diff_std=meas_lr_diff_std,
+                    gt_lr_absdiff_mean=gt_lr_absdiff_mean,
+                    gt_lr_diff_std=gt_lr_diff_std,
+                    gt_next_lr_absdiff_mean=gt_next_lr_absdiff_mean,
+                    gt_next_lr_diff_std=gt_next_lr_diff_std,
+                    err_abs_mean=err_abs_mean,
+                    err_abs_per_c=err_abs_per_c,
+                    err_per_c=err_per_c,
+                    plan_gt_abs_mean=plan_gt_abs_mean,
+                    meas_gt_abs_mean=meas_gt_abs_mean,
+                    plan_gt_abs_per_c=plan_gt_abs_per_c,
+                    meas_gt_abs_per_c=meas_gt_abs_per_c,
+                )
                 # Optional: contact_meas_head input-swap diagnostics (pose drift vs angvel drift).
                 # This recomputes meas logits on:
                 #   (pose_pred, angvel_pred) == current rollout state,
@@ -5525,84 +5948,21 @@ def _run_freerun_cycles(
                             contact_entry["ContactMeasHeadSwapError"] = str(e)
                         except Exception:
                             pass
-                # TTC / clock-anchor diagnostics
-                try:
-                    contact_entry["PhaseResetSource"] = str(phase_reset_source)
-                    contact_entry["TTCEventKind"] = str(ttc_event_kind)
-                    contact_entry["TTCGTPerC"] = (
-                        ttc_gt_step.mean(dim=0).detach().cpu().tolist() if torch.is_tensor(ttc_gt_step) else None
-                    )
-                    contact_entry["TTCGTValidPerC"] = (
-                        ttc_gt_valid_step.to(dtype=torch.float32).mean(dim=0).detach().cpu().tolist()
-                        if torch.is_tensor(ttc_gt_valid_step)
-                        else None
-                    )
-                    contact_entry["TTCStatePerC"] = (
-                        ttc_state_step.mean(dim=0).detach().cpu().tolist() if torch.is_tensor(ttc_state_step) else None
-                    )
-                    contact_entry["TTCEventPerC"] = (
-                        ttc_event_step.to(dtype=torch.float32).mean(dim=0).detach().cpu().tolist()
-                        if torch.is_tensor(ttc_event_step)
-                        else None
-                    )
-                except Exception:
-                    pass
-                # Debug: record what meas the model was explicitly fed (override only; otherwise None).
-                try:
-                    meas_override_per_c = None
-                    if torch.is_tensor(contacts_in_t):
-                        ov = contacts_in_t
-                        if ov.ndim == 3 and ov.size(1) == 1:
-                            ov = ov[:, 0]
-                        if ov.ndim == 2:
-                            meas_override_per_c = ov.mean(dim=0).detach().cpu().tolist()
-                    contact_entry["ContactsMeasOverridePerC"] = meas_override_per_c
-                except Exception:
-                    pass
-                # Debug: record what meas the direct head actually saw (override only; otherwise it's "model").
-                try:
-                    direct_meas_per_c = None
-                    if isinstance(direct_meas_override, str):
-                        if direct_meas_override.strip().lower() in ("ignore", "zero", "none"):
-                            C = None
-                            for ref in (plan, meas, gt_contacts):
-                                if torch.is_tensor(ref) and ref.ndim == 2:
-                                    C = int(ref.shape[-1])
-                                    break
-                            if C is not None and C > 0:
-                                direct_meas_per_c = [0.0 for _ in range(C)]
-                    elif torch.is_tensor(direct_meas_override):
-                        ov = direct_meas_override
-                        if ov.ndim == 3 and ov.size(1) == 1:
-                            ov = ov[:, 0]
-                        if ov.ndim == 2:
-                            direct_meas_per_c = ov.mean(dim=0).detach().cpu().tolist()
-                    contact_entry["DirectMeasSource"] = str(direct_meas_source_eff)
-                    contact_entry["DirectMeasOverridePerC"] = direct_meas_per_c
-                except Exception:
-                    pass
-                # Debug: record what plan the direct head actually saw (override only; otherwise it's "model").
-                try:
-                    direct_plan_per_c = None
-                    if isinstance(direct_plan_override, str):
-                        if direct_plan_override.strip().lower() in ("ignore", "zero", "none"):
-                            C = None
-                            for ref in (plan, meas, gt_contacts):
-                                if torch.is_tensor(ref) and ref.ndim == 2:
-                                    C = int(ref.shape[-1])
-                                    break
-                            if C is not None and C > 0:
-                                direct_plan_per_c = [0.0 for _ in range(C)]
-                    elif torch.is_tensor(direct_plan_override):
-                        ov = direct_plan_override
-                        if ov.ndim == 3 and ov.size(1) == 1:
-                            ov = ov[:, 0]
-                        if ov.ndim == 2:
-                            direct_plan_per_c = ov.mean(dim=0).detach().cpu().tolist()
-                    contact_entry["DirectPlanSource"] = str(direct_plan_source_eff)
-                    contact_entry["DirectPlanOverridePerC"] = direct_plan_per_c
-                except Exception:
-                    pass
+                _attach_contact_runtime_debug(
+                    contact_entry,
+                    phase_reset_source=phase_reset_source,
+                    ttc_event_kind=ttc_event_kind,
+                    ttc_gt_step=ttc_gt_step,
+                    ttc_gt_valid_step=ttc_gt_valid_step,
+                    ttc_state_step=ttc_state_step,
+                    ttc_event_step=ttc_event_step,
+                    contacts_in_t=contacts_in_t,
+                    direct_meas_source_eff=direct_meas_source_eff,
+                    direct_meas_override=direct_meas_override,
+                    direct_plan_source_eff=direct_plan_source_eff,
+                    direct_plan_override=direct_plan_override,
+                    refs=(plan, meas, gt_contacts),
+                )
                 if (
                     bool(getattr(trainer, "so3_corr_apply", False))
                     and bool(getattr(trainer, "so3_corr_gate_from_contacts_err", False))
@@ -5899,7 +6259,7 @@ def _run_freerun_cycles(
                     y_prev_pert[..., rot_slice] = prev_flat_pert.reshape_as(y_prev_pert[..., rot_slice])
 
                     motion_raw_pert = motion_raw_in.clone()
-                    rx = getattr(trainer, "rot6d_x_slice", None) or getattr(trainer, "rot6d_slice", None)
+                    rx = _rot_x_slice_or(int(J) * 6)
                     if isinstance(rx, slice):
                         rx_len = int(rx.stop - rx.start)
                         if rx_len == int(J) * 6:
@@ -6189,27 +6549,46 @@ def _run_freerun_cycles(
         else:
             predsY_direct.append(y_inc_norm.detach())
 
-        if motion_raw is not None:
-            motion_raw = trainer._apply_free_carry(motion_raw, y_used_raw, cond_next_raw=cond_raw_step).detach()
-            motion = trainer._diag_norm_x(motion_raw)
-            if bool(freerun_x_gt) and torch.is_tensor(gt_motion_raw) and gt_motion_raw.shape == motion_raw.shape:
+        if motion_raw is None:
+            trainer._raise_norm_error("run_freerun_cycles free carry 需要 RAW motion state。")
+        free_carry_cfg = _rollout_kernel.resolve_free_carry_runtime_config(trainer)
+        rx = free_carry_cfg.rot6d_x_slice
+        rot6d_y_carry_slice = (
+            free_carry_cfg.rot6d_y_slice
+            if isinstance(free_carry_cfg.rot6d_y_slice, slice)
+            else rot_slice
+        )
+        try:
+            motion_raw = _rollout_kernel.apply_free_carry_raw(
+                x_prev=motion_raw,
+                y_next_raw=y_used_raw,
+                cond_next_raw=cond_raw_step,
+                rot6d_x_slice=rx,
+                rot6d_y_slice=rot6d_y_carry_slice,
+                angvel_x_slice=free_carry_cfg.angvel_x_slice,
+                rootvel_x_slice=free_carry_cfg.rootvel_x_slice,
+                rootpos_x_slice=free_carry_cfg.rootpos_x_slice,
+                bone_hz=free_carry_cfg.bone_hz,
+                columns=free_carry_cfg.columns,
+            ).detach()
+        except (RuntimeError, TypeError, ValueError) as exc:
+            trainer._raise_norm_error("run_freerun_cycles free carry 写回失败", exc)
+        motion = trainer._diag_norm_x(motion_raw)
+        if bool(freerun_x_gt) and torch.is_tensor(gt_motion_raw) and gt_motion_raw.shape == motion_raw.shape:
+            try:
+                motion_raw = gt_motion_raw.detach()
+                motion = trainer._diag_norm_x(motion_raw)
+            except Exception:
+                pass
+        elif bool(freerun_x_gt_except_rot6d) and torch.is_tensor(gt_motion_raw) and gt_motion_raw.shape == motion_raw.shape:
+            if isinstance(rx, slice):
                 try:
-                    motion_raw = gt_motion_raw.detach()
+                    hybrid = gt_motion_raw.detach().clone()
+                    hybrid[..., rx] = motion_raw[..., rx]
+                    motion_raw = hybrid
                     motion = trainer._diag_norm_x(motion_raw)
                 except Exception:
                     pass
-            elif bool(freerun_x_gt_except_rot6d) and torch.is_tensor(gt_motion_raw) and gt_motion_raw.shape == motion_raw.shape:
-                rx = getattr(trainer, "rot6d_x_slice", None) or getattr(trainer, "rot6d_slice", None)
-                if isinstance(rx, slice):
-                    try:
-                        hybrid = gt_motion_raw.detach().clone()
-                        hybrid[..., rx] = motion_raw[..., rx]
-                        motion_raw = hybrid
-                        motion = trainer._diag_norm_x(motion_raw)
-                    except Exception:
-                        pass
-        else:
-            motion = trainer._apply_free_carry(motion, y_used_raw, cond_next_raw=None).detach()
 
         predsX.append(motion)
 
@@ -6231,7 +6610,7 @@ def _run_freerun_cycles(
         )
 
         if pose_hist_enabled and pose_hist_stride > 0 and pose_hist_source == "buffer" and pose_hist_update_source != "freeze":
-            rot_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
+            rot_slice = _rot_y_slice_or(int(y_used_raw.shape[-1]))
             rot_write = None
             if pose_hist_update_source == "gt":
                 try:
@@ -6314,11 +6693,11 @@ def _run_freerun_cycles(
             with torch.no_grad():
                 predX_raw = trainer.normalizer.denorm_x(predX.reshape(-1, predX.shape[-1])).view_as(predX)
                 gtX_raw = trainer.normalizer.denorm_x(gtX.reshape(-1, gtX.shape[-1])).view_as(gtX)
-            rootpos_sl = getattr(trainer, "rootpos_x_slice", None)
+            rootpos_sl = free_carry_cfg.rootpos_x_slice
             if isinstance(rootpos_sl, slice):
                 diff = predX_raw[..., rootpos_sl] - gtX_raw[..., rootpos_sl]
                 root_pos_err = torch.norm(diff, dim=-1).mean(dim=0)  # [free_steps]
-            rootvel_sl = getattr(trainer, "rootvel_x_slice", None)
+            rootvel_sl = free_carry_cfg.rootvel_x_slice
             if isinstance(rootvel_sl, slice):
                 diff = predX_raw[..., rootvel_sl] - gtX_raw[..., rootvel_sl]
                 root_vel_mae = diff.abs().mean(dim=-1).mean(dim=0)  # [free_steps]
@@ -6330,9 +6709,7 @@ def _run_freerun_cycles(
 
     # ---- Per‑round metrics ---------------------------------------------------
     # Shared slices for rotations (reuse previously inferred)
-    rot_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
-    if not isinstance(rot_slice, slice):
-        rot_slice = slice(0, predY.shape[-1])
+    rot_slice = _rot_y_slice_or(int(predY.shape[-1]))
     width = rot_slice.stop - rot_slice.start
     deg_factor = 180.0 / float(np.pi)
     metrics_per_round: List[Dict[str, Any]] = []
@@ -6877,9 +7254,7 @@ def _run_freerun_cycles(
                 t_list.append(int(tt))
 
             # Prepare rot slice.
-            rot_slice_dbg = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
-            if not isinstance(rot_slice_dbg, slice):
-                rot_slice_dbg = slice(0, int(gt_raw_full.shape[-1]))
+            rot_slice_dbg = _rot_y_slice_or(int(gt_raw_full.shape[-1]))
             rot_len = int(rot_slice_dbg.stop - rot_slice_dbg.start)
             if rot_len <= 0 or (rot_len % 6) != 0:
                 raise ValueError("Invalid rot6d slice for leg omega alpha sweep.")
@@ -7199,9 +7574,7 @@ def _run_freerun_cycles(
                     if bool(lambda_fusion_apply) and pred_blend_raw_full is not None
                     else pred_raw_full
                 )
-                rot6d_y_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
-                if not isinstance(rot6d_y_slice, slice):
-                    rot6d_y_slice = slice(0, y_used_raw_full.shape[-1])
+                rot6d_y_slice = _rot_y_slice_or(int(y_used_raw_full.shape[-1]))
 
                 buf_norm = pose_hist_seq[:, 0]
                 buf_raw = pose_hist_inverse_vec(buf_norm, scales, mu, std)
@@ -7276,11 +7649,11 @@ def _run_freerun_cycles(
             except ImportError:  # pragma: no cover
                 from geometry import fk_positions_from_rot6d
 
-            rot_x_sl = getattr(trainer, "rot6d_x_slice", None)
-            root_x_sl = getattr(trainer, "rootpos_x_slice", None)
+            rot_x_sl = _rot_x_slice_or(int(predX_raw.shape[-1]))
+            root_x_sl = free_carry_cfg.rootpos_x_slice
             parents = getattr(loss_fn, "parents", None)
             offsets = getattr(loss_fn, "bone_offsets", None)
-            cols = getattr(loss_fn, "_rot6d_columns", ("X", "Z"))
+            cols = free_carry_cfg.columns
 
             if (
                 isinstance(rot_x_sl, slice)
@@ -7323,8 +7696,7 @@ def _run_freerun_cycles(
     # Per-step metrics across the whole free-run (helps locate drift frame)
     if width > 0 and width % 6 == 0:
         J = width // 6
-        root_idx = int(getattr(trainer, "eval_root_idx", 0) or 0)
-        root_idx = max(0, min(J - 1, root_idx))
+        root_idx = _clamp_eval_root_idx(int(J))
         joint_mask = torch.ones(J, device=device, dtype=torch.bool)
         joint_mask[root_idx] = False
         pr6_full = pred_raw_full[..., rot_slice].view(1, free_steps, J, 6)
@@ -8821,109 +9193,7 @@ def _run_freerun_cycles(
                     entry[k] = v
         if contact_steps:
             c = contact_steps[t] if t < len(contact_steps) else None
-            if isinstance(c, dict):
-                # Keep keys flat for easy plotting.
-                for ck in (
-                    "ContactGTMean",
-                    "ContactGTAbsMean",
-                    "ContactGTPerC",
-                    "ContactGTNextMean",
-                    "ContactGTNextAbsMean",
-                    "ContactGTNextPerC",
-                    "ContactsMeasSource",
-                    "ContactsMeasSourceApplied",
-                    "ContactsMeasOverridePerC",
-                    "ContactPlanMean",
-                    "ContactPlanAbsMean",
-                    "ContactPlanPerC",
-                    "ContactPlanLogitsMean",
-                    "ContactPlanLogitsStd",
-                    "ContactPlanLogitsPerC",
-                    "ContactPlanLogitsBasePerC",
-                    "ContactPlanLogitsTimePerC",
-                    "ContactPlanLogitsRawPerC",
-                    "ContactMeasMean",
-                    "ContactMeasAbsMean",
-                    "ContactMeasPerC",
-                    "ContactMeasLogitsMean",
-                    "ContactMeasLogitsStd",
-                    "ContactMeasLogitsPerC",
-                    "AngvelMean",
-                    "AngvelAbsMean",
-                    "AngvelStd",
-                    "PoseHistMean",
-                    "PoseHistAbsMean",
-	                    "PoseHistStd",
-	                    "PlanZNorm",
-	                    "PhaseZNorm",
-	                    "PhaseZShape",
-	                    "PhaseBinN",
-	                    "PhaseZInSinCosPerC",
-	                    "PhaseAngleInRadPerC",
-	                    "PhaseAngleInDegPerC",
-	                    "PhaseZInPerCNorm",
-	                    "PhaseBinInPerC",
-	                    # Touchdown-anchored phase (derived from PhaseAngleInRadPerC + ContactGTPerC touchdown events).
-	                    "PhaseAngleInTdRadPerC",
-	                    "PhaseAngleInTdDegPerC",
-	                    "PhaseBinInTdPerC",
-	                    "PhaseZSinCosPerC",
-	                    "PhaseAngleRadPerC",
-	                    "PhaseAngleDegPerC",
-	                    "PhaseZPerCNorm",
-	                    "PhaseBinPerC",
-	                    "PhaseEventAgePerC",
-                    "PhaseEventAgeMean",
-                    "PhaseResetSource",
-                    "TTCEventKind",
-                    "TTCGTPerC",
-                    "TTCGTValidPerC",
-                    "TTCStatePerC",
-                    "TTCEventPerC",
-                    "ContactPlanLRAbsDiffMean",
-                    "ContactPlanLRDiffStd",
-                    "ContactMeasLRAbsDiffMean",
-                    "ContactMeasLRDiffStd",
-                    "ContactGTLRAbsDiffMean",
-                    "ContactGTLRDiffStd",
-                    "ContactGTNextLRAbsDiffMean",
-                    "ContactGTNextLRDiffStd",
-                    "ContactErrAbsMean",
-                    "ContactPlanGtAbsMean",
-                    "ContactMeasGtAbsMean",
-                    "DirectMeasSource",
-                    "DirectMeasOverridePerC",
-                    "DirectPlanSource",
-                    "DirectPlanOverridePerC",
-                    "So3GateWarmup",
-                    "So3GateErrRef",
-                    "So3GateErrEff",
-                    "So3GateBase",
-                    "So3GateMode",
-                    "So3GateScale",
-                    "So3GateOverride",
-                    "ContactMeasHeadSwapPoseL2",
-                    "ContactMeasHeadSwapAngvelL2",
-                    "ContactMeasHeadSwapLogitsPPPerC",
-                    "ContactMeasHeadSwapLogitsPGPerC",
-                    "ContactMeasHeadSwapLogitsGPPerC",
-                    "ContactMeasHeadSwapLogitsGGPerC",
-                    "ContactMeasHeadSwapMaxAbsDiffToModelLogits",
-                    "ContactMeasHeadSwapError",
-                ):
-                    if ck in c:
-                        entry[ck] = c.get(ck)
-                if "ContactErrAbsPerC" in c:
-                    entry["ContactErrAbsPerC"] = c.get("ContactErrAbsPerC")
-                if "ContactErrPerC" in c:
-                    entry["ContactErrPerC"] = c.get("ContactErrPerC")
-                if "ContactPlanGtAbsPerC" in c:
-                    entry["ContactPlanGtAbsPerC"] = c.get("ContactPlanGtAbsPerC")
-                if "ContactMeasGtAbsPerC" in c:
-                    entry["ContactMeasGtAbsPerC"] = c.get("ContactMeasGtAbsPerC")
-                if "ContactMeasWhitebox" in c:
-                    # Nested dict (debug only): keep it grouped instead of flattening dozens of keys.
-                    entry["ContactMeasWhitebox"] = c.get("ContactMeasWhitebox")
+            _merge_contact_step_into_metrics_entry(entry, c)
         if keybone_geo:
             entry["KeyBoneGeoDeg"] = keybone_geo
         if keybone_geo_local:

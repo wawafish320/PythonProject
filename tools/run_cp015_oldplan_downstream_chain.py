@@ -199,6 +199,7 @@ def load_stage6_case(name: str) -> Dict[str, Any]:
 
 def make_generated_config(base_config: Path, out_json: Path, overrides: Mapping[str, Any]) -> Path:
     payload = load_json(base_config)
+    payload.setdefault("load_context", "chain_hop")
     payload.update(dict(overrides))
     write_json(out_json, payload)
     return out_json
@@ -245,6 +246,8 @@ def run_posttrain_stage(
             str(config),
             "--ckpt_in",
             str(ckpt_in),
+            "--load_context",
+            "chain_hop",
             "--out_dir",
             str(out_dir),
             "--run_name",

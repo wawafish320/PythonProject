@@ -1,7 +1,7 @@
 # Fresh Basetrain -> Top7 Clean-StepC Runbook
 
-> Last updated: 2026-04-14  
-> Scope: `tail top7 basetrain -> fresh ckpt_last donor -> stage6 -> 70a -> replace -> 70R -> 71 -> 72 -> lambda`  
+> Last updated: 2026-04-22  
+> Scope: `tail top7 basetrain -> fresh ckpt_last donor -> stage6 -> 70a -> replace -> 70R -> 71 -> 72 -> lambda`, plus optional experimental selective-continuation branch from `stage6 step360`  
 > This runbook is for the **fresh basetrain donor** path and does **not** include legacy old-boundary detailed comparison.
 
 ---
@@ -15,6 +15,7 @@
 - `basetrain` donor 固定使用 fresh `ckpt_last_<run_name>.pth`，**不是** `ckpt_epoch_014.pth`
 - `posttrain` 主链固定使用  
   `stage6 -> 70a -> warmstart copy -> replace -> 70R -> 71 -> 72 -> lambda`
+- 上面这条仍然是 **canonical / default** posttrain 主链；如果要保留新的诊断分支，应该作为 **parallel experimental branch** 记录，而不是替换主链
 - 运行入口固定使用 CPU / 禁用 MPS wrapper：  
   `debug_output/_tmp_phasecd_min_ablation_20260330/cpu_nomps_exec.py`
 - 所有产物写入新的临时目录，避免覆盖旧结果
@@ -615,7 +616,171 @@ echo "$RUN_ROOT/run_context.json"
 
 ---
 
-## 12. Notes / Caveats
+## 12. Experimental Branch — `stage6 step360` selective continuation
+
+这一节记录一条**并行实验分支**，用于保留当前观察到的 trade-off；它**不替代**上面的 canonical 主链。
+
+### 12.1 分支定位
+
+- canonical 主链仍然是：`stage6 -> 70a -> warmstart copy -> replace -> 70R -> 71 -> 72 -> lambda`
+- 实验分支的目标不是生成新的默认 baseline，而是显式保留一条：
+  - `all_ex_root` 更优
+  - `nonleg / arm / else` 更优
+  - 但 `leg` 明显回退
+  的候选链路，方便后续继续诊断 stage7 的 leg recovery 问题
+
+### 12.2 当前已验证的实验链路（2026-04-25 update）
+
+- 上游入口仍是 `stage6 step360`，但 fresh run root 切到本轮：
+  - `debug_output/_tmp_tail_top7_fresh_chain_step360_20260425_030401/run_context.json`
+- 完整链路（warmstart copy 仍是显式一步，与 §9 主链定义一致）：
+  - `stage6(step360) -> 70a -> warmstart copy -> replace -> 70R(lr=1e-4, pick step20) -> 71(pick step120) -> 72(pick step150) -> lambda`
+- 各 stage handoff 摘要：
+  - `70R lr probe`（详见 §12.2a）：
+    - `debug_output/_tmp_tail_top7_fresh_chain_step360_20260425_030401/70R_lr_probe/sweep_step20_summary.md`
+  - `71` main（lr=1e-4 dense）：
+    - `debug_output/_tmp_tail_top7_fresh_chain_step360_20260425_030401/71_lr_branch_cmp/summary_71s120.md`
+  - `72 from 71@120` dense：
+    - `debug_output/_tmp_tail_top7_fresh_chain_step360_20260425_030401/72_lr_branch_cmp/summary_72s150.md`
+  - `lambda from 72@150`：
+    - `debug_output/_tmp_tail_top7_fresh_chain_step360_20260425_030401/lambda_lr_branch_cmp/summary_branch_lambda_eval.md`
+- `lambda` 在这条分支上**仍为 downstream no-op**（同表 `Δ(s200-72) = 0.00000` 全维成立），因此**有效最终端点仍记作 `72_step150`**；`lambda` 仅作"若未来 stage7 末端动力学发生变化时可重新激活"的占位。
+
+> 备注：本节口语化描述 regression onset 时常会把 warmstart copy 略去（因为它不是训练阶段、只是 ckpt handoff）。但本 runbook 内对链路完整性的引用应**保留 warmstart copy**，与 §9 canonical 主链的 stage 命名严格一致。
+
+### 12.2a 70R lr probe finding（2026-04-25 新增）
+
+本轮最有操作性的新结论与 70R lr 默认值有关：
+
+- 现 default `lr=3e-4` 在当前 refactored 代码线下，是 stage7 regression 的明确 onset 来源
+- `lr=1e-4` 在 step20 处全维优于 `lr=3e-4`（数据见 `70R_lr_probe/sweep_step20_summary.md`）
+- 因此本 experimental chain 已固定 70R `lr=1e-4`；`lr=3e-4` 视为 refactor 期间未及更新的 stale default
+- **Open question (留给主链)**：canonical 主链 §9.5 的 70R default 仍是 `3e-4`，按本轮证据**很可能同样属 stale default**。本文件**不**在本轮直接修改 §9.5；建议下次 canonical 主链复跑前，先用 §9.5 同条件复一遍 `lr=1e-4` vs `lr=3e-4`，再决定是否升格 §9.5 default。
+
+### 12.3 和 healthy final / historical optima 的当前对比
+
+参考基线（**注意基线属于哪条代码线**）：
+
+- `_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean` —— **同代码线 healthy final**，本节 ship-gate anchor
+- `_tmp_tail_top7_fresh_chain_step360_20260425_030401/lambda_lr_branch_cmp/summary_branch_lambda_eval.md` —— 本分支评估
+- `old_lambda_20260416` —— **老代码线 historical optimum**，仅历史对照，**不参与 ship gate**
+
+完整四列对比（`branch_lambda_s200` / `current_lambda_s200` / `old_lambda_20260418` / `old_lambda_20260416`）：
+
+| group | metric | branch | current | 0418 | 0416 | best |
+|---|---:|---:|---:|---:|---:|---|
+| all_ex_root | mean | 0.12035 | 0.14299 | 0.13188 | 0.11660 | 0416 |
+| all_ex_root | p50  | 0.07053 | 0.08881 | 0.08135 | 0.07370 | branch |
+| all_ex_root | p90  | 0.29122 | 0.34828 | 0.32050 | 0.28167 | 0416 |
+| all_ex_root | p95  | 0.40690 | 0.45967 | 0.43957 | 0.37617 | 0416 |
+| leg | mean | 0.17817 | 0.20328 | 0.17306 | 0.16532 | 0416 |
+| leg | p50  | 0.13731 | 0.15942 | 0.13229 | 0.12452 | 0416 |
+| leg | p90  | 0.36652 | 0.41422 | 0.32997 | 0.34027 | 0418 |
+| leg | p95  | 0.45646 | 0.52292 | 0.47462 | 0.46136 | branch |
+| nonleg | mean | 0.10785 | 0.12995 | 0.12298 | 0.10606 | 0416 |
+| nonleg | p50  | 0.05799 | 0.06975 | 0.06952 | 0.06245 | branch |
+| nonleg | p90  | 0.27003 | 0.33680 | 0.31706 | 0.26694 | 0416 |
+| nonleg | p95  | 0.38135 | 0.44496 | 0.43405 | 0.35823 | 0416 |
+| arm | mean | 0.12581 | 0.14846 | 0.14320 | 0.12061 | 0416 |
+| arm | p50  | 0.06292 | 0.07292 | 0.07853 | 0.06646 | branch |
+| arm | p90  | 0.32375 | 0.38766 | 0.37485 | 0.30808 | 0416 |
+| arm | p95  | 0.44143 | 0.49163 | 0.50520 | 0.40665 | 0416 |
+| else | mean | 0.06538 | 0.08620 | 0.07519 | 0.07167 | branch |
+| else | p50  | 0.05207 | 0.06628 | 0.05615 | 0.05548 | branch |
+| else | p90  | 0.14298 | 0.20573 | 0.17480 | 0.16561 | branch |
+| else | p95  | 0.17831 | 0.23343 | 0.20925 | 0.20425 | branch |
+
+读这张表的方式：
+
+- **vs 同代码线 healthy final（0418）**：
+  - `all_ex_root` / `nonleg` / `arm` / `else` 全部优于
+  - `leg`：`mean / p50` 略差（~+3% / +4%），`p90` 略差（~+11%），`p95` 反超（~-4%）
+  - 已显著优于 refactor 后未优化的 `current_lambda_s200`（默认链路），证明 70R lr=1e-4 + step360 入口的确是 refactored 代码线下当前最佳已知 continuation
+- **vs 历史最优（0416，老代码线）**：
+  - `else` 全 4 项反超；`leg p95` 反超；多个 p50 反超
+  - `leg / nonleg / arm` 的 mean / p90 / p95 仍略差，量级集中在 ~3–8% 区间
+  - 这个 gap 属于 **refactor-cost gap**（当前代码线、配置默认尚未重新调优），不是 stage7 regression 重新出现
+  - 因此 `0416` 仅作 historical reference，不构成本分支的 ship-gate failure
+
+### 12.4 后续复跑建议
+
+- **不建议继续在 71/72 上扫 schedule 去追 leg tail**。本分支已经基本把 71/72 在 `stage6 step360` 入口、70R lr=1e-4 配置下的局部下界摸到：
+  - `71` lr=1e-4 dense 的 leg p95 拐点落在 `step120`（数据见 `71_lr_branch_cmp/summary_71s120.md`），不是单调下降
+  - `72 from 71@120` lr=1e-4 dense 的 leg p95 在 `step150` 取最低，late-step 仍出现轻微回退
+  - 当前 refactored 配置下继续扫 71/72 schedule，大概率只能带来低幅波动，难以再消化对 0418 的 leg mean/p90 残差
+- 如果只是要**复跑验证下界没漂**（不是找更优点）：
+  - `71` 保持 lr=1e-4 dense ckpt `(0,1,5,20,...,120,150,180)`，重点核 `step120` 的 leg p90/p95
+  - `72 from 71@120` 保持 lr=1e-4 dense ckpt，重点核 `step150` 的 leg p90/p95
+  - 复核 `lambda` 是否仍为 downstream no-op
+- 若要**主动改善 leg gap**：按当前证据，下一步应进 §12.6 stage6 cutpoint shift；71/72 / 70a / replace 内部不要再先动
+- 任何复跑都**不要覆盖** canonical fresh chain 的 `71 / 72 / lambda`；保留主链，单独新建 `_tmp_*` run root 承接 continuation
+
+### 12.5 Ship criteria（作为 experimental candidate 固化）
+
+**Ship-gate anchor 显式声明**：
+
+- gate 基线 = `_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean`（**同代码线 healthy final**）
+- `old_lambda_20260416` 仅作 historical reference，**不参与 ship gate**（跨代码线对比不构成 apples-to-apples）
+
+把这条分支固化为 experimental candidate（仍不替代 canonical 主链）的条件，全部对 anchor（0418）：
+
+- `leg p95` 对 anchor 的 gap ≤ ~5%，`leg mean` 对 anchor 的 gap ≤ ~7%
+  - 当前 `leg p95` ≈ -3.8%（反超），`leg mean` ≈ +3.0%，**满足**
+- `all_ex_root` / `nonleg` / `arm` / `else` 每一项都**至少不劣于** anchor
+  - 当前全部**优于** anchor，**满足**
+
+下列任一情况出现，则应重新审视这条分支是否仍值得保留为候选：
+
+- 复跑后非 leg 任一组（`nonleg` / `arm` / `else` / `all_ex_root`）从"优于 anchor"掉回"劣于 anchor"
+- `leg mean` 或 `leg p95` 对 anchor 的 gap 扩大超过 ~8%
+- `lambda` 不再为 downstream no-op（`step0 != step_end`），意味着 stage7 末端动力学变化，现有"有效终点 = 72_step150"的记账方式失效
+- 70R `lr=1e-4` 对 `lr=3e-4` 的全维优势在新一轮复跑中失去——若该 lr finding 不稳，本分支的入口配置需从 70R lr 重新评估
+
+这条分支**不**作为 canonical 主链替代的前提：
+
+- 入口是 `stage6 step360`，**不经过** canonical `stage6 ckpt_last`
+- 仍受 refactor-cost gap 约束（vs `0416`），表明当前代码线尚未重新调优；判断"是否替代 canonical"的窗口应等到 refactor 收口、配置 default 重新对齐之后再开
+
+### 12.6 下一实验 — stage6 cutpoint shift（唯一推荐动作）
+
+目标：用本分支在非 leg 维度相对 healthy 的 headroom，换 leg 起点改善，验证能否关掉当前 `+0.02` 级别的 leg p95 残差。
+
+前置假设（必须在实验前核对，否则不划算）：
+
+- 当前本分支 `all_ex_root` / `nonleg` / `arm` / `else` 仍然**全部优于** healthy final —— 这是"可以用 headroom 换 leg"的前提；如果这个前提不再成立，这个实验直接不起
+
+做法：
+
+- 基于同一 fresh basetrain donor，stage6 dense ckpt 至少保存 `360 / 380 / 400`
+- 三个 cutpoint 各自起完整 continuation：`-> 70a -> warmstart copy -> replace -> 70R(lr=1e-4) -> 71 (dense, pick step120) -> 72 (dense, pick step150) -> lambda`
+- 70R 复用 §12.2a 的 `lr=1e-4` 结论，不再保留 `lr=3e-4` 作为 cutpoint 之外的混淆因子
+- 除 stage6 cutpoint 外，**所有其它参数冻结**（lr / steps_per_epoch / save_step_ckpts / 71/72 选点规则），保证唯一变量就是 cutpoint
+
+三方对比：
+
+- `cutpoint=360`（当前分支）
+- `cutpoint=380 / 400`（新）
+- `healthy final`（`debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source_group_summary.json`）
+
+验收通过的条件（必须同时满足）：
+
+- `leg mean` 和 `leg p95` 对 healthy final 的 gap **都缩小**
+- `all_ex_root` / `nonleg` / `arm` / `else` 每一项都**仍然不劣于** healthy final
+
+验收失败 / 需要撤回的条件（任一成立即回退到 `cutpoint=360`）：
+
+- 任一非 leg 组从"不劣于 healthy"退化为"劣于 healthy"
+- leg gap 没有缩小，或反而扩大
+
+在这个实验得出结论**之前**，下列动作都不起：
+
+- 71/72 的 full sweep
+- 70a / replace 的 leg reinjection（引入 leg 到 nonleg_train_only 路径的改动）
+- 重新选择 stage6 `ckpt_last` vs step-cut 的默认入口
+
+---
+
+## 13. Notes / Caveats
 
 - 这份 runbook 是 **fresh basetrain ckpt_last donor** 版本，不是 canonical `ep014 donor` 版本。
 - `70R` 当前 runbook 直接调用 `tools/run_posttrain_nonleg_trunk_ablation.py`；本文件默认以当前 `PostTrainModelArtifacts` / `_save_posttrain_outputs(...)` API 为准，如接口再次漂移，再重新评估是否需要临时 shim。

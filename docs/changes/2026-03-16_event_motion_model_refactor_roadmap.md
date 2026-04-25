@@ -121,7 +121,7 @@ Non-goal: 不改 loss 数学定义、不改默认配置行为、不改 checkpoin
 
 ### Phase A — 语义冻结与基线固化（不改逻辑）
 
-模板参考：`docs/templates/change_refactor_phaseA_template.md`  
+模板参考：`docs/templates/changes/change_refactor_phaseA_template.md`  
 执行状态：已完成（2026-03-17）  
 本次执行报告：`docs/changes/2026-03-16_event_motion_model_refactor_phaseA_report.md`  
 热点 raw 清单：`docs/changes/2026-03-16_event_motion_model_refactor_phaseA_key_refs_raw.txt`  
@@ -303,8 +303,8 @@ Non-goal: 不改 loss 数学定义、不改默认配置行为、不改 checkpoin
 ## 8) 与配套文档关系
 
 - 本文件聚焦：`train/models.py` 的重复逻辑收敛路线图。  
-- Phase A 模板：`docs/templates/change_refactor_phaseA_template.md`  
+- Phase A 模板：`docs/templates/changes/change_refactor_phaseA_template.md`  
 - Phase A 执行报告：`docs/changes/2026-03-16_event_motion_model_refactor_phaseA_report.md`
 - Phase B 执行报告：`docs/changes/2026-03-16_event_motion_model_refactor_phaseB_report.md`
-- 主计划模板：`docs/templates/change_refactor_plan_template.md`  
+- 主计划模板：`docs/templates/changes/change_refactor_plan_template.md`  
 - 推荐执行顺序：先按本文件完成 Phase A/B，再进入 `forward` 主循环收敛与清理。

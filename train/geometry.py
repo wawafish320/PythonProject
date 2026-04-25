@@ -603,6 +603,219 @@ def so3_log_map(R: torch.Tensor) -> torch.Tensor:
     return phi
 
 
+def _coerce_required_columns(columns: Sequence[str], *, caller: str) -> Tuple[str, str]:
+    if not isinstance(columns, (list, tuple)) or len(columns) < 2:
+        raise ValueError(f"[{caller}] columns must be an explicit sequence with at least two axes.")
+    cols = (str(columns[0]), str(columns[1]))
+    valid = {"X", "Y", "Z"}
+    if cols[0] not in valid or cols[1] not in valid or cols[0] == cols[1]:
+        raise ValueError(f"[{caller}] invalid columns={columns!r}; expected two distinct axes from X/Y/Z.")
+    return cols
+
+
+def _require_bounded_rot_slice(rot_slice: slice, *, caller: str) -> Tuple[int, int, int]:
+    if not isinstance(rot_slice, slice) or rot_slice.start is None or rot_slice.stop is None:
+        raise ValueError(f"[{caller}] rot_slice must be a bounded slice.")
+    start = int(rot_slice.start)
+    stop = int(rot_slice.stop)
+    rot_len = stop - start
+    if start < 0 or stop <= start or rot_len % 6 != 0:
+        raise ValueError(f"[{caller}] invalid rot_slice={rot_slice}; length must be a positive multiple of 6.")
+    return start, stop, rot_len
+
+
+def compose_delta_raw_to_next(
+    y_prev_raw: torch.Tensor,
+    delta_raw: torch.Tensor,
+    *,
+    rot_slice: slice,
+    columns: Sequence[str],
+    omega_hat: Optional[torch.Tensor] = None,
+    gate_val: float = 0.0,
+    max_deg: float = 0.0,
+    omega_detach: bool = True,
+    reproject: bool = False,
+) -> torch.Tensor:
+    """
+    Compose a RAW residual step through the shared geometry path.
+
+    This is intentionally a thin orchestrator: SO(3) correction is delegated to
+    `_apply_so3_correction_to_delta_raw`, and rot6d composition is delegated to
+    `compose_rot6d_delta`. The canonical default keeps the current rollout
+    behavior (`reproject=False`).
+    """
+    caller = "compose_delta_raw_to_next"
+    cols = _coerce_required_columns(columns, caller=caller)
+    _, _, rot_len = _require_bounded_rot_slice(rot_slice, caller=caller)
+    if not torch.is_tensor(y_prev_raw) or not torch.is_tensor(delta_raw):
+        raise TypeError(f"[{caller}] y_prev_raw and delta_raw must be tensors.")
+    if y_prev_raw.shape != delta_raw.shape:
+        raise ValueError(f"[{caller}] shape mismatch: y_prev_raw={y_prev_raw.shape}, delta_raw={delta_raw.shape}.")
+    if y_prev_raw.dim() != 2:
+        raise ValueError(f"[{caller}] expected 2D RAW tensors shaped (B,D), got {y_prev_raw.shape}.")
+    if rot_slice.stop > y_prev_raw.shape[-1]:
+        raise ValueError(f"[{caller}] rot_slice={rot_slice} exceeds RAW dim={y_prev_raw.shape[-1]}.")
+    if rot_len <= 0:
+        raise ValueError(f"[{caller}] rot_slice has no rot6d content.")
+
+    delta_used = _apply_so3_correction_to_delta_raw(
+        delta_raw,
+        rot_slice=rot_slice,
+        omega_hat=omega_hat,
+        gate_val=float(gate_val or 0.0),
+        max_deg=float(max_deg or 0.0),
+        columns=cols,
+        omega_detach=bool(omega_detach),
+    )
+    rot_next = compose_rot6d_delta(
+        y_prev_raw[..., rot_slice],
+        delta_used[..., rot_slice],
+        columns=cols,
+        reproject_result=bool(reproject),
+    )
+    y_next = y_prev_raw + delta_used
+    y_next = y_next.clone()
+    y_next[..., rot_slice] = rot_next
+    return y_next
+
+
+def so3_geodesic_blend(
+    R_inc: torch.Tensor,
+    R_dir: torch.Tensor,
+    lam: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Blend two SO(3) pose tensors with canonical lambda shape (B,J).
+    """
+    caller = "so3_geodesic_blend"
+    if not torch.is_tensor(R_inc) or not torch.is_tensor(R_dir) or not torch.is_tensor(lam):
+        raise TypeError(f"[{caller}] R_inc, R_dir, and lam must be tensors.")
+    if R_inc.shape != R_dir.shape:
+        raise ValueError(f"[{caller}] R shape mismatch: R_inc={R_inc.shape}, R_dir={R_dir.shape}.")
+    if R_inc.dim() != 4 or R_inc.shape[-2:] != (3, 3):
+        raise ValueError(f"[{caller}] expected R tensors shaped (B,J,3,3), got {R_inc.shape}.")
+    if lam.dim() != 2:
+        raise ValueError(f"[{caller}] lam must have canonical shape (B,J), got {lam.shape}.")
+    if lam.shape[0] != R_inc.shape[0] or lam.shape[1] != R_inc.shape[1]:
+        raise ValueError(f"[{caller}] lam shape {lam.shape} is incompatible with R shape {R_inc.shape}.")
+
+    lam = lam.to(device=R_inc.device, dtype=R_inc.dtype)
+    R_res = torch.matmul(R_dir, R_inc.transpose(-1, -2))
+    omega = so3_log_map(R_res)
+    return torch.matmul(so3_exp_map(omega * lam.unsqueeze(-1)), R_inc)
+
+
+def blend_rot6d_raw_with_lambda(
+    y_inc_raw: torch.Tensor,
+    direct_raw: torch.Tensor,
+    lam: torch.Tensor,
+    *,
+    rot_slice: slice,
+    columns: Sequence[str],
+) -> torch.Tensor:
+    """
+    Replace the rot6d slice in RAW pose via SO(3) geodesic blending.
+
+    `lam` is intentionally canonical-only: callers must pass shape (B,J).
+    Shape normalization and denormalization stay in higher-level wrappers.
+    """
+    caller = "blend_rot6d_raw_with_lambda"
+    cols = _coerce_required_columns(columns, caller=caller)
+    _, _, rot_len = _require_bounded_rot_slice(rot_slice, caller=caller)
+    if not torch.is_tensor(y_inc_raw) or not torch.is_tensor(direct_raw):
+        raise TypeError(f"[{caller}] y_inc_raw and direct_raw must be tensors.")
+    if y_inc_raw.shape != direct_raw.shape:
+        raise ValueError(f"[{caller}] RAW shape mismatch: y_inc_raw={y_inc_raw.shape}, direct_raw={direct_raw.shape}.")
+    if y_inc_raw.dim() != 2:
+        raise ValueError(f"[{caller}] expected RAW tensors shaped (B,D), got {y_inc_raw.shape}.")
+    if rot_slice.stop > y_inc_raw.shape[-1]:
+        raise ValueError(f"[{caller}] rot_slice={rot_slice} exceeds RAW dim={y_inc_raw.shape[-1]}.")
+    joint_count = rot_len // 6
+    if lam.dim() != 2 or lam.shape[0] != y_inc_raw.shape[0] or lam.shape[1] != joint_count:
+        raise ValueError(f"[{caller}] lam must have shape (B,J)=({y_inc_raw.shape[0]},{joint_count}), got {lam.shape}.")
+
+    inc6 = reproject_rot6d(y_inc_raw[..., rot_slice]).view(y_inc_raw.shape[0], joint_count, 6)
+    dir6 = reproject_rot6d(direct_raw[..., rot_slice]).view(y_inc_raw.shape[0], joint_count, 6)
+    R_inc = rot6d_to_matrix(inc6, columns=cols)
+    R_dir = rot6d_to_matrix(dir6, columns=cols)
+    R_blend = so3_geodesic_blend(R_inc, R_dir, lam)
+    rot_blend6 = matrix_to_rot6d(R_blend, columns=cols).reshape(y_inc_raw.shape[0], rot_len)
+    y_blend = y_inc_raw.clone()
+    y_blend[..., rot_slice] = rot_blend6
+    return y_blend
+
+
+def apply_direct_leg_so3_to_raw(
+    direct_raw: torch.Tensor,
+    *,
+    rot_slice: slice,
+    columns: Sequence[str],
+    omega_leg: torch.Tensor,
+    leg_idx: torch.Tensor,
+    exclude_idx: Optional[int] = None,
+    stopgrad_base: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+    """
+    Apply direct-leg SO(3) deltas to a RAW pose tensor.
+
+    This pure helper performs only geometry: omega normalization, optional index
+    exclusion, base rotation extraction, Exp(omega) application, and scatter back
+    to the rot6d slice. Accumulators, supervision, denorm/norm, and Trainer state
+    remain outside this contract.
+    """
+    caller = "apply_direct_leg_so3_to_raw"
+    cols = _coerce_required_columns(columns, caller=caller)
+    _, _, rot_len = _require_bounded_rot_slice(rot_slice, caller=caller)
+    if not torch.is_tensor(direct_raw) or not torch.is_tensor(omega_leg) or not torch.is_tensor(leg_idx):
+        raise TypeError(f"[{caller}] direct_raw, omega_leg, and leg_idx must be tensors.")
+    if direct_raw.dim() != 2:
+        raise ValueError(f"[{caller}] expected direct_raw shaped (B,D), got {direct_raw.shape}.")
+    if rot_slice.stop > direct_raw.shape[-1]:
+        raise ValueError(f"[{caller}] rot_slice={rot_slice} exceeds RAW dim={direct_raw.shape[-1]}.")
+    if leg_idx.dim() != 1:
+        raise ValueError(f"[{caller}] leg_idx must be a 1D tensor, got {leg_idx.shape}.")
+
+    omega = omega_leg
+    if omega.dim() == 4 and omega.size(1) == 1:
+        omega = omega[:, 0]
+    elif omega.dim() != 3:
+        raise ValueError(f"[{caller}] omega_leg must have shape (B,K,3) or (B,1,K,3), got {omega_leg.shape}.")
+    if omega.dim() != 3 or omega.shape[0] != direct_raw.shape[0] or omega.shape[-1] != 3:
+        raise ValueError(f"[{caller}] omega_leg must align with direct_raw batch and have last dim 3, got {omega_leg.shape}.")
+    if omega.shape[1] != leg_idx.numel():
+        raise ValueError(f"[{caller}] omega K={omega.shape[1]} must match leg_idx length={leg_idx.numel()}.")
+
+    joint_count = rot_len // 6
+    idx_use = leg_idx.to(device=direct_raw.device, dtype=torch.long)
+    if idx_use.numel() > 0 and (int(idx_use.min().item()) < 0 or int(idx_use.max().item()) >= joint_count):
+        raise ValueError(f"[{caller}] leg_idx values must be within [0,{joint_count}).")
+    omega = omega.to(device=direct_raw.device, dtype=direct_raw.dtype)
+
+    keep_mask = None
+    if exclude_idx is not None and idx_use.numel() > 0:
+        exclude_val = int(exclude_idx)
+        if bool((idx_use == exclude_val).any().detach().cpu().item()):
+            keep_mask = idx_use != exclude_val
+            idx_use = idx_use[keep_mask]
+            omega = omega[:, keep_mask, :]
+
+    base6 = reproject_rot6d(direct_raw[..., rot_slice]).view(direct_raw.shape[0], joint_count, 6)
+    R_base = rot6d_to_matrix(base6, columns=cols)
+    R_leg_base_used = R_base[:, idx_use, :, :]
+    if bool(stopgrad_base):
+        R_leg_base_used = R_leg_base_used.detach()
+    if int(idx_use.numel()) <= 0:
+        return direct_raw, R_leg_base_used, idx_use, keep_mask
+
+    R_leg = torch.matmul(so3_exp_map(omega), R_leg_base_used)
+    R_final = R_base.clone()
+    R_final[:, idx_use, :, :] = R_leg
+    rot6_final = matrix_to_rot6d(R_final, columns=cols).view(direct_raw.shape[0], rot_len)
+    direct_raw_next = direct_raw.clone()
+    direct_raw_next[..., rot_slice] = rot6_final
+    return direct_raw_next, R_leg_base_used, idx_use, keep_mask
+
+
 # ============================================
 # 角速度计算 (Angular Velocity)
 # ============================================
@@ -786,6 +999,109 @@ def root_yaw_from_rot6d_torch(
     if original_ndim == 1:
         return yaw.reshape(())
     return yaw
+
+
+def root_yaw_from_raw_rot6d(
+    raw: Optional[torch.Tensor],
+    *,
+    rot_slice: slice,
+    root_idx: int,
+    up_axis: int,
+    forward_axis: int,
+    offset: float = 0.0,
+    reproject: bool = True,
+) -> Optional[torch.Tensor]:
+    if not torch.is_tensor(raw) or raw.numel() == 0:
+        return None
+    if raw.ndim != 2:
+        return None
+    if not isinstance(rot_slice, slice):
+        return None
+
+    start = rot_slice.start
+    stop = rot_slice.stop
+    step = rot_slice.step
+    if not isinstance(start, int) or not isinstance(stop, int):
+        return None
+    if step not in (None, 1):
+        return None
+    if start < 0 or stop <= start:
+        return None
+    if int(raw.shape[-1]) < stop:
+        return None
+
+    try:
+        rot_flat = raw[..., rot_slice]
+    except Exception:
+        return None
+    if not torch.is_tensor(rot_flat) or rot_flat.numel() == 0:
+        return None
+
+    rot_len = int(rot_flat.shape[-1])
+    if rot_len != (stop - start) or rot_len % 6 != 0:
+        return None
+
+    joint_count = rot_len // 6
+    if joint_count <= 0:
+        return None
+
+    try:
+        root_idx = int(root_idx)
+        up_axis = int(up_axis)
+        forward_axis = int(forward_axis)
+        offset = float(offset)
+    except Exception:
+        return None
+    if root_idx < 0 or root_idx >= joint_count:
+        return None
+
+    try:
+        rot6d = rot_flat.reshape(int(raw.shape[0]), joint_count, 6)
+    except Exception:
+        return None
+
+    return root_yaw_from_rot6d_torch(
+        rot6d,
+        forward_axis=forward_axis,
+        up_axis=up_axis,
+        offset=offset,
+        root_idx=root_idx,
+        reproject=bool(reproject),
+    )
+
+
+def reproject_cond_to_local_frame(
+    cond_raw: Optional[torch.Tensor],
+    yaw_gt: torch.Tensor,
+    yaw_pred: torch.Tensor,
+) -> Optional[torch.Tensor]:
+    if cond_raw is None:
+        return None
+    if not torch.is_tensor(cond_raw):
+        raise TypeError("cond_raw must be a torch.Tensor")
+
+    cond_dim = int(cond_raw.shape[-1])
+    if cond_dim < 3:
+        raise ValueError("cond_raw must contain [..., dir_x, dir_y, speed]")
+
+    if yaw_gt.dim() > 1:
+        yaw_gt = yaw_gt.squeeze(-1)
+    if yaw_pred.dim() > 1:
+        yaw_pred = yaw_pred.squeeze(-1)
+
+    delta_yaw = wrap_to_pi_torch(yaw_pred - yaw_gt)
+    action_dim = cond_dim - 3
+    cond_reprojected = cond_raw.clone()
+    dir_world = cond_raw[..., action_dim : action_dim + 2]
+
+    cos_delta = torch.cos(-delta_yaw)
+    sin_delta = torch.sin(-delta_yaw)
+    dir_local_x = dir_world[..., 0] * cos_delta - dir_world[..., 1] * sin_delta
+    dir_local_y = dir_world[..., 0] * sin_delta + dir_world[..., 1] * cos_delta
+
+    cond_reprojected[..., action_dim] = dir_local_x
+    cond_reprojected[..., action_dim + 1] = dir_local_y
+    return cond_reprojected
 
 
 def root_yaw_from_rot6d_np(

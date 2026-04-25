@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence
 
 import torch
 
-from .geometry import _rot6d_identity_like
+from .data.normalizers import normalize_cond_tensor
+from .geometry import (
+    _rot6d_identity_like,
+    angvel_vec_from_R_seq,
+    reproject_cond_to_local_frame,
+    rot6d_to_matrix,
+    root_yaw_from_raw_rot6d,
+)
 from .history import (
     PoseHistState,
     advance_pose_hist_state,
@@ -37,6 +44,141 @@ class RolloutSequenceInputs:
     angvel_seq: Optional[torch.Tensor] = None
     pose_hist_seq: Optional[torch.Tensor] = None
     gt_seq: Optional[torch.Tensor] = None
+
+
+@dataclass(frozen=True)
+class RolloutCondRuntimeConfig:
+    rot_slice: Optional[slice]
+    root_idx: int
+    up_axis: int
+    forward_axis: int
+    offset: float
+    cond_norm_clip: float
+
+
+@dataclass(frozen=True)
+class FreeCarryRuntimeConfig:
+    rot6d_x_slice: Optional[slice]
+    rot6d_y_slice: Optional[slice]
+    angvel_x_slice: Optional[slice]
+    rootvel_x_slice: Optional[slice]
+    rootpos_x_slice: Optional[slice]
+    bone_hz: Any
+    columns: tuple[Any, Any]
+
+
+@dataclass(frozen=True)
+class PoseHistRuntimeConfig:
+    pose_hist_len: int
+    pose_hist_dim: int
+    pose_hist_stride: int
+    enabled: bool
+    force_pose_hist_seq: bool
+    params_fn: Optional[Callable[[torch.Tensor], tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]]]
+
+
+def resolve_rollout_cond_runtime_config(trainer: Any) -> RolloutCondRuntimeConfig:
+    rot_slice = getattr(trainer, "rot6d_y_slice", None)
+    if not isinstance(rot_slice, slice):
+        rot_slice = getattr(trainer, "rot6d_slice", None)
+    if not isinstance(rot_slice, slice):
+        rot_slice = None
+
+    root_idx = getattr(trainer, "eval_root_idx", 0)
+    if root_idx is None:
+        root_idx = 0
+
+    up_axis = getattr(trainer, "eval_up_axis", None)
+    if up_axis is None:
+        up_axis = getattr(trainer, "_up_axis", None)
+    if up_axis is None:
+        up_axis = 2
+
+    forward_axis = getattr(trainer, "yaw_forward_axis", None)
+    if forward_axis is None:
+        forward_axis = 2
+
+    offset = getattr(trainer, "yaw_forward_axis_offset", None)
+    if offset is None:
+        offset = 0.0
+
+    cond_norm_clip = getattr(trainer, "cond_norm_clip", None)
+    if cond_norm_clip is None:
+        cond_norm_clip = 6.0
+
+    return RolloutCondRuntimeConfig(
+        rot_slice=rot_slice,
+        root_idx=root_idx,
+        up_axis=up_axis,
+        forward_axis=forward_axis,
+        offset=offset,
+        cond_norm_clip=cond_norm_clip,
+    )
+
+
+def resolve_free_carry_runtime_config(trainer: Any) -> FreeCarryRuntimeConfig:
+    """Resolve only the runtime fields required by apply_free_carry_raw."""
+    rot6d_x_slice = getattr(trainer, "rot6d_x_slice", None)
+    if not isinstance(rot6d_x_slice, slice):
+        rot6d_x_slice = getattr(trainer, "rot6d_slice", None)
+    if not isinstance(rot6d_x_slice, slice):
+        rot6d_x_slice = None
+
+    rot6d_y_slice = getattr(trainer, "rot6d_y_slice", None)
+    if not isinstance(rot6d_y_slice, slice):
+        rot6d_y_slice = getattr(trainer, "rot6d_slice", None)
+    if not isinstance(rot6d_y_slice, slice):
+        rot6d_y_slice = None
+
+    angvel_x_slice = getattr(trainer, "angvel_x_slice", None)
+    if not isinstance(angvel_x_slice, slice):
+        angvel_x_slice = None
+    rootvel_x_slice = getattr(trainer, "rootvel_x_slice", None)
+    if not isinstance(rootvel_x_slice, slice):
+        rootvel_x_slice = None
+    rootpos_x_slice = getattr(trainer, "rootpos_x_slice", None)
+    if not isinstance(rootpos_x_slice, slice):
+        rootpos_x_slice = None
+
+    bone_hz = getattr(trainer, "bone_hz", 60.0)
+    if bone_hz is None:
+        bone_hz = 60.0
+
+    columns = ("X", "Z")
+    columns_raw = getattr(getattr(trainer, "loss_fn", None), "_rot6d_columns", columns)
+    if isinstance(columns_raw, (list, tuple)) and len(columns_raw) >= 2:
+        axis_a = str(columns_raw[0]).strip().upper()
+        axis_b = str(columns_raw[1]).strip().upper()
+        if axis_a in ("X", "Y", "Z") and axis_b in ("X", "Y", "Z") and axis_a != axis_b:
+            columns = (axis_a, axis_b)
+
+    return FreeCarryRuntimeConfig(
+        rot6d_x_slice=rot6d_x_slice,
+        rot6d_y_slice=rot6d_y_slice,
+        angvel_x_slice=angvel_x_slice,
+        rootvel_x_slice=rootvel_x_slice,
+        rootpos_x_slice=rootpos_x_slice,
+        bone_hz=bone_hz,
+        columns=columns,
+    )
+
+
+def resolve_pose_hist_runtime_config(trainer: Any) -> PoseHistRuntimeConfig:
+    pose_hist_len = int(getattr(trainer, "pose_hist_len", 0) or 0)
+    pose_hist_dim = int(getattr(trainer, "pose_hist_dim", 0) or 0)
+    pose_hist_stride = pose_hist_dim // pose_hist_len if pose_hist_len > 0 else 0
+    enabled = pose_hist_len > 0 and pose_hist_dim > 0 and pose_hist_stride > 0
+    params_fn = getattr(trainer, "_pose_hist_params", None)
+    if not callable(params_fn):
+        params_fn = None
+    return PoseHistRuntimeConfig(
+        pose_hist_len=pose_hist_len,
+        pose_hist_dim=pose_hist_dim,
+        pose_hist_stride=pose_hist_stride,
+        enabled=enabled,
+        force_pose_hist_seq=bool(getattr(trainer, "force_pose_hist_seq", False)),
+        params_fn=params_fn,
+    )
 
 
 def new_rollout_prediction_buffers() -> RolloutPredictionBuffers:
@@ -99,6 +241,105 @@ class RolloutStepInputs:
     time_index_t: Optional[torch.Tensor]
     rollout_step_t: Optional[torch.Tensor]
     reprojection_applied: bool
+
+
+@dataclass(frozen=True)
+class RolloutModelStepRequest:
+    state: MutableMapping[str, Any]
+    step_idx: int
+    frame_idx: int
+    total_steps: int
+    cond_seq: Optional[torch.Tensor]
+    cond_raw_seq: Optional[torch.Tensor]
+    cond_norm_mu: Optional[torch.Tensor]
+    cond_norm_std: Optional[torch.Tensor]
+    angvel_seq: Optional[torch.Tensor]
+    pose_hist_seq: Optional[torch.Tensor]
+    time_index_mode: str
+    time_base: Any
+    enable_reprojection: bool
+    include_boundary: bool
+    cycle_len: int
+    cond_raw_offset: int = 1
+    yaw_gt_fn: Optional[Callable[[int], Optional[torch.Tensor]]] = None
+
+
+def _slice_width(value: slice, *, name: str) -> int:
+    if not isinstance(value, slice) or value.start is None or value.stop is None:
+        raise ValueError(f"{name} must be a concrete slice")
+    return int(value.stop - value.start)
+
+
+def apply_free_carry_raw(
+    *,
+    x_prev: torch.Tensor,
+    y_next_raw: torch.Tensor,
+    cond_next_raw: Any,
+    rot6d_x_slice: slice,
+    rot6d_y_slice: slice,
+    angvel_x_slice: Optional[slice],
+    rootvel_x_slice: slice,
+    rootpos_x_slice: slice,
+    bone_hz: Any,
+    columns: Sequence[str],
+) -> torch.Tensor:
+    x_next = x_prev.clone()
+    cols = tuple(columns)
+    if len(cols) < 2:
+        raise ValueError("apply_free_carry_raw requires explicit rot6d columns")
+    rot_x_width = _slice_width(rot6d_x_slice, name="rot6d_x_slice")
+    rot_y_width = _slice_width(rot6d_y_slice, name="rot6d_y_slice")
+    if rot_x_width <= 0 or rot_y_width <= 0:
+        raise ValueError("apply_free_carry_raw requires valid rot6d slices")
+    if rot_x_width != rot_y_width:
+        raise ValueError("apply_free_carry_raw rot6d slice widths must match")
+
+    x_next[..., rot6d_x_slice] = y_next_raw[..., rot6d_y_slice]
+
+    if cond_next_raw is None:
+        raise ValueError("apply_free_carry_raw requires cond_next_raw")
+    cond_raw = torch.as_tensor(cond_next_raw).to(device=x_prev.device, dtype=x_prev.dtype)
+    if cond_raw.dim() == 1:
+        cond_raw = cond_raw.unsqueeze(0)
+    if cond_raw.shape[0] != x_prev.shape[0]:
+        cond_raw = cond_raw.expand(x_prev.shape[0], -1)
+    cond_dim = int(cond_raw.shape[-1])
+    if cond_dim < 3:
+        raise ValueError("apply_free_carry_raw cond_next_raw requires [dir_x, dir_y, speed]")
+    action_dim = max(0, cond_dim - 3)
+    cond_dir = cond_raw[..., action_dim:action_dim + 2]
+    cond_speed = cond_raw[..., action_dim + 2]
+
+    cond_dir_world = cond_dir
+    dir_norm = cond_dir_world.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    dir_unit_world = cond_dir_world / dir_norm
+
+    if isinstance(angvel_x_slice, slice):
+        joint_count = rot_x_width // 6
+        if joint_count <= 0:
+            raise ValueError("apply_free_carry_raw rot6d slice has no valid joints")
+        prev6 = x_prev[..., rot6d_x_slice].reshape(x_prev.shape[0], joint_count, 6)
+        curr6 = x_next[..., rot6d_x_slice].reshape(x_prev.shape[0], joint_count, 6)
+        R_prev = rot6d_to_matrix(prev6, columns=cols)
+        R_curr = rot6d_to_matrix(curr6, columns=cols)
+        R_seq = torch.stack([R_prev, R_curr], dim=1)
+        angvel = angvel_vec_from_R_seq(R_seq, fps=float(bone_hz or 60.0))[:, -1]
+        x_next[..., angvel_x_slice] = angvel.reshape(x_prev.shape[0], joint_count * 3)
+
+    if not isinstance(rootvel_x_slice, slice):
+        raise ValueError("apply_free_carry_raw requires rootvel_x_slice")
+    vel_world = dir_unit_world * cond_speed.unsqueeze(-1)
+    vel_world = vel_world[..., :_slice_width(rootvel_x_slice, name="rootvel_x_slice")]
+    x_next[..., rootvel_x_slice] = vel_world
+
+    if not isinstance(rootpos_x_slice, slice):
+        raise ValueError("apply_free_carry_raw requires rootpos_x_slice")
+    dt = 1.0 / max(float(bone_hz or 60.0), 1e-6)
+    pos = x_prev[..., rootpos_x_slice].clone()
+    step = vel_world[..., : min(2, vel_world.shape[-1])] * dt
+    pos[..., :step.shape[-1]] = pos[..., :step.shape[-1]] + step
+    x_next[..., rootpos_x_slice] = pos
+    return x_next
 
 
 def finalize_rollout_prediction_buffers(
@@ -191,17 +432,18 @@ def prepare_rollout_pose_hist_state(
     offset: int = 0,
     force_disable: Optional[bool] = None,
 ) -> PoseHistState:
+    pose_hist_cfg = resolve_pose_hist_runtime_config(trainer)
     return init_pose_hist_state(
         ref_tensor=state_seq,
         pose_hist_seq=pose_hist_seq,
         y_prev_raw=y_raw_local,
         rot_slice=rot6d_y_slice,
-        pose_hist_len=int(getattr(trainer, "pose_hist_len", 0) or 0),
-        pose_hist_dim=int(getattr(trainer, "pose_hist_dim", 0) or 0),
-        params_fn=trainer._pose_hist_params,
+        pose_hist_len=pose_hist_cfg.pose_hist_len,
+        pose_hist_dim=pose_hist_cfg.pose_hist_dim,
+        params_fn=pose_hist_cfg.params_fn,
         offset=int(offset),
         force_disable=bool(
-            getattr(trainer, "force_pose_hist_seq", False)
+            pose_hist_cfg.force_pose_hist_seq
             if force_disable is None
             else force_disable
         ),
@@ -228,11 +470,15 @@ def resolve_rollout_initial_raw_state(
     if dy <= 0:
         dy = int(getattr(trainer, "Dy", 0) or (gt_seq.shape[-1] if gt_seq is not None else 0))
     rot6d_slice = getattr(getattr(trainer, "train_loader", None), "rot6d_x_slice", None)
-    if rot6d_slice is None:
-        rot6d_slice = getattr(trainer, "rot6d_x_slice", None) or getattr(trainer, "rot6d_slice", None)
+    if not isinstance(rot6d_slice, slice):
+        rot6d_slice = getattr(trainer, "rot6d_x_slice", None)
+    if not isinstance(rot6d_slice, slice):
+        rot6d_slice = getattr(trainer, "rot6d_slice", None)
     if not isinstance(rot6d_slice, slice):
         rot6d_slice = slice(0, motion.size(-1))
-    rot6d_y_slice = getattr(trainer, "rot6d_y_slice", None) or rot6d_slice
+    rot6d_y_slice = getattr(trainer, "rot6d_y_slice", None)
+    if not isinstance(rot6d_y_slice, slice):
+        rot6d_y_slice = rot6d_slice
     if y_raw_local is None and motion_raw_local is not None and dy:
         slice_len = rot6d_slice.stop - rot6d_slice.start
         if slice_len != dy:
@@ -315,6 +561,72 @@ def init_rollout_execution_state(
     )
 
 
+def prepare_cond_input_from_raw(
+    *,
+    base_cond_input: Optional[torch.Tensor],
+    cond_raw_step: Optional[torch.Tensor],
+    cond_norm_mu: Optional[torch.Tensor],
+    cond_norm_std: Optional[torch.Tensor],
+    cond_norm_clip: Optional[float],
+    allow_reprojection: bool,
+    yaw_gt: Optional[torch.Tensor],
+    y_prev_raw: Optional[torch.Tensor],
+    rot_slice: Any,
+    root_idx: int,
+    up_axis: int,
+    forward_axis: int,
+    offset: float,
+    normalize_fail_open: bool = False,
+) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], bool]:
+    cond_input = base_cond_input
+    cond_raw_for_model = cond_raw_step
+    reprojection_applied = False
+
+    if (
+        bool(allow_reprojection)
+        and torch.is_tensor(cond_raw_step)
+        and yaw_gt is not None
+        and y_prev_raw is not None
+    ):
+        yaw_pred = root_yaw_from_raw_rot6d(
+            y_prev_raw,
+            rot_slice=rot_slice,
+            root_idx=root_idx,
+            up_axis=up_axis,
+            forward_axis=forward_axis,
+            offset=offset,
+            reproject=True,
+        )
+        if yaw_pred is not None:
+            cond_proj = reproject_cond_to_local_frame(cond_raw_step, yaw_gt, yaw_pred)
+            if cond_proj is not None:
+                cond_raw_for_model = cond_proj
+                reprojection_applied = True
+
+    if cond_raw_for_model is not None:
+        if bool(normalize_fail_open):
+            try:
+                cond_override = normalize_cond_tensor(
+                    cond_raw_for_model,
+                    cond_norm_mu,
+                    cond_norm_std,
+                    cond_norm_clip=float(cond_norm_clip or 0.0),
+                )
+            except Exception:
+                cond_override = None
+        else:
+            cond_override = normalize_cond_tensor(
+                cond_raw_for_model,
+                cond_norm_mu,
+                cond_norm_std,
+                cond_norm_clip=float(cond_norm_clip or 0.0),
+            )
+        if cond_override is not None:
+            cond_input = cond_override
+
+    return cond_input, cond_raw_for_model, reprojection_applied
+
+
 def prepare_rollout_cond(
     trainer: Any,
     *,
@@ -350,38 +662,30 @@ def prepare_rollout_cond(
         else:
             cond_raw_step = cond_raw_seq
 
-    cond_raw_for_model = cond_raw_step
-    reprojection_applied = False
-    if bool(allow_reprojection) and torch.is_tensor(cond_raw_step):
-        yaw_gt = None
-        if callable(yaw_gt_fn):
-            try:
-                yaw_gt = yaw_gt_fn(int(idx))
-            except Exception:
-                yaw_gt = None
-        yaw_pred = None
-        if y_prev_raw is not None:
-            try:
-                yaw_pred = trainer._infer_root_yaw_from_rot6d(y_prev_raw)
-            except Exception:
-                yaw_pred = None
-        if yaw_gt is not None and yaw_pred is not None:
-            cond_proj = trainer._reproject_cond_to_local_frame(cond_raw_step, yaw_gt, yaw_pred)
-            if cond_proj is not None:
-                cond_raw_for_model = cond_proj
-                reprojection_applied = True
-
-    if cond_raw_for_model is not None:
+    runtime_cfg = resolve_rollout_cond_runtime_config(trainer)
+    yaw_gt = None
+    if callable(yaw_gt_fn):
         try:
-            cond_override = trainer._normalize_cond_from_raw(
-                cond_raw_for_model,
-                cond_norm_mu,
-                cond_norm_std,
-            )
+            yaw_gt = yaw_gt_fn(int(idx))
         except Exception:
-            cond_override = None
-        if cond_override is not None:
-            cond_t = cond_override
+            yaw_gt = None
+
+    cond_t, cond_raw_for_model, reprojection_applied = prepare_cond_input_from_raw(
+        base_cond_input=cond_t,
+        cond_raw_step=cond_raw_step,
+        cond_norm_mu=cond_norm_mu,
+        cond_norm_std=cond_norm_std,
+        cond_norm_clip=runtime_cfg.cond_norm_clip,
+        allow_reprojection=allow_reprojection,
+        yaw_gt=yaw_gt,
+        y_prev_raw=y_prev_raw,
+        rot_slice=runtime_cfg.rot_slice,
+        root_idx=runtime_cfg.root_idx,
+        up_axis=runtime_cfg.up_axis,
+        forward_axis=runtime_cfg.forward_axis,
+        offset=runtime_cfg.offset,
+        normalize_fail_open=True,
+    )
     return cond_t, cond_raw_step, cond_raw_for_model, reprojection_applied
 
 
@@ -516,6 +820,90 @@ def forward_rollout_model_step(
     return ret, delta_out, ret.get("period_pred", None)
 
 
+def execute_rollout_model_step(
+    trainer: Any,
+    model: Any,
+    request: RolloutModelStepRequest,
+) -> Dict[str, Any]:
+    motion = request.state["motion"]
+    y_prev_raw = request.state["y_prev_raw"]
+
+    cond_t, cond_raw_step, _, _ = prepare_rollout_cond(
+        trainer,
+        cond_seq=request.cond_seq,
+        cond_raw_seq=request.cond_raw_seq,
+        cond_norm_mu=request.cond_norm_mu,
+        cond_norm_std=request.cond_norm_std,
+        step_idx=int(request.step_idx),
+        cond_idx=int(request.frame_idx),
+        cond_has_time_dim=rollout_has_time_dim(request.cond_seq),
+        cond_raw_has_time_dim=rollout_has_time_dim(request.cond_raw_seq),
+        cond_raw_offset=int(request.cond_raw_offset),
+        include_boundary=bool(request.include_boundary),
+        cycle_len=int(request.cycle_len),
+        y_prev_raw=y_prev_raw,
+        allow_reprojection=bool(request.enable_reprojection and int(request.step_idx) > 0),
+        yaw_gt_fn=request.yaw_gt_fn,
+    )
+
+    angvel_t = resolve_rollout_step_angvel(
+        trainer,
+        motion=motion,
+        angvel_seq=request.angvel_seq,
+        step_idx=int(request.frame_idx),
+        has_time_dim=rollout_has_time_dim(request.angvel_seq),
+    )
+
+    _, pose_hist_t = resolve_rollout_pose_history(
+        pose_hist_state=request.state.get("pose_hist_state", None),
+        pose_hist_seq=request.pose_hist_seq,
+        idx=int(request.frame_idx),
+    )
+
+    contacts_in_t = prepare_rollout_contacts_input(
+        trainer,
+        model,
+        motion_t=motion,
+        pose_hist_t=pose_hist_t,
+    )
+
+    time_base_local, time_index_seed = resolve_rollout_time_controls(
+        time_index_mode=str(request.time_index_mode),
+        time_base=request.time_base,
+        frame_idx=int(request.frame_idx),
+        rollout_step_idx=int(request.step_idx),
+    )
+    time_index_t, rollout_step_t = build_rollout_step_time_inputs(
+        motion,
+        total_steps=int(request.total_steps),
+        step_idx=int(request.step_idx),
+        time_base=time_base_local,
+        time_index_seed=time_index_seed,
+    )
+
+    ret, _, _ = forward_rollout_model_step(
+        model,
+        motion=motion.unsqueeze(1),
+        cond_input=ensure_rollout_time_axis(cond_t),
+        contacts_in_t=contacts_in_t,
+        angvel_t=ensure_rollout_time_axis(angvel_t),
+        pose_history_t=ensure_rollout_time_axis(pose_hist_t),
+        plan_z=request.state.get("plan_z", None),
+        meas_logits_prev=request.state.get("meas_logits_prev", None),
+        time_index_t=time_index_t,
+        rollout_step_t=rollout_step_t,
+    )
+    update_rollout_recurrent_state(model, ret, request.state)
+
+    return {
+        "ret": ret,
+        "contacts_in_t": contacts_in_t,
+        "cond_raw_step": cond_raw_step,
+        "time_index_t": time_index_t,
+        "rollout_step_t": rollout_step_t,
+    }
+
+
 def resolve_rollout_step_inputs(
     trainer: Any,
     rollout: RolloutExecutionState,
@@ -593,11 +981,22 @@ def update_rollout_carry_state(
 ) -> RolloutExecutionState:
     if rollout.motion_raw_local is None:
         trainer._raise_norm_error("rollout 更新需要 DataNormalizer 提供 RAW 状态写回。")
-    free_raw = trainer._apply_free_carry(
-        rollout.motion_raw_local,
-        rollout.latest_y_raw,
-        cond_next_raw=rollout.latest_cond_raw_for_env,
-    )
+    free_carry_cfg = resolve_free_carry_runtime_config(trainer)
+    try:
+        free_raw = apply_free_carry_raw(
+            x_prev=rollout.motion_raw_local,
+            y_next_raw=rollout.latest_y_raw,
+            cond_next_raw=rollout.latest_cond_raw_for_env,
+            rot6d_x_slice=free_carry_cfg.rot6d_x_slice,
+            rot6d_y_slice=free_carry_cfg.rot6d_y_slice,
+            angvel_x_slice=free_carry_cfg.angvel_x_slice,
+            rootvel_x_slice=free_carry_cfg.rootvel_x_slice,
+            rootpos_x_slice=free_carry_cfg.rootpos_x_slice,
+            bone_hz=free_carry_cfg.bone_hz,
+            columns=free_carry_cfg.columns,
+        )
+    except (RuntimeError, TypeError, ValueError) as exc:
+        trainer._raise_norm_error("rollout free carry 写回失败", exc)
     free_raw = free_raw.clone() if rollout.allow_grad else free_raw.detach()
     free_z = trainer._diag_norm_x(free_raw)
     gt_next = rollout_inputs.state_seq[:, step_idx + 1]
@@ -672,8 +1071,22 @@ def apply_rollout_carry_state(
     y_next_raw: torch.Tensor,
     cond_raw_step: Optional[torch.Tensor],
 ) -> None:
-    cond_env = cond_raw_step if torch.is_tensor(cond_raw_step) else None
-    motion_raw = trainer._apply_free_carry(state["motion_raw"], y_next_raw, cond_next_raw=cond_env)
+    free_carry_cfg = resolve_free_carry_runtime_config(trainer)
+    try:
+        motion_raw = apply_free_carry_raw(
+            x_prev=state["motion_raw"],
+            y_next_raw=y_next_raw,
+            cond_next_raw=cond_raw_step,
+            rot6d_x_slice=free_carry_cfg.rot6d_x_slice,
+            rot6d_y_slice=free_carry_cfg.rot6d_y_slice,
+            angvel_x_slice=free_carry_cfg.angvel_x_slice,
+            rootvel_x_slice=free_carry_cfg.rootvel_x_slice,
+            rootpos_x_slice=free_carry_cfg.rootpos_x_slice,
+            bone_hz=free_carry_cfg.bone_hz,
+            columns=free_carry_cfg.columns,
+        )
+    except (RuntimeError, TypeError, ValueError) as exc:
+        trainer._raise_norm_error("apply_rollout_carry_state free carry 写回失败", exc)
     motion_raw = torch.nan_to_num(motion_raw, nan=0.0, posinf=1e6, neginf=-1e6)
     motion = trainer._diag_norm_x(motion_raw)
     state["motion_raw"] = motion_raw

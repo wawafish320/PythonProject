@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 from unittest import mock
 import unittest
@@ -119,7 +120,10 @@ class PosttrainPoseHistoryPhase3Test(unittest.TestCase):
         }
 
         with (
-            mock.patch("train.posttrain._prepare_rollout_cond", return_value=(torch.ones(1, 1), None)),
+            mock.patch(
+                "train.rollout_kernel.prepare_rollout_cond",
+                return_value=(torch.ones(1, 1), None, None, False),
+            ),
             mock.patch("train.posttrain._rollout_kernel.prepare_rollout_contacts_input", return_value=None),
             mock.patch("train.posttrain._rollout_kernel.update_rollout_recurrent_state", return_value=None),
         ):
@@ -164,7 +168,6 @@ class PosttrainPoseHistoryPhase3Test(unittest.TestCase):
 
     def test_apply_rollout_carry_state_advances_shared_pose_hist_state(self) -> None:
         trainer = _make_trainer()
-        trainer._apply_free_carry = lambda motion_raw, y_next_raw, cond_next_raw=None: y_next_raw + 1.0
         trainer._diag_norm_x = lambda x_raw: x_raw + 2.0
 
         state = {
@@ -185,12 +188,16 @@ class PosttrainPoseHistoryPhase3Test(unittest.TestCase):
         }
         y_next_raw = torch.tensor([[30.0, 31.0, 32.0, 90.0, 91.0, 92.0]], dtype=torch.float32)
 
-        _rollout_kernel.apply_rollout_carry_state(
-            trainer,
-            state,
-            y_next_raw=y_next_raw,
-            cond_raw_step=torch.tensor([[0.1, 0.2, 0.3]], dtype=torch.float32),
-        )
+        with mock.patch(
+            "train.rollout_kernel.apply_free_carry_raw",
+            side_effect=lambda **kwargs: kwargs["y_next_raw"] + 1.0,
+        ):
+            _rollout_kernel.apply_rollout_carry_state(
+                trainer,
+                state,
+                y_next_raw=y_next_raw,
+                cond_raw_step=torch.tensor([[0.1, 0.2, 0.3]], dtype=torch.float32),
+            )
 
         self.assertIsInstance(state["pose_hist_state"], PoseHistState)
         torch.testing.assert_close(state["motion_raw"], y_next_raw + 1.0)
@@ -257,6 +264,34 @@ class PosttrainPoseHistoryPhase3Test(unittest.TestCase):
         self.assertIn("leg_align_grad_probe", aux_payload)
         self.assertEqual(set(aux_payload["leg_align_grad_probe"].keys()), {"total", "distal", "proximal"})
         self.assertTrue(all(torch.is_tensor(value) for value in aux_payload["leg_align_grad_probe"].values()))
+        self.assertAlmostEqual(stats["dir_nonleg_effective_base"], stats["dir_nonleg_base"], places=6)
+
+    def test_lambda_fusion_finalize_empty_optional_lists_preserves_nan_defaults(self) -> None:
+        trainer = _make_trainer()
+        finalize_ctx = LambdaFusionFinalizeContext(
+            trainer=trainer,
+            model=SimpleNamespace(direct_pose_leg_joint_names=[]),
+            objective="blend",
+        )
+        accum = LambdaFusionAccum(
+            loss_terms=[torch.tensor(1.0, dtype=torch.float32)],
+        )
+
+        total, stats, aux_payload = _lambda_fusion_finalize(finalize_ctx=finalize_ctx, accum_ctx=accum)
+
+        torch.testing.assert_close(total, torch.tensor(1.0, dtype=torch.float32))
+        self.assertTrue(math.isnan(stats["lambda_mean"]))
+        self.assertTrue(math.isnan(stats["lambda_std"]))
+        self.assertTrue(math.isnan(stats["lambda_eff_mean"]))
+        self.assertTrue(math.isnan(stats["lambda_eff_std"]))
+        self.assertTrue(math.isnan(stats["lambda_rel_mean"]))
+        self.assertTrue(math.isnan(stats["gate_sup_acc@0.5"]))
+        self.assertEqual(stats["dir_group_norm_used"], 0.0)
+        self.assertEqual(aux_payload, {"ema_update_payload": None})
+        self.assertEqual(
+            getattr(trainer, "_posttrain_soft_fail_counts", {}),
+            {"finalize_lambda_stats_eff": 1, "finalize_lambda_stats_raw": 1},
+        )
 
 
 if __name__ == "__main__":

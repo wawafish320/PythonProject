@@ -1,6 +1,6 @@
 # [2026-03-16] EventMotionModel refactor Phase A 执行结果
 
-模板参考：`docs/templates/change_refactor_phaseA_template.md`  
+模板参考：`docs/templates/changes/change_refactor_phaseA_template.md`  
 路线图来源：`docs/changes/2026-03-16_event_motion_model_refactor_roadmap.md`
 
 ## A1. baseline 固化

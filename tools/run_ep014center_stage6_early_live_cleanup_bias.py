@@ -253,6 +253,7 @@ def build_inspection_dataset() -> Any:
 def inspect_scope(*, config_json: Path, ckpt_in: Path, ds: Any) -> Dict[str, Any]:
     payload = load_json(config_json)
     payload["ckpt_in"] = str(ckpt_in)
+    payload["load_context"] = "chain_hop"
     payload["encoder_bundle"] = str(ENCODER_BUNDLE)
     payload["posttrain_contacts_source"] = "pretrain_contact"
     payload["posttrain_contacts_pretrain_clamp"] = PRETRAIN_CLAMP

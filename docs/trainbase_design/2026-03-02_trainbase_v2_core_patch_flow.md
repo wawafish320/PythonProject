@@ -1,8 +1,11 @@
 # TrainBase v2 流程重构设计（Core / Patch 分层）
 
-> Status: retained in `docs/trainbase_design` as foundational trainbase design context
-> Reader note: This file is not the current global posttrain canonical. Terms such as `mainline` or `current` below refer to the original trainbase-design context.
-> Current canonical entry: `docs/posttrain_pipeline.md`
+> Status: retained in `docs/trainbase_design` as foundational trainbase design context (v2 迁移期决策记录)
+> Reader note: This file is not the current global canonical. Terms such as `mainline` or `current` below refer to the original trainbase-design context (2026-03 时点)。
+> Current canonical entries:
+> - basetrain 当前架构 / 设计思路：`docs/basetrain_pipeline.md`
+> - posttrain canonical chain：`docs/posttrain_pipeline.md`
+> - 代码归属红线：`train/MODULE_BOUNDARIES.md`
 
 > Last updated: 2026-03-09  
 > 目标：在不破坏 Stage6→Stage7 主链质量的前提下，降低 train(base) 维护复杂度，明确“哪些属于 base core、哪些属于 patch 实验层”。

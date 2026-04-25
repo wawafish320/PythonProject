@@ -171,14 +171,17 @@ def _seed_group_norm_ema(trainer: Any, log_row: Mapping[str, Any] | None) -> Non
         return
     if safe_float(log_row.get("dir_group_norm_used")) <= 0.0:
         return
+    loss_fn = getattr(trainer, "loss_fn", None)
+    if loss_fn is None or not hasattr(loss_fn, "_direct_pose_group_norm_ema"):
+        raise AttributeError("trainer.loss_fn missing canonical _direct_pose_group_norm_ema")
     if safe_float(log_row.get("dir_group_norm_3way_active")) > 0.0:
-        trainer._direct_pose_group_norm_ema = {
+        loss_fn._direct_pose_group_norm_ema = {
             "leg": torch.tensor(float(log_row.get("dir_group_norm_leg_ema", 0.0)), dtype=torch.float32),
             "arm": torch.tensor(float(log_row.get("dir_group_norm_arm_ema", 0.0)), dtype=torch.float32),
             "else": torch.tensor(float(log_row.get("dir_group_norm_else_ema", 0.0)), dtype=torch.float32),
         }
     else:
-        trainer._direct_pose_group_norm_ema = {
+        loss_fn._direct_pose_group_norm_ema = {
             "leg": torch.tensor(float(log_row.get("dir_group_norm_leg_ema", 0.0)), dtype=torch.float32),
             "nonleg": torch.tensor(float(log_row.get("dir_group_norm_nonleg_ema", 0.0)), dtype=torch.float32),
         }

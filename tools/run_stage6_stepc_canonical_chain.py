@@ -159,6 +159,7 @@ def run_cmd(cmd: Sequence[str]) -> None:
 
 def make_generated_config(base_config: Path, out_json: Path, overrides: Mapping[str, Any]) -> Path:
     payload = load_json(base_config)
+    payload.setdefault("load_context", "chain_hop")
     payload.update(dict(overrides))
     write_json(out_json, payload)
     return out_json
@@ -293,6 +294,8 @@ def run_posttrain(config_json: Path, ckpt_in: Path, out_dir: Path, run_name: str
             str(config_json),
             "--ckpt_in",
             str(ckpt_in),
+            "--load_context",
+            "chain_hop",
             "--out_dir",
             str(out_dir),
             "--run_name",

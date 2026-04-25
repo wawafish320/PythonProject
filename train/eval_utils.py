@@ -13,6 +13,8 @@ from .diagnostics import (
     diagnose_free_run,
     save_freerun_debug_payload,
 )
+from .geometry import root_yaw_from_raw_rot6d
+from . import rollout_kernel as _rollout_kernel
 
 
 @dataclass
@@ -196,6 +198,7 @@ def evaluate_freerun(
             diag_records: list[dict[str, Any]] = []
             tf_ratio = float(getattr(trainer, "_last_tf_ratio", 1.0))
             enable_reprojection = bool(getattr(trainer, "enable_cond_reprojection", True))
+            cond_runtime = _rollout_kernel.resolve_rollout_cond_runtime_config(trainer)
 
             time_base = None
             try:
@@ -219,7 +222,7 @@ def evaluate_freerun(
             except Exception:
                 y_raw_prev = None
             if y_raw_prev is None and motion_raw is not None:
-                rot6d_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
+                rot6d_slice = cond_runtime.rot_slice
                 if isinstance(rot6d_slice, slice):
                     slice_len = rot6d_slice.stop - rot6d_slice.start
                     if slice_len == gt_seq.shape[-1]:
@@ -267,36 +270,52 @@ def evaluate_freerun(
                 if cond_seq_raw is not None:
                     cond_raw_step = cond_seq_raw[:, min(cond_seq_raw.shape[1] - 1, t + 1)] if cond_seq_raw.dim() == 3 else cond_seq_raw
 
-                cond_raw_for_model = cond_raw_step
+                yaw_gt = None
                 if enable_reprojection and t > 0 and cond_raw_step is not None:
-                    gt_yaw = None
                     try:
                         gt_idx = min(gt_seq.shape[1] - 1, t)
                         gt_raw_frame = trainer._denorm(gt_seq[:, gt_idx])
-                        gt_yaw = trainer._infer_root_yaw_from_rot6d(gt_raw_frame)
+                        yaw_gt = root_yaw_from_raw_rot6d(
+                            gt_raw_frame,
+                            rot_slice=cond_runtime.rot_slice,
+                            root_idx=cond_runtime.root_idx,
+                            up_axis=cond_runtime.up_axis,
+                            forward_axis=cond_runtime.forward_axis,
+                            offset=cond_runtime.offset,
+                            reproject=True,
+                        )
                     except Exception:
-                        gt_yaw = None
-                    if gt_yaw is None and state_seq is not None:
+                        yaw_gt = None
+                    if yaw_gt is None and state_seq is not None:
                         try:
                             state_raw = trainer.normalizer.denorm_x(state_seq[:, t], prev_raw=motion_raw)
-                            gt_yaw = trainer._infer_root_yaw_from_rot6d(state_raw)
+                            yaw_gt = root_yaw_from_raw_rot6d(
+                                state_raw,
+                                rot_slice=cond_runtime.rot_slice,
+                                root_idx=cond_runtime.root_idx,
+                                up_axis=cond_runtime.up_axis,
+                                forward_axis=cond_runtime.forward_axis,
+                                offset=cond_runtime.offset,
+                                reproject=True,
+                            )
                         except Exception:
-                            gt_yaw = None
-                    pred_yaw = None
-                    if y_raw_prev is not None:
-                        try:
-                            pred_yaw = trainer._infer_root_yaw_from_rot6d(y_raw_prev)
-                        except Exception:
-                            pred_yaw = None
-                    if gt_yaw is not None and pred_yaw is not None:
-                        cond_proj = trainer._reproject_cond_to_local_frame(cond_raw_step, gt_yaw, pred_yaw)
-                        if cond_proj is not None:
-                            cond_raw_for_model = cond_proj
+                            yaw_gt = None
 
-                if cond_raw_for_model is not None:
-                    cond_override = trainer._normalize_cond_from_raw(cond_raw_for_model, cond_norm_mu, cond_norm_std)
-                    if cond_override is not None:
-                        cond_input = cond_override
+                cond_input, cond_raw_for_model, _ = _rollout_kernel.prepare_cond_input_from_raw(
+                    base_cond_input=cond_input,
+                    cond_raw_step=cond_raw_step,
+                    cond_norm_mu=cond_norm_mu,
+                    cond_norm_std=cond_norm_std,
+                    cond_norm_clip=cond_runtime.cond_norm_clip,
+                    allow_reprojection=bool(enable_reprojection and t > 0),
+                    yaw_gt=yaw_gt,
+                    y_prev_raw=y_raw_prev,
+                    rot_slice=cond_runtime.rot_slice,
+                    root_idx=cond_runtime.root_idx,
+                    up_axis=cond_runtime.up_axis,
+                    forward_axis=cond_runtime.forward_axis,
+                    offset=cond_runtime.offset,
+                )
 
                 device_type = getattr(device, "type", "cpu")
                 if device_type == "mps":
@@ -395,11 +414,25 @@ def evaluate_freerun(
                 if period_pred is not None:
                     period_seq_pred.append(period_pred)
 
-                if motion_raw is not None:
-                    motion_raw = trainer._apply_free_carry(motion_raw, y_raw, cond_next_raw=cond_raw_step).detach()
-                    motion = trainer._diag_norm_x(motion_raw)
-                else:
-                    motion = trainer._apply_free_carry(motion, y_raw, cond_next_raw=None).detach()
+                if motion_raw is None:
+                    trainer._raise_norm_error("eval_utils free carry 需要 RAW motion state。")
+                free_carry_cfg = _rollout_kernel.resolve_free_carry_runtime_config(trainer)
+                try:
+                    motion_raw = _rollout_kernel.apply_free_carry_raw(
+                        x_prev=motion_raw,
+                        y_next_raw=y_raw,
+                        cond_next_raw=cond_raw_step,
+                        rot6d_x_slice=free_carry_cfg.rot6d_x_slice,
+                        rot6d_y_slice=free_carry_cfg.rot6d_y_slice,
+                        angvel_x_slice=free_carry_cfg.angvel_x_slice,
+                        rootvel_x_slice=free_carry_cfg.rootvel_x_slice,
+                        rootpos_x_slice=free_carry_cfg.rootpos_x_slice,
+                        bone_hz=free_carry_cfg.bone_hz,
+                        columns=free_carry_cfg.columns,
+                    ).detach()
+                except (RuntimeError, TypeError, ValueError) as exc:
+                    trainer._raise_norm_error("eval_utils free carry 写回失败", exc)
+                motion = trainer._diag_norm_x(motion_raw)
                 predsX.append(motion)
 
                 rec = collect_freerun_step_debug_record(

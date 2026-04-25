@@ -81,7 +81,7 @@ Non-goal: 不改 loss 数学定义、不改默认超参行为、不引入新算�
   - 全文件 `except Exception: pass` 共 39 处
   - 两大函数内合计 17 处（`_lambda_rollout_unroll_steps` 9 处 + `_lambda_fusion_loss_rollout` 8 处）
 - **隐式状态副作用**
-  - `train/posttrain.py:2956~train/posttrain.py:3011`：在 loss 计算路径内读写 `trainer._direct_pose_group_norm_ema`
+  - 历史热点：曾在 loss 计算路径内读写 `trainer._direct_pose_group_norm_ema`；Phase 6 之后已统一为 `loss_fn._direct_pose_group_norm_ema`，并删除 trainer-level mirror
 
 结构指标基线（本路线图起点）：
 - LOC: `5253`

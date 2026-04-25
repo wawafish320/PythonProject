@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 import unittest
 
 import torch
@@ -75,7 +78,6 @@ class TrainingMPLPoseHistoryPhase2Test(unittest.TestCase):
 
     def test_resolve_rollout_step_inputs_uses_shared_pose_hist_resolution(self) -> None:
         trainer = _make_trainer()
-        trainer._normalize_cond_from_raw = lambda cond_raw, mu, std: None
 
         cond_seq = torch.tensor([[[1.0], [2.0]]], dtype=torch.float32)
         angvel_seq = torch.tensor([[[3.0], [4.0]]], dtype=torch.float32)
@@ -137,7 +139,6 @@ class TrainingMPLPoseHistoryPhase2Test(unittest.TestCase):
         trainer = _make_trainer()
         trainer.normalizer = _NormalizerStub()
         trainer._raise_norm_error = lambda context, exc=None: (_ for _ in ()).throw(RuntimeError(context))
-        trainer._apply_free_carry = lambda motion_raw_local, y_raw, cond_next_raw=None: y_raw + 1.0
         trainer._diag_norm_x = lambda x_raw: x_raw + 10.0
         trainer._denorm = lambda y: y + 30.0
 
@@ -178,18 +179,84 @@ class TrainingMPLPoseHistoryPhase2Test(unittest.TestCase):
             gt_seq=torch.tensor([[[11.0, 12.0, 13.0, 14.0], [3.0, 4.0, 5.0, 6.0]]], dtype=torch.float32),
         )
 
-        _rollout_kernel.update_rollout_carry_state(
-            trainer,
-            rollout,
-            rollout_inputs,
-            step_idx=0,
-        )
+        with mock.patch(
+            "train.rollout_kernel.apply_free_carry_raw",
+            side_effect=lambda **kwargs: kwargs["y_next_raw"] + 1.0,
+        ):
+            _rollout_kernel.update_rollout_carry_state(
+                trainer,
+                rollout,
+                rollout_inputs,
+                step_idx=0,
+            )
 
         expected_y_raw_local = torch.tensor([[33.0, 34.0, 35.0, 36.0]], dtype=torch.float32)
         expected_buffer_raw = torch.tensor([[4.0, 5.0, 6.0, 33.0, 34.0, 35.0]], dtype=torch.float32)
 
         torch.testing.assert_close(rollout.y_raw_local, expected_y_raw_local)
         torch.testing.assert_close(rollout.pose_hist_state.buffer_raw, expected_buffer_raw)
+
+
+class PoseHistRuntimeResolverSentinelTest(unittest.TestCase):
+    _FORBIDDEN_RUNTIME_ATTRS = frozenset(
+        {
+            "pose_hist_len",
+            "pose_hist_dim",
+            "force_pose_hist_seq",
+            "_pose_hist_params",
+        }
+    )
+
+    @staticmethod
+    def _parse_module() -> ast.AST:
+        path = Path(__file__).resolve().parents[2] / "train/rollout_kernel.py"
+        return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    @staticmethod
+    def _find_function(tree: ast.AST, name: str) -> ast.FunctionDef:
+        return next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        )
+
+    @classmethod
+    def _forbidden_runtime_reads(cls, node: ast.AST) -> list[tuple[str, int]]:
+        reads: list[tuple[str, int]] = []
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            if not isinstance(child.func, ast.Name) or child.func.id not in {"getattr", "hasattr"}:
+                continue
+            if len(child.args) < 2:
+                continue
+            attr_arg = child.args[1]
+            lineno = getattr(child, "lineno", None)
+            if not isinstance(attr_arg, ast.Constant) or not isinstance(attr_arg.value, str) or lineno is None:
+                continue
+            if attr_arg.value in cls._FORBIDDEN_RUNTIME_ATTRS:
+                reads.append((attr_arg.value, int(lineno)))
+        return reads
+
+    @staticmethod
+    def _call_names(node: ast.AST) -> list[str]:
+        names: list[str] = []
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            if isinstance(child.func, ast.Name):
+                names.append(child.func.id)
+            elif isinstance(child.func, ast.Attribute):
+                names.append(child.func.attr)
+        return names
+
+    def test_prepare_rollout_pose_hist_state_uses_shared_runtime_resolver(self) -> None:
+        tree = self._parse_module()
+        node = self._find_function(tree, "prepare_rollout_pose_hist_state")
+        call_names = self._call_names(node)
+
+        self.assertIn("resolve_pose_hist_runtime_config", call_names)
+        self.assertEqual(self._forbidden_runtime_reads(node), [])
 
 
 if __name__ == "__main__":

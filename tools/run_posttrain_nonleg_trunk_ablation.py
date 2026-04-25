@@ -81,6 +81,7 @@ def main() -> None:
     payload["epochs"] = int(args.epochs)
     payload["steps_per_epoch"] = int(args.steps_per_epoch)
     payload["save_step_ckpts"] = str(args.save_step_ckpts)
+    payload["load_context"] = "chain_hop"
 
     cfg = posttrain._cfg_from_payload(payload)
     _set_seed(cfg.seed)

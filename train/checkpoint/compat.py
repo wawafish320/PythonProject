@@ -40,6 +40,9 @@ __all__ = [
     "resolve_direct_pose_leg_build_cfg",
     "resolve_event_motion_build_state_from_ckpt",
 ]
+_RETIRED_DIRECT_POSE_STEPC_LEG_PREFIXES: tuple[str, ...] = (
+    "direct_pose_out_leg.",
+)
 _DIRECT_POSE_FEAT_SOURCE_CANONICAL: tuple[str, ...] = (
     "cond",
     "hidden",
@@ -92,6 +95,41 @@ _DIRECT_POSE_LEG_GATE_ALIAS_MAP: dict[str, str] = {
     "exp": "scale",
     "alpha": "scale",
 }
+
+
+class RetiredDirectPoseLayoutError(RuntimeError):
+    """Raised when a checkpoint still uses a retired direct-pose layout."""
+
+
+def _find_retired_direct_pose_stepc_leg_keys(state_dict: Any) -> tuple[str, ...]:
+    if not isinstance(state_dict, dict):
+        return ()
+    return tuple(
+        sorted(
+            str(key)
+            for key in state_dict.keys()
+            if str(key).startswith(_RETIRED_DIRECT_POSE_STEPC_LEG_PREFIXES)
+        )
+    )
+
+
+def _raise_if_retired_direct_pose_stepc_leg_layout(
+    state_dict: Any,
+    *,
+    context: str,
+) -> None:
+    legacy_keys = _find_retired_direct_pose_stepc_leg_keys(state_dict)
+    if not legacy_keys:
+        return
+    preview = ", ".join(legacy_keys[:4])
+    if len(legacy_keys) > 4:
+        preview = f"{preview}, ..."
+    raise RetiredDirectPoseLayoutError(
+        f"{context}: detected retired legacy direct-pose stepc-leg layout "
+        f"({preview}). Current mainline no longer supports `direct_pose_out_leg.*`; "
+        "the only supported canonical stepc leg layout is `direct_pose_leg_terminal.*`. "
+        "No runtime compatibility or conversion is available."
+    )
 
 
 @dataclass(frozen=True)
@@ -470,6 +508,10 @@ def resume_load_weights_compat(
                 warning=warning,
             )
 
+        _raise_if_retired_direct_pose_stepc_leg_layout(
+            state_dict,
+            context="resume_load_weights_compat",
+        )
         try:
             maybe_upgrade_direct_pose_split_state_dict(model, state_dict)
         except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
@@ -504,6 +546,8 @@ def resume_load_weights_compat(
         )
         return report
     except Exception as err:
+        if isinstance(err, RetiredDirectPoseLayoutError):
+            raise
         warning = f'failed to load checkpoint: {err}'
         print(f'[Resume][WARN] {warning}')
         return ResumeLoadReport(
@@ -959,6 +1003,10 @@ def resolve_direct_pose_build_cfg(
     width: int,
     overrides: DirectPoseBuildOverrides,
 ) -> DirectPoseBuildConfig:
+    _raise_if_retired_direct_pose_stepc_leg_layout(
+        state_dict,
+        context="resolve_direct_pose_build_cfg",
+    )
     train_direct_pose = bool(overrides.train_direct_pose)
     direct_has_weights = any(
         key.startswith(
@@ -1353,6 +1401,10 @@ def apply_direct_pose_ckpt_compat(
     direct_pose_cfg: DirectPoseBuildConfig,
     load_options: DirectPoseLoadCompatOptions,
 ) -> None:
+    _raise_if_retired_direct_pose_stepc_leg_layout(
+        state_dict,
+        context="apply_direct_pose_ckpt_compat",
+    )
     if direct_pose_cfg.drop_ckpt_weights:
         _drop_direct_pose_ckpt_tensors(state_dict)
     _adapt_direct_pose_phase_z_ckpt_inputs(
@@ -1483,6 +1535,10 @@ def _copy_indexed_tensor_if_needed(
 
 
 def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_dict: dict[str, Any]) -> bool:
+    _raise_if_retired_direct_pose_stepc_leg_layout(
+        state_dict,
+        context="maybe_upgrade_direct_pose_split_state_dict",
+    )
     split_state = model._direct_pose_split_state()
     if (not isinstance(state_dict, dict)) or split_state is None:
         return False
@@ -2145,6 +2201,10 @@ def prepare_event_motion_ckpt_state_for_load(
     load_options: DirectPoseLoadCompatOptions,
     encoder_bundle: Any = None,
 ) -> dict[str, Any]:
+    _raise_if_retired_direct_pose_stepc_leg_layout(
+        state_dict,
+        context="prepare_event_motion_ckpt_state_for_load",
+    )
     load_state_dict = dict(state_dict)
     if encoder_bundle is not None:
         bundle_payload = (

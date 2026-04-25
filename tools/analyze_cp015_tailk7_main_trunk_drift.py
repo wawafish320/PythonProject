@@ -378,7 +378,7 @@ def _capture_run(
 
     orig_forward = model.forward
     orig_compose = trainer._compose_delta_to_raw
-    orig_apply_free_carry = trainer._apply_free_carry
+    orig_apply_free_carry_raw = rfc._rollout_kernel.apply_free_carry_raw
     orig_hist_advance = rfc.advance_pose_hist_state_with_tail
 
     def wrapped_forward(*args: Any, **kwargs: Any) -> Any:
@@ -398,14 +398,12 @@ def _capture_run(
         recorder.y_inc_raw.append(_tensor_to_mean_vec(ret))
         return ret
 
-    def wrapped_apply_free_carry(*args: Any, **kwargs: Any) -> Any:
-        y_denorm = None
-        if len(args) > 1:
-            y_denorm = args[1]
-        elif "y_denorm" in kwargs:
-            y_denorm = kwargs["y_denorm"]
-        ret = orig_apply_free_carry(*args, **kwargs)
-        recorder.y_used_raw.append(_tensor_to_mean_vec(y_denorm))
+    def wrapped_apply_free_carry_raw(*args: Any, **kwargs: Any) -> Any:
+        y_next_raw = kwargs.get("y_next_raw")
+        if y_next_raw is None and len(args) > 1:
+            y_next_raw = args[1]
+        ret = orig_apply_free_carry_raw(*args, **kwargs)
+        recorder.y_used_raw.append(_tensor_to_mean_vec(y_next_raw))
         recorder.motion_raw_after_carry.append(_tensor_to_mean_vec(ret))
         return ret
 
@@ -415,7 +413,7 @@ def _capture_run(
 
     model.forward = wrapped_forward
     trainer._compose_delta_to_raw = wrapped_compose
-    trainer._apply_free_carry = wrapped_apply_free_carry
+    rfc._rollout_kernel.apply_free_carry_raw = wrapped_apply_free_carry_raw
     rfc.advance_pose_hist_state_with_tail = wrapped_hist_advance
     try:
         metrics_per_round, per_step, extra = rfc._run_freerun_cycles(
@@ -432,7 +430,7 @@ def _capture_run(
     finally:
         model.forward = orig_forward
         trainer._compose_delta_to_raw = orig_compose
-        trainer._apply_free_carry = orig_apply_free_carry
+        rfc._rollout_kernel.apply_free_carry_raw = orig_apply_free_carry_raw
         rfc.advance_pose_hist_state_with_tail = orig_hist_advance
 
     expected = int(len(per_step))

@@ -454,6 +454,7 @@ def make_probe_config(case_name: str, ckpt_in: Path) -> Tuple[Path, Path, str]:
             "save_step_ckpts": "0,1,5,20,60",
             "rollout_random_offset": False,
             "direct_pose_grad_monitor_enable": True,
+            "load_context": "chain_hop",
             "seed": 0,
         }
     )
@@ -477,6 +478,8 @@ def run_probe_train(case_name: str, cfg_json: Path, out_dir: Path, run_name: str
             str(cfg_json),
             "--ckpt_in",
             str(cfg_payload["ckpt_in"]),
+            "--load_context",
+            "chain_hop",
             "--out_dir",
             str(out_dir),
             "--run_name",
@@ -610,9 +613,31 @@ def activation_summary(model: torch.nn.Module, batch: Mapping[str, Any], *, roll
     return stats
 
 
+def _seed_group_norm_ema(trainer: Any, log_row: Mapping[str, Any] | None) -> None:
+    if log_row is None:
+        return
+    if safe_float(log_row.get("dir_group_norm_used")) <= 0.0:
+        return
+    loss_fn = getattr(trainer, "loss_fn", None)
+    if loss_fn is None or not hasattr(loss_fn, "_direct_pose_group_norm_ema"):
+        raise AttributeError("trainer.loss_fn missing canonical _direct_pose_group_norm_ema")
+    if safe_float(log_row.get("dir_group_norm_3way_active")) > 0.0:
+        loss_fn._direct_pose_group_norm_ema = {
+            "leg": torch.tensor(float(log_row.get("dir_group_norm_leg_ema", 0.0)), dtype=torch.float32),
+            "arm": torch.tensor(float(log_row.get("dir_group_norm_arm_ema", 0.0)), dtype=torch.float32),
+            "else": torch.tensor(float(log_row.get("dir_group_norm_else_ema", 0.0)), dtype=torch.float32),
+        }
+    else:
+        loss_fn._direct_pose_group_norm_ema = {
+            "leg": torch.tensor(float(log_row.get("dir_group_norm_leg_ema", 0.0)), dtype=torch.float32),
+            "nonleg": torch.tensor(float(log_row.get("dir_group_norm_nonleg_ema", 0.0)), dtype=torch.float32),
+        }
+
+
 def build_rollout_context(cfg_json: Path, ckpt_in: Path) -> Dict[str, Any]:
     payload = load_json(cfg_json)
     payload["ckpt_in"] = str(ckpt_in)
+    payload["load_context"] = "chain_hop"
     cfg = _cfg_from_payload(payload)
     _set_seed(int(cfg.seed))
     device = _resolve_device(cfg.device)
@@ -672,18 +697,7 @@ def gradient_audit_for_snapshot(
     batch = ctx["batch"]
     rollout_common_kwargs = ctx["rollout_common_kwargs"]
     rollout_mode_kwargs = ctx["rollout_mode_kwargs"]
-    if log_row is not None and safe_float(log_row.get("dir_group_norm_used")) > 0.0:
-        if safe_float(log_row.get("dir_group_norm_3way_active")) > 0.0:
-            trainer._direct_pose_group_norm_ema = {
-                "leg": torch.tensor(float(log_row.get("dir_group_norm_leg_ema", 0.0)), dtype=torch.float32),
-                "arm": torch.tensor(float(log_row.get("dir_group_norm_arm_ema", 0.0)), dtype=torch.float32),
-                "else": torch.tensor(float(log_row.get("dir_group_norm_else_ema", 0.0)), dtype=torch.float32),
-            }
-        else:
-            trainer._direct_pose_group_norm_ema = {
-                "leg": torch.tensor(float(log_row.get("dir_group_norm_leg_ema", 0.0)), dtype=torch.float32),
-                "nonleg": torch.tensor(float(log_row.get("dir_group_norm_nonleg_ema", 0.0)), dtype=torch.float32),
-            }
+    _seed_group_norm_ema(trainer, log_row)
     model.zero_grad(set_to_none=True)
     loss, stats, _aux = _lambda_fusion_loss_rollout(
         batch=batch,

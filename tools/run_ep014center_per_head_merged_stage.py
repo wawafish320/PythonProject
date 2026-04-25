@@ -238,6 +238,7 @@ def inspect_model_scope(
 ) -> Dict[str, Any]:
     payload = load_json(config_json)
     payload["ckpt_in"] = str(ckpt_in)
+    payload["load_context"] = "chain_hop"
     cfg = posttrain._cfg_from_payload(payload)
     artifacts = _build_posttrain_model_from_ckpt(
         cfg=cfg,

@@ -18,6 +18,8 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from train.geometry import geodesic_R, reproject_rot6d, root_relative_matrices, rot6d_to_matrix
+from train.data.normalizers import normalize_cond_tensor
+from train import rollout_kernel as _rollout_kernel
 from train.validate.run_freerun_cycles import (
     FreeRunCycleRunner,
     _build_full_cycle_sample,
@@ -229,7 +231,12 @@ def _scale_sample(
 
     cond_mu = scaled.get("cond_norm_mu")
     cond_std = scaled.get("cond_norm_std")
-    cond_norm = trainer._normalize_cond_from_raw(cond_raw, cond_mu, cond_std)
+    cond_norm = normalize_cond_tensor(
+        cond_raw,
+        cond_mu,
+        cond_std,
+        cond_norm_clip=float(getattr(trainer, "cond_norm_clip", 6.0) or 0.0),
+    )
     scaled["cond_in"] = cond_norm if cond_norm is not None else cond_raw.clone()
     scaled["cond_tgt"] = scaled["cond_in"].clone()
 
@@ -269,21 +276,31 @@ def _infer_root_speed_and_pos(
     motion_raw = trainer.normalizer.denorm_x(motion)
     motion_raw_series: List[torch.Tensor] = [motion_raw[0].detach().cpu()]
     pred_steps = int(pred_y_raw.shape[0])
+    free_carry_cfg = _rollout_kernel.resolve_free_carry_runtime_config(trainer)
     for step_idx in range(pred_steps):
         cond_raw_step = None
         if cond_raw_seq is not None:
             idx = min(int(cond_raw_seq.shape[1]) - 1, int(step_idx) + 1)
             cond_raw_step = cond_raw_seq[:, idx]
-        motion_raw = trainer._apply_free_carry(
-            motion_raw,
-            pred_y_raw[step_idx : step_idx + 1],
+        if cond_raw_step is None:
+            raise ValueError("_infer_root_speed_and_pos requires cond_raw_seq with per-step cond_next_raw.")
+        motion_raw = _rollout_kernel.apply_free_carry_raw(
+            x_prev=motion_raw,
+            y_next_raw=pred_y_raw[step_idx : step_idx + 1],
             cond_next_raw=cond_raw_step,
+            rot6d_x_slice=free_carry_cfg.rot6d_x_slice,
+            rot6d_y_slice=free_carry_cfg.rot6d_y_slice,
+            angvel_x_slice=free_carry_cfg.angvel_x_slice,
+            rootvel_x_slice=free_carry_cfg.rootvel_x_slice,
+            rootpos_x_slice=free_carry_cfg.rootpos_x_slice,
+            bone_hz=free_carry_cfg.bone_hz,
+            columns=free_carry_cfg.columns,
         ).detach()
         motion_raw_series.append(motion_raw[0].detach().cpu())
 
     motion_raw_stack = torch.stack(motion_raw_series, dim=0)
-    rootvel_sl = getattr(trainer, "rootvel_x_slice", None)
-    rootpos_sl = getattr(trainer, "rootpos_x_slice", None)
+    rootvel_sl = free_carry_cfg.rootvel_x_slice
+    rootpos_sl = free_carry_cfg.rootpos_x_slice
 
     if isinstance(rootvel_sl, slice):
         root_vel = motion_raw_stack[:, rootvel_sl].numpy()
@@ -293,7 +310,7 @@ def _infer_root_speed_and_pos(
     if isinstance(rootpos_sl, slice):
         root_pos = motion_raw_stack[:, rootpos_sl].numpy()
     else:
-        dt = 1.0 / max(float(getattr(trainer, "bone_hz", 60.0) or 60.0), 1e-6)
+        dt = 1.0 / max(float(free_carry_cfg.bone_hz or 60.0), 1e-6)
         planar_vel = root_vel[:, : min(2, root_vel.shape[1])]
         root_pos = np.concatenate(
             [
@@ -520,7 +537,9 @@ def _rot_local_group_metrics(
     *,
     trainer: Any,
 ) -> Dict[str, float]:
-    rot_slice = getattr(trainer, "rot6d_y_slice", None) or getattr(trainer, "rot6d_slice", None)
+    rot_slice = getattr(trainer, "rot6d_y_slice", None)
+    if not isinstance(rot_slice, slice):
+        rot_slice = getattr(trainer, "rot6d_slice", None)
     if not isinstance(rot_slice, slice):
         raise RuntimeError("Trainer is missing rot6d_y_slice / rot6d_slice.")
 
