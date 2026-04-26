@@ -9,7 +9,8 @@ import torch
 from torch import nn
 
 from train.checkpoint.compat import (
-    maybe_upgrade_direct_pose_split_state_dict,
+    RemovedCheckpointCompatError,
+    normalize_direct_pose_split_state_dict_schema,
 )
 from train.models import EventMotionModel
 
@@ -127,6 +128,164 @@ _FORWARD_SNAPSHOT_EXPECTED = {
 }
 
 
+_EVENT_CLOCK_FORWARD_ON_KEYS = (
+    "contacts_meas",
+    "contacts_plan",
+    "contacts_plan_logits",
+    "contacts_plan_logits_raw",
+    "contacts_plan_logits_base",
+    "contacts_plan_logits_phase",
+    "contacts_plan_logits_time",
+    "plan_z_next",
+    "out_direct",
+    "event_clock_delta_meas",
+    "event_clock_lr_diff",
+    "event_clock_lambda_corr",
+    "event_clock_lambda_logit",
+    "event_clock_dynamic_prior",
+    "event_clock_delta_z",
+)
+
+
+_EVENT_CLOCK_FORWARD_OFF_KEYS = (
+    "contacts_meas",
+    "contacts_plan",
+    "contacts_plan_logits",
+    "contacts_plan_logits_raw",
+    "contacts_plan_logits_base",
+    "contacts_plan_logits_phase",
+    "contacts_plan_logits_time",
+    "plan_z_next",
+    "out_direct",
+)
+
+
+_EVENT_CLOCK_FORWARD_ON_EXPECTED: dict[str, dict[str, object]] = {
+    "contacts_meas": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "74d4ddc1ae2a8a1fd533a14a4c2ec89f95373d42718769e6cb0b654c5b5f8598",
+    },
+    "contacts_plan": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "ce852f462f1ccc88926ee0bb45b77a29aee6bedbf012c911d5f228d7c14e1ca8",
+    },
+    "contacts_plan_logits": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "92f8bf3797e869e9659eb470ecae3af70bd2fbaefcd2697edd71b7d6f4d1c615",
+    },
+    "contacts_plan_logits_raw": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "9d961bde46ef8fab9af9e1fcbc762c080aaad1d1970f0d35f477ec43b9022c1a",
+    },
+    "contacts_plan_logits_base": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "92f8bf3797e869e9659eb470ecae3af70bd2fbaefcd2697edd71b7d6f4d1c615",
+    },
+    "contacts_plan_logits_phase": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "17b0761f87b081d5cf10757ccc89f12be355c70e2e29df288b65b30710dcbcd1",
+    },
+    "contacts_plan_logits_time": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "17b0761f87b081d5cf10757ccc89f12be355c70e2e29df288b65b30710dcbcd1",
+    },
+    "plan_z_next": {
+        "shape": [2, 16],
+        "dtype": "torch.float32",
+        "sha256": "6ca5abeda4604f317df347d0a7b084002a918a157b8025efdd35ea263d85086e",
+    },
+    "out_direct": {
+        "shape": [2, 3, 24],
+        "dtype": "torch.float32",
+        "sha256": "841ad8c3c2066a0fb7f2b8847ffd4b2708d8c7577e5641171c32a0c1c2f56550",
+    },
+    "event_clock_delta_meas": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "1f7ccdf7a5c95fe38344d8ff98e23f6cab09dc9ce4236f4ec10c1047c90e3445",
+    },
+    "event_clock_lr_diff": {
+        "shape": [2, 3, 1],
+        "dtype": "torch.float32",
+        "sha256": "ed803099e6ad6ddbefb777e649c9d6dd193040c4a701673b2500ca83b0d3f3bb",
+    },
+    "event_clock_lambda_corr": {
+        "shape": [2, 3, 1],
+        "dtype": "torch.float32",
+        "sha256": "7d964577c7a8e0609a067c69d860393afddb930ac2b167325073d7d3da04036a",
+    },
+    "event_clock_lambda_logit": {
+        "shape": [2, 3, 1],
+        "dtype": "torch.float32",
+        "sha256": "5deb34372758bae9d23e2ea27ab2c8559cd7e84ddc4deb6d71ad5ad965224229",
+    },
+    "event_clock_dynamic_prior": {
+        "shape": [2, 3, 1],
+        "dtype": "torch.float32",
+        "sha256": "42f83c50f3c628794b99d7725b0282b1570b0c825b8c6fa7d497c3dcf4ea28ed",
+    },
+    "event_clock_delta_z": {
+        "shape": [2, 3, 16],
+        "dtype": "torch.float32",
+        "sha256": "113857dd08dbef0ea258fad3ad3b3ac725f63fc2f68293f0eab4cfebdcd006d0",
+    },
+}
+_EVENT_CLOCK_FORWARD_OFF_EXPECTED: dict[str, dict[str, object]] = {
+    "contacts_meas": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "74d4ddc1ae2a8a1fd533a14a4c2ec89f95373d42718769e6cb0b654c5b5f8598",
+    },
+    "contacts_plan": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "ebf4a7b6bcedcce241fbdc62c17b78c7dc92ee37772cbc9eb3f9dbaea0403efb",
+    },
+    "contacts_plan_logits": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "1c23ce9b689cec4cd4e95812a7d955b3873af0edf7731419bf669fdc597430aa",
+    },
+    "contacts_plan_logits_raw": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "1c23ce9b689cec4cd4e95812a7d955b3873af0edf7731419bf669fdc597430aa",
+    },
+    "contacts_plan_logits_base": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "1c23ce9b689cec4cd4e95812a7d955b3873af0edf7731419bf669fdc597430aa",
+    },
+    "contacts_plan_logits_phase": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "17b0761f87b081d5cf10757ccc89f12be355c70e2e29df288b65b30710dcbcd1",
+    },
+    "contacts_plan_logits_time": {
+        "shape": [2, 3, 2],
+        "dtype": "torch.float32",
+        "sha256": "17b0761f87b081d5cf10757ccc89f12be355c70e2e29df288b65b30710dcbcd1",
+    },
+    "plan_z_next": {
+        "shape": [2, 16],
+        "dtype": "torch.float32",
+        "sha256": "7a0e7813900a3d5f310d2ec1b280c59f755d84a05f22b1c103e79666136f4da5",
+    },
+    "out_direct": {
+        "shape": [2, 3, 24],
+        "dtype": "torch.float32",
+        "sha256": "2d8a665c648702b93c21ee32b202b7dbeb12f2a6c2f888a94bba67d5bfad3451",
+    },
+}
+
+
 def _make_forward_snapshot_output() -> dict[str, torch.Tensor]:
     bone_names = ["thigh_l", "thigh_r", "arm_l", "arm_r"]
     torch.manual_seed(12345)
@@ -149,9 +308,57 @@ def _make_forward_snapshot_output() -> dict[str, torch.Tensor]:
         )
 
 
+def _make_event_clock_forward_output(*, use_event_clock: bool) -> dict[str, torch.Tensor]:
+    bone_names = ["thigh_l", "thigh_r", "arm_l", "arm_r"]
+    batch_size, steps = 2, 3
+    torch.manual_seed(24680)
+    io = _make_io(batch_size=batch_size, steps=steps, num_joints=len(bone_names), cond_dim=8, contact_dim=2)
+    model = _build_model(
+        bone_names=bone_names,
+        direct_mode="concat",
+        use_event_clock=use_event_clock,
+        contact_time_pe_dim=6,
+        use_phase=True,
+        split_enable=True,
+        leg_enable=True,
+        leg_mode="so3",
+        leg_side_routing=True,
+        leg_side_cue="phase_event_age",
+        leg_bones=("thigh_l", "thigh_r"),
+    )
+    model.eval()
+    model.set_eval_runtime_controls(debug_contact_plan_logits_decomp=True)
+    phase_z = torch.randn(batch_size, steps, 4, dtype=torch.float32)
+    phase_event_age = torch.rand(batch_size, steps, 2, dtype=torch.float32)
+    torch.manual_seed(13579)
+    with torch.no_grad():
+        out = model(
+            io["state"],
+            io["cond"],
+            contacts=io["contacts"],
+            angvel=io["angvel"],
+            pose_history=io["pose_history"],
+            phase_z=phase_z,
+            phase_event_age=phase_event_age,
+        )
+    keys = _EVENT_CLOCK_FORWARD_ON_KEYS if use_event_clock else _EVENT_CLOCK_FORWARD_OFF_KEYS
+    return {key: out[key].detach().cpu().contiguous() for key in keys}
+
+
 def _tensor_sha256(value: torch.Tensor) -> str:
     tensor = value.detach().cpu().contiguous()
     return hashlib.sha256(tensor.numpy().tobytes()).hexdigest()
+
+
+def _tensor_dict_fingerprint(tensors: dict[str, torch.Tensor]) -> dict[str, dict[str, object]]:
+    return {
+        key: {
+            "shape": list(value.shape),
+            "dtype": str(value.dtype),
+            "sha256": _tensor_sha256(value),
+        }
+        for key, value in tensors.items()
+    }
 
 
 def _state_dict_fingerprint(state_dict: dict[str, torch.Tensor]) -> dict[str, object]:
@@ -203,7 +410,7 @@ class EventMotionModelRefactorPhaseDTest(unittest.TestCase):
                     self.assertIsNone(model.direct_pose_leg_terminal)
                     self.assertIsNone(model.direct_pose_out_nonleg)
 
-    def test_split_checkpoint_upgrade_from_legacy_direct_head(self) -> None:
+    def test_split_checkpoint_rejects_monolithic_direct_head(self) -> None:
         bone_names = ["thigh_l", "thigh_r", "arm_l", "arm_r"]
         legacy_model = _build_model(
             bone_names=bone_names,
@@ -219,15 +426,14 @@ class EventMotionModelRefactorPhaseDTest(unittest.TestCase):
         )
 
         legacy_state = copy.deepcopy(legacy_model.state_dict())
-        self.assertTrue(maybe_upgrade_direct_pose_split_state_dict(split_model, legacy_state))
-        self.assertNotIn("direct_pose_head.6.weight", legacy_state)
-        self.assertIn("direct_pose_leg_terminal.6.weight", legacy_state)
-        self.assertIn("direct_pose_out_nonleg.weight", legacy_state)
-
-        load_info = split_model.load_state_dict(legacy_state, strict=False)
-        self.assertFalse(any(key.startswith("direct_pose_leg_terminal") for key in load_info.missing_keys))
-        self.assertFalse(any(key.startswith("direct_pose_out_nonleg") for key in load_info.missing_keys))
-        self.assertFalse(any(key == "direct_pose_head.6.weight" for key in load_info.unexpected_keys))
+        with self.assertRaisesRegex(
+            RemovedCheckpointCompatError,
+            "direct_pose_head\\.6\\.weight.*semantic checkpoint compat removal.*no in-loader replacement",
+        ):
+            normalize_direct_pose_split_state_dict_schema(split_model, legacy_state)
+        self.assertIn("direct_pose_head.6.weight", legacy_state)
+        self.assertNotIn("direct_pose_leg_terminal.6.weight", legacy_state)
+        self.assertNotIn("direct_pose_out_nonleg.weight", legacy_state)
 
     def test_split_leg_terminal_forward_regression(self) -> None:
         bone_names = ["thigh_l", "thigh_r", "arm_l", "arm_r"]
@@ -404,6 +610,67 @@ class EventMotionModelRefactorPhaseDTest(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertTrue(torch.equal(state_ref[key], state_layout_flip[key]), key)
 
+    def test_direct_pose_leg_builder_dispatch_regression(self) -> None:
+        bone_names = ["thigh_l", "thigh_r", "arm_l", "arm_r"]
+        events: list[dict[str, object]] = []
+        original_prepare = EventMotionModel._prepare_direct_pose_leg_build_state
+        original_build_leg = EventMotionModel._build_direct_pose_leg_modules
+
+        def prepare_spy(self: EventMotionModel, **kwargs):
+            result = original_prepare(self, **kwargs)
+            events.append(
+                {
+                    "event": "prepare",
+                    "leg_joint_idx": list(getattr(self, "direct_pose_leg_joint_idx", []) or []),
+                    "side_routing": bool(getattr(self, "direct_pose_leg_side_routing", False)),
+                    "side_k": int(getattr(self, "direct_pose_leg_side_k", 0) or 0),
+                }
+            )
+            return result
+
+        def build_leg_spy(self: EventMotionModel, **kwargs):
+            events.append(
+                {
+                    "event": "build_leg",
+                    "leg_joint_idx": list(getattr(self, "direct_pose_leg_joint_idx", []) or []),
+                    "side_routing": bool(getattr(self, "direct_pose_leg_side_routing", False)),
+                    "side_k": int(getattr(self, "direct_pose_leg_side_k", 0) or 0),
+                    "split_leg_terminal_out_dim": kwargs.get("split_leg_terminal_out_dim"),
+                }
+            )
+            return original_build_leg(self, **kwargs)
+
+        with mock.patch.object(
+            EventMotionModel,
+            "_prepare_direct_pose_leg_build_state",
+            autospec=True,
+            side_effect=prepare_spy,
+        ), mock.patch.object(
+            EventMotionModel,
+            "_build_direct_pose_leg_modules",
+            autospec=True,
+            side_effect=build_leg_spy,
+        ):
+            model = _build_model(
+                bone_names=bone_names,
+                direct_mode="concat",
+                split_enable=True,
+                leg_enable=True,
+                leg_mode="so3",
+                leg_gate_mode="learned",
+                leg_side_routing=True,
+                leg_bones=("thigh_l", "thigh_r"),
+            )
+
+        self.assertEqual([event["event"] for event in events], ["prepare", "build_leg"])
+        self.assertEqual(events[0]["leg_joint_idx"], [0, 1])
+        self.assertEqual(events[1]["leg_joint_idx"], [0, 1])
+        self.assertTrue(bool(events[1]["side_routing"]))
+        self.assertEqual(events[1]["side_k"], 1)
+        self.assertEqual(events[1]["split_leg_terminal_out_dim"], 12)
+        self.assertIsNotNone(model.direct_pose_leg_head_shared)
+        self.assertIsNotNone(model.direct_pose_leg_gate_head_shared)
+
     def test_split_branch_init_is_repeated_construction_deterministic(self) -> None:
         bone_names = ["thigh_l", "thigh_r", "calf_l", "calf_r", "arm_l", "arm_r", "spine", "head"]
         model_a = _build_model(
@@ -435,6 +702,38 @@ class EventMotionModelRefactorPhaseDTest(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertTrue(torch.equal(state_a[key], state_b[key]), key)
 
+    def test_contact_plan_and_event_clock_builder_dispatch_regression(self) -> None:
+        calls: list[str] = []
+        original_contact_plan = EventMotionModel._build_contact_plan_modules
+        original_event_clock = EventMotionModel._build_event_clock_modules
+
+        def contact_plan_spy(self: EventMotionModel):
+            calls.append("contact_plan")
+            return original_contact_plan(self)
+
+        def event_clock_spy(self: EventMotionModel):
+            calls.append("event_clock")
+            return original_event_clock(self)
+
+        with mock.patch.object(
+            EventMotionModel,
+            "_build_contact_plan_modules",
+            autospec=True,
+            side_effect=contact_plan_spy,
+        ), mock.patch.object(
+            EventMotionModel,
+            "_build_event_clock_modules",
+            autospec=True,
+            side_effect=event_clock_spy,
+        ):
+            _build_model(
+                bone_names=["thigh_l", "thigh_r", "arm_l", "arm_r"],
+                direct_mode="concat",
+                use_event_clock=True,
+            )
+
+        self.assertEqual(calls, ["contact_plan", "event_clock"])
+
     def test_forward_output_snapshot_deterministic_regression(self) -> None:
         out = _make_forward_snapshot_output()
 
@@ -450,6 +749,24 @@ class EventMotionModelRefactorPhaseDTest(unittest.TestCase):
                 self.assertAlmostEqual(float(value64.mean().item()), expected["mean"], places=6)
                 self.assertAlmostEqual(float(torch.linalg.vector_norm(value64).item()), expected["l2"], places=6)
 
+    def test_event_clock_forward_output_fingerprint_regression(self) -> None:
+        out = _make_event_clock_forward_output(use_event_clock=True)
+        fingerprint = _tensor_dict_fingerprint(out)
+
+        self.assertEqual(sorted(fingerprint.keys()), sorted(_EVENT_CLOCK_FORWARD_ON_EXPECTED.keys()))
+        for key, expected in _EVENT_CLOCK_FORWARD_ON_EXPECTED.items():
+            with self.subTest(key=key):
+                self.assertEqual(fingerprint[key], expected)
+
+    def test_non_event_clock_forward_output_fingerprint_regression(self) -> None:
+        out = _make_event_clock_forward_output(use_event_clock=False)
+        fingerprint = _tensor_dict_fingerprint(out)
+
+        self.assertEqual(sorted(fingerprint.keys()), sorted(_EVENT_CLOCK_FORWARD_OFF_EXPECTED.keys()))
+        for key, expected in _EVENT_CLOCK_FORWARD_OFF_EXPECTED.items():
+            with self.subTest(key=key):
+                self.assertEqual(fingerprint[key], expected)
+
     def test_forward_shell_dispatch_smoke_regression(self) -> None:
         bone_names = ["thigh_l", "thigh_r", "arm_l", "arm_r"]
         torch.manual_seed(12345)
@@ -464,7 +781,6 @@ class EventMotionModelRefactorPhaseDTest(unittest.TestCase):
 
         calls: list[str] = []
         original_prepare = EventMotionModel._prepare_forward_inputs
-        original_init_contact_clock = EventMotionModel._init_contact_clock_forward_defaults
         original_finalize_contact_plan = EventMotionModel._finalize_contact_plan_outputs
         original_build = EventMotionModel._build_forward_base_result
         original_should_run_direct = EventMotionModel._should_run_direct_pose_forward
@@ -477,10 +793,6 @@ class EventMotionModelRefactorPhaseDTest(unittest.TestCase):
         def prepare_spy(self: EventMotionModel, **kwargs):
             calls.append("prepare_inputs")
             return original_prepare(self, **kwargs)
-
-        def init_contact_clock_spy(self: EventMotionModel):
-            calls.append("init_contact_clock_defaults")
-            return original_init_contact_clock(self)
 
         def finalize_contact_plan_spy(self: EventMotionModel, **kwargs):
             calls.append("finalize_contact_plan_outputs")
@@ -516,12 +828,6 @@ class EventMotionModelRefactorPhaseDTest(unittest.TestCase):
 
         with (
             mock.patch.object(EventMotionModel, "_prepare_forward_inputs", autospec=True, side_effect=prepare_spy),
-            mock.patch.object(
-                EventMotionModel,
-                "_init_contact_clock_forward_defaults",
-                autospec=True,
-                side_effect=init_contact_clock_spy,
-            ),
             mock.patch.object(
                 EventMotionModel,
                 "_finalize_contact_plan_outputs",
@@ -580,7 +886,6 @@ class EventMotionModelRefactorPhaseDTest(unittest.TestCase):
             calls,
             [
                 "prepare_inputs",
-                "init_contact_clock_defaults",
                 "finalize_contact_plan_outputs",
                 "build_base_result",
                 "should_run_direct_pose",
@@ -1023,6 +1328,78 @@ class EventMotionModelRefactorPhaseDTest(unittest.TestCase):
         self.assertEqual(out["event_clock_delta_z"].shape[:2], (batch_size, steps))
         self.assertTrue(torch.isfinite(out["contacts_plan_logits"]).all().item())
         self.assertTrue(torch.isfinite(out["event_clock_lambda_corr"]).all().item())
+
+    def test_event_clock_correction_helper_dispatch_regression(self) -> None:
+        bone_names = ["thigh_l", "thigh_r", "arm_l", "arm_r"]
+        batch_size, steps = 2, 3
+        torch.manual_seed(12345)
+        io = _make_io(batch_size, steps, len(bone_names), cond_dim=8, contact_dim=2)
+        phase_z = torch.randn(batch_size, steps, 4, dtype=torch.float32)
+        phase_event_age = torch.rand(batch_size, steps, 2, dtype=torch.float32)
+
+        for use_event_clock in (False, True):
+            with self.subTest(use_event_clock=use_event_clock):
+                model = _build_model(
+                    bone_names=bone_names,
+                    direct_mode="concat",
+                    use_event_clock=use_event_clock,
+                    contact_time_pe_dim=6,
+                    use_phase=True,
+                    split_enable=True,
+                    leg_enable=True,
+                    leg_mode="so3",
+                    leg_side_routing=True,
+                    leg_side_cue="phase_event_age",
+                    leg_bones=("thigh_l", "thigh_r"),
+                )
+                model.eval()
+                calls: list[dict[str, object]] = []
+                original_apply = EventMotionModel._apply_event_clock_correction
+
+                def apply_spy(model_self: EventMotionModel, **kwargs):
+                    calls.append(
+                        {
+                            "plan_z_raw_shape": tuple(int(dim) for dim in kwargs["plan_z_raw"].shape),
+                            "contacts_meas_shape": tuple(int(dim) for dim in kwargs["contacts_meas"].shape),
+                            "delta_meas_shape": tuple(int(dim) for dim in kwargs["delta_meas"].shape),
+                            "lr_diff_shape": tuple(int(dim) for dim in kwargs["lr_diff"].shape),
+                            "period_feat_shape": (
+                                tuple(int(dim) for dim in kwargs["period_feat"].shape)
+                                if torch.is_tensor(kwargs["period_feat"])
+                                else None
+                            ),
+                        }
+                    )
+                    return original_apply(model_self, **kwargs)
+
+                with mock.patch.object(
+                    EventMotionModel,
+                    "_apply_event_clock_correction",
+                    autospec=True,
+                    side_effect=apply_spy,
+                ):
+                    torch.manual_seed(999)
+                    with torch.no_grad():
+                        model(
+                            io["state"],
+                            io["cond"],
+                            contacts=io["contacts"],
+                            angvel=io["angvel"],
+                            pose_history=io["pose_history"],
+                            phase_z=phase_z,
+                            phase_event_age=phase_event_age,
+                        )
+
+                if use_event_clock:
+                    self.assertEqual(len(calls), steps)
+                    for call in calls:
+                        self.assertEqual(call["plan_z_raw_shape"], (batch_size, 16))
+                        self.assertEqual(call["contacts_meas_shape"], (batch_size, 2))
+                        self.assertEqual(call["delta_meas_shape"], (batch_size, 2))
+                        self.assertEqual(call["lr_diff_shape"], (batch_size, 1))
+                        self.assertIsNone(call["period_feat_shape"])
+                else:
+                    self.assertEqual(calls, [])
 
     def test_forward_non_side_leg_residual_shell_dispatch_regression(self) -> None:
         bone_names = ["thigh_l", "thigh_r", "arm_l", "arm_r"]

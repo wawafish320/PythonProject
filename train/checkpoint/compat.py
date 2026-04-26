@@ -5,8 +5,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import torch
-import torch.nn as nn
-from ..utils import warn_once
 
 if TYPE_CHECKING:
     from ..models import EventMotionModel
@@ -32,7 +30,7 @@ __all__ = [
     "infer_event_clock_build_cfg",
     "infer_lambda_fusion_build_cfg",
     "load_event_motion_ckpt_payload",
-    "maybe_upgrade_direct_pose_split_state_dict",
+    "normalize_direct_pose_split_state_dict_schema",
     "prepare_event_motion_ckpt_state_for_load",
     "resume_load_weights_compat",
     "resolve_contact_plan_build_cfg",
@@ -97,8 +95,141 @@ _DIRECT_POSE_LEG_GATE_ALIAS_MAP: dict[str, str] = {
 }
 
 
-class RetiredDirectPoseLayoutError(RuntimeError):
+class RemovedCheckpointCompatError(RuntimeError):
+    """Raised when a checkpoint enters a removed semantic compat path."""
+
+
+class RetiredDirectPoseLayoutError(RemovedCheckpointCompatError):
     """Raised when a checkpoint still uses a retired direct-pose layout."""
+
+
+_DIRECT_POSE_COMPAT_REMOVAL_CHANGE = "2026-04-25 semantic checkpoint compat removal"
+_DIRECT_POSE_COMPAT_MIGRATION = (
+    "retrain/resave with the current checkpoint schema; no in-loader replacement"
+)
+_DIRECT_POSE_WEIGHT_PREFIXES: tuple[str, ...] = (
+    "direct_pose_head.",
+    "direct_pose_leg_terminal.",
+    "direct_pose_out_nonleg.",
+    "direct_pose_out_arm.",
+    "direct_pose_out_else.",
+    "direct_pose_nonleg_proj.",
+    "direct_pose_arm_proj.",
+    "direct_pose_else_proj.",
+    "direct_pose_leg_head.",
+    "direct_pose_leg_gate_head.",
+    "direct_pose_leg_head_shared.",
+    "direct_pose_leg_gate_head_shared.",
+    "direct_pose_leg_side_sign_gate_head.",
+    "direct_pose_leg_side_embed.",
+)
+_DIRECT_POSE_WEIGHT_EXACT_KEYS: tuple[str, ...] = (
+    "direct_pose_leg_joint_idx_tensor",
+    "direct_pose_leg_side_pos_r_tensor",
+    "direct_pose_leg_side_pos_l_tensor",
+    "direct_pose_leg_out_idx",
+    "direct_pose_nonleg_out_idx",
+    "direct_pose_arm_out_idx",
+    "direct_pose_else_out_idx",
+)
+_RETIRED_DIRECT_POSE_HIGHORDER_PREFIXES: tuple[str, ...] = (
+    "direct_pose_leg_head_shared.",
+    "direct_pose_leg_gate_head_shared.",
+    "direct_pose_leg_side_sign_gate_head.",
+    "direct_pose_leg_side_embed.",
+)
+_RETIRED_DIRECT_POSE_HIGHORDER_EXACT_KEYS: tuple[str, ...] = (
+    "direct_pose_leg_side_pos_r_tensor",
+    "direct_pose_leg_side_pos_l_tensor",
+)
+_DIRECT_POSE_PHASE_INPUT_KEYS: tuple[str, ...] = (
+    "direct_pose_head.0.weight",
+    "direct_pose_leg_head.0.weight",
+    "direct_pose_leg_head_shared.0.weight",
+    "direct_pose_leg_gate_head.0.weight",
+    "direct_pose_leg_gate_head_shared.0.weight",
+)
+_DIRECT_POSE_LEG_PREFIXES: tuple[str, ...] = (
+    "direct_pose_leg_head.",
+    "direct_pose_leg_gate_head.",
+    "direct_pose_leg_head_shared.",
+    "direct_pose_leg_gate_head_shared.",
+    "direct_pose_leg_side_sign_gate_head.",
+    "direct_pose_leg_side_embed.",
+)
+_DIRECT_POSE_LEG_EXACT_KEYS: tuple[str, ...] = (
+    "direct_pose_leg_joint_idx_tensor",
+    "direct_pose_leg_side_pos_r_tensor",
+    "direct_pose_leg_side_pos_l_tensor",
+)
+_DIRECT_POSE_SPLIT_INDEX_KEYS: tuple[str, ...] = (
+    "direct_pose_leg_out_idx",
+    "direct_pose_nonleg_out_idx",
+    "direct_pose_arm_out_idx",
+    "direct_pose_else_out_idx",
+)
+_INDEX_BUFFER_DTYPES: tuple[torch.dtype, ...] = (
+    torch.uint8,
+    torch.int8,
+    torch.int16,
+    torch.int32,
+    torch.int64,
+)
+
+
+def _preview_items(items: Sequence[str], *, limit: int = 5) -> str:
+    preview = ", ".join(items[:limit])
+    if len(items) > limit:
+        preview = f"{preview}, ..."
+    return preview
+
+
+def _find_state_keys(
+    state_dict: Any,
+    *,
+    prefixes: tuple[str, ...] = (),
+    exact: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    if not isinstance(state_dict, dict):
+        return ()
+    exact_set = set(exact)
+    return tuple(
+        sorted(
+            str(key)
+            for key in state_dict.keys()
+            if str(key) in exact_set or str(key).startswith(prefixes)
+        )
+    )
+
+
+def _raise_removed_checkpoint_compat(
+    *,
+    context: str,
+    key_pattern: str,
+    hits: Sequence[str],
+    reason: str,
+    migration: str = _DIRECT_POSE_COMPAT_MIGRATION,
+) -> None:
+    hit_text = _preview_items(tuple(str(item) for item in hits))
+    raise RemovedCheckpointCompatError(
+        f"{context}: [Removed] ckpt key pattern `{key_pattern}` matched [{hit_text}]. "
+        f"Removed by {_DIRECT_POSE_COMPAT_REMOVAL_CHANGE}: {reason}. "
+        f"Migration: {migration}."
+    )
+
+
+def _raise_removed_checkpoint_field(
+    *,
+    context: str,
+    field_name: str,
+    reason: str,
+    migration: str = _DIRECT_POSE_COMPAT_MIGRATION,
+) -> None:
+    raise RemovedCheckpointCompatError(
+        f"{context}: [Removed] checkpoint/config field `{field_name}` entered a removed path. "
+        f"Removed by {_DIRECT_POSE_COMPAT_REMOVAL_CHANGE}: {reason}. "
+        f"Migration: {migration}."
+    )
 
 
 def _find_retired_direct_pose_stepc_leg_keys(state_dict: Any) -> tuple[str, ...]:
@@ -118,17 +249,15 @@ def _raise_if_retired_direct_pose_stepc_leg_layout(
     *,
     context: str,
 ) -> None:
-    legacy_keys = _find_retired_direct_pose_stepc_leg_keys(state_dict)
-    if not legacy_keys:
+    retired_keys = _find_retired_direct_pose_stepc_leg_keys(state_dict)
+    if not retired_keys:
         return
-    preview = ", ".join(legacy_keys[:4])
-    if len(legacy_keys) > 4:
-        preview = f"{preview}, ..."
     raise RetiredDirectPoseLayoutError(
-        f"{context}: detected retired legacy direct-pose stepc-leg layout "
-        f"({preview}). Current mainline no longer supports `direct_pose_out_leg.*`; "
-        "the only supported canonical stepc leg layout is `direct_pose_leg_terminal.*`. "
-        "No runtime compatibility or conversion is available."
+        f"{context}: [Removed] ckpt key pattern `direct_pose_out_leg.*` matched "
+        f"[{_preview_items(retired_keys)}]. Removed by {_DIRECT_POSE_COMPAT_REMOVAL_CHANGE}: "
+        "retired stepc-leg direct-pose layout cannot be bit-exactly mapped to the current "
+        "`direct_pose_leg_terminal.*` layout. Migration: "
+        f"{_DIRECT_POSE_COMPAT_MIGRATION}."
     )
 
 
@@ -454,23 +583,6 @@ def attach_motion_encoder_bundle(
     return meta
 
 
-_RESUME_WARN_ONCE_KEYS: set[str] = set()
-
-
-def _resume_warn_once(
-    key: str,
-    message: str,
-    exc: Optional[BaseException] = None,
-) -> None:
-    warn_once(
-        _RESUME_WARN_ONCE_KEYS,
-        category="Resume",
-        key=key,
-        message=message,
-        exc=exc,
-    )
-
-
 def resume_load_weights_compat(
     model: torch.nn.Module,
     resume_path: Optional[str],
@@ -512,14 +624,12 @@ def resume_load_weights_compat(
             state_dict,
             context="resume_load_weights_compat",
         )
-        try:
-            maybe_upgrade_direct_pose_split_state_dict(model, state_dict)
-        except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
-            _resume_warn_once(
-                "train_entry/resume_upgrade_direct_pose_state",
-                "direct-pose ckpt upgrade failed; loading matching keys directly",
-                exc,
-            )
+        normalize_direct_pose_split_state_dict_schema(model, state_dict)
+        _raise_if_direct_pose_semantic_tensor_would_be_skipped(
+            state_dict=state_dict,
+            model=model,
+            context="resume_load_weights_compat",
+        )
 
         current_state = model.state_dict()
         filtered_state = {}
@@ -546,7 +656,7 @@ def resume_load_weights_compat(
         )
         return report
     except Exception as err:
-        if isinstance(err, RetiredDirectPoseLayoutError):
+        if isinstance(err, RemovedCheckpointCompatError):
             raise
         warning = f'failed to load checkpoint: {err}'
         print(f'[Resume][WARN] {warning}')
@@ -765,6 +875,115 @@ def _normalize_direct_pose_feat_source(val: Any) -> Optional[str]:
     return None
 
 
+def _normalize_direct_pose_phase_z_mode(val: Any) -> str:
+    text = str(val or "").strip().lower()
+    if text in ("", "auto"):
+        return "concat"
+    if text in ("replace", "replace_contacts", "phase", "phase_only"):
+        return "replace_contacts"
+    if text in ("concat", "append", "add", "plus", "contacts+phase"):
+        return "concat"
+    return text
+
+
+def _normalize_direct_pose_time_pe_dim(val: Any) -> Optional[int]:
+    try:
+        dim = int(val)
+    except (TypeError, ValueError):
+        return None
+    if dim < 0:
+        return None
+    if dim % 2 == 1:
+        dim += 1
+    return int(dim)
+
+
+def _apply_direct_pose_concat_to_replace_contacts_phase_tail_compat(
+    *,
+    state_dict: dict[str, Any],
+    model: EventMotionModel,
+    ckpt_posttrain_cfg: Optional[dict[str, Any]],
+    contact_dim: int,
+    direct_pose_cfg: DirectPoseBuildConfig,
+) -> tuple[str, ...]:
+    # Narrow semantic compat for the direct-pose first-layer input projection only:
+    # - source checkpoint was trained with `direct_pose_phase_z_mode='concat'`
+    #   so its input layout is `[prefix, plan+meas, phase_tail]`
+    # - target model runs with `direct_pose_phase_z_mode='replace_contacts'`
+    #   so its input layout is `[prefix, phase_tail]`
+    # - we only adapt the exact contraction where the removed middle block has the
+    #   same width as `phase_dim = 2 * contact_dim`, i.e.
+    #     src_in = prefix + phase_dim + phase_dim
+    #     tgt_in = prefix + phase_dim
+    # - mapping contract is:
+    #     target[:, :prefix] <- source[:, :prefix]
+    #     target[:, prefix:] <- source[:, src_in - phase_dim:src_in]
+    # Unsupported layouts continue to fail via the strict mismatch guard below.
+    if bool(direct_pose_cfg.drop_ckpt_weights) or (not bool(direct_pose_cfg.use_phase_z)):
+        return ()
+    if str(direct_pose_cfg.meas_mode or "concat").strip().lower() != "concat":
+        return ()
+    if _normalize_direct_pose_phase_z_mode(direct_pose_cfg.phase_z_mode) != "replace_contacts":
+        return ()
+    if not isinstance(ckpt_posttrain_cfg, dict):
+        return ()
+    if not bool(ckpt_posttrain_cfg.get("direct_pose_use_phase_z", False)):
+        return ()
+    if _normalize_direct_pose_phase_z_mode(ckpt_posttrain_cfg.get("direct_pose_phase_z_mode", None)) != "concat":
+        return ()
+
+    target_feat_source = _normalize_direct_pose_feat_source(direct_pose_cfg.feat_source)
+    source_feat_source = _normalize_direct_pose_feat_source(ckpt_posttrain_cfg.get("direct_pose_feat_source", None))
+    if target_feat_source is None or source_feat_source is None or source_feat_source != target_feat_source:
+        return ()
+
+    target_time_pe_dim = _normalize_direct_pose_time_pe_dim(direct_pose_cfg.time_pe_dim)
+    source_time_pe_dim = _normalize_direct_pose_time_pe_dim(ckpt_posttrain_cfg.get("direct_pose_time_pe_dim", None))
+    if target_time_pe_dim is None or source_time_pe_dim is None or source_time_pe_dim != target_time_pe_dim:
+        return ()
+
+    phase_dim = int(2 * int(contact_dim))
+    if phase_dim <= 0:
+        return ()
+
+    model_sd = model.state_dict()
+    adapted = []
+    for key in _DIRECT_POSE_PHASE_INPUT_KEYS:
+        value_ckpt = state_dict.get(key, None)
+        value_model = model_sd.get(key, None)
+        if not (
+            torch.is_tensor(value_ckpt)
+            and torch.is_tensor(value_model)
+            and value_ckpt.ndim == 2
+            and value_model.ndim == 2
+        ):
+            continue
+        if int(value_ckpt.shape[0]) != int(value_model.shape[0]):
+            continue
+        src_in = int(value_ckpt.shape[1])
+        tgt_in = int(value_model.shape[1])
+        if src_in == tgt_in:
+            continue
+        prefix_len = int(tgt_in - phase_dim)
+        removed_middle = int(src_in - tgt_in)
+        if prefix_len < 0 or removed_middle != phase_dim:
+            continue
+        if src_in != int(prefix_len + removed_middle + phase_dim):
+            continue
+        patched = value_model.detach().clone()
+        patched[:, :prefix_len] = value_ckpt[:, :prefix_len].to(dtype=patched.dtype, device=patched.device)
+        patched[:, prefix_len:] = value_ckpt[:, src_in - phase_dim : src_in].to(
+            dtype=patched.dtype,
+            device=patched.device,
+        )
+        state_dict[key] = patched.to(dtype=value_ckpt.dtype, device=value_ckpt.device)
+        adapted.append(
+            f"{key} for phase replace: in_dim {src_in} -> {tgt_in} "
+            f"(dropped plan+meas, kept phase tail dim={phase_dim})"
+        )
+    return tuple(adapted)
+
+
 def _infer_direct_pose_head_shape(
     *,
     out_motion_dim: int,
@@ -932,9 +1151,8 @@ def _infer_direct_pose_ckpt_layout(
     )
 
 
-def _resolve_direct_pose_ckpt_compat_policy(
+def _reject_removed_direct_pose_ckpt_semantic_policy(
     *,
-    train_direct_pose: bool,
     direct_pose_reinit: bool,
     ckpt_layout: DirectPoseCkptInference,
     direct_pose_hidden: int,
@@ -944,8 +1162,16 @@ def _resolve_direct_pose_ckpt_compat_policy(
     direct_pose_split_enable: bool,
     direct_pose_arm_split_enable: bool,
     direct_pose_nonleg_proj_dim: int,
-) -> bool:
-    drop_direct_pose_weights = bool(direct_pose_reinit and ckpt_layout.has_weights)
+) -> None:
+    if bool(direct_pose_reinit) and bool(ckpt_layout.has_weights):
+        _raise_removed_checkpoint_field(
+            context="resolve_direct_pose_build_cfg",
+            field_name="direct_pose_reinit",
+            reason=(
+                "`direct_pose_reinit` previously dropped existing `direct_pose_*` checkpoint tensors; "
+                "that semantic tensor drop is no longer allowed"
+            ),
+        )
     shape_override = bool(
         ckpt_layout.has_weights
         and ckpt_layout.enable
@@ -961,36 +1187,41 @@ def _resolve_direct_pose_ckpt_compat_policy(
     split_mismatch = bool(direct_pose_split_enable) != bool(ckpt_layout.split_enable)
     arm_split_mismatch = bool(direct_pose_arm_split_enable) != bool(ckpt_layout.arm_split_enable)
     if shape_override:
-        if not train_direct_pose:
-            raise SystemExit(
-                "[FATAL] direct_pose_* overrides change direct head tensor shapes, but train_direct_pose=false. "
-                "Enable train_direct_pose (and optionally direct_pose_reinit=true) to reinitialize the head."
-            )
-        drop_direct_pose_weights = True
-    if nonleg_proj_mismatch and (not train_direct_pose):
-        raise SystemExit(
-            "[FATAL] direct_pose_nonleg_proj_dim differs from checkpoint but train_direct_pose=false. "
-            "Enable train_direct_pose to adapt non-leg readout weights."
+        _raise_removed_checkpoint_field(
+            context="resolve_direct_pose_build_cfg",
+            field_name="direct_pose_hidden/direct_pose_meas_mode/direct_pose_feat_source/direct_pose_time_pe_dim",
+            reason=(
+                "direct-pose shape overrides previously dropped or reinitialized old "
+                "`direct_pose_head.*` tensors; non-bit-exact tensor replacement is removed"
+            ),
         )
-    for mismatch, allow_compat, fatal_msg in (
-        (
-            split_mismatch,
-            bool(direct_pose_split_enable) and (not bool(ckpt_layout.split_enable)),
-            "[FATAL] direct_pose split mode differs from checkpoint but train_direct_pose=false. "
-            "Enable train_direct_pose (or match direct_pose_split_enable to checkpoint).",
-        ),
-        (
-            arm_split_mismatch,
-            bool(direct_pose_arm_split_enable) and (not bool(ckpt_layout.arm_split_enable)),
-            "[FATAL] direct_pose arm-split mode differs from checkpoint but train_direct_pose=false. "
-            "Enable train_direct_pose (or match direct_pose_arm_split_enable to checkpoint).",
-        ),
-    ):
-        if mismatch and (not allow_compat):
-            if not train_direct_pose:
-                raise SystemExit(fatal_msg)
-            drop_direct_pose_weights = True
-    return bool(drop_direct_pose_weights)
+    if nonleg_proj_mismatch and bool(ckpt_layout.has_weights):
+        _raise_removed_checkpoint_field(
+            context="resolve_direct_pose_build_cfg",
+            field_name="direct_pose_nonleg_proj_dim",
+            reason=(
+                "`direct_pose_nonleg_proj_dim` mismatch previously adapted/reinitialized non-leg "
+                "readout tensors; non-bit-exact tensor adaptation is removed"
+            ),
+        )
+    if split_mismatch and bool(ckpt_layout.has_weights):
+        _raise_removed_checkpoint_field(
+            context="resolve_direct_pose_build_cfg",
+            field_name="direct_pose_split_enable",
+            reason=(
+                "old monolithic `direct_pose_head.6.*` to split-readout conversion/drop was removed; "
+                "split mode must match the checkpoint schema exactly"
+            ),
+        )
+    if arm_split_mismatch and bool(ckpt_layout.has_weights):
+        _raise_removed_checkpoint_field(
+            context="resolve_direct_pose_build_cfg",
+            field_name="direct_pose_arm_split_enable",
+            reason=(
+                "direct-pose arm/else split restructuring previously remapped old readout tensors; "
+                "non-bit-exact head restructuring is removed"
+            ),
+        )
 
 
 def resolve_direct_pose_build_cfg(
@@ -1022,8 +1253,15 @@ def resolve_direct_pose_build_cfg(
     )
     direct_pose_reinit = bool(overrides.direct_pose_reinit)
     if direct_pose_reinit and (not train_direct_pose):
-        print("[posttrain][WARN] direct_pose_reinit=true but train_direct_pose=false; ignoring reinit.")
-        direct_pose_reinit = False
+        _raise_removed_checkpoint_field(
+            context="resolve_direct_pose_build_cfg",
+            field_name="direct_pose_reinit",
+            reason=(
+                "`direct_pose_reinit=true` with `train_direct_pose=false` was formerly ignored; "
+                "warning-and-continue behavior is removed"
+            ),
+            migration="set `direct_pose_reinit=false` or train a fresh current-schema direct-pose head; no replacement",
+        )
 
     ckpt_layout = _infer_direct_pose_ckpt_layout(
         out_motion_dim=out_motion_dim,
@@ -1101,8 +1339,7 @@ def resolve_direct_pose_build_cfg(
         )
         direct_pose_time_pe_dim = int(direct_pose_time_pe_dim) + 1
 
-    drop_direct_pose_weights = _resolve_direct_pose_ckpt_compat_policy(
-        train_direct_pose=train_direct_pose,
+    _reject_removed_direct_pose_ckpt_semantic_policy(
         direct_pose_reinit=direct_pose_reinit,
         ckpt_layout=ckpt_layout,
         direct_pose_hidden=direct_pose_hidden,
@@ -1127,46 +1364,36 @@ def resolve_direct_pose_build_cfg(
         arm_split_enable=bool(direct_pose_arm_split_enable),
         arm_bones=direct_pose_arm_bones,
         nonleg_proj_dim=int(direct_pose_nonleg_proj_dim),
-        drop_ckpt_weights=bool(drop_direct_pose_weights),
+        drop_ckpt_weights=False,
     )
 
 
-def _drop_direct_pose_ckpt_tensors(state_dict: dict[str, Any]) -> None:
-    removed = [
-        key
-        for key in list(state_dict.keys())
-        if str(key).startswith("direct_pose_head.")
-        or str(key).startswith("direct_pose_leg_terminal.")
-        or str(key).startswith("direct_pose_out_nonleg.")
-        or str(key).startswith("direct_pose_out_arm.")
-        or str(key).startswith("direct_pose_out_else.")
-        or str(key).startswith("direct_pose_leg_head.")
-        or str(key).startswith("direct_pose_leg_head_shared.")
-        or str(key).startswith("direct_pose_arm_proj.")
-        or str(key).startswith("direct_pose_else_proj.")
-        or str(key).startswith("direct_pose_leg_gate_head.")
-        or str(key).startswith("direct_pose_leg_gate_head_shared.")
-        or str(key).startswith("direct_pose_leg_side_sign_gate_head.")
-        or str(key).startswith("direct_pose_leg_side_embed.")
-        or str(key) == "direct_pose_leg_joint_idx_tensor"
-        or str(key) in ("direct_pose_leg_side_pos_r_tensor", "direct_pose_leg_side_pos_l_tensor")
-        or str(key)
-        in (
-            "direct_pose_leg_out_idx",
-            "direct_pose_nonleg_out_idx",
-            "direct_pose_arm_out_idx",
-            "direct_pose_else_out_idx",
-        )
-    ]
-    for key in removed:
-        state_dict.pop(key, None)
-    if removed:
-        print(
-            f"[posttrain][INFO] dropped {len(removed)} direct_pose_* tensors from checkpoint (reinit/override)."
+def _raise_if_direct_pose_ckpt_weight_drop_requested(
+    *,
+    state_dict: dict[str, Any],
+    context: str,
+    drop_direct_pose_weights: bool,
+) -> None:
+    if not bool(drop_direct_pose_weights):
+        return
+    hits = _find_state_keys(
+        state_dict,
+        prefixes=_DIRECT_POSE_WEIGHT_PREFIXES,
+        exact=_DIRECT_POSE_WEIGHT_EXACT_KEYS,
+    )
+    if hits:
+        _raise_removed_checkpoint_compat(
+            context=context,
+            key_pattern="direct_pose_*",
+            hits=hits,
+            reason=(
+                "direct-pose reinit/shape override previously dropped checkpoint tensors; "
+                "semantic tensor drop is no longer allowed"
+            ),
         )
 
 
-def _adapt_direct_pose_phase_z_ckpt_inputs(
+def _raise_if_direct_pose_phase_z_input_mismatch(
     *,
     state_dict: dict[str, Any],
     model: EventMotionModel,
@@ -1174,130 +1401,67 @@ def _adapt_direct_pose_phase_z_ckpt_inputs(
     direct_pose_use_phase_z: bool,
     direct_pose_phase_z_mode: str,
     drop_direct_pose_weights: bool,
-    train_direct_pose: bool,
+    context: str,
 ) -> None:
-    try:
-        if (
-            (not bool(drop_direct_pose_weights))
-            and bool(direct_pose_use_phase_z)
-            and any(key.startswith("direct_pose_head.") for key in state_dict.keys())
+    if bool(drop_direct_pose_weights) or not bool(direct_pose_use_phase_z):
+        return
+    if not any(str(key).startswith("direct_pose_") for key in state_dict.keys()):
+        return
+    model_sd = model.state_dict()
+    phase_dim = int(2 * int(contact_dim))
+    phase_mode = str(direct_pose_phase_z_mode or "concat").strip().lower()
+    mismatches = []
+    for key in _DIRECT_POSE_PHASE_INPUT_KEYS:
+        value_ckpt = state_dict.get(key, None)
+        value_model = model_sd.get(key, None)
+        if not (
+            torch.is_tensor(value_ckpt)
+            and torch.is_tensor(value_model)
+            and value_ckpt.ndim == 2
+            and value_model.ndim == 2
         ):
-            model_sd = model.state_dict()
-            phase_mode = str(direct_pose_phase_z_mode or "concat").strip().lower()
-            phase_dim = int(2 * int(contact_dim))
-
-            def _adapt_phase_weight_tensor_(key: str) -> str:
-                w0 = state_dict.get(key, None)
-                w0_exp = model_sd.get(key, None)
-                if not (
-                    torch.is_tensor(w0)
-                    and torch.is_tensor(w0_exp)
-                    and w0.ndim == 2
-                    and w0_exp.ndim == 2
-                ):
-                    return "skip"
-                old_in = int(w0.shape[1])
-                new_in = int(w0_exp.shape[1])
-                if old_in == new_in:
-                    return "skip"
-                if int(w0.shape[0]) != int(w0_exp.shape[0]):
-                    return "mismatch"
-                if (old_in + phase_dim) == new_in:
-                    new_w = torch.zeros(
-                        (int(w0.shape[0]), int(new_in)),
-                        device=w0.device,
-                        dtype=w0.dtype,
-                    )
-                    new_w[:, :old_in] = w0
-                    state_dict[key] = new_w
-                    print(
-                        f"[posttrain][INFO] expanded {key} in_dim {old_in} -> {new_in} "
-                        f"(appended phase_z_in dim={phase_dim} as zeros)."
-                    )
-                    return "ok"
-                if (
-                    phase_mode == "replace_contacts"
-                    and (old_in == (new_in + phase_dim))
-                    and int(new_in) >= int(phase_dim)
-                ):
-                    base_in = int(new_in - phase_dim)
-                    new_w = torch.zeros(
-                        (int(w0.shape[0]), int(new_in)),
-                        device=w0.device,
-                        dtype=w0.dtype,
-                    )
-                    new_w[:, :base_in] = w0[:, :base_in]
-                    new_w[:, base_in:] = w0[:, (old_in - phase_dim) :]
-                    state_dict[key] = new_w
-                    print(
-                        f"[posttrain][INFO] adapted {key} for phase replace: in_dim {old_in} -> {new_in} "
-                        f"(dropped plan+meas, kept phase tail dim={phase_dim})."
-                    )
-                    return "ok"
-                return "mismatch"
-
-            status_head = _adapt_phase_weight_tensor_("direct_pose_head.0.weight")
-            for key in (
-                "direct_pose_leg_head.0.weight",
-                "direct_pose_leg_head_shared.0.weight",
-                "direct_pose_leg_gate_head.0.weight",
-                "direct_pose_leg_gate_head_shared.0.weight",
-            ):
-                _adapt_phase_weight_tensor_(key)
-
-            if status_head == "mismatch":
-                w0 = state_dict.get("direct_pose_head.0.weight", None)
-                w0_exp = model_sd.get("direct_pose_head.0.weight", None)
-                old_in = int(w0.shape[1]) if torch.is_tensor(w0) and w0.ndim == 2 else -1
-                new_in = int(w0_exp.shape[1]) if torch.is_tensor(w0_exp) and w0_exp.ndim == 2 else -1
-                if train_direct_pose:
-                    removed = [
-                        key
-                        for key in list(state_dict.keys())
-                        if str(key).startswith("direct_pose_head.")
-                    ]
-                    for key in removed:
-                        state_dict.pop(key, None)
-                    print(
-                        f"[posttrain][WARN] direct_pose_use_phase_z=true but cannot adapt direct_pose_head shape "
-                        f"(ckpt_in_dim={old_in}, model_in_dim={new_in}, phase_dim={phase_dim}); "
-                        f"dropped {len(removed)} direct_pose_head.* tensors (will reinit)."
-                    )
-                else:
-                    raise SystemExit(
-                        f"[FATAL] direct_pose_use_phase_z=true but direct_pose_head.0.weight shape mismatch "
-                        f"(ckpt_in_dim={old_in}, model_in_dim={new_in}). Enable train_direct_pose to reinit/adapt."
-                    )
-    except Exception:
-        pass
-
-
-def _drop_retired_direct_pose_highorder_ckpt_tensors(state_dict: dict[str, Any]) -> None:
-    try:
-        removed_highorder = []
-        for key in list(state_dict.keys()):
-            if any(
-                str(key).startswith(prefix)
-                for prefix in (
-                    "direct_pose_leg_head_shared.",
-                    "direct_pose_leg_gate_head_shared.",
-                    "direct_pose_leg_side_sign_gate_head.",
-                    "direct_pose_leg_side_embed.",
-                )
-            ):
-                removed_highorder.append(str(key))
-                state_dict.pop(key, None)
-        for key in ("direct_pose_leg_side_pos_r_tensor", "direct_pose_leg_side_pos_l_tensor"):
-            if key in state_dict:
-                removed_highorder.append(str(key))
-                state_dict.pop(key, None)
-        if removed_highorder:
-            print(
-                f"[posttrain][INFO] dropped {len(removed_highorder)} retired direct_pose high-order ckpt tensor(s) "
-                "(side-routing/sign-gate/rank1 compat shell)."
+            continue
+        if tuple(value_ckpt.shape) != tuple(value_model.shape):
+            mismatches.append(
+                f"{key}: ckpt_shape={tuple(int(v) for v in value_ckpt.shape)} "
+                f"model_shape={tuple(int(v) for v in value_model.shape)}"
             )
-    except Exception:
-        pass
+    if mismatches:
+        _raise_removed_checkpoint_compat(
+            context=context,
+            key_pattern="direct_pose_head.0.weight/direct_pose_leg_head*.0.weight",
+            hits=tuple(mismatches),
+            reason=(
+                "phase_z input-dimension padding/cropping was removed because zero-fill, "
+                "contact-tail slicing, or head reinit is not bit-exact semantic equivalence; "
+                f"direct_pose_phase_z_mode={phase_mode!r}, phase_dim={phase_dim}"
+            ),
+        )
+
+
+def _raise_if_retired_direct_pose_highorder_ckpt_tensors(
+    state_dict: dict[str, Any],
+    *,
+    context: str,
+) -> None:
+    retired_highorder = _find_state_keys(
+        state_dict,
+        prefixes=_RETIRED_DIRECT_POSE_HIGHORDER_PREFIXES,
+        exact=_RETIRED_DIRECT_POSE_HIGHORDER_EXACT_KEYS,
+    )
+    if retired_highorder:
+        _raise_removed_checkpoint_compat(
+            context=context,
+            key_pattern=(
+                "direct_pose_leg_head_shared.*|direct_pose_leg_gate_head_shared.*|"
+                "direct_pose_leg_side_sign_gate_head.*|direct_pose_leg_side_embed.*"
+            ),
+            hits=retired_highorder,
+            reason=(
+                "retired high-order direct-pose tensors were previously dropped or used by a "
+                "side-routing/sign-gate/rank1 shell; that semantic compat path is removed"
+            ),
+        )
 
 
 def _norm_bones(value: Any) -> list[str]:
@@ -1310,86 +1474,63 @@ def _norm_bones(value: Any) -> list[str]:
     return [item for item in items if item]
 
 
-def _drop_incompatible_direct_pose_leg_ckpt_tensors(
+def _raise_if_incompatible_direct_pose_leg_ckpt_tensors(
     *,
     state_dict: dict[str, Any],
     model: EventMotionModel,
     ckpt_posttrain_cfg: Optional[dict[str, Any]],
     load_options: DirectPoseLoadCompatOptions,
+    context: str,
 ) -> None:
-    try:
-        leg_prefixes = (
-            "direct_pose_leg_head.",
-            "direct_pose_leg_head_shared.",
-            "direct_pose_leg_side_sign_gate_head.",
-            "direct_pose_leg_side_embed.",
+    ckpt_leg_bones = []
+    if isinstance(ckpt_posttrain_cfg, dict):
+        ckpt_leg_bones = _norm_bones(ckpt_posttrain_cfg.get("direct_pose_leg_bones", None))
+    tgt_leg_bones = _norm_bones(load_options.leg_bones)
+
+    if bool(load_options.leg_enable) and ckpt_leg_bones and tgt_leg_bones and (tgt_leg_bones != ckpt_leg_bones):
+        hits = _find_state_keys(
+            state_dict,
+            prefixes=_DIRECT_POSE_LEG_PREFIXES,
+            exact=_DIRECT_POSE_LEG_EXACT_KEYS,
         )
-        ckpt_leg_bones = []
-        if isinstance(ckpt_posttrain_cfg, dict):
-            ckpt_leg_bones = _norm_bones(ckpt_posttrain_cfg.get("direct_pose_leg_bones", None))
-        tgt_leg_bones = _norm_bones(load_options.leg_bones)
-
-        removed = []
-        if bool(load_options.leg_enable) and ckpt_leg_bones and tgt_leg_bones and (tgt_leg_bones != ckpt_leg_bones):
-            for key in list(state_dict.keys()):
-                if (
-                    any(str(key).startswith(prefix) for prefix in leg_prefixes)
-                    or str(key) == "direct_pose_leg_joint_idx_tensor"
-                    or str(key) in ("direct_pose_leg_side_pos_r_tensor", "direct_pose_leg_side_pos_l_tensor")
-                ):
-                    removed.append(str(key))
-                    state_dict.pop(key, None)
-            if removed:
-                print(
-                    f"[posttrain][INFO] direct_pose_leg_bones override: ckpt={ckpt_leg_bones} cfg={tgt_leg_bones}; "
-                    f"dropped {len(removed)} direct_pose_leg_* tensors (will re-init leg head / idx)."
-                )
-
-        model_sd = model.state_dict()
-        removed_shape = []
-        for key in list(state_dict.keys()):
-            if not any(str(key).startswith(prefix) for prefix in leg_prefixes):
-                continue
-            value_ckpt = state_dict.get(key, None)
-            value_model = model_sd.get(key, None)
-            if (
-                torch.is_tensor(value_ckpt)
-                and torch.is_tensor(value_model)
-                and tuple(value_ckpt.shape) != tuple(value_model.shape)
-            ):
-                try:
-                    if (
-                        str(key).endswith("direct_pose_leg_head_shared.0.weight")
-                        and value_ckpt.ndim == 2
-                        and value_model.ndim == 2
-                        and int(value_ckpt.shape[0]) == int(value_model.shape[0])
-                    ):
-                        in_old = int(value_ckpt.shape[1])
-                        in_new = int(value_model.shape[1])
-                        if in_old < in_new and (in_new - in_old) <= 8:
-                            pad = int(in_new - in_old)
-                            state_dict[key] = torch.cat(
-                                [value_ckpt, value_ckpt.new_zeros((int(value_ckpt.shape[0]), pad))],
-                                dim=1,
-                            )
-                            continue
-                        if in_old > in_new:
-                            state_dict[key] = value_ckpt[:, :in_new].contiguous()
-                            continue
-                except Exception:
-                    pass
-                removed_shape.append(str(key))
-                state_dict.pop(key, None)
-        if removed_shape:
-            state_dict.pop("direct_pose_leg_joint_idx_tensor", None)
-            state_dict.pop("direct_pose_leg_side_pos_r_tensor", None)
-            state_dict.pop("direct_pose_leg_side_pos_l_tensor", None)
-            print(
-                f"[posttrain][INFO] dropped {len(removed_shape)} direct_pose_leg_head.* tensors due to shape mismatch "
-                "(likely leg_mode or bone set changed)."
+        if hits:
+            _raise_removed_checkpoint_compat(
+                context=context,
+                key_pattern="direct_pose_leg_bones + direct_pose_leg_*",
+                hits=hits,
+                reason=(
+                    "`direct_pose_leg_bones` override previously dropped old leg-head/index tensors; "
+                    f"ckpt_bones={ckpt_leg_bones!r}, requested_bones={tgt_leg_bones!r}"
+                ),
             )
-    except Exception:
-        pass
+
+    model_sd = model.state_dict()
+    shape_mismatches = []
+    for key in state_dict.keys():
+        key_text = str(key)
+        if not any(key_text.startswith(prefix) for prefix in ("direct_pose_leg_head.", "direct_pose_leg_gate_head.")):
+            continue
+        value_ckpt = state_dict.get(key_text, None)
+        value_model = model_sd.get(key_text, None)
+        if (
+            torch.is_tensor(value_ckpt)
+            and torch.is_tensor(value_model)
+            and tuple(value_ckpt.shape) != tuple(value_model.shape)
+        ):
+            shape_mismatches.append(
+                f"{key_text}: ckpt_shape={tuple(int(v) for v in value_ckpt.shape)} "
+                f"model_shape={tuple(int(v) for v in value_model.shape)}"
+            )
+    if shape_mismatches:
+        _raise_removed_checkpoint_compat(
+            context=context,
+            key_pattern="direct_pose_leg_head.*|direct_pose_leg_gate_head.*",
+            hits=tuple(shape_mismatches),
+            reason=(
+                "leg-head shape mismatch previously triggered pad/crop/drop/reinit behavior; "
+                "non-bit-exact direct-pose leg tensor adaptation is removed"
+            ),
+        )
 
 
 def apply_direct_pose_ckpt_compat(
@@ -1405,356 +1546,208 @@ def apply_direct_pose_ckpt_compat(
         state_dict,
         context="apply_direct_pose_ckpt_compat",
     )
-    if direct_pose_cfg.drop_ckpt_weights:
-        _drop_direct_pose_ckpt_tensors(state_dict)
-    _adapt_direct_pose_phase_z_ckpt_inputs(
+    normalize_direct_pose_split_state_dict_schema(model, state_dict)
+    _raise_if_direct_pose_ckpt_weight_drop_requested(
+        state_dict=state_dict,
+        context="apply_direct_pose_ckpt_compat",
+        drop_direct_pose_weights=direct_pose_cfg.drop_ckpt_weights,
+    )
+    for row in _apply_direct_pose_concat_to_replace_contacts_phase_tail_compat(
+        state_dict=state_dict,
+        model=model,
+        ckpt_posttrain_cfg=ckpt_posttrain_cfg,
+        contact_dim=contact_dim,
+        direct_pose_cfg=direct_pose_cfg,
+    ):
+        print(f"[posttrain][INFO] adapted {row}")
+    _raise_if_direct_pose_phase_z_input_mismatch(
         state_dict=state_dict,
         model=model,
         contact_dim=contact_dim,
         direct_pose_use_phase_z=direct_pose_cfg.use_phase_z,
         direct_pose_phase_z_mode=direct_pose_cfg.phase_z_mode,
         drop_direct_pose_weights=direct_pose_cfg.drop_ckpt_weights,
-        train_direct_pose=bool(load_options.train_direct_pose),
+        context="apply_direct_pose_ckpt_compat",
     )
-    _drop_retired_direct_pose_highorder_ckpt_tensors(state_dict)
-    _drop_incompatible_direct_pose_leg_ckpt_tensors(
+    _raise_if_retired_direct_pose_highorder_ckpt_tensors(
+        state_dict,
+        context="apply_direct_pose_ckpt_compat",
+    )
+    _raise_if_incompatible_direct_pose_leg_ckpt_tensors(
         state_dict=state_dict,
         model=model,
         ckpt_posttrain_cfg=ckpt_posttrain_cfg,
         load_options=load_options,
+        context="apply_direct_pose_ckpt_compat",
+    )
+    _raise_if_direct_pose_semantic_tensor_would_be_skipped(
+        state_dict=state_dict,
+        model=model,
+        context="apply_direct_pose_ckpt_compat",
     )
 
 
-def _direct_pose_first_linear(module: Any) -> Optional[nn.Linear]:
-    if isinstance(module, nn.Sequential) and len(module) > 0 and isinstance(module[0], nn.Linear):
-        return module[0]
-    if isinstance(module, nn.Linear):
-        return module
-    return None
-
-
-def _direct_pose_last_linear(module: Any) -> Optional[nn.Linear]:
-    if isinstance(module, nn.Linear):
-        return module
-    if not isinstance(module, nn.Module):
-        return None
-    last_linear = None
-    for mm in module.modules():
-        if isinstance(mm, nn.Linear):
-            last_linear = mm
-    return last_linear
-
-
-def _direct_pose_local_index(
-    parent_idx: torch.Tensor,
-    child_idx: torch.Tensor,
-    *,
-    device: torch.device,
-) -> Optional[torch.Tensor]:
-    try:
-        pos_map = {int(v): i for i, v in enumerate(parent_idx.detach().cpu().tolist())}
-        local_idx = [int(pos_map[int(v)]) for v in child_idx.detach().cpu().tolist()]
-    except Exception:
-        return None
-    local_tensor = torch.as_tensor(local_idx, dtype=torch.long, device=device)
-    if int(local_tensor.numel()) != int(child_idx.numel()):
-        return None
-    return local_tensor
-
-
-def _normalize_split_index_buffer(state_dict: dict[str, Any], key: str, target_idx: torch.Tensor) -> bool:
+def _normalize_split_index_buffer_schema_only(state_dict: dict[str, Any], key: str, target_idx: torch.Tensor) -> bool:
     value = state_dict.get(key, None)
     if not torch.is_tensor(value):
         return False
     if tuple(value.shape) != tuple(target_idx.shape):
-        state_dict.pop(key, None)
-        return True
+        _raise_removed_checkpoint_compat(
+            context="normalize_direct_pose_split_state_dict_schema",
+            key_pattern=key,
+            hits=(f"{key}: ckpt_shape={tuple(int(v) for v in value.shape)} model_shape={tuple(int(v) for v in target_idx.shape)}",),
+            reason=(
+                "split index-buffer shape mismatch would change direct-pose output routing; "
+                "shape drop/reconstruction is not schema-only"
+            ),
+        )
     if value.dtype == target_idx.dtype:
         return False
+    if value.dtype not in _INDEX_BUFFER_DTYPES or target_idx.dtype not in _INDEX_BUFFER_DTYPES:
+        _raise_removed_checkpoint_compat(
+            context="normalize_direct_pose_split_state_dict_schema",
+            key_pattern=key,
+            hits=(f"{key}: ckpt_dtype={value.dtype} model_dtype={target_idx.dtype}",),
+            reason=(
+                "split index-buffer dtype normalization is only schema-only for integer index tensors; "
+                "non-integer index adaptation has no replacement"
+            ),
+        )
     try:
+        # Schema-only whitelist: split index buffers encode the same integer output
+        # positions. Casting an existing same-shape integer buffer to the model's
+        # integer dtype changes serialization/schema only, not routing semantics.
         state_dict[key] = value.to(dtype=target_idx.dtype)
     except Exception:
-        state_dict.pop(key, None)
+        _raise_removed_checkpoint_compat(
+            context="normalize_direct_pose_split_state_dict_schema",
+            key_pattern=key,
+            hits=(f"{key}: ckpt_dtype={value.dtype} model_dtype={target_idx.dtype}",),
+            reason=(
+                "split index-buffer dtype normalization failed; silent index-buffer drop is removed"
+            ),
+        )
     return True
 
 
-def _copy_tensor_if_compatible(
-    state_dict: dict[str, Any],
-    *,
-    target_key: str,
-    target_tensor: Optional[torch.Tensor],
-    source_tensor: Optional[torch.Tensor],
-) -> bool:
-    if (not torch.is_tensor(target_tensor)) or (not torch.is_tensor(source_tensor)):
-        return False
-    current = state_dict.get(target_key, None)
-    if torch.is_tensor(current) and tuple(current.shape) == tuple(target_tensor.shape):
-        return False
-    if tuple(source_tensor.shape) != tuple(target_tensor.shape):
-        return False
-    state_dict[target_key] = source_tensor
-    return True
-
-
-def _copy_indexed_tensor_if_needed(
-    state_dict: dict[str, Any],
-    *,
-    target_key: str,
-    target_tensor: Optional[torch.Tensor],
-    source_tensor: Optional[torch.Tensor],
-    index_tensor: Optional[torch.Tensor],
-) -> bool:
-    if (
-        (not torch.is_tensor(target_tensor))
-        or (not torch.is_tensor(source_tensor))
-        or (not torch.is_tensor(index_tensor))
-    ):
-        return False
-    current = state_dict.get(target_key, None)
-    if torch.is_tensor(current) and tuple(current.shape) == tuple(target_tensor.shape):
-        return False
-    src_shape = tuple(source_tensor.shape)
-    tgt_shape = tuple(target_tensor.shape)
-    if len(src_shape) == 0 or len(tgt_shape) == 0:
-        return False
-    if int(index_tensor.numel()) <= 0:
-        return False
-    if src_shape[0] < int(index_tensor.max().item()) + 1:
-        return False
-    if len(src_shape) != len(tgt_shape):
-        return False
-    if any(int(src_shape[i]) != int(tgt_shape[i]) for i in range(1, len(src_shape))):
-        return False
-    if int(tgt_shape[0]) != int(index_tensor.numel()):
-        return False
+def _model_direct_pose_split_state(model: "EventMotionModel") -> Optional[dict[str, Any]]:
     try:
-        state_dict[target_key] = source_tensor.index_select(0, index_tensor.to(device=source_tensor.device, dtype=torch.long))
-    except Exception:
-        return False
-    return True
+        split_state_fn = model._direct_pose_split_state
+    except AttributeError:
+        return None
+    split_state = split_state_fn()
+    return split_state if isinstance(split_state, dict) else None
 
 
-def maybe_upgrade_direct_pose_split_state_dict(model: "EventMotionModel", state_dict: dict[str, Any]) -> bool:
+def _raise_if_old_monolithic_direct_pose_readout_for_split_model(
+    *,
+    state_dict: dict[str, Any],
+    model: "EventMotionModel",
+    context: str,
+    split_state: Optional[dict[str, Any]] = None,
+) -> None:
+    if split_state is None:
+        split_state = _model_direct_pose_split_state(model)
+    if split_state is None:
+        return
+    hits = tuple(
+        key
+        for key in ("direct_pose_head.6.weight", "direct_pose_head.6.bias")
+        if key in state_dict
+    )
+    if hits:
+        _raise_removed_checkpoint_compat(
+            context=context,
+            key_pattern="direct_pose_head.6.weight/direct_pose_head.6.bias",
+            hits=hits,
+            reason=(
+                "old monolithic direct-pose readout to split readout (`direct_pose_leg_terminal.*`, "
+                "`direct_pose_out_nonleg.*`, `direct_pose_out_arm.*`, `direct_pose_out_else.*`) "
+                "was a semantic tensor re-index/restructure and has been removed"
+            ),
+        )
+
+
+def _raise_if_direct_pose_semantic_tensor_would_be_skipped(
+    state_dict: dict[str, Any],
+    *,
+    model: "EventMotionModel",
+    context: str,
+) -> None:
+    model_sd = model.state_dict()
+    missing = []
+    mismatched = []
+    for key, value_ckpt in state_dict.items():
+        key_text = str(key)
+        if key_text in _DIRECT_POSE_SPLIT_INDEX_KEYS:
+            continue
+        if key_text in _RETIRED_DIRECT_POSE_HIGHORDER_EXACT_KEYS:
+            continue
+        if not any(key_text.startswith(prefix) for prefix in _DIRECT_POSE_WEIGHT_PREFIXES):
+            continue
+        if not torch.is_tensor(value_ckpt):
+            continue
+        value_model = model_sd.get(key_text, None)
+        if value_model is None:
+            missing.append(key_text)
+            continue
+        if torch.is_tensor(value_model) and tuple(value_ckpt.shape) != tuple(value_model.shape):
+            mismatched.append(
+                f"{key_text}: ckpt_shape={tuple(int(v) for v in value_ckpt.shape)} "
+                f"model_shape={tuple(int(v) for v in value_model.shape)}"
+            )
+    if missing:
+        _raise_removed_checkpoint_compat(
+            context=context,
+            key_pattern="direct_pose_* unexpected/missing-in-model",
+            hits=tuple(missing),
+            reason=(
+                "direct-pose tensor partial-load would silently drop checkpoint tensors that are not present "
+                "in the current model; semantic direct-pose drops are removed"
+            ),
+        )
+    if mismatched:
+        _raise_removed_checkpoint_compat(
+            context=context,
+            key_pattern="direct_pose_* shape mismatch",
+            hits=tuple(mismatched),
+            reason=(
+                "direct-pose tensor partial-load would skip shape-mismatched tensors; "
+                "semantic shape adaptation/drop is removed"
+            ),
+        )
+
+
+def normalize_direct_pose_split_state_dict_schema(model: "EventMotionModel", state_dict: dict[str, Any]) -> bool:
     _raise_if_retired_direct_pose_stepc_leg_layout(
         state_dict,
-        context="maybe_upgrade_direct_pose_split_state_dict",
+        context="normalize_direct_pose_split_state_dict_schema",
     )
-    split_state = model._direct_pose_split_state()
+    _raise_if_retired_direct_pose_highorder_ckpt_tensors(
+        state_dict,
+        context="normalize_direct_pose_split_state_dict_schema",
+    )
+    split_state = _model_direct_pose_split_state(model)
     if (not isinstance(state_dict, dict)) or split_state is None:
         return False
+    _raise_if_old_monolithic_direct_pose_readout_for_split_model(
+        state_dict=state_dict,
+        model=model,
+        context="normalize_direct_pose_split_state_dict_schema",
+        split_state=split_state,
+    )
     arm_split = bool(split_state["arm_split"])
-    leg_head = split_state["leg_head"]
-    nonleg_head = split_state["nonleg_head"]
-    arm_head = split_state["arm_head"]
-    else_head = split_state["else_head"]
     idx_leg = split_state["idx_leg"]
     idx_nonleg = split_state["idx_nonleg"]
     idx_arm = split_state["idx_arm"]
     idx_else = split_state["idx_else"]
-    if leg_head is None:
-        return False
-    leg_last = _direct_pose_last_linear(leg_head)
-    if leg_last is None:
-        return False
-    if arm_split:
-        if arm_head is None or else_head is None:
-            return False
-    elif nonleg_head is None:
-        return False
-
-    old_w = state_dict.get("direct_pose_head.6.weight", None)
-    old_b = state_dict.get("direct_pose_head.6.bias", None)
-    has_old = bool(torch.is_tensor(old_w) and old_w.ndim == 2 and int(old_w.shape[0]) == int(model.out_motion_dim))
-    ref_device = old_w.device if has_old else leg_last.weight.device
-    idx_leg_use = idx_leg.to(device=ref_device, dtype=torch.long)
-    idx_nonleg_use = idx_nonleg.to(device=ref_device, dtype=torch.long)
-    idx_arm_use = idx_else_use = arm_nonleg_local = else_nonleg_local = None
-    if arm_split:
-        idx_arm_use = idx_arm.to(device=ref_device, dtype=torch.long)
-        idx_else_use = idx_else.to(device=ref_device, dtype=torch.long)
-        arm_nonleg_local = _direct_pose_local_index(idx_nonleg_use, idx_arm_use, device=ref_device)
-        else_nonleg_local = _direct_pose_local_index(idx_nonleg_use, idx_else_use, device=ref_device)
-        if arm_nonleg_local is None or else_nonleg_local is None:
-            return False
     converted = False
-    model_sd = model.state_dict()
-    for key in (
-        "direct_pose_leg_terminal.0.weight",
-        "direct_pose_leg_terminal.0.bias",
-        "direct_pose_leg_terminal.3.weight",
-        "direct_pose_leg_terminal.3.bias",
-    ):
-        target_tensor = model_sd.get(key, None)
-        converted = _copy_tensor_if_compatible(
-            state_dict,
-            target_key=key,
-            target_tensor=target_tensor,
-            source_tensor=target_tensor,
-        ) or converted
-
     idx_pairs = [("direct_pose_leg_out_idx", idx_leg), ("direct_pose_nonleg_out_idx", idx_nonleg)]
     if arm_split:
         idx_pairs.append(("direct_pose_arm_out_idx", idx_arm))
         idx_pairs.append(("direct_pose_else_out_idx", idx_else))
     for key, idx_tgt in idx_pairs:
-        converted = _normalize_split_index_buffer(state_dict, key, idx_tgt) or converted
-
-    if has_old:
-        copy_specs = [("direct_pose_leg_terminal.6.weight", leg_last.weight, idx_leg_use)]
-        if arm_split:
-            copy_specs.extend([
-                ("direct_pose_out_arm.weight", arm_head.weight, idx_arm_use),
-                ("direct_pose_out_else.weight", else_head.weight, idx_else_use),
-            ])
-        else:
-            copy_specs.append(("direct_pose_out_nonleg.weight", nonleg_head.weight, idx_nonleg_use))
-        for target_key, target_tensor, index_tensor in copy_specs:
-            converted = _copy_indexed_tensor_if_needed(
-                state_dict,
-                target_key=target_key,
-                target_tensor=target_tensor,
-                source_tensor=old_w,
-                index_tensor=index_tensor,
-            ) or converted
-
-    if has_old and torch.is_tensor(old_b):
-        copy_specs = [("direct_pose_leg_terminal.6.bias", leg_last.bias, idx_leg_use)]
-        if arm_split:
-            copy_specs.extend([
-                ("direct_pose_out_arm.bias", arm_head.bias, idx_arm_use),
-                ("direct_pose_out_else.bias", else_head.bias, idx_else_use),
-            ])
-        else:
-            copy_specs.append(("direct_pose_out_nonleg.bias", nonleg_head.bias, idx_nonleg_use))
-        for target_key, target_tensor, index_tensor in copy_specs:
-            converted = _copy_indexed_tensor_if_needed(
-                state_dict,
-                target_key=target_key,
-                target_tensor=target_tensor,
-                source_tensor=old_b,
-                index_tensor=index_tensor,
-            ) or converted
-
-    src_nonleg_w = src_nonleg_b = None
-    if has_old:
-        try:
-            src_nonleg_w = old_w.index_select(0, idx_nonleg_use)
-        except Exception:
-            src_nonleg_w = None
-        if torch.is_tensor(old_b):
-            try:
-                src_nonleg_b = old_b.index_select(0, idx_nonleg_use)
-            except Exception:
-                src_nonleg_b = None
-    if src_nonleg_w is None:
-        w_ckpt_nonleg = state_dict.get("direct_pose_out_nonleg.weight", None)
-        if torch.is_tensor(w_ckpt_nonleg) and w_ckpt_nonleg.ndim == 2:
-            src_nonleg_w = w_ckpt_nonleg
-    if src_nonleg_b is None:
-        b_ckpt_nonleg = state_dict.get("direct_pose_out_nonleg.bias", None)
-        if torch.is_tensor(b_ckpt_nonleg) and b_ckpt_nonleg.ndim == 1:
-            src_nonleg_b = b_ckpt_nonleg
-
-    if arm_split:
-        for source_tensor, targets in (
-            (
-                src_nonleg_w,
-                (
-                    ("direct_pose_out_arm.weight", arm_head.weight, arm_nonleg_local),
-                    ("direct_pose_out_else.weight", else_head.weight, else_nonleg_local),
-                ),
-            ),
-            (
-                src_nonleg_b,
-                (
-                    ("direct_pose_out_arm.bias", arm_head.bias, arm_nonleg_local),
-                    ("direct_pose_out_else.bias", else_head.bias, else_nonleg_local),
-                ),
-            ),
-        ):
-            if not torch.is_tensor(source_tensor):
-                continue
-            if int(source_tensor.shape[0]) != int(idx_nonleg_use.numel()):
-                continue
-            for target_key, target_tensor, local_idx in targets:
-                converted = _copy_indexed_tensor_if_needed(
-                    state_dict,
-                    target_key=target_key,
-                    target_tensor=target_tensor,
-                    source_tensor=source_tensor,
-                    index_tensor=local_idx,
-                ) or converted
-
-    if not arm_split:
-        proj_linear = _direct_pose_first_linear(split_state["nonleg_proj"])
-        if proj_linear is not None:
-            tgt_proj_w = proj_linear.weight
-            tgt_nonleg_w = nonleg_head.weight
-            cur_proj_w = state_dict.get("direct_pose_nonleg_proj.0.weight", None)
-            cur_nonleg_w = state_dict.get("direct_pose_out_nonleg.weight", None)
-            need_proj = (not torch.is_tensor(cur_proj_w)) or tuple(cur_proj_w.shape) != tuple(tgt_proj_w.shape)
-            need_nonleg = (not torch.is_tensor(cur_nonleg_w)) or tuple(cur_nonleg_w.shape) != tuple(tgt_nonleg_w.shape)
-            if (
-                (need_proj or need_nonleg)
-                and torch.is_tensor(src_nonleg_w)
-                and src_nonleg_w.ndim == 2
-                and int(src_nonleg_w.shape[0]) == int(tgt_nonleg_w.shape[0])
-                and int(src_nonleg_w.shape[1]) == int(tgt_proj_w.shape[1])
-            ):
-                try:
-                    src = src_nonleg_w.detach().to(dtype=torch.float32)
-                    u, s, vh = torch.linalg.svd(src, full_matrices=False)
-                    rank = int(min(int(tgt_proj_w.shape[0]), int(s.numel())))
-                    proj_w = torch.zeros(tuple(tgt_proj_w.shape), dtype=src_nonleg_w.dtype, device=src_nonleg_w.device)
-                    out_w = torch.zeros(tuple(tgt_nonleg_w.shape), dtype=src_nonleg_w.dtype, device=src_nonleg_w.device)
-                    if rank > 0:
-                        out_w[:, :rank] = (u[:, :rank] * s[:rank].unsqueeze(0)).to(dtype=out_w.dtype, device=out_w.device)
-                        proj_w[:rank, :] = vh[:rank, :].to(dtype=proj_w.dtype, device=proj_w.device)
-                    state_dict["direct_pose_nonleg_proj.0.weight"] = proj_w
-                    state_dict["direct_pose_nonleg_proj.0.bias"] = torch.zeros(
-                        (int(tgt_proj_w.shape[0]),),
-                        dtype=src_nonleg_w.dtype,
-                        device=src_nonleg_w.device,
-                    )
-                    state_dict["direct_pose_out_nonleg.weight"] = out_w
-                    converted = True
-                except Exception:
-                    pass
-    else:
-        src_proj_w = state_dict.get("direct_pose_nonleg_proj.0.weight", None)
-        src_proj_b = state_dict.get("direct_pose_nonleg_proj.0.bias", None)
-        for branch, key in (
-            (split_state["arm_proj"], "direct_pose_arm_proj"),
-            (split_state["else_proj"], "direct_pose_else_proj"),
-        ):
-            lin = _direct_pose_first_linear(branch)
-            if lin is None:
-                continue
-            converted = _copy_tensor_if_compatible(
-                state_dict,
-                target_key=f"{key}.0.weight",
-                target_tensor=lin.weight,
-                source_tensor=src_proj_w if torch.is_tensor(src_proj_w) and src_proj_w.ndim == 2 else None,
-            ) or converted
-            converted = _copy_tensor_if_compatible(
-                state_dict,
-                target_key=f"{key}.0.bias",
-                target_tensor=lin.bias,
-                source_tensor=src_proj_b if torch.is_tensor(src_proj_b) and src_proj_b.ndim == 1 else None,
-            ) or converted
-        for key in (
-            "direct_pose_out_nonleg.weight",
-            "direct_pose_out_nonleg.bias",
-            "direct_pose_nonleg_proj.0.weight",
-            "direct_pose_nonleg_proj.0.bias",
-        ):
-            if key in state_dict:
-                state_dict.pop(key, None)
-                converted = True
-
-    if converted:
-        state_dict.pop("direct_pose_head.6.weight", None)
-        state_dict.pop("direct_pose_head.6.bias", None)
+        converted = _normalize_split_index_buffer_schema_only(state_dict, key, idx_tgt) or converted
     return converted
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -10,7 +12,7 @@ from train.training_MPL import _parse_train_entry_args
 
 
 class TrainingMPLEntryConfigCompatTest(unittest.TestCase):
-    def test_config_json_accepts_adaptive_bone_weights(self) -> None:
+    def test_config_json_rejects_removed_adaptive_bone_weights(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg_path = Path(tmpdir) / "config.json"
             cfg_path.write_text(
@@ -24,18 +26,17 @@ class TrainingMPLEntryConfigCompatTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            args = _parse_train_entry_args(["--config_json", str(cfg_path)])
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as exc:
+                    _parse_train_entry_args(["--config_json", str(cfg_path)])
 
-        self.assertTrue(hasattr(args, "adaptive_bone_weights"))
-        self.assertTrue(args.adaptive_bone_weights)
+        self.assertEqual(exc.exception.code, 2)
 
-    def test_motion_joint_loss_accepts_compat_flag(self) -> None:
-        loss_fn = MotionJointLoss(adaptive_bone_weights=True)
+    def test_motion_joint_loss_rejects_removed_adaptive_bone_weights(self) -> None:
+        with self.assertRaises(TypeError) as exc:
+            MotionJointLoss(adaptive_bone_weights=True)
 
-        self.assertTrue(loss_fn.use_adaptive_weights)
-        loss_fn._joint_weight_cache = {"sentinel": object()}
-        loss_fn._invalidate_weight_cache()
-        self.assertEqual(loss_fn._joint_weight_cache, {})
+        self.assertIn("adaptive_bone_weights", str(exc.exception))
 
 
 if __name__ == "__main__":

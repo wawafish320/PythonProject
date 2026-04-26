@@ -137,6 +137,22 @@ class DiagnosticsRuntimeResolverSentinelTest(unittest.TestCase):
                 names.append(child.func.attr)
         return names
 
+    @staticmethod
+    def _getattr_reads(node: ast.AST) -> list[tuple[str, str]]:
+        reads: list[tuple[str, str]] = []
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            if not isinstance(child.func, ast.Name) or child.func.id != "getattr":
+                continue
+            if len(child.args) < 2:
+                continue
+            attr_arg = child.args[1]
+            if not isinstance(attr_arg, ast.Constant) or not isinstance(attr_arg.value, str):
+                continue
+            reads.append((ast.unparse(child.args[0]), attr_arg.value))
+        return reads
+
     @classmethod
     def _forbidden_runtime_reads(cls, node: ast.AST) -> list[tuple[str, int]]:
         reads: list[tuple[str, int]] = []
@@ -178,6 +194,15 @@ class DiagnosticsRuntimeResolverSentinelTest(unittest.TestCase):
 
         self.assertIn("resolve_diagnostics_runtime_config", call_names)
         self.assertEqual(self._forbidden_runtime_reads(node), [])
+
+    def test_history_drift_debug_lines_reflectively_use_loss_limb_stats_seam(self) -> None:
+        tree = self._parse_module()
+        node = self._find_function(tree, "_emit_history_drift_debug_lines")
+
+        self.assertIn(
+            ("trainer.loss_fn", "_collect_limb_local_stats"),
+            self._getattr_reads(node),
+        )
 
 
 if __name__ == "__main__":

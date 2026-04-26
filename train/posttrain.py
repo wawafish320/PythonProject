@@ -28,6 +28,14 @@ import torch
 import torch.nn.functional as F
 
 from train.configuration.io import dump_json, load_json
+from train.configuration import model_build as _model_build_cfg
+from train.configuration.model_build import (
+    DatasetLossFacts,
+    ModelBuildConfig,
+    TrainerRuntimeConfig as BuildTrainerRuntimeConfig,
+    resolve_posttrain_loss_build_config,
+    resolve_posttrain_trainer_runtime_config,
+)
 from train.data.dataset import (
     MotionEventDataset,
     build_and_attach_dataset_runtime,
@@ -54,6 +62,7 @@ from train.posttrain_shared import (
 from train import posttrain_build_shell as _posttrain_build_shell
 from train.checkpoint.contract import (
     ContactPlanBuildConfig,
+    DirectPoseBuildConfig,
     DirectPoseLegBuildConfig,
     EventClockBuildConfig,
     LambdaFusionBuildConfig,
@@ -74,7 +83,6 @@ from train.data.io import config_to_jsonable as _cfg_to_jsonable
 from train.configuration.norm_spec import (
     ContactPretrainRuntime,
     merge_norm_spec,
-    resolve_contact_pretrain_runtime,
 )
 from train.models import EventMotionModel, MotionJointLoss
 from train.runtime_attach import (
@@ -92,7 +100,6 @@ from train.training_MPL import Trainer
 from train.utils import (
     apply_cli_overrides as _apply_cli_overrides_shared,
     as_bool as _as_bool,
-    as_float_list as _as_float_list,
     as_path as _as_path,
     cfg_from_schema as _cfg_from_schema,
     cfg_get_bool as _cfg_get_bool,
@@ -535,10 +542,6 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
         [
             ("event_clock_hidden_dim", _cfg_get_int, {"key": "event_clock_hidden_dim", "default": None, "allow_none": True}),
             ("event_clock_gate_hidden_dim", _cfg_get_int, {"key": "event_clock_gate_hidden_dim", "default": None, "allow_none": True}),
-            ("lambda_gate_sup_weight", _cfg_get_float, {"key": "lambda_gate_sup_weight", "default": 0.0}),
-            ("lambda_gate_sup_tau_deg", _cfg_get_float, {"key": "lambda_gate_sup_tau_deg", "default": 2.5}),
-            ("lambda_gate_sup_margin_deg", _cfg_get_float, {"key": "lambda_gate_sup_margin_deg", "default": 1.0}),
-            ("lambda_gate_sup_start_step", _cfg_get_int, {"key": "lambda_gate_sup_start_step", "default": -1}),
             ("direct_pose_time_pe_dim", _cfg_get_int, {"key": "direct_pose_time_pe_dim", "default": -1}),
             ("direct_pose_hidden_override", _cfg_get_int, {"key": "direct_pose_hidden_override", "default": None, "allow_none": True}),
             ("direct_pose_nonleg_proj_dim", _cfg_get_int, {"key": "direct_pose_nonleg_proj_dim", "default": 0, "min_value": 0}),
@@ -597,25 +600,29 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
         leg_align_cfg[key] = None if s.lower() in ("", "none", "null", "off", "disabled") else s
     cfg.update(leg_align_cfg)
 
-    cfg["direct_pose_loss_leg_split"] = _cfg_get_bool(payload, "direct_pose_loss_leg_split", False)
+    cfg["direct_pose_loss_leg_split"] = _cfg_get_bool(
+        payload,
+        "direct_pose_loss_leg_split",
+        _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_LEG_SPLIT,
+    )
     cfg["direct_pose_nonleg_focus_bones"] = _normalize_optional_csv(payload.get("direct_pose_nonleg_focus_bones", None))
 
     direct_pose_loss_cfg = _cfg_from_schema(
         payload,
         [
-            ("direct_pose_loss_arm_else_balance_enable", _cfg_get_bool, {"key": "direct_pose_loss_arm_else_balance_enable", "default": False}),
-            ("direct_pose_loss_arm_weight", _cfg_get_float, {"key": "direct_pose_loss_arm_weight", "default": 1.0, "require_finite": False}),
-            ("direct_pose_loss_else_weight", _cfg_get_float, {"key": "direct_pose_loss_else_weight", "default": 1.0, "require_finite": False}),
-            ("direct_pose_loss_group_norm_enable", _cfg_get_bool, {"key": "direct_pose_loss_group_norm_enable", "default": False}),
-            ("direct_pose_loss_group_norm_w_leg", _cfg_get_float, {"key": "direct_pose_loss_group_norm_w_leg", "default": 1.0, "require_finite": False}),
-            ("direct_pose_loss_group_norm_w_nonleg", _cfg_get_float, {"key": "direct_pose_loss_group_norm_w_nonleg", "default": 1.0, "require_finite": False}),
-            ("direct_pose_loss_group_norm_ema_beta", _cfg_get_float, {"key": "direct_pose_loss_group_norm_ema_beta", "default": 0.95}),
-            ("direct_pose_loss_group_norm_ratio_min", _cfg_get_float, {"key": "direct_pose_loss_group_norm_ratio_min", "default": 0.2}),
-            ("direct_pose_loss_group_norm_ratio_max", _cfg_get_float, {"key": "direct_pose_loss_group_norm_ratio_max", "default": 5.0}),
-            ("direct_pose_loss_group_norm_eps", _cfg_get_float, {"key": "direct_pose_loss_group_norm_eps", "default": 1e-6}),
+            ("direct_pose_loss_arm_else_balance_enable", _cfg_get_bool, {"key": "direct_pose_loss_arm_else_balance_enable", "default": _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_ARM_ELSE_BALANCE_ENABLE}),
+            ("direct_pose_loss_arm_weight", _cfg_get_float, {"key": "direct_pose_loss_arm_weight", "default": _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_ARM_WEIGHT, "require_finite": False}),
+            ("direct_pose_loss_else_weight", _cfg_get_float, {"key": "direct_pose_loss_else_weight", "default": _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_ELSE_WEIGHT, "require_finite": False}),
+            ("direct_pose_loss_group_norm_enable", _cfg_get_bool, {"key": "direct_pose_loss_group_norm_enable", "default": _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_ENABLE}),
+            ("direct_pose_loss_group_norm_w_leg", _cfg_get_float, {"key": "direct_pose_loss_group_norm_w_leg", "default": _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_W_LEG, "require_finite": False}),
+            ("direct_pose_loss_group_norm_w_nonleg", _cfg_get_float, {"key": "direct_pose_loss_group_norm_w_nonleg", "default": _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_W_NONLEG, "require_finite": False}),
+            ("direct_pose_loss_group_norm_ema_beta", _cfg_get_float, {"key": "direct_pose_loss_group_norm_ema_beta", "default": _model_build_cfg.DEFAULT_POSTTRAIN_LOSS_DIRECT_POSE_GROUP_NORM_EMA_BETA}),
+            ("direct_pose_loss_group_norm_ratio_min", _cfg_get_float, {"key": "direct_pose_loss_group_norm_ratio_min", "default": _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_RATIO_MIN}),
+            ("direct_pose_loss_group_norm_ratio_max", _cfg_get_float, {"key": "direct_pose_loss_group_norm_ratio_max", "default": _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_RATIO_MAX}),
+            ("direct_pose_loss_group_norm_eps", _cfg_get_float, {"key": "direct_pose_loss_group_norm_eps", "default": _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_EPS}),
             ("direct_pose_nonleg_focus_weight", _cfg_get_float, {"key": "direct_pose_nonleg_focus_weight", "default": 1.0}),
-            ("direct_pose_grad_monitor_enable", _cfg_get_bool, {"key": "direct_pose_grad_monitor_enable", "default": False}),
-            ("direct_pose_grad_ratio_gate", _cfg_get_float, {"key": "direct_pose_grad_ratio_gate", "default": 0.35}),
+            ("direct_pose_grad_monitor_enable", _cfg_get_bool, {"key": "direct_pose_grad_monitor_enable", "default": _model_build_cfg.DEFAULT_DIRECT_POSE_GRAD_MONITOR_ENABLE}),
+            ("direct_pose_grad_ratio_gate", _cfg_get_float, {"key": "direct_pose_grad_ratio_gate", "default": _model_build_cfg.DEFAULT_DIRECT_POSE_GRAD_RATIO_GATE}),
             ("direct_pose_leg_align_grad_probe_enable", _cfg_get_bool, {"key": "direct_pose_leg_align_grad_probe_enable", "default": False}),
             ("direct_pose_leg_align_grad_probe_steps", _cfg_get_int, {"key": "direct_pose_leg_align_grad_probe_steps", "default": 0, "min_value": 0}),
         ],
@@ -623,14 +630,18 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
     for key in ("direct_pose_loss_arm_weight", "direct_pose_loss_else_weight"):
         value = float(direct_pose_loss_cfg[key])
         if not math.isfinite(value):
-            value = 1.0
+            value = (
+                _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_ARM_WEIGHT
+                if key == "direct_pose_loss_arm_weight"
+                else _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_ELSE_WEIGHT
+            )
         direct_pose_loss_cfg[key] = max(0.0, value)
     if (float(direct_pose_loss_cfg["direct_pose_loss_arm_weight"]) + float(direct_pose_loss_cfg["direct_pose_loss_else_weight"])) <= 0.0:
-        direct_pose_loss_cfg["direct_pose_loss_arm_weight"] = 1.0
-        direct_pose_loss_cfg["direct_pose_loss_else_weight"] = 1.0
+        direct_pose_loss_cfg["direct_pose_loss_arm_weight"] = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_ARM_WEIGHT
+        direct_pose_loss_cfg["direct_pose_loss_else_weight"] = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_ELSE_WEIGHT
     direct_pose_loss_group_norm_ema_beta = float(direct_pose_loss_cfg["direct_pose_loss_group_norm_ema_beta"])
     if (not math.isfinite(direct_pose_loss_group_norm_ema_beta)) or direct_pose_loss_group_norm_ema_beta < 0.0:
-        direct_pose_loss_group_norm_ema_beta = 0.95
+        direct_pose_loss_group_norm_ema_beta = _model_build_cfg.DEFAULT_POSTTRAIN_LOSS_DIRECT_POSE_GROUP_NORM_EMA_BETA
     direct_pose_loss_cfg["direct_pose_loss_group_norm_ema_beta"] = _clamp_float(
         direct_pose_loss_group_norm_ema_beta,
         min_value=0.0,
@@ -639,17 +650,17 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
     direct_pose_loss_group_norm_ratio_min = float(direct_pose_loss_cfg["direct_pose_loss_group_norm_ratio_min"])
     direct_pose_loss_group_norm_ratio_max = float(direct_pose_loss_cfg["direct_pose_loss_group_norm_ratio_max"])
     if (not math.isfinite(direct_pose_loss_group_norm_ratio_min)) or direct_pose_loss_group_norm_ratio_min <= 0.0:
-        direct_pose_loss_group_norm_ratio_min = 0.2
+        direct_pose_loss_group_norm_ratio_min = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_RATIO_MIN
     if (not math.isfinite(direct_pose_loss_group_norm_ratio_max)) or direct_pose_loss_group_norm_ratio_max <= 0.0:
-        direct_pose_loss_group_norm_ratio_max = 5.0
+        direct_pose_loss_group_norm_ratio_max = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_RATIO_MAX
     if direct_pose_loss_group_norm_ratio_min > direct_pose_loss_group_norm_ratio_max:
         direct_pose_loss_group_norm_ratio_min, direct_pose_loss_group_norm_ratio_max = direct_pose_loss_group_norm_ratio_max, direct_pose_loss_group_norm_ratio_min
     direct_pose_loss_cfg["direct_pose_loss_group_norm_ratio_min"] = direct_pose_loss_group_norm_ratio_min
     direct_pose_loss_cfg["direct_pose_loss_group_norm_ratio_max"] = direct_pose_loss_group_norm_ratio_max
     for key, default in (
-        ("direct_pose_loss_group_norm_eps", 1e-6),
+        ("direct_pose_loss_group_norm_eps", _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_EPS),
         ("direct_pose_nonleg_focus_weight", 1.0),
-        ("direct_pose_grad_ratio_gate", 0.35),
+        ("direct_pose_grad_ratio_gate", _model_build_cfg.DEFAULT_DIRECT_POSE_GRAD_RATIO_GATE),
     ):
         value = float(direct_pose_loss_cfg[key])
         direct_pose_loss_cfg[key] = default if (not math.isfinite(value)) or value <= 0.0 else value
@@ -682,8 +693,8 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
             ("context_len", _cfg_get_int_or, {"key": "context_len", "default": 16}),
             ("epochs", _cfg_get_int_present, {"key": "epochs", "default": 1}),
             ("steps_per_epoch", _cfg_get_int_present, {"key": "steps_per_epoch", "default": 200}),
-            ("lr", _cfg_get_float_present, {"key": "lr", "default": 2e-4}),
-            ("weight_decay", _cfg_get_float_or, {"key": "weight_decay", "default": 0.0}),
+            ("lr", _cfg_get_float_present, {"key": "lr", "default": _model_build_cfg.DEFAULT_POSTTRAIN_TRAINER_LR}),
+            ("weight_decay", _cfg_get_float_or, {"key": "weight_decay", "default": _model_build_cfg.DEFAULT_POSTTRAIN_TRAINER_WEIGHT_DECAY}),
             ("so3_corr_gate_logit_reset", _cfg_pick, {"key": "so3_corr_gate_logit_reset"}),
             ("detach_rollout_state", _cfg_get_bool, {"key": "detach_rollout_state", "default": True}),
             ("contact_plan_init_mode", _cfg_get_str_or, {"key": "contact_plan_init_mode", "default": "learnable"}),
@@ -699,36 +710,7 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
             ("direct_pose_use_phase_z", _cfg_get_bool, {"key": "direct_pose_use_phase_z", "default": False}),
             ("direct_pose_phase_z_mode", _cfg_get_str_or, {"key": "direct_pose_phase_z_mode", "default": "concat"}),
             ("direct_pose_reinit", _cfg_get_bool, {"key": "direct_pose_reinit", "default": False}),
-            ("lambda_fusion_mode", _cfg_get_str_or, {"key": "lambda_fusion_mode", "default": "per_joint"}),
-            ("lambda_fusion_hidden", _cfg_get_int_or, {"key": "lambda_fusion_hidden", "default": 128}),
-            ("lambda_fusion_dropout", _cfg_get_float_or, {"key": "lambda_fusion_dropout", "default": 0.0}),
-            ("lambda_fusion_logit_init", _cfg_get_float_or, {"key": "lambda_fusion_logit_init", "default": -2.0}),
-            ("lambda_fusion_use_rollout_step", _cfg_get_bool, {"key": "lambda_fusion_use_rollout_step", "default": False}),
-            ("lambda_fusion_entropy_weight", _cfg_get_float_or, {"key": "lambda_fusion_entropy_weight", "default": 0.0}),
-            ("lambda_fusion_smooth_weight", _cfg_get_float_or, {"key": "lambda_fusion_smooth_weight", "default": 0.0}),
-            ("lambda_fusion_early_steps", _cfg_get_int_or, {"key": "lambda_fusion_early_steps", "default": 0}),
-            ("lambda_fusion_early_weight", _cfg_get_float_or, {"key": "lambda_fusion_early_weight", "default": 0.0}),
-            ("lambda_fusion_monotonic_weight", _cfg_get_float_or, {"key": "lambda_fusion_monotonic_weight", "default": 0.0}),
-            ("lambda_plan_entropy_weight", _cfg_get_float_or, {"key": "lambda_plan_entropy_weight", "default": 0.0}),
-            ("lambda_plan_dyn_weight", _cfg_get_float_or, {"key": "lambda_plan_dyn_weight", "default": 0.0}),
-            ("lambda_time_weight_mode", _cfg_get_str_or, {"key": "lambda_time_weight_mode", "default": "inv"}),
-            ("lambda_time_weight_max", _cfg_get_float_or, {"key": "lambda_time_weight_max", "default": 2.0}),
-            ("lambda_reliability_mode", _cfg_get_str_or, {"key": "lambda_reliability_mode", "default": "none"}),
-            ("lambda_reliability_warmup_steps", _cfg_get_int_or, {"key": "lambda_reliability_warmup_steps", "default": 0}),
-            ("lambda_reliability_contact_err_max", _cfg_get_float_or, {"key": "lambda_reliability_contact_err_max", "default": 1.0}),
-            ("lambda_reliability_warmup_joint_scales_raw", _cfg_pick, {"key": "lambda_reliability_warmup_joint_scales"}),
-            ("lambda_l2sp_weight", _cfg_get_float_or, {"key": "lambda_l2sp_weight", "default": 0.0}),
-            ("lambda_boundary_weight", _cfg_get_float_or, {"key": "lambda_boundary_weight", "default": 0.0}),
-            ("contact_meas_weight", _cfg_get_float_or, {"key": "contact_meas_weight", "default": 0.0}),
-            ("contact_meas_gate_by_hit", _cfg_get_str_or, {"key": "contact_meas_gate_by_hit", "default": "auto"}),
-            ("contact_meas_vxy_mode", _cfg_get_str_or, {"key": "contact_meas_vxy_mode", "default": "abs"}),
-            ("contact_meas_ground_z_mode", _cfg_get_str_or, {"key": "contact_meas_ground_z_mode", "default": "window"}),
-            ("contact_meas_ground_z_beta", _cfg_get_float_or, {"key": "contact_meas_ground_z_beta", "default": 0.05}),
-            ("contact_meas_ground_z_window", _cfg_get_int_or, {"key": "contact_meas_ground_z_window", "default": 5}),
-            ("contact_meas_ground_z_quantile", _cfg_get_float_or, {"key": "contact_meas_ground_z_quantile", "default": 0.2}),
-            ("contact_meas_ground_z_slew_up_cm", _cfg_get_float_or, {"key": "contact_meas_ground_z_slew_up_cm", "default": 0.0}),
-            ("contact_meas_ground_z_slew_down_cm", _cfg_get_float_or, {"key": "contact_meas_ground_z_slew_down_cm", "default": 0.0}),
-            ("posttrain_contacts_pretrain_clamp", _cfg_get_float, {"key": "posttrain_contacts_pretrain_clamp", "default": 1.0, "min_value": 0.0}),
+            ("posttrain_contacts_pretrain_clamp", _cfg_get_float, {"key": "posttrain_contacts_pretrain_clamp", "default": _model_build_cfg.DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_CLAMP, "min_value": 0.0}),
             ("posttrain_contacts_pretrain_affine_stats", _cfg_pick, {"key": "posttrain_contacts_pretrain_affine_stats"}),
             ("seed", _cfg_get_int_or, {"key": "seed", "default": 0}),
         ],
@@ -744,16 +726,19 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
     else:
         load_context_text = str(load_context_raw).strip()
         core_cfg["load_context"] = load_context_text or None
-    core_cfg["lambda_reliability_warmup_joint_scales"] = _as_float_list(
-        core_cfg.pop("lambda_reliability_warmup_joint_scales_raw")
+    core_cfg.update(
+        _model_build_cfg.resolve_posttrain_lambda_objective_config(payload).to_posttrain_config_dict()
     )
-    clamp_v = core_cfg.get("posttrain_contacts_pretrain_clamp", 1.0)
+    core_cfg.update(
+        _model_build_cfg.resolve_posttrain_local_runtime_config(payload).to_posttrain_config_dict()
+    )
+    clamp_v = core_cfg.get("posttrain_contacts_pretrain_clamp", _model_build_cfg.DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_CLAMP)
     try:
         clamp_f = float(clamp_v)
     except Exception:
-        clamp_f = 1.0
+        clamp_f = _model_build_cfg.DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_CLAMP
     if not math.isfinite(clamp_f):
-        clamp_f = 1.0
+        clamp_f = _model_build_cfg.DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_CLAMP
     core_cfg["posttrain_contacts_pretrain_clamp"] = max(0.0, float(clamp_f))
     affine_spec = core_cfg.get("posttrain_contacts_pretrain_affine_stats", None)
     if affine_spec is not None:
@@ -1087,13 +1072,13 @@ class LambdaFusionFinalizeContext:
     direct_pose_leg_gate_sup_weight: float = 0.0
     direct_pose_leg_align_weight: float = 0.0
     direct_pose_leg_align_anchor_weight: float = 0.0
-    lambda_entropy_weight: float = 0.0
-    lambda_smooth_weight: float = 0.0
-    lambda_early_weight: float = 0.0
-    lambda_monotonic_weight: float = 0.0
-    lambda_plan_entropy_weight: float = 0.0
-    lambda_plan_dyn_weight: float = 0.0
-    contact_meas_weight: float = 0.0
+    lambda_entropy_weight: float = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_ENTROPY_WEIGHT
+    lambda_smooth_weight: float = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_SMOOTH_WEIGHT
+    lambda_early_weight: float = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_EARLY_WEIGHT
+    lambda_monotonic_weight: float = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_MONOTONIC_WEIGHT
+    lambda_plan_entropy_weight: float = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_PLAN_ENTROPY_WEIGHT
+    lambda_plan_dyn_weight: float = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_PLAN_DYN_WEIGHT
+    contact_meas_weight: float = _model_build_cfg.DEFAULT_POSTTRAIN_CONTACT_MEAS_WEIGHT
     include_boundary: bool = False
     random_offset: bool = False
     offset: int = 0
@@ -1105,17 +1090,17 @@ class LambdaFusionFinalizeContext:
     direct_nonleg_focus_weight_use: float = 1.0
     direct_nonleg_focus_applied: float = 0.0
     direct_pose_loss_arm_else_balance_enable: bool = False
-    direct_pose_loss_arm_weight: float = 1.0
-    direct_pose_loss_else_weight: float = 1.0
+    direct_pose_loss_arm_weight: float = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_ARM_WEIGHT
+    direct_pose_loss_else_weight: float = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_ELSE_WEIGHT
     meas_used_logits: bool = False
     gate_sup_weight: float = 0.0
     direct_group_norm_enable: bool = False
-    direct_group_w_leg: float = 1.0
-    direct_group_w_nonleg: float = 1.0
-    direct_group_beta: float = 0.95
-    direct_group_ratio_min: float = 0.2
-    direct_group_ratio_max: float = 5.0
-    direct_group_eps: float = 1e-6
+    direct_group_w_leg: float = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_W_LEG
+    direct_group_w_nonleg: float = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_W_NONLEG
+    direct_group_beta: float = _model_build_cfg.DEFAULT_POSTTRAIN_LOSS_DIRECT_POSE_GROUP_NORM_EMA_BETA
+    direct_group_ratio_min: float = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_RATIO_MIN
+    direct_group_ratio_max: float = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_RATIO_MAX
+    direct_group_eps: float = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_EPS
 
 
 @dataclass
@@ -1393,54 +1378,54 @@ def _lambda_rollout_build_reg_params(
     direct_pose_loss_group_norm_eps: float,
 ) -> LambdaRolloutRegParams:
     # ---- Stage2: optional gate supervision (λ logits) ----
-    gate_sup_weight = float(lambda_gate_sup_weight or 0.0)
-    gate_sup_start = int(lambda_gate_sup_start_step or 0)
+    gate_sup_weight = float(lambda_gate_sup_weight)
+    gate_sup_start = int(lambda_gate_sup_start_step)
     if gate_sup_start < 0:
         # Auto: start after reliability warmup, when enabled, to avoid train/infer mismatch.
-        mode = str(getattr(trainer, "lambda_reliability_mode", "none") or "none").strip().lower()
+        mode = str(trainer.lambda_reliability_mode).strip().lower()
         tokens = [s.strip() for s in mode.replace(",", "+").split("+") if s.strip()]
-        warmup_steps = int(getattr(trainer, "lambda_reliability_warmup_steps", 0) or 0)
+        warmup_steps = int(trainer.lambda_reliability_warmup_steps)
         if ("warmup" in tokens or "step_warmup" in tokens) and warmup_steps > 0:
             gate_sup_start = warmup_steps
         else:
             gate_sup_start = 0
     gate_sup_start = max(0, int(gate_sup_start))
-    tau_deg = float(lambda_gate_sup_tau_deg) if lambda_gate_sup_tau_deg is not None else 2.5
+    tau_deg = float(lambda_gate_sup_tau_deg)
     tau_rad = max(1e-6, tau_deg * (math.pi / 180.0))
-    margin_deg = float(lambda_gate_sup_margin_deg) if lambda_gate_sup_margin_deg is not None else 1.0
+    margin_deg = float(lambda_gate_sup_margin_deg)
     margin_rad = max(0.0, margin_deg * (math.pi / 180.0))
 
     # ---- Stage7/B2: optional legs vs non-legs group-wise magnitude normalization ----
     direct_group_norm_enable = bool(objective == "direct" and bool(direct_pose_loss_group_norm_enable))
     try:
-        direct_group_w_leg = float(direct_pose_loss_group_norm_w_leg or 1.0)
-    except (TypeError, ValueError): _record_posttrain_soft_fail(trainer, "reg_group_w_leg"); direct_group_w_leg = 1.0
+        direct_group_w_leg = float(direct_pose_loss_group_norm_w_leg)
+    except (TypeError, ValueError): _record_posttrain_soft_fail(trainer, "reg_group_w_leg"); direct_group_w_leg = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_W_LEG
     try:
-        direct_group_w_nonleg = float(direct_pose_loss_group_norm_w_nonleg or 1.0)
-    except (TypeError, ValueError): _record_posttrain_soft_fail(trainer, "reg_group_w_nonleg"); direct_group_w_nonleg = 1.0
+        direct_group_w_nonleg = float(direct_pose_loss_group_norm_w_nonleg)
+    except (TypeError, ValueError): _record_posttrain_soft_fail(trainer, "reg_group_w_nonleg"); direct_group_w_nonleg = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_W_NONLEG
     try:
-        direct_group_beta = float(direct_pose_loss_group_norm_ema_beta or 0.95)
-    except (TypeError, ValueError): _record_posttrain_soft_fail(trainer, "reg_group_beta"); direct_group_beta = 0.95
+        direct_group_beta = float(direct_pose_loss_group_norm_ema_beta)
+    except (TypeError, ValueError): _record_posttrain_soft_fail(trainer, "reg_group_beta"); direct_group_beta = _model_build_cfg.DEFAULT_POSTTRAIN_LOSS_DIRECT_POSE_GROUP_NORM_EMA_BETA
     if (not math.isfinite(direct_group_beta)) or direct_group_beta < 0.0:
-        direct_group_beta = 0.95
+        direct_group_beta = _model_build_cfg.DEFAULT_POSTTRAIN_LOSS_DIRECT_POSE_GROUP_NORM_EMA_BETA
     direct_group_beta = max(0.0, min(0.9999, float(direct_group_beta)))
     try:
-        direct_group_ratio_min = float(direct_pose_loss_group_norm_ratio_min or 0.2)
-    except (TypeError, ValueError): _record_posttrain_soft_fail(trainer, "reg_group_ratio_min"); direct_group_ratio_min = 0.2
+        direct_group_ratio_min = float(direct_pose_loss_group_norm_ratio_min)
+    except (TypeError, ValueError): _record_posttrain_soft_fail(trainer, "reg_group_ratio_min"); direct_group_ratio_min = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_RATIO_MIN
     try:
-        direct_group_ratio_max = float(direct_pose_loss_group_norm_ratio_max or 5.0)
-    except (TypeError, ValueError): _record_posttrain_soft_fail(trainer, "reg_group_ratio_max"); direct_group_ratio_max = 5.0
+        direct_group_ratio_max = float(direct_pose_loss_group_norm_ratio_max)
+    except (TypeError, ValueError): _record_posttrain_soft_fail(trainer, "reg_group_ratio_max"); direct_group_ratio_max = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_RATIO_MAX
     if (not math.isfinite(direct_group_ratio_min)) or direct_group_ratio_min <= 0.0:
-        direct_group_ratio_min = 0.2
+        direct_group_ratio_min = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_RATIO_MIN
     if (not math.isfinite(direct_group_ratio_max)) or direct_group_ratio_max <= 0.0:
-        direct_group_ratio_max = 5.0
+        direct_group_ratio_max = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_RATIO_MAX
     if direct_group_ratio_min > direct_group_ratio_max:
         direct_group_ratio_min, direct_group_ratio_max = direct_group_ratio_max, direct_group_ratio_min
     try:
-        direct_group_eps = float(direct_pose_loss_group_norm_eps or 1e-6)
-    except (TypeError, ValueError): _record_posttrain_soft_fail(trainer, "reg_group_eps"); direct_group_eps = 1e-6
+        direct_group_eps = float(direct_pose_loss_group_norm_eps)
+    except (TypeError, ValueError): _record_posttrain_soft_fail(trainer, "reg_group_eps"); direct_group_eps = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_EPS
     if (not math.isfinite(direct_group_eps)) or direct_group_eps <= 0.0:
-        direct_group_eps = 1e-6
+        direct_group_eps = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_EPS
 
     return LambdaRolloutRegParams(
         gate_sup_weight=float(gate_sup_weight),
@@ -1746,7 +1731,7 @@ def _lambda_rollout_accumulate_plan_terms(*, trainer: Trainer, ret: Dict[str, An
         _record_posttrain_soft_fail(trainer, "unroll_contacts_plan_decode")
         plan_step = None
 
-    if (float(weights.lambda_plan_entropy_weight or 0.0) <= 0.0 and float(weights.lambda_plan_dyn_weight or 0.0) <= 0.0) or (not torch.is_tensor(plan_step)):
+    if (float(weights.lambda_plan_entropy_weight) <= 0.0 and float(weights.lambda_plan_dyn_weight) <= 0.0) or (not torch.is_tensor(plan_step)):
         return plan_prev
 
     lam_eff_mean = lam_eff.mean(dim=-1)
@@ -1754,7 +1739,7 @@ def _lambda_rollout_accumulate_plan_terms(*, trainer: Trainer, ret: Dict[str, An
         plan_det = plan_step.detach()
         ent = _lambda_entropy(plan_det).mean(dim=-1)
         accum.plan_ent_stat_terms.append(ent.mean() * step_weight)
-        if float(weights.lambda_plan_entropy_weight or 0.0) > 0.0:
+        if float(weights.lambda_plan_entropy_weight) > 0.0:
             accum.plan_ent_terms.append((lam_eff_mean * ent).mean() * step_weight)
     except _ROLLOUT_SOFT_FAIL_ERRORS:
         _record_posttrain_soft_fail(trainer, "unroll_plan_entropy")
@@ -1762,7 +1747,7 @@ def _lambda_rollout_accumulate_plan_terms(*, trainer: Trainer, ret: Dict[str, An
         plan_det = plan_step.detach()
         dyn = (plan_det - plan_prev).abs().mean(dim=-1) if torch.is_tensor(plan_prev) and plan_prev.shape == plan_step.shape else plan_det.new_zeros((B,))
         accum.plan_dyn_stat_terms.append(dyn.mean() * step_weight)
-        if float(weights.lambda_plan_dyn_weight or 0.0) > 0.0:
+        if float(weights.lambda_plan_dyn_weight) > 0.0:
             accum.plan_dyn_terms.append((lam_eff_mean * dyn).mean() * step_weight)
         return plan_det
     except _ROLLOUT_SOFT_FAIL_ERRORS:
@@ -1967,7 +1952,7 @@ def _lambda_rollout_unroll_single_step(*, t: int, ctx: LambdaRolloutStepContext)
 
     delta_norm, direct_norm, lam = _lambda_rollout_decode_model_outputs(ret=ret, objective=objective, B=B, J=J)
 
-    if contacts_in_t is None and float(weights.contact_meas_weight or 0.0) > 0.0 and torch.is_tensor(data.contacts_seq):
+    if contacts_in_t is None and float(weights.contact_meas_weight) > 0.0 and torch.is_tensor(data.contacts_seq):
         try:
             contacts_seq = data.contacts_seq
             gt_c_t = contacts_seq[:, idx] if contacts_seq.dim() == 3 else contacts_seq
@@ -2567,7 +2552,7 @@ def _lambda_fusion_finalize(
         stats["rollout_include_boundary"] = 1.0
         stats["rollout_random_offset"] = 1.0 if bool(random_offset) else 0.0
         stats["rollout_offset"] = float(offset)
-        stats["lambda_boundary_weight"] = float(boundary_weight or 0.0)
+        stats["lambda_boundary_weight"] = float(boundary_weight)
         stats["boundary_steps"] = float(boundary_steps or 0)
         stats["boundary_weighted_sum"] = float(boundary_weighted_sum or 0.0)
         for key, terms in (
@@ -2594,7 +2579,7 @@ def _lambda_fusion_finalize(
             stats[key] = value
     if contact_meas_loss is not None:
         stats["contact_meas_bce" if bool(meas_used_logits) else "contact_meas_mse"] = safe_float_scalar(contact_meas_loss)
-        stats["contact_meas_weighted"] = safe_float_scalar(float(contact_meas_weight or 0.0) * contact_meas_loss)
+        stats["contact_meas_weighted"] = safe_float_scalar(float(contact_meas_weight) * contact_meas_loss)
     aux_payload: Dict[str, Any] = {"ema_update_payload": ema_update_payload}
     if objective == "direct":
         aux_payload["leg_align_grad_probe"] = {
@@ -2622,16 +2607,16 @@ def _lambda_fusion_loss_rollout(
     detach_rollout_state: bool,
     lambda_entropy_weight: float,
     lambda_smooth_weight: float,
-    lambda_early_steps: int = 0,
-    lambda_early_weight: float = 0.0,
-    lambda_monotonic_weight: float = 0.0,
-    lambda_plan_entropy_weight: float = 0.0,
-    lambda_plan_dyn_weight: float = 0.0,
-    lambda_gate_sup_weight: float = 0.0,
-    lambda_gate_sup_tau_deg: float = 2.5,
-    lambda_gate_sup_margin_deg: float = 1.0,
-    lambda_gate_sup_start_step: int = -1,
-    contact_meas_weight: float = 0.0,
+    lambda_early_steps: int = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_EARLY_STEPS,
+    lambda_early_weight: float = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_EARLY_WEIGHT,
+    lambda_monotonic_weight: float = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_MONOTONIC_WEIGHT,
+    lambda_plan_entropy_weight: float = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_PLAN_ENTROPY_WEIGHT,
+    lambda_plan_dyn_weight: float = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_PLAN_DYN_WEIGHT,
+    lambda_gate_sup_weight: float = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_GATE_SUP_WEIGHT,
+    lambda_gate_sup_tau_deg: float = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_GATE_SUP_TAU_DEG,
+    lambda_gate_sup_margin_deg: float = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_GATE_SUP_MARGIN_DEG,
+    lambda_gate_sup_start_step: int = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_GATE_SUP_START_STEP,
+    contact_meas_weight: float = _model_build_cfg.DEFAULT_POSTTRAIN_CONTACT_MEAS_WEIGHT,
     objective: str = "blend",  # blend|direct|inc
     direct_pose_leg_gate_sup_weight: float = 0.0,
     direct_pose_leg_align_weight: float = 0.0,
@@ -2645,17 +2630,17 @@ def _lambda_fusion_loss_rollout(
     direct_pose_leg_align_target_joints: Optional[str] = None,
     direct_pose_leg_align_anchor_joints: Optional[str] = None,
     direct_pose_leg_align_anchor_weight: float = 0.0,
-    direct_pose_loss_leg_split: bool = False,
-    direct_pose_loss_arm_else_balance_enable: bool = False,
-    direct_pose_loss_arm_weight: float = 1.0,
-    direct_pose_loss_else_weight: float = 1.0,
-    direct_pose_loss_group_norm_enable: bool = False,
-    direct_pose_loss_group_norm_w_leg: float = 1.0,
-    direct_pose_loss_group_norm_w_nonleg: float = 1.0,
-    direct_pose_loss_group_norm_ema_beta: float = 0.95,
-    direct_pose_loss_group_norm_ratio_min: float = 0.2,
-    direct_pose_loss_group_norm_ratio_max: float = 5.0,
-    direct_pose_loss_group_norm_eps: float = 1e-6,
+    direct_pose_loss_leg_split: bool = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_LEG_SPLIT,
+    direct_pose_loss_arm_else_balance_enable: bool = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_ARM_ELSE_BALANCE_ENABLE,
+    direct_pose_loss_arm_weight: float = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_ARM_WEIGHT,
+    direct_pose_loss_else_weight: float = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_ELSE_WEIGHT,
+    direct_pose_loss_group_norm_enable: bool = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_ENABLE,
+    direct_pose_loss_group_norm_w_leg: float = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_W_LEG,
+    direct_pose_loss_group_norm_w_nonleg: float = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_W_NONLEG,
+    direct_pose_loss_group_norm_ema_beta: float = _model_build_cfg.DEFAULT_POSTTRAIN_LOSS_DIRECT_POSE_GROUP_NORM_EMA_BETA,
+    direct_pose_loss_group_norm_ratio_min: float = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_RATIO_MIN,
+    direct_pose_loss_group_norm_ratio_max: float = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_RATIO_MAX,
+    direct_pose_loss_group_norm_eps: float = _model_build_cfg.DEFAULT_LOSS_DIRECT_POSE_GROUP_NORM_EPS,
     direct_pose_nonleg_focus_bones: str = "",
     direct_pose_nonleg_focus_weight: float = 1.0,
 ) -> Tuple[torch.Tensor, Dict[str, float], Optional[Dict[str, Any]]]:
@@ -2663,11 +2648,14 @@ def _lambda_fusion_loss_rollout(
     if objective not in ("blend", "direct", "inc"):
         raise ValueError(f"Unknown objective={objective!r} (expected blend|direct|inc)")
     if objective != "blend":
-        lambda_entropy_weight = lambda_smooth_weight = 0.0
-        lambda_early_steps = 0
-        lambda_early_weight = lambda_monotonic_weight = 0.0
-        lambda_plan_entropy_weight = lambda_plan_dyn_weight = 0.0
-        lambda_gate_sup_weight = 0.0
+        lambda_entropy_weight = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_ENTROPY_WEIGHT
+        lambda_smooth_weight = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_SMOOTH_WEIGHT
+        lambda_early_steps = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_EARLY_STEPS
+        lambda_early_weight = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_EARLY_WEIGHT
+        lambda_monotonic_weight = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_MONOTONIC_WEIGHT
+        lambda_plan_entropy_weight = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_PLAN_ENTROPY_WEIGHT
+        lambda_plan_dyn_weight = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_PLAN_DYN_WEIGHT
+        lambda_gate_sup_weight = _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_GATE_SUP_WEIGHT
     # ---- Prepare rollout context ----
     prep_ctx = _lambda_rollout_prepare_context(
         trainer,
@@ -2904,13 +2892,13 @@ def _build_rollout_mode_kwargs(cfg: PostTrainConfig, train_mode: str) -> Dict[st
     if train_mode == "direct":
         return {
             "objective": "direct",
-            "lambda_entropy_weight": 0.0,
-            "lambda_smooth_weight": 0.0,
-            "lambda_early_steps": 0,
-            "lambda_early_weight": 0.0,
-            "lambda_monotonic_weight": 0.0,
-            "lambda_plan_entropy_weight": 0.0,
-            "lambda_plan_dyn_weight": 0.0,
+            "lambda_entropy_weight": _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_ENTROPY_WEIGHT,
+            "lambda_smooth_weight": _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_SMOOTH_WEIGHT,
+            "lambda_early_steps": _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_EARLY_STEPS,
+            "lambda_early_weight": _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_EARLY_WEIGHT,
+            "lambda_monotonic_weight": _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_FUSION_MONOTONIC_WEIGHT,
+            "lambda_plan_entropy_weight": _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_PLAN_ENTROPY_WEIGHT,
+            "lambda_plan_dyn_weight": _model_build_cfg.DEFAULT_POSTTRAIN_LAMBDA_PLAN_DYN_WEIGHT,
             "direct_pose_leg_gate_sup_weight": float(getattr(cfg, "direct_pose_leg_gate_sup_weight", 0.0) or 0.0),
             "direct_pose_leg_align_weight": float(getattr(cfg, "direct_pose_leg_align_weight", 0.0) or 0.0),
             "direct_pose_leg_align_oracle_min_deg": float(
@@ -2927,42 +2915,22 @@ def _build_rollout_mode_kwargs(cfg: PostTrainConfig, train_mode: str) -> Dict[st
             "direct_pose_leg_align_target_joints": getattr(cfg, "direct_pose_leg_align_target_joints", None),
             "direct_pose_leg_align_anchor_joints": getattr(cfg, "direct_pose_leg_align_anchor_joints", None),
             "direct_pose_leg_align_anchor_weight": float(getattr(cfg, "direct_pose_leg_align_anchor_weight", 0.0) or 0.0),
-            "direct_pose_loss_leg_split": bool(getattr(cfg, "direct_pose_loss_leg_split", False)),
-            "direct_pose_loss_arm_else_balance_enable": bool(getattr(cfg, "direct_pose_loss_arm_else_balance_enable", False)),
-            "direct_pose_loss_arm_weight": float(getattr(cfg, "direct_pose_loss_arm_weight", 1.0) or 1.0),
-            "direct_pose_loss_else_weight": float(getattr(cfg, "direct_pose_loss_else_weight", 1.0) or 1.0),
-            "direct_pose_loss_group_norm_enable": bool(getattr(cfg, "direct_pose_loss_group_norm_enable", False)),
-            "direct_pose_loss_group_norm_w_leg": float(getattr(cfg, "direct_pose_loss_group_norm_w_leg", 1.0) or 1.0),
-            "direct_pose_loss_group_norm_w_nonleg": float(
-                getattr(cfg, "direct_pose_loss_group_norm_w_nonleg", 1.0) or 1.0
-            ),
-            "direct_pose_loss_group_norm_ema_beta": float(
-                getattr(cfg, "direct_pose_loss_group_norm_ema_beta", 0.95) or 0.95
-            ),
-            "direct_pose_loss_group_norm_ratio_min": float(
-                getattr(cfg, "direct_pose_loss_group_norm_ratio_min", 0.2) or 0.2
-            ),
-            "direct_pose_loss_group_norm_ratio_max": float(
-                getattr(cfg, "direct_pose_loss_group_norm_ratio_max", 5.0) or 5.0
-            ),
-            "direct_pose_loss_group_norm_eps": float(getattr(cfg, "direct_pose_loss_group_norm_eps", 1e-6) or 1e-6),
-            "direct_pose_nonleg_focus_bones": str(getattr(cfg, "direct_pose_nonleg_focus_bones", "") or ""),
-            "direct_pose_nonleg_focus_weight": float(getattr(cfg, "direct_pose_nonleg_focus_weight", 1.0) or 1.0),
+            "direct_pose_loss_leg_split": bool(cfg.direct_pose_loss_leg_split),
+            "direct_pose_loss_arm_else_balance_enable": bool(cfg.direct_pose_loss_arm_else_balance_enable),
+            "direct_pose_loss_arm_weight": float(cfg.direct_pose_loss_arm_weight),
+            "direct_pose_loss_else_weight": float(cfg.direct_pose_loss_else_weight),
+            "direct_pose_loss_group_norm_enable": bool(cfg.direct_pose_loss_group_norm_enable),
+            "direct_pose_loss_group_norm_w_leg": float(cfg.direct_pose_loss_group_norm_w_leg),
+            "direct_pose_loss_group_norm_w_nonleg": float(cfg.direct_pose_loss_group_norm_w_nonleg),
+            "direct_pose_loss_group_norm_ema_beta": float(cfg.direct_pose_loss_group_norm_ema_beta),
+            "direct_pose_loss_group_norm_ratio_min": float(cfg.direct_pose_loss_group_norm_ratio_min),
+            "direct_pose_loss_group_norm_ratio_max": float(cfg.direct_pose_loss_group_norm_ratio_max),
+            "direct_pose_loss_group_norm_eps": float(cfg.direct_pose_loss_group_norm_eps),
+            "direct_pose_nonleg_focus_bones": str(cfg.direct_pose_nonleg_focus_bones or ""),
+            "direct_pose_nonleg_focus_weight": float(cfg.direct_pose_nonleg_focus_weight),
         }
-    return {
-        "objective": "blend",
-        "lambda_entropy_weight": cfg.lambda_fusion_entropy_weight,
-        "lambda_smooth_weight": cfg.lambda_fusion_smooth_weight,
-        "lambda_early_steps": cfg.lambda_fusion_early_steps,
-        "lambda_early_weight": cfg.lambda_fusion_early_weight,
-        "lambda_monotonic_weight": cfg.lambda_fusion_monotonic_weight,
-        "lambda_plan_entropy_weight": cfg.lambda_plan_entropy_weight,
-        "lambda_plan_dyn_weight": cfg.lambda_plan_dyn_weight,
-        "lambda_gate_sup_weight": cfg.lambda_gate_sup_weight,
-        "lambda_gate_sup_tau_deg": cfg.lambda_gate_sup_tau_deg,
-        "lambda_gate_sup_margin_deg": cfg.lambda_gate_sup_margin_deg,
-        "lambda_gate_sup_start_step": cfg.lambda_gate_sup_start_step,
-    }
+    lambda_objective_config = _model_build_cfg.resolve_posttrain_lambda_objective_config(cfg)
+    return {"objective": "blend", **lambda_objective_config.to_lambda_rollout_kwargs()}
 
 
 def _resolve_direct_pose_leg_align_weight(cfg: PostTrainConfig, global_step: int) -> float:
@@ -3039,12 +3007,12 @@ def _format_posttrain_step_msg(
                 f" hit={stats.get('dir_group_norm_leg_hit_any', 0.0):.0f}/"
                 f"{stats.get('dir_group_norm_nonleg_hit_any', 0.0):.0f}"
             )
-        if str(cfg.lambda_reliability_mode or "none").strip().lower() not in ("none", "off", "false", "0", ""):
+        if str(cfg.lambda_reliability_mode).strip().lower() != "none":
             msg += (
                 f" λ_eff={stats.get('lambda_eff_mean', float('nan')):.3f}±{stats.get('lambda_eff_std', float('nan')):.3f}"
                 f" r={stats.get('lambda_rel_mean', float('nan')):.3f}"
             )
-        if bool(getattr(cfg, "direct_pose_grad_monitor_enable", False)):
+        if bool(cfg.direct_pose_grad_monitor_enable):
             msg += (
                 f" g(trunk/leg/non)={stats.get('direct_grad_norm_trunk', float('nan')):.3e}/"
                 f"{stats.get('direct_grad_norm_out_leg', float('nan')):.3e}/"
@@ -3076,26 +3044,26 @@ def _format_posttrain_step_msg(
             f"λ={stats['lambda_mean']:.3f}±{stats['lambda_std']:.3f} "
             f"inc={stats['inc_geo']:.6f} dir={stats['dir_geo']:.6f}"
         )
-        if str(cfg.lambda_reliability_mode or "none").strip().lower() not in ("none", "off", "false", "0", ""):
+        if str(cfg.lambda_reliability_mode).strip().lower() != "none":
             msg += (
                 f" λ_eff={stats.get('lambda_eff_mean', float('nan')):.3f}±{stats.get('lambda_eff_std', float('nan')):.3f}"
                 f" r={stats.get('lambda_rel_mean', float('nan')):.3f}"
             )
-        if float(cfg.lambda_gate_sup_weight or 0.0) > 0.0:
+        if float(cfg.lambda_gate_sup_weight) > 0.0:
             msg += (
                 f" gate_sup={stats.get('gate_sup_loss', float('nan')):.3e}"
                 f" acc@0.5={stats.get('gate_sup_acc@0.5', float('nan')):.3f}"
                 f" frac={stats.get('gate_sup_frac', float('nan')):.3f}"
             )
-        if float(cfg.lambda_fusion_early_weight or 0.0) > 0.0:
+        if float(cfg.lambda_fusion_early_weight) > 0.0:
             msg += f" early={stats.get('early_loss', float('nan')):.3e}"
-        if float(cfg.lambda_fusion_monotonic_weight or 0.0) > 0.0:
+        if float(cfg.lambda_fusion_monotonic_weight) > 0.0:
             msg += f" mono={stats.get('mono_loss', float('nan')):.3e}"
-        if float(cfg.lambda_plan_entropy_weight or 0.0) > 0.0:
+        if float(cfg.lambda_plan_entropy_weight) > 0.0:
             msg += f" planH={stats.get('plan_entropy_loss', float('nan')):.3e}"
             if "plan_entropy_mean" in stats:
                 msg += f" H={stats.get('plan_entropy_mean', float('nan')):.3f}"
-        if float(cfg.lambda_plan_dyn_weight or 0.0) > 0.0:
+        if float(cfg.lambda_plan_dyn_weight) > 0.0:
             msg += f" planDyn={stats.get('plan_dyn_loss', float('nan')):.3e}"
             if "plan_dyn_mean" in stats:
                 msg += f" dPlan={stats.get('plan_dyn_mean', float('nan')):.3f}"
@@ -3124,7 +3092,7 @@ def _run_training_loop(*, cfg: PostTrainConfig, train_mode: str, model: EventMot
     lambda_mode = train_mode == "lambda"
     epochs = int(cfg.epochs)
     steps_per_epoch = int(cfg.steps_per_epoch)
-    direct_grad_monitor_enable = direct_mode and bool(getattr(cfg, "direct_pose_grad_monitor_enable", False))
+    direct_grad_monitor_enable = direct_mode and bool(cfg.direct_pose_grad_monitor_enable)
     leg_align_grad_probe_steps = max(0, int(getattr(cfg, "direct_pose_leg_align_grad_probe_steps", 0) or 0))
     global_step = 0
     save_step_set = _parse_int_set_spec(getattr(cfg, "save_step_ckpts", None))
@@ -3242,7 +3210,7 @@ def _run_training_loop(*, cfg: PostTrainConfig, train_mode: str, model: EventMot
                     direct_grad_ratio_nonleg_over_leg=float(ratio),
                     direct_grad_ratio_nonleg_over_leg_branch=float(ratio_leg_branch),
                 )
-                gate_thr = float(getattr(cfg, "direct_pose_grad_ratio_gate", 0.35) or 0.35)
+                gate_thr = float(cfg.direct_pose_grad_ratio_gate)
                 if math.isfinite(ratio) and math.isfinite(gate_thr) and gate_thr > 0.0:
                     stats["direct_grad_ratio_gate"] = float(gate_thr)
                     stats["direct_grad_ratio_alert"] = 1.0 if ratio < gate_thr else 0.0
@@ -3281,6 +3249,8 @@ def _run_training_loop(*, cfg: PostTrainConfig, train_mode: str, model: EventMot
 
 @dataclass(frozen=True)
 class PosttrainLocalRuntimeOverlay:
+    direct_pose_grad_monitor_enable: bool
+    direct_pose_grad_ratio_gate: float
     contact_meas_gate_by_hit_override: Optional[bool]
     contact_meas_vxy_mode: str
     contact_meas_ground_z_mode: str
@@ -3297,46 +3267,43 @@ class PosttrainLocalRuntimeOverlay:
 
 
 def _resolve_posttrain_contact_meas_gate_override(raw_value: Any) -> Optional[bool]:
-    gate_raw = str(raw_value or "auto").strip().lower()
-    if gate_raw in ("true", "1", "yes", "y"):
-        return True
-    if gate_raw in ("false", "0", "no", "n"):
-        return False
-    return None
+    return _model_build_cfg.resolve_posttrain_local_runtime_config(
+        {"contact_meas_gate_by_hit": raw_value}
+    ).contact_meas_gate_by_hit_override
 
 
 def _resolve_posttrain_ground_z_slew_limits_m(cfg: PostTrainConfig) -> tuple[float, float]:
-    try:
-        up_cm = float(getattr(cfg, "contact_meas_ground_z_slew_up_cm", 0.0) or 0.0)
-        down_cm = float(getattr(cfg, "contact_meas_ground_z_slew_down_cm", 0.0) or 0.0)
-    except Exception:
-        up_cm, down_cm = 0.0, 0.0
-    return max(0.0, up_cm) / 100.0, max(0.0, down_cm) / 100.0
-
-
-def _resolve_posttrain_local_runtime_overlay(cfg: PostTrainConfig) -> PosttrainLocalRuntimeOverlay:
-    gate_override = _resolve_posttrain_contact_meas_gate_override(getattr(cfg, "contact_meas_gate_by_hit", "auto"))
-    ground_z_max_up_m, ground_z_max_down_m = _resolve_posttrain_ground_z_slew_limits_m(cfg)
-
-    contact_pretrain_runtime = resolve_contact_pretrain_runtime(
-        clamp_raw=getattr(cfg, "posttrain_contacts_pretrain_clamp", 1.0),
-        affine_stats_raw=getattr(cfg, "posttrain_contacts_pretrain_affine_stats", None),
-        warn=False,
+    runtime_config = _model_build_cfg.resolve_posttrain_local_runtime_config(cfg)
+    return (
+        float(runtime_config.contact_meas_ground_z_max_up_m),
+        float(runtime_config.contact_meas_ground_z_max_down_m),
     )
+
+
+def _resolve_posttrain_local_runtime_overlay(
+    cfg: PostTrainConfig,
+    *,
+    trainer_runtime_config: BuildTrainerRuntimeConfig,
+) -> PosttrainLocalRuntimeOverlay:
+    local_runtime_config = _model_build_cfg.resolve_posttrain_local_runtime_config(cfg)
+    runtime_kwargs = local_runtime_config.to_runtime_kwargs()
+
     return PosttrainLocalRuntimeOverlay(
-        contact_meas_gate_by_hit_override=gate_override,
-        contact_meas_vxy_mode=str(getattr(cfg, "contact_meas_vxy_mode", "abs") or "abs").strip().lower(),
-        contact_meas_ground_z_mode=str(getattr(cfg, "contact_meas_ground_z_mode", "window") or "window").strip().lower(),
-        contact_meas_ground_z_beta=float(getattr(cfg, "contact_meas_ground_z_beta", 0.05) or 0.05),
-        contact_meas_ground_z_window=int(getattr(cfg, "contact_meas_ground_z_window", 5) or 5),
-        contact_meas_ground_z_quantile=float(getattr(cfg, "contact_meas_ground_z_quantile", 0.2) or 0.2),
-        contact_meas_ground_z_max_up_m=float(ground_z_max_up_m),
-        contact_meas_ground_z_max_down_m=float(ground_z_max_down_m),
-        contacts_pretrain=contact_pretrain_runtime,
-        lambda_reliability_mode=str(cfg.lambda_reliability_mode or "none"),
-        lambda_reliability_warmup_steps=int(cfg.lambda_reliability_warmup_steps or 0),
-        lambda_reliability_contact_err_max=float(cfg.lambda_reliability_contact_err_max or 1.0),
-        lambda_reliability_warmup_joint_scales=cfg.lambda_reliability_warmup_joint_scales,
+        direct_pose_grad_monitor_enable=bool(trainer_runtime_config.direct_pose_grad_monitor_enable),
+        direct_pose_grad_ratio_gate=float(trainer_runtime_config.direct_pose_grad_ratio_gate),
+        contact_meas_gate_by_hit_override=runtime_kwargs["contact_meas_gate_by_hit_override"],
+        contact_meas_vxy_mode=runtime_kwargs["contact_meas_vxy_mode"],
+        contact_meas_ground_z_mode=runtime_kwargs["contact_meas_ground_z_mode"],
+        contact_meas_ground_z_beta=runtime_kwargs["contact_meas_ground_z_beta"],
+        contact_meas_ground_z_window=runtime_kwargs["contact_meas_ground_z_window"],
+        contact_meas_ground_z_quantile=runtime_kwargs["contact_meas_ground_z_quantile"],
+        contact_meas_ground_z_max_up_m=runtime_kwargs["contact_meas_ground_z_max_up_m"],
+        contact_meas_ground_z_max_down_m=runtime_kwargs["contact_meas_ground_z_max_down_m"],
+        contacts_pretrain=trainer_runtime_config.contacts_pretrain,
+        lambda_reliability_mode=runtime_kwargs["lambda_reliability_mode"],
+        lambda_reliability_warmup_steps=runtime_kwargs["lambda_reliability_warmup_steps"],
+        lambda_reliability_contact_err_max=runtime_kwargs["lambda_reliability_contact_err_max"],
+        lambda_reliability_warmup_joint_scales=runtime_kwargs["lambda_reliability_warmup_joint_scales"],
     )
 
 
@@ -3421,8 +3388,8 @@ def _build_posttrain_train_policy_manifest(*, cfg: PostTrainConfig, train_mode: 
         "rollout_random_offset": bool(getattr(cfg, "rollout_random_offset", False)),
         "time_index_mode": str(getattr(cfg, "time_index_mode", "auto") or "auto"),
         "detach_rollout_state": bool(getattr(cfg, "detach_rollout_state", False)),
-        "contact_meas_weight": float(getattr(cfg, "contact_meas_weight", 0.0) or 0.0),
-        "lambda_reliability_mode": str(getattr(cfg, "lambda_reliability_mode", "none") or "none"),
+        "contact_meas_weight": float(cfg.contact_meas_weight),
+        "lambda_reliability_mode": str(cfg.lambda_reliability_mode),
     }
 
 
@@ -3430,17 +3397,17 @@ def _build_posttrain_structural_flags(
     *,
     artifacts: _posttrain_build_shell.PostTrainModelArtifacts,
 ) -> dict[str, Any]:
-    model = artifacts.model
     build_state = artifacts.build_state
+    direct_pose_leg_cfg = build_state.direct_pose_leg_cfg
     return {
         "direct_pose_enable": bool(build_state.direct_pose_cfg.enable),
         "lambda_fusion_enable": bool(build_state.lambda_fusion_enable),
         "contact_plan_enable": bool(build_state.contact_plan_enable),
         "use_event_clock": bool(build_state.use_event_clock),
-        "direct_pose_leg_enable": bool(getattr(model, "direct_pose_leg_enable", False)),
-        "direct_pose_leg_side_routing": bool(getattr(model, "direct_pose_leg_side_routing", False)),
+        "direct_pose_leg_enable": bool(direct_pose_leg_cfg.enable),
+        "direct_pose_leg_side_routing": bool(direct_pose_leg_cfg.side_routing),
         "direct_pose_arm_split_enable": bool(build_state.direct_pose_cfg.arm_split_enable),
-        "direct_pose_leg_mode": str(getattr(model, "direct_pose_leg_mode", "rot6d_add") or "rot6d_add"),
+        "direct_pose_leg_mode": str(direct_pose_leg_cfg.mode),
     }
 
 
@@ -3466,59 +3433,75 @@ def _build_posttrain_contract_build_state(
     artifacts: _posttrain_build_shell.PostTrainModelArtifacts,
     state_dict: dict[str, Any],
 ) -> PosttrainContractBuildState:
-    model = artifacts.model
     build_state = artifacts.build_state
+    model_cfg = build_state.model_build_config
+    direct_pose_cfg = model_cfg.direct_pose
+    direct_pose_leg_cfg = model_cfg.direct_pose_leg
     return PosttrainContractBuildState(
         ckpt_posttrain_cfg=build_state.ckpt_posttrain_cfg,
         state_dict=state_dict,
-        in_state_dim=int(getattr(model, "in_state_dim", 0) or 0),
-        out_motion_dim=int(getattr(model, "out_motion_dim", 0) or 0),
-        cond_dim=int(getattr(model, "cond_dim", 0) or 0),
-        hidden_dim=int(getattr(model, "hidden_dim", build_state.width) or build_state.width),
-        depth=int(getattr(cfg, "depth", getattr(model, "num_layers", 0)) or getattr(model, "num_layers", 0)),
-        num_heads=int(getattr(cfg, "num_heads", getattr(model, "_pasa_heads", 0)) or getattr(model, "_pasa_heads", 0)),
-        dropout=float(getattr(cfg, "dropout", 0.0) or 0.0),
-        context_len=int(getattr(model, "context_len", getattr(cfg, "context_len", 0)) or getattr(cfg, "context_len", 0)),
-        contact_dim=int(getattr(model, "contact_dim", build_state.contact_dim) or build_state.contact_dim),
-        angvel_dim=int(getattr(model, "angvel_dim", build_state.angvel_dim) or build_state.angvel_dim),
-        pose_hist_dim=int(getattr(model, "pose_hist_dim", build_state.pose_hist_dim) or build_state.pose_hist_dim),
-        period_dim=int(getattr(model, "period_dim", build_state.period_dim_init) or build_state.period_dim_init),
+        in_state_dim=int(model_cfg.facts.dx),
+        out_motion_dim=int(model_cfg.facts.dy),
+        cond_dim=int(model_cfg.facts.dc),
+        hidden_dim=int(model_cfg.hidden_dim),
+        depth=int(model_cfg.num_layers),
+        num_heads=int(model_cfg.num_heads),
+        dropout=float(model_cfg.dropout),
+        context_len=int(model_cfg.context_len),
+        contact_dim=int(model_cfg.facts.contact_dim),
+        angvel_dim=int(model_cfg.facts.angvel_dim),
+        pose_hist_dim=int(model_cfg.pose_hist_dim_model),
+        period_dim=int(model_cfg.event_clock.period_dim_init),
         contact_plan_cfg=ContactPlanBuildConfig(
-            enable=bool(build_state.contact_plan_enable),
-            hidden=int(build_state.contact_plan_hidden),
-            inject=str(build_state.contact_plan_inject),
-            time_pe_dim=int(build_state.contact_plan_time_pe_dim),
-            init_mode=str(build_state.contact_plan_init_mode),
-            init_hidden=int(build_state.contact_plan_init_hidden),
-            init_dropout=float(build_state.contact_plan_init_dropout),
+            enable=bool(model_cfg.contact_plan.enable),
+            hidden=int(model_cfg.contact_plan.hidden),
+            inject=str(model_cfg.contact_plan.inject),
+            time_pe_dim=int(model_cfg.contact_plan.time_pe_dim),
+            init_mode=str(model_cfg.contact_plan.init_mode),
+            init_hidden=int(model_cfg.contact_plan.init_hidden),
+            init_dropout=float(model_cfg.contact_plan.init_dropout),
         ),
-        direct_pose_cfg=build_state.direct_pose_cfg,
+        direct_pose_cfg=DirectPoseBuildConfig(
+            enable=bool(direct_pose_cfg.enable),
+            hidden=int(direct_pose_cfg.hidden),
+            meas_mode=str(direct_pose_cfg.meas_mode),
+            feat_source=str(direct_pose_cfg.feat_source),
+            time_pe_dim=int(direct_pose_cfg.time_pe_dim),
+            time_pe_base=float(direct_pose_cfg.time_pe_base),
+            use_phase_z=bool(direct_pose_cfg.use_phase_z),
+            phase_z_mode=str(direct_pose_cfg.phase_z_mode),
+            split_enable=bool(direct_pose_cfg.split_enable),
+            arm_split_enable=bool(direct_pose_cfg.arm_split_enable),
+            arm_bones=direct_pose_cfg.arm_bones,
+            nonleg_proj_dim=int(direct_pose_cfg.nonleg_proj_dim),
+            drop_ckpt_weights=bool(direct_pose_cfg.drop_ckpt_weights),
+        ),
         direct_pose_leg_cfg=DirectPoseLegBuildConfig(
-            enable=bool(getattr(model, "direct_pose_leg_enable", False)),
-            bones=getattr(model, "direct_pose_leg_bones", None),
-            mode=str(getattr(model, "direct_pose_leg_mode", "rot6d_add") or "rot6d_add"),
-            stopgrad_main=bool(getattr(model, "direct_pose_leg_stopgrad_main", False)),
-            detach_feat=bool(getattr(model, "direct_pose_leg_detach_feat", False)),
-            max_deg=float(getattr(model, "direct_pose_leg_max_deg", 0.0) or 0.0),
-            gate_mode=str(artifacts.direct_pose_leg_gate_mode_model),
-            gate_power=float(artifacts.direct_pose_leg_gate_power_model),
-            scale_log_clip=float(getattr(model, "direct_pose_leg_scale_log_clip", 0.0) or 0.0),
-            scale_clamp_k=float(getattr(model, "direct_pose_leg_scale_clamp_k", 0.0) or 0.0),
+            enable=bool(direct_pose_leg_cfg.enable),
+            bones=direct_pose_leg_cfg.bones,
+            mode=str(direct_pose_leg_cfg.mode),
+            stopgrad_main=bool(direct_pose_leg_cfg.stopgrad_main),
+            detach_feat=bool(direct_pose_leg_cfg.detach_feat),
+            max_deg=float(direct_pose_leg_cfg.max_deg),
+            gate_mode=str(direct_pose_leg_cfg.gate_mode),
+            gate_power=float(direct_pose_leg_cfg.gate_power),
+            scale_log_clip=float(direct_pose_leg_cfg.scale_log_clip),
+            scale_clamp_k=float(direct_pose_leg_cfg.scale_clamp_k),
         ),
         event_clock_cfg=EventClockBuildConfig(
-            use_event_clock=bool(build_state.use_event_clock),
-            hidden_dim=int(build_state.event_clock_hidden_dim),
-            gate_hidden_dim=int(build_state.event_clock_gate_hidden_dim),
-            max_delta=float(build_state.event_clock_max_delta),
-            period_dim_init=int(getattr(model, "period_dim", build_state.period_dim_init) or build_state.period_dim_init),
+            use_event_clock=bool(model_cfg.event_clock.enable),
+            hidden_dim=int(model_cfg.event_clock.hidden_dim),
+            gate_hidden_dim=int(model_cfg.event_clock.gate_hidden_dim),
+            max_delta=float(model_cfg.event_clock.max_delta),
+            period_dim_init=int(model_cfg.event_clock.period_dim_init),
         ),
         lambda_fusion_cfg=LambdaFusionBuildConfig(
-            enable=bool(build_state.lambda_fusion_enable),
-            mode=str(build_state.lambda_fusion_mode),
-            hidden=int(build_state.lambda_fusion_hidden),
-            dropout=float(build_state.lambda_fusion_dropout),
-            logit_init=float(build_state.lambda_fusion_logit_init),
-            use_rollout_step=bool(build_state.lambda_fusion_use_rollout_step),
+            enable=bool(model_cfg.lambda_fusion.enable),
+            mode=str(model_cfg.lambda_fusion.mode),
+            hidden=int(model_cfg.lambda_fusion.hidden),
+            dropout=float(model_cfg.lambda_fusion.dropout),
+            logit_init=float(model_cfg.lambda_fusion.logit_init),
+            use_rollout_step=bool(model_cfg.lambda_fusion.use_rollout_step),
         ),
     )
 
@@ -3664,27 +3647,52 @@ def _assert_posttrain_loader_has_batches(*, loader: Any, ds: MotionEventDataset,
     raise SystemExit(f"[FATAL] posttrain DataLoader has 0 batches (len(dataset)={len(ds)}, batch={batch}, drop_last=True). Lower --batch or use more/longer --paths (or reduce --seq_len).")
 
 
-def _sync_posttrain_bone_names(*, trainer: Trainer, loss_fn: MotionJointLoss, ds: MotionEventDataset) -> None:
-    try:
-        bone_names_ds = list(getattr(ds, "bone_names", []) or [])
-        if bone_names_ds:
-            setattr(trainer, "bone_names", bone_names_ds)
-            if hasattr(loss_fn, "set_bone_names"):
-                loss_fn.set_bone_names(bone_names_ds)
-            else:
-                setattr(loss_fn, "bone_names", bone_names_ds)
-    except Exception:
-        pass
+def _sync_posttrain_loss_facts(*, trainer: Trainer, loss_fn: MotionJointLoss, loss_build_config: Any) -> None:
+    bone_names_ds = list(loss_build_config.bone_names)
+    if bone_names_ds:
+        setattr(trainer, "bone_names", bone_names_ds)
+        if hasattr(loss_fn, "set_bone_names"):
+            loss_fn.set_bone_names(bone_names_ds)
+        else:
+            setattr(loss_fn, "bone_names", bone_names_ds)
+    parents = tuple(loss_build_config.parents)
+    if parents:
+        loss_fn.set_skeleton(parents, loss_build_config.bone_offsets)
 
 
-def _build_posttrain_loss_and_trainer(*, cfg: PostTrainConfig, ds: MotionEventDataset, model: EventMotionModel) -> Trainer:
-    loss_fn = MotionJointLoss(output_layout=getattr(ds, "output_layout", None), fps=float(getattr(ds, "fps", 60.0) or 60.0), rot6d_spec=getattr(ds, "rot6d_spec", None) or {}, meta=getattr(ds, "meta", None) or {})
-    trainer = Trainer(model=model, loss_fn=loss_fn, lr=float(getattr(cfg, "lr", 1e-4) or 1e-4), grad_clip=0.0, weight_decay=float(getattr(cfg, "weight_decay", 0.0) or 0.0), use_amp=False, accum_steps=1, pin_memory=False)
-    _sync_posttrain_bone_names(trainer=trainer, loss_fn=loss_fn, ds=ds)
+def _build_posttrain_loss_and_trainer(
+    *,
+    cfg: PostTrainConfig,
+    ds: MotionEventDataset,
+    model: EventMotionModel,
+    model_build_config: ModelBuildConfig,
+) -> Trainer:
+    loss_facts = DatasetLossFacts.from_dataset(ds, context="posttrain.dataset")
+    loss_build_config = resolve_posttrain_loss_build_config(
+        cfg=cfg,
+        loss_facts=loss_facts,
+        model_build_config=model_build_config,
+    )
+    trainer_runtime_config = resolve_posttrain_trainer_runtime_config(
+        cfg=cfg,
+        loss_facts=loss_facts,
+        model_build_config=model_build_config,
+    )
+    loss_fn = loss_build_config.build_loss()
+    trainer = Trainer(model=model, loss_fn=loss_fn, **trainer_runtime_config.to_trainer_kwargs())
+    trainer._entry_trainer_runtime_config = trainer_runtime_config
+    _sync_posttrain_loss_facts(trainer=trainer, loss_fn=loss_fn, loss_build_config=loss_build_config)
     return trainer
 
 
-def _attach_posttrain_trainer_runtime(*, cfg: PostTrainConfig, ds: MotionEventDataset, trainer: Trainer, norm_spec: dict[str, Any]) -> None:
+def _attach_posttrain_trainer_runtime(
+    *,
+    cfg: PostTrainConfig,
+    ds: MotionEventDataset,
+    trainer: Trainer,
+    norm_spec: dict[str, Any],
+    trainer_runtime_config: BuildTrainerRuntimeConfig,
+) -> None:
     dataset_artifacts = build_and_attach_dataset_runtime(
         trainer,
         ds,
@@ -3703,12 +3711,49 @@ def _attach_posttrain_trainer_runtime(*, cfg: PostTrainConfig, ds: MotionEventDa
         ),
     )
     apply_loss_runtime_from_trainer(trainer.loss_fn, trainer)
-    _apply_posttrain_local_runtime_overlay(trainer, _resolve_posttrain_local_runtime_overlay(cfg))
+    _apply_posttrain_local_runtime_overlay(
+        trainer,
+        _resolve_posttrain_local_runtime_overlay(
+            cfg,
+            trainer_runtime_config=trainer_runtime_config,
+        ),
+    )
 
 
-def _build_model_and_trainer(*, cfg: PostTrainConfig, ds: MotionEventDataset, model: EventMotionModel, norm_spec: dict[str, Any]) -> Trainer:
-    trainer = _build_posttrain_loss_and_trainer(cfg=cfg, ds=ds, model=model)
-    _attach_posttrain_trainer_runtime(cfg=cfg, ds=ds, trainer=trainer, norm_spec=norm_spec)
+def _require_posttrain_entry_trainer_runtime_config(trainer: Trainer) -> BuildTrainerRuntimeConfig:
+    try:
+        runtime_config = trainer._entry_trainer_runtime_config
+    except AttributeError as exc:
+        raise RuntimeError(
+            "[FATAL][TrainerRuntimeConfig] posttrain trainer is missing '_entry_trainer_runtime_config'. "
+            "This P2 TrainerRuntimeConfig migration removed the inline posttrain Trainer(...) default path. "
+            "Migration: construct Trainer through _build_posttrain_loss_and_trainer so centralized "
+            "resolve_posttrain_trainer_runtime_config(...) provides trainer kwargs and entry runtime attach facts."
+        ) from exc
+    return runtime_config
+
+
+def _build_model_and_trainer(
+    *,
+    cfg: PostTrainConfig,
+    ds: MotionEventDataset,
+    model: EventMotionModel,
+    model_build_config: ModelBuildConfig,
+    norm_spec: dict[str, Any],
+) -> Trainer:
+    trainer = _build_posttrain_loss_and_trainer(
+        cfg=cfg,
+        ds=ds,
+        model=model,
+        model_build_config=model_build_config,
+    )
+    _attach_posttrain_trainer_runtime(
+        cfg=cfg,
+        ds=ds,
+        trainer=trainer,
+        norm_spec=norm_spec,
+        trainer_runtime_config=_require_posttrain_entry_trainer_runtime_config(trainer),
+    )
     return trainer
 
 _POSTTRAIN_ARG_SPECS_PATHS_AND_DATA = (
@@ -4127,7 +4172,7 @@ def main() -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-    if bool(getattr(cfg, "direct_pose_loss_group_norm_enable", False)) and (not bool(getattr(cfg, "direct_pose_loss_leg_split", False))):
+    if bool(cfg.direct_pose_loss_group_norm_enable) and (not bool(cfg.direct_pose_loss_leg_split)):
         print("[posttrain][WARN] direct_pose_loss_group_norm_enable=true but direct_pose_loss_leg_split=false; group norm will have no effect.")
 
     # ---- Dataset / model build ----
@@ -4149,7 +4194,13 @@ def main() -> None:
                 "[FATAL] rollout contact resolution requires bundle keys 'encoder' and 'contact_head'."
             )
 
-    trainer = _build_model_and_trainer(cfg=cfg, ds=ds, model=model, norm_spec=norm_spec)
+    trainer = _build_model_and_trainer(
+        cfg=cfg,
+        ds=ds,
+        model=model,
+        model_build_config=artifacts.build_state.model_build_config,
+        norm_spec=norm_spec,
+    )
     print(f"[posttrain] mode={'train_direct_pose' if train_mode == 'direct' else 'train_lambda_head'}")
 
     # ---- Train runtime ----
@@ -4193,7 +4244,7 @@ def main() -> None:
             print(f"[posttrain][WARN] unexpected trainable params (prefixes={expected_prefixes}): {unexpected[:8]}{' ...' if len(unexpected)>8 else ''}")
 
     l2sp_pairs: list[tuple[torch.nn.Parameter, torch.Tensor]] = []
-    l2sp_weight = float(getattr(cfg, "lambda_l2sp_weight", 0.0) or 0.0)
+    l2sp_weight = float(cfg.lambda_l2sp_weight)
     if l2sp_weight > 0.0:
         try:
             l2sp_pairs = [(p, p.detach().clone()) for p in params]

@@ -96,21 +96,23 @@ class EventMotionModelPhaseDModeNormalizationTest(unittest.TestCase):
         self.assertEqual(model.direct_pose_leg_gate_mode, "learned")
         self.assertEqual(model.lambda_fusion_mode, "global")
 
-    def test_model_ctor_falls_back_to_defaults_for_invalid_values(self) -> None:
-        model = _build_model(
-            contact_plan_init_mode="bad",
-            direct_pose_feat_source="bad",
-            direct_pose_phase_z_mode="bad",
-            direct_pose_leg_mode="bad",
-            direct_pose_leg_gate_mode="bad",
-            lambda_fusion_mode="bad",
+    def test_model_ctor_rejects_invalid_string_modes(self) -> None:
+        cases = (
+            ("contact_plan_inject", dict(contact_plan_inject="bad"), "contact_plan_inject"),
+            ("contact_plan_init_mode", dict(contact_plan_init_mode="bad"), "contact_plan_init_mode"),
+            ("direct_pose_feat_source", dict(direct_pose_feat_source="bad"), "direct_pose_feat_source"),
+            ("direct_pose_phase_z_mode", dict(direct_pose_phase_z_mode="bad"), "direct_pose_phase_z_mode"),
+            ("direct_pose_leg_mode", dict(direct_pose_leg_mode="bad"), "direct_pose_leg_mode"),
+            ("direct_pose_leg_gate_mode", dict(direct_pose_leg_gate_mode="bad"), "direct_pose_leg_gate_mode"),
         )
+        for name, kwargs, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError) as raised:
+                    _build_model(**kwargs)
+                self.assertIn(expected, str(raised.exception))
 
-        self.assertEqual(model.contact_plan_init_mode, "learnable")
-        self.assertEqual(model.direct_pose_feat_source, "cond")
-        self.assertEqual(model.direct_pose_phase_z_mode, "concat")
-        self.assertEqual(model.direct_pose_leg_mode, "rot6d_add")
-        self.assertEqual(model.direct_pose_leg_gate_mode, "none")
+    def test_model_ctor_lambda_fusion_mode_still_uses_default_for_invalid_value(self) -> None:
+        model = _build_model(lambda_fusion_mode="bad")
         self.assertEqual(model.lambda_fusion_mode, "per_joint")
 
 

@@ -208,7 +208,6 @@
   "direct_pose_loss_group_norm_ratio_min": 0.2,
   "direct_pose_loss_group_norm_ratio_max": 5.0,
   "direct_pose_loss_group_norm_eps": 1e-06,
-  "adaptive_bone_weights": true,
   "unified_downstream_power": 0.6,
   "unified_self_scale": 1.5,
   "unified_min_weight": 0.05,

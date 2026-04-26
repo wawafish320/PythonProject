@@ -48,7 +48,38 @@ from .configuration.norm_spec import (
     ContactPretrainRuntime,
     merge_norm_spec,
     parse_pretrain_contact_affine_spec,
-    resolve_contact_pretrain_runtime,
+)
+from .configuration.model_build import (
+    DEFAULT_DIRECT_POSE_GRAD_MONITOR_ENABLE,
+    DEFAULT_DIRECT_POSE_GRAD_RATIO_GATE,
+    DEFAULT_TRAIN_DIAG_THR,
+    DEFAULT_TRAIN_DIAG_TOPK,
+    DEFAULT_TRAIN_HISTORY_ADAPTIVE_HEADS,
+    DEFAULT_TRAIN_HISTORY_ADAPTIVE_HIDDEN,
+    DEFAULT_TRAIN_HISTORY_ADAPTIVE_MAX_FRAMES,
+    DEFAULT_TRAIN_HISTORY_ADAPTIVE_TRAIN_VARIABLE,
+    DEFAULT_TRAIN_HISTORY_DEBUG_STEPS,
+    DEFAULT_TRAIN_HISTORY_DROPOUT_PROB,
+    DEFAULT_TRAIN_HISTORY_USE_TREND_FEATURES,
+    DEFAULT_TRAIN_SS_CHUNK_LEN,
+    DEFAULT_TRAIN_TF_END_EPOCH,
+    DEFAULT_TRAIN_TF_MAX,
+    DEFAULT_TRAIN_TF_MIN,
+    DEFAULT_TRAIN_TF_MODE,
+    DEFAULT_TRAIN_TF_START_EPOCH,
+    DEFAULT_TRAIN_TRAINER_ACCUM_STEPS,
+    DEFAULT_TRAIN_TRAINER_GRAD_CLIP,
+    DEFAULT_TRAIN_TRAINER_LR,
+    DEFAULT_TRAIN_TRAINER_USE_AMP,
+    DEFAULT_TRAIN_TRAINER_WEIGHT_DECAY,
+    DatasetLossFacts,
+    DatasetModelFacts,
+    DirectPoseConfig,
+    ModelBuildConfig,
+    TrainerRuntimeConfig as BuildTrainerRuntimeConfig,
+    resolve_train_loss_build_config,
+    resolve_train_model_build_config,
+    resolve_train_trainer_runtime_config,
 )
 from .data.dataset import (
     MotionEventDataset,
@@ -114,9 +145,6 @@ from .models import (
     PeriodHead,
     EventMotionModel,
     MotionJointLoss,
-    DEFAULT_DIRECT_POSE_LEG_BONES,
-    STAGE6_3WAY_ARMCHAIN_BONES,
-    STAGE6_3WAY_ARMCHAIN_BONES_CSV,
 )
 from .checkpoint.compat import resume_load_weights_compat as _resume_load_weights_compat
 from .checkpoint.compat import attach_motion_encoder_bundle as _attach_motion_encoder_bundle
@@ -2242,6 +2270,7 @@ def _resolve_trainer_runtime_config(
     args: argparse.Namespace,
     trainer: Trainer,
     dataset_artifacts: DatasetRuntimeArtifacts,
+    trainer_runtime_config: BuildTrainerRuntimeConfig,
     norm_template_path: Optional[Path],
     bundle_json_path: Optional[str],
     out_dir: Path,
@@ -2259,40 +2288,14 @@ def _resolve_trainer_runtime_config(
         full_config=resolved_config,
         current_run_name=run_name,
     )
-    contact_pretrain_runtime = resolve_contact_pretrain_runtime(
-        clamp_raw=getattr(args, 'trainbase_contacts_pretrain_clamp', 1.0),
-        affine_stats_raw=getattr(args, 'trainbase_contacts_pretrain_affine_stats', None),
-        warn=True,
-        warn_prefix='[MPL]',
+    owner_kwargs = trainer_runtime_config.to_train_owner_runtime_kwargs()
+    owner_kwargs['freerun_stage_schedule'] = _resolve_freerun_stage_schedule(
+        trainer_runtime_config.freerun_stage_schedule_spec
     )
-    eval_monitor = {
-        'direct_pose_grad_monitor_enable': bool(args.direct_pose_grad_monitor_enable),
-        'direct_pose_grad_ratio_gate': float(args.direct_pose_grad_ratio_gate or 0.35),
-        'diag_topk': int(args.diag_topk or 8),
-        'diag_thr': float(args.diag_thr or 8.0),
-        'teacher_eval_max_batches': args.teacher_eval_max_batches,
-    }
-    history_schedule = {
-        'ss_chunk_len': int(getattr(args, 'ss_chunk_len', getattr(trainer, 'ss_chunk_len', 1)) or 1),
-        'tf_mode': args.tf_mode,
-        'tf_start_epoch': int(args.tf_start_epoch),
-        'tf_end_epoch': int(args.tf_end_epoch),
-        'tf_max': float(args.tf_max),
-        'tf_min': float(args.tf_min),
-        'history_debug_steps': int(args.history_debug_steps or 0),
-        'history_dropout_prob': float(args.history_dropout_prob or 0.0),
-        'history_dropout_prob_min': 0.05,
-        'history_dropout_prob_max': 0.30,
-        'freerun_stage_schedule': _resolve_freerun_stage_schedule(args.freerun_stage_schedule),
-        'hyperparam_scheduler': None,
-        'freerun_debug_path': args.freerun_debug_path,
-        'enable_grad_connection_test': not bool(args.no_grad_conn_test),
-    }
     return TrainerRuntimeConfig(
         shared=shared_runtime,
-        contacts_pretrain=contact_pretrain_runtime,
-        **eval_monitor,
-        **history_schedule,
+        contacts_pretrain=trainer_runtime_config.contacts_pretrain,
+        **owner_kwargs,
     )
 
 
@@ -2346,21 +2349,15 @@ class TrainDataArtifacts:
 
 
 @dataclass(frozen=True)
-class DirectPoseBuildOptions:
-    split_enable: bool
-    arm_split_enable: bool
-    arm_bones_resolved: Optional[str]
-    nonleg_proj_dim: int
-
-
-@dataclass(frozen=True)
 class TrainModelArtifacts:
     model: EventMotionModel
+    model_build_config: ModelBuildConfig
+    trainer_runtime_config: BuildTrainerRuntimeConfig
     pose_hist_dim_raw: int
     pose_hist_len_raw: int
     history_export_frames: int
     history_frame_dim: int
-    direct_pose_options: DirectPoseBuildOptions
+    direct_pose_config: DirectPoseConfig
 
 
 @dataclass(frozen=True)
@@ -2368,6 +2365,7 @@ class TrainBuildArtifacts:
     model: EventMotionModel
     loss_fn: MotionJointLoss
     trainer: Trainer
+    trainer_runtime_config: BuildTrainerRuntimeConfig
     bundle_json_path: Optional[str]
     resolved_config: Dict[str, Any]
 
@@ -2468,8 +2466,8 @@ def _parser_add_io_args(p: argparse.ArgumentParser) -> None:
         help='在解析后覆写配置值，可重复，例如 --config_override lr=5e-5',
     )
     p.add_argument('--train_files', type=str, default='', help='逗号分隔的路径/通配/或 @list.txt')
-    p.add_argument('--diag_topk', type=int, default=8, help='free-run 评估时打印 X_norm 的 |z| Top-K')
-    p.add_argument('--diag_thr', type=float, default=8.0, help='|z| 阈值，统计 X_norm 爆炸比例')
+    p.add_argument('--diag_topk', type=int, default=DEFAULT_TRAIN_DIAG_TOPK, help='free-run 评估时打印 X_norm 的 |z| Top-K')
+    p.add_argument('--diag_thr', type=float, default=DEFAULT_TRAIN_DIAG_THR, help='|z| 阈值，统计 X_norm 爆炸比例')
     p.add_argument("--bundle_json", type=str, default=None, help='UE 导出的运行时 bundle（可含 MuY/StdY、feature_layout、MuC_other/StdC_other 等）', required=True)
 
 
@@ -2477,37 +2475,47 @@ def _parser_add_runtime_args(p: argparse.ArgumentParser) -> None:
     p.add_argument('--epochs', type=int, default=300)
     p.add_argument('--batch', type=int, default=32)
     p.add_argument('--num_workers', type=int, default=0)
-    p.add_argument('--lr', type=float, default=0.0001)
-    p.add_argument('--weight_decay', type=float, default=0.01)
-    p.add_argument('--accum_steps', type=int, default=1)
-    p.add_argument('--grad_clip', type=float, default=1.0)
-    p.add_argument('--tf_mode', type=str, default='epoch_linear', choices=['global', 'epoch_linear'])
-    p.add_argument('--tf_start_epoch', type=int, default=0)
-    p.add_argument('--tf_end_epoch', type=int, default=10)
-    p.add_argument('--tf_max', type=float, default=1.0)
-    p.add_argument('--tf_min', type=float, default=0.1)
+    p.add_argument('--lr', type=float, default=DEFAULT_TRAIN_TRAINER_LR)
+    p.add_argument('--weight_decay', type=float, default=DEFAULT_TRAIN_TRAINER_WEIGHT_DECAY)
+    p.add_argument('--accum_steps', type=int, default=DEFAULT_TRAIN_TRAINER_ACCUM_STEPS)
+    p.add_argument('--grad_clip', type=float, default=DEFAULT_TRAIN_TRAINER_GRAD_CLIP)
+    p.add_argument('--tf_mode', type=str, default=DEFAULT_TRAIN_TF_MODE, choices=['global', 'epoch_linear'])
+    p.add_argument('--tf_start_epoch', type=int, default=DEFAULT_TRAIN_TF_START_EPOCH)
+    p.add_argument('--tf_end_epoch', type=int, default=DEFAULT_TRAIN_TF_END_EPOCH)
+    p.add_argument('--tf_max', type=float, default=DEFAULT_TRAIN_TF_MAX)
+    p.add_argument('--tf_min', type=float, default=DEFAULT_TRAIN_TF_MIN)
     p.add_argument(
         '--history_debug_steps',
         type=int,
-        default=0,
+        default=DEFAULT_TRAIN_HISTORY_DEBUG_STEPS,
         help='>1 时，在训练批次中额外运行 train_free rollout 诊断历史漂移步数',
     )
     p.add_argument(
         '--history_adaptive_max_frames',
         type=int,
-        default=None,
+        default=DEFAULT_TRAIN_HISTORY_ADAPTIVE_MAX_FRAMES,
         help='训练期允许的最大历史帧数（默认使用 norm_template 中的 pose_hist_len）',
     )
-    p.add_argument('--history_adaptive_hidden', type=int, default=256, help='adaptive history 内部隐藏维度')
-    p.add_argument('--history_adaptive_heads', type=int, default=2, help='adaptive history 注意力头数')
-    p.add_argument('--history_adaptive_train_variable', action='store_true', help='训练时随机截断历史长度，提升部署鲁棒性')
+    p.add_argument('--history_adaptive_hidden', type=int, default=DEFAULT_TRAIN_HISTORY_ADAPTIVE_HIDDEN, help='adaptive history 内部隐藏维度')
+    p.add_argument('--history_adaptive_heads', type=int, default=DEFAULT_TRAIN_HISTORY_ADAPTIVE_HEADS, help='adaptive history 注意力头数')
+    p.add_argument(
+        '--history_adaptive_train_variable',
+        action='store_true',
+        default=DEFAULT_TRAIN_HISTORY_ADAPTIVE_TRAIN_VARIABLE,
+        help='训练时随机截断历史长度，提升部署鲁棒性',
+    )
     p.add_argument(
         '--history_dropout_prob',
         type=float,
-        default=0.10,
+        default=DEFAULT_TRAIN_HISTORY_DROPOUT_PROB,
         help='训练期以该概率完全屏蔽历史特征，迫使模型依赖未来条件信号进行纠错。',
     )
-    p.add_argument('--history_use_trend_features', action='store_true', help='在 adaptive history 中显式注入历史 drift/趋势特征。')
+    p.add_argument(
+        '--history_use_trend_features',
+        action='store_true',
+        default=DEFAULT_TRAIN_HISTORY_USE_TREND_FEATURES,
+        help='在 adaptive history 中显式注入历史 drift/趋势特征。',
+    )
     p.add_argument(
         '--freerun_stage_schedule',
         type=str,
@@ -2517,7 +2525,7 @@ def _parser_add_runtime_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         '--ss_chunk_len',
         type=int,
-        default=1,
+        default=DEFAULT_TRAIN_SS_CHUNK_LEN,
         help='scheduled sampling 的 chunk 长度（>1 启用 sticky 采样：每 chunk 采一次 use_gt）。',
     )
     p.add_argument('--width', type=int, default=512)
@@ -2525,52 +2533,57 @@ def _parser_add_runtime_args(p: argparse.ArgumentParser) -> None:
     p.add_argument('--num_heads', type=int, default=4)
     p.add_argument('--context_len', type=int, default=16)
     p.add_argument('--dropout', type=float, default=0.1)
-    p.add_argument('--amp', action='store_true', help='启用自动混合精度 (torch.autocast)')
+    p.add_argument(
+        '--amp',
+        action='store_true',
+        default=DEFAULT_TRAIN_TRAINER_USE_AMP,
+        help='启用自动混合精度 (torch.autocast)',
+    )
 
 
 def _parser_add_data_args(p: argparse.ArgumentParser) -> None:
     # ---- (Reserved) post-train corrector knobs live in dedicated scripts ----
     # unified bone weight (new)
-    p.add_argument('--unified_downstream_power', type=float, default=0.6, help='下游影响指数压缩 power (0.5~0.7 recommended)')
-    p.add_argument('--unified_self_scale', type=float, default=1.5, help='自身长度放大系数')
-    p.add_argument('--unified_min_weight', type=float, default=0.05, help='权重保底（相对均值）')
+    p.add_argument('--unified_downstream_power', type=float, default=None, help='下游影响指数压缩 power (0.5~0.7 recommended)')
+    p.add_argument('--unified_self_scale', type=float, default=None, help='自身长度放大系数')
+    p.add_argument('--unified_min_weight', type=float, default=None, help='权重保底（相对均值）')
     p.add_argument(
         '--rot_local_tail_weight',
         type=float,
-        default=0.0,
+        default=None,
         help='rot_local 额外 tail loss 权重（CVaR/top-k，越大越压最差骨骼）。0=关闭。',
     )
     p.add_argument(
         '--rot_local_tail_k',
         type=int,
-        default=0,
+        default=None,
         help='rot_local tail loss 的 top-k 骨骼数量（例如 13 骨骼取 3）。0=关闭。',
     )
     p.add_argument(
         '--rot_local_tail_scope',
         type=str,
-        default='all',
+        default=None,
         choices=['all', 'limbs', 'keybones'],
         help="tail loss 选择范围：all=全骨骼；limbs=limb_monitor_names（若缺失则用skeleton leaves回退）；keybones=pelvis+limb_monitor_names（并用leaves补全）。",
     )
     p.add_argument(
         '--rot_local_tail_select',
         type=str,
-        default='batch',
+        default=None,
         choices=['batch', 'ema'],
         help='tail loss top-k 选择打分：batch=当前batch均值；ema=跨batch EMA（更平滑、减少whack-a-mole）。',
     )
-    p.add_argument('--rot_local_tail_ema_beta', type=float, default=0.9, help='rot_local_tail_select=ema 时的 EMA beta（越大越平滑）。')
+    p.add_argument('--rot_local_tail_ema_beta', type=float, default=None, help='rot_local_tail_select=ema 时的 EMA beta（越大越平滑）。')
     p.add_argument('--seq_len', type=int, default=120)
     p.add_argument('--yaw_aug_deg', type=float, default=0.0)
     p.add_argument('--normalize_c', action='store_true')
 
 
 def _parser_add_loss_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument('--w_rot_ortho', type=float, default=0.001)
-    p.add_argument('--w_rot_local', type=float, default=0.0, help='父子关节局部 geodesic 约束权重（0=关闭）。')
-    p.add_argument('--w_root_vel', type=float, default=0.0, help='根速度向量 MSE 损失权重（输出包含 RootVelocity 时生效）。')
-    p.add_argument('--w_root_speed', type=float, default=0.0, help='根速度模长 MAE 损失权重（输出包含 RootVelocity 时生效）。')
+    p.add_argument('--w_rot_ortho', type=float, default=None)
+    p.add_argument('--w_rot_local', type=float, default=None, help='父子关节局部 geodesic 约束权重（0=关闭）。')
+    p.add_argument('--w_root_vel', type=float, default=None, help='根速度向量 MSE 损失权重（输出包含 RootVelocity 时生效）。')
+    p.add_argument('--w_root_speed', type=float, default=None, help='根速度模长 MAE 损失权重（输出包含 RootVelocity 时生效）。')
 
 
 def _parser_add_model_args(p: argparse.ArgumentParser) -> None:
@@ -2590,7 +2603,7 @@ def _parser_add_model_args(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument('--contact_plan_hidden', type=int, default=64, help='contacts_plan GRU hidden dim')
     p.add_argument('--contact_plan_dropout', type=float, default=0.0, help='contacts_plan head dropout')
-    p.add_argument('--w_contact_plan', type=float, default=0.0, help='contacts_plan 监督权重（MSE vs GT soft_contacts）')
+    p.add_argument('--w_contact_plan', type=float, default=None, help='contacts_plan 监督权重（MSE vs GT soft_contacts）')
     p.add_argument(
         '--contact_plan_inject',
         type=str,
@@ -2625,9 +2638,9 @@ def _parser_add_model_args(p: argparse.ArgumentParser) -> None:
     p.add_argument('--event_clock_max_delta', type=float, default=0.5, help='Event-Clock Δz clip 幅度（0=不 clip）')
     p.add_argument('--event_clock_hidden_dim', type=int, default=64, help='Event-Clock Δz head hidden dim')
     p.add_argument('--event_clock_gate_hidden_dim', type=int, default=32, help='Event-Clock gate head hidden dim')
-    p.add_argument('--event_clock_lambda_entropy_weight', type=float, default=0.01, help='Event-Clock λ entropy 正则权重')
-    p.add_argument('--event_clock_lambda_prior_weight', type=float, default=0.01, help='Event-Clock λ dynamic prior 正则权重')
-    p.add_argument('--event_clock_delta_z_l2_weight', type=float, default=0.001, help='Event-Clock Δz L2 正则权重')
+    p.add_argument('--event_clock_lambda_entropy_weight', type=float, default=None, help='Event-Clock λ entropy 正则权重')
+    p.add_argument('--event_clock_lambda_prior_weight', type=float, default=None, help='Event-Clock λ dynamic prior 正则权重')
+    p.add_argument('--event_clock_delta_z_l2_weight', type=float, default=None, help='Event-Clock Δz L2 正则权重')
     # ---- Direct pose head (cond + contacts_plan -> absolute pose) ----
     p.add_argument('--direct_pose_enable', action='store_true', default=False, help='启用 direct pose head（cond+contacts_plan -> out_direct，不走自回归）')
     p.add_argument('--direct_pose_hidden', type=int, default=256, help='direct pose head hidden dim')
@@ -2657,26 +2670,35 @@ def _parser_add_model_args(p: argparse.ArgumentParser) -> None:
     p.add_argument('--direct_pose_arm_split_enable', action='store_true', default=False, help='启用 direct_pose 非腿分支的 arm/else 再分头（3-way: leg/arm/else）')
     p.add_argument('--direct_pose_arm_bones', type=str, default=None, help='arm 分支骨骼 CSV；未提供且启用 arm split 时默认使用 Stage6 3-way armchain 口径')
     p.add_argument('--direct_pose_nonleg_proj_dim', type=int, default=0, help='non-leg/arm/else 分支投影维度；0=直接从 trunk readout')
-    p.add_argument('--w_direct_pose', type=float, default=0.0, help='direct pose 监督权重（geodesic vs GT pose；0=关闭）')
-    p.add_argument('--direct_pose_loss_leg_split', action='store_true', default=False, help='direct loss 按 leg/non-leg 拆分计算 base objective（Stage6 parity）')
+    p.add_argument('--w_direct_pose', type=float, default=None, help='direct pose 监督权重（geodesic vs GT pose；0=关闭）')
+    p.add_argument('--direct_pose_loss_leg_split', action='store_true', default=None, help='direct loss 按 leg/non-leg 拆分计算 base objective（Stage6 parity）')
     p.add_argument(
         '--direct_pose_loss_arm_else_balance_enable',
         action='store_true',
-        default=False,
+        default=None,
         help='启用 arm/else 组均衡 non-leg objective（按 group mean 重构 non-leg base）',
     )
-    p.add_argument('--direct_pose_loss_arm_weight', type=float, default=1.0, help='arm/else rebalance 中 arm group 权重')
-    p.add_argument('--direct_pose_loss_else_weight', type=float, default=1.0, help='arm/else rebalance 中 else group 权重')
-    p.add_argument('--direct_pose_grad_monitor_enable', action='store_true', default=False, help='记录 direct trunk/leg/arm/else 输出头梯度范数与比值')
-    p.add_argument('--direct_pose_grad_ratio_gate', type=float, default=0.35, help='direct grad ratio 诊断阈值（nonleg/leg；仅日志告警）')
-    p.add_argument('--direct_pose_loss_group_norm_enable', action='store_true', default=False, help='启用 direct leg/non-leg group norm objective（Stage6 parity）')
-    p.add_argument('--direct_pose_loss_group_norm_w_leg', type=float, default=1.0, help='group norm objective 中 leg ratio 权重')
-    p.add_argument('--direct_pose_loss_group_norm_w_nonleg', type=float, default=1.0, help='group norm objective 中 non-leg ratio 权重')
-    p.add_argument('--direct_pose_loss_group_norm_ema_beta', type=float, default=0.9, help='group norm EMA beta')
-    p.add_argument('--direct_pose_loss_group_norm_ratio_min', type=float, default=0.2, help='group norm ratio clamp 最小值')
-    p.add_argument('--direct_pose_loss_group_norm_ratio_max', type=float, default=5.0, help='group norm ratio clamp 最大值')
-    p.add_argument('--direct_pose_loss_group_norm_eps', type=float, default=1e-6, help='group norm 数值稳定 epsilon')
-
+    p.add_argument('--direct_pose_loss_arm_weight', type=float, default=None, help='arm/else rebalance 中 arm group 权重')
+    p.add_argument('--direct_pose_loss_else_weight', type=float, default=None, help='arm/else rebalance 中 else group 权重')
+    p.add_argument(
+        '--direct_pose_grad_monitor_enable',
+        action='store_true',
+        default=DEFAULT_DIRECT_POSE_GRAD_MONITOR_ENABLE,
+        help='记录 direct trunk/leg/arm/else 输出头梯度范数与比值',
+    )
+    p.add_argument(
+        '--direct_pose_grad_ratio_gate',
+        type=float,
+        default=DEFAULT_DIRECT_POSE_GRAD_RATIO_GATE,
+        help='direct grad ratio 诊断阈值（nonleg/leg；仅日志告警）',
+    )
+    p.add_argument('--direct_pose_loss_group_norm_enable', action='store_true', default=None, help='启用 direct leg/non-leg group norm objective（Stage6 parity）')
+    p.add_argument('--direct_pose_loss_group_norm_w_leg', type=float, default=None, help='group norm objective 中 leg ratio 权重')
+    p.add_argument('--direct_pose_loss_group_norm_w_nonleg', type=float, default=None, help='group norm objective 中 non-leg ratio 权重')
+    p.add_argument('--direct_pose_loss_group_norm_ema_beta', type=float, default=None, help='group norm EMA beta')
+    p.add_argument('--direct_pose_loss_group_norm_ratio_min', type=float, default=None, help='group norm ratio clamp 最小值')
+    p.add_argument('--direct_pose_loss_group_norm_ratio_max', type=float, default=None, help='group norm ratio clamp 最大值')
+    p.add_argument('--direct_pose_loss_group_norm_eps', type=float, default=None, help='group norm 数值稳定 epsilon')
 def _parser_add_debug_export_args(p: argparse.ArgumentParser) -> None:
     # TensorBoard 相关逻辑已移除，避免冗余参数
     p.add_argument('--log_every', type=int, default=50)
@@ -2726,20 +2748,6 @@ def _parse_train_entry_args(argv: Optional[Sequence[str]] = None) -> argparse.Na
     if missing_opts:
         parser.error(f"missing required arguments: {', '.join(missing_opts)}")
     return parsed_args
-
-
-def _build_direct_pose_options(args: argparse.Namespace) -> DirectPoseBuildOptions:
-    arm_bones_raw = getattr(args, 'direct_pose_arm_bones', None)
-    arm_split_enable = bool(args.direct_pose_arm_split_enable)
-    arm_bones_txt = None if arm_bones_raw is None else str(arm_bones_raw).strip()
-    arm_bones_default = None if not arm_split_enable else str(STAGE6_3WAY_ARMCHAIN_BONES_CSV)
-    arm_bones_resolved = arm_bones_default if arm_bones_txt in (None, '') else arm_bones_txt
-    return DirectPoseBuildOptions(
-        split_enable=bool(args.direct_pose_split_enable),
-        arm_split_enable=arm_split_enable,
-        arm_bones_resolved=arm_bones_resolved,
-        nonleg_proj_dim=int(args.direct_pose_nonleg_proj_dim or 0),
-    )
 
 def _build_train_entry_context(args: argparse.Namespace) -> TrainEntryContext:
     train_paths = expand_paths_from_specs(args.train_files)
@@ -2832,74 +2840,24 @@ def _build_train_model(
     ds_train = train_data.ds_train
     device = train_ctx.device
 
-    pose_hist_dim_raw = int(getattr(ds_train, 'pose_hist_dim', 0) or 0)
-    pose_hist_len_raw = int(getattr(ds_train, 'pose_hist_len', 0) or 0)
-    history_export_frames = int(getattr(args, 'history_adaptive_export_frames', 0) or 0)
-    history_frame_dim = (
-        pose_hist_dim_raw // pose_hist_len_raw
-        if pose_hist_len_raw > 0 and pose_hist_dim_raw % pose_hist_len_raw == 0
-        else 0
+    dataset_facts = DatasetModelFacts.from_dataset(ds_train, context='train.ds_train')
+    model_build_config = resolve_train_model_build_config(args=args, dataset_facts=dataset_facts)
+    trainer_runtime_config = resolve_train_trainer_runtime_config(
+        args=args,
+        dataset_facts=dataset_facts,
+        model_build_config=model_build_config,
+        pin_memory=train_data.pin_memory,
     )
-    pose_hist_dim_model = pose_hist_dim_raw
-    if history_export_frames > 0 and history_frame_dim > 0:
-        pose_hist_dim_model = history_export_frames * history_frame_dim
-
-    direct_pose_options = _build_direct_pose_options(args)
-
-    model_kwargs = dict(
-        in_state_dim=ds_train.Dx,
-        out_motion_dim=ds_train.Dy,
-        cond_dim=ds_train.Dc,
-        period_dim=getattr(ds_train, 'period_dim', 0),
-        hidden_dim=args.width,
-        num_layers=args.depth,
-        num_heads=args.num_heads,
-        dropout=args.dropout,
-        context_len=args.context_len,
-        contact_dim=getattr(ds_train, 'contact_dim', 0),
-        angvel_dim=getattr(ds_train, 'angvel_dim', 0),
-        pose_hist_dim=pose_hist_dim_model,
-        state_layout=getattr(ds_train, 'state_layout', None),
-        bone_names=getattr(ds_train, 'bone_names', None),
-        output_layout=getattr(ds_train, 'output_layout', None),
-        contact_plan_enable=bool(args.contact_plan_enable),
-        contact_plan_hidden=int(args.contact_plan_hidden or 64),
-        contact_plan_dropout=float(args.contact_plan_dropout or 0.0),
-        contact_plan_inject=str(args.contact_plan_inject or 'none'),
-        contact_plan_inject_detach=bool(args.contact_plan_inject_detach),
-        contact_plan_time_pe_dim=int(args.contact_plan_time_pe_dim or 0),
-        contact_plan_time_pe_base=float(args.contact_plan_time_pe_base or 10000.0),
-        contact_plan_init_mode=str(getattr(args, 'contact_plan_init_mode', 'learnable') or 'learnable'),
-        contact_plan_init_hidden=int(args.contact_plan_init_hidden or 128),
-        contact_plan_init_dropout=float(args.contact_plan_init_dropout or 0.0),
-        use_event_clock=bool(args.use_event_clock),
-        event_clock_max_delta=float(args.event_clock_max_delta or 0.5),
-        event_clock_hidden_dim=int(args.event_clock_hidden_dim or 64),
-        event_clock_gate_hidden_dim=int(args.event_clock_gate_hidden_dim or 32),
-        direct_pose_enable=bool(args.direct_pose_enable),
-        direct_pose_hidden=int(args.direct_pose_hidden or 256),
-        direct_pose_dropout=float(args.direct_pose_dropout or 0.0),
-        direct_pose_detach_plan=bool(args.direct_pose_detach_plan),
-        direct_pose_meas_mode=str(getattr(args, 'direct_pose_meas_mode', 'concat') or 'concat'),
-        direct_pose_meas_drop_prob=float(args.direct_pose_meas_drop_prob or 0.0),
-        direct_pose_meas_noise_std=float(args.direct_pose_meas_noise_std or 0.0),
-        direct_pose_plan_drop_prob=float(args.direct_pose_plan_drop_prob or 0.0),
-        direct_pose_feat_source=str(getattr(args, 'direct_pose_feat_source', 'cond') or 'cond'),
-        direct_pose_time_pe_dim=int(getattr(args, 'direct_pose_time_pe_dim', 0) or 0),
-        direct_pose_time_pe_base=float(getattr(args, 'direct_pose_time_pe_base', 10000.0) or 10000.0),
-        direct_pose_split_enable=bool(direct_pose_options.split_enable),
-        direct_pose_nonleg_proj_dim=int(direct_pose_options.nonleg_proj_dim),
-        direct_pose_arm_split_enable=bool(direct_pose_options.arm_split_enable),
-        direct_pose_arm_bones=direct_pose_options.arm_bones_resolved,
-    )
-    model = EventMotionModel(**model_kwargs).to(device)
+    model = EventMotionModel.from_config(model_build_config).to(device)
     return TrainModelArtifacts(
         model=model,
-        pose_hist_dim_raw=pose_hist_dim_raw,
-        pose_hist_len_raw=pose_hist_len_raw,
-        history_export_frames=history_export_frames,
-        history_frame_dim=history_frame_dim,
-        direct_pose_options=direct_pose_options,
+        model_build_config=model_build_config,
+        trainer_runtime_config=trainer_runtime_config,
+        pose_hist_dim_raw=model_build_config.pose_hist_dim_raw,
+        pose_hist_len_raw=model_build_config.pose_hist_len_raw,
+        history_export_frames=model_build_config.history_export_frames,
+        history_frame_dim=model_build_config.history_frame_dim,
+        direct_pose_config=model_build_config.direct_pose,
     )
 
 
@@ -2973,12 +2931,7 @@ def _prepare_train_model_runtime(
         pose_hist_dim_raw=model_artifacts.pose_hist_dim_raw,
         pose_hist_len_raw=model_artifacts.pose_hist_len_raw,
         history_frame_dim=model_artifacts.history_frame_dim,
-        history_hidden_dim=int(args.history_adaptive_hidden or int(args.width)),
-        max_history_frames=args.history_adaptive_max_frames,
-        history_heads=int(args.history_adaptive_heads or 2),
-        train_variable_history=bool(args.history_adaptive_train_variable),
-        history_dropout_prob=float(args.history_dropout_prob or 0.0),
-        use_trend_features=bool(args.history_use_trend_features),
+        **model_artifacts.trainer_runtime_config.to_adaptive_history_kwargs(),
         device=train_ctx.device,
     )
     _sanitize_train_model_post_build(model, train_data)
@@ -3004,62 +2957,30 @@ def _build_train_loss_and_trainer(
     args = train_ctx.args
     ds_train = train_data.ds_train
     model = model_artifacts.model
-    direct_pose_options = model_artifacts.direct_pose_options
-    direct_pose_arm_split_enable = direct_pose_options.arm_split_enable
-    direct_pose_arm_bones_resolved = direct_pose_options.arm_bones_resolved
+    direct_pose_config = model_artifacts.direct_pose_config
+    direct_pose_arm_split_enable = direct_pose_config.arm_split_enable
+    direct_pose_arm_bones_resolved = direct_pose_config.arm_bones
 
-    fps_data = float(getattr(ds_train, 'fps', 60.0) or 60.0)
-    w_rot_local, w_root_vel, w_root_speed = (float(value or 0.0) for value in (args.w_rot_local, args.w_root_vel, args.w_root_speed))
-
-    loss_fn = MotionJointLoss(
-        output_layout=ds_train.output_layout,
-        fps=fps_data,
-        rot6d_spec=getattr(ds_train, 'rot6d_spec', {}),
-        w_rot_ortho=args.w_rot_ortho,
-        meta=getattr(ds_train, 'meta', None),
-        w_rot_local=w_rot_local,
-        w_root_vel=w_root_vel,
-        w_root_speed=w_root_speed,
-        w_contact_plan=float(args.w_contact_plan or 0.0),
-        w_direct_pose=float(args.w_direct_pose or 0.0),
-        direct_pose_loss_leg_split=bool(args.direct_pose_loss_leg_split),
-        direct_pose_arm_split_enable=bool(direct_pose_arm_split_enable),
-        direct_pose_arm_bones=direct_pose_arm_bones_resolved,
-        direct_pose_loss_arm_else_balance_enable=bool(args.direct_pose_loss_arm_else_balance_enable),
-        direct_pose_loss_arm_weight=float(args.direct_pose_loss_arm_weight or 1.0),
-        direct_pose_loss_else_weight=float(args.direct_pose_loss_else_weight or 1.0),
-        direct_pose_loss_group_norm_enable=bool(args.direct_pose_loss_group_norm_enable),
-        direct_pose_loss_group_norm_w_leg=float(args.direct_pose_loss_group_norm_w_leg or 1.0),
-        direct_pose_loss_group_norm_w_nonleg=float(args.direct_pose_loss_group_norm_w_nonleg or 1.0),
-        direct_pose_loss_group_norm_ema_beta=float(args.direct_pose_loss_group_norm_ema_beta or 0.9),
-        direct_pose_loss_group_norm_ratio_min=float(args.direct_pose_loss_group_norm_ratio_min or 0.2),
-        direct_pose_loss_group_norm_ratio_max=float(args.direct_pose_loss_group_norm_ratio_max or 5.0),
-        direct_pose_loss_group_norm_eps=float(args.direct_pose_loss_group_norm_eps or 1e-6),
-        event_clock_lambda_entropy_weight=float(args.event_clock_lambda_entropy_weight or 0.01),
-        event_clock_lambda_prior_weight=float(args.event_clock_lambda_prior_weight or 0.01),
-        event_clock_delta_z_l2_weight=float(args.event_clock_delta_z_l2_weight or 0.001),
+    loss_facts = DatasetLossFacts.from_dataset(ds_train, context='train.ds_train')
+    loss_build_config = resolve_train_loss_build_config(
+        args=args,
+        loss_facts=loss_facts,
+        model_build_config=model_artifacts.model_build_config,
     )
-    loss_fn.unified_downstream_power = float(args.unified_downstream_power or 0.6)
-    loss_fn.unified_self_scale = float(args.unified_self_scale or 1.5)
-    loss_fn.unified_min_weight = float(args.unified_min_weight or 0.05)
-    loss_fn.rot_local_tail_weight = float(args.rot_local_tail_weight or 0.0)
-    loss_fn.rot_local_tail_k = int(args.rot_local_tail_k or 0)
-    loss_fn.rot_local_tail_scope = str(args.rot_local_tail_scope or 'all')
-    loss_fn.rot_local_tail_select = str(args.rot_local_tail_select or 'batch')
-    loss_fn.rot_local_tail_ema_beta = float(args.rot_local_tail_ema_beta or 0.9)
-    loss_fn.unified_use_visual_importance = False
-    if getattr(ds_train, 'bone_names', None):
+    fps_data = float(loss_build_config.fps)
+    loss_fn = loss_build_config.build_loss()
+    if loss_build_config.bone_names:
         try:
-            loss_fn.set_bone_names(ds_train.bone_names)
+            loss_fn.set_bone_names(loss_build_config.bone_names)
         except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
             _phasec_warn_once(
                 "train_entry/loss_set_bone_names",
                 "loss_fn.set_bone_names failed; continuing with default bone metadata",
                 exc,
             )
-    if getattr(ds_train, 'parents', None):
+    if loss_build_config.parents:
         try:
-            loss_fn.set_skeleton(ds_train.parents, getattr(ds_train, 'bone_offsets', None))
+            loss_fn.set_skeleton(loss_build_config.parents, loss_build_config.bone_offsets)
         except Exception as exc:
             print(f'[Loss][WARN] set_skeleton failed: {exc}')
     bundle_json_arg = args.bundle_json
@@ -3069,40 +2990,33 @@ def _build_train_loss_and_trainer(
         f'[LossWeights] '
         f'w_rot_ortho={loss_fn.w_rot_ortho} '
         f'w_rot_local={loss_fn.w_rot_local} '
-        f'rot_local_tail_weight={getattr(loss_fn, "rot_local_tail_weight", 0.0)} '
-        f'rot_local_tail_k={getattr(loss_fn, "rot_local_tail_k", 0)} '
-        f'rot_local_tail_scope={getattr(loss_fn, "rot_local_tail_scope", "all")} '
-        f'rot_local_tail_select={getattr(loss_fn, "rot_local_tail_select", "batch")} '
-        f'rot_local_tail_ema_beta={getattr(loss_fn, "rot_local_tail_ema_beta", 0.9)} '
+        f'rot_local_tail_weight={loss_build_config.rot_local_tail_weight} '
+        f'rot_local_tail_k={loss_build_config.rot_local_tail_k} '
+        f'rot_local_tail_scope={loss_build_config.rot_local_tail_scope} '
+        f'rot_local_tail_select={loss_build_config.rot_local_tail_select} '
+        f'rot_local_tail_ema_beta={loss_build_config.rot_local_tail_ema_beta} '
     )
 
     loss_fn.dt_traj = 1.0 / max(1e-6, fps_data)
     loss_fn.dt_bone = 1.0 / max(1e-6, fps_data)
     print(f'[Dt] dt_traj={loss_fn.dt_traj:.6f}s | dt_bone={loss_fn.dt_bone:.6f}s (dataset fps={fps_data})')
 
-    if hasattr(loss_fn, 'rot6d_eps'):
-        loss_fn.rot6d_eps = 1e-6
-    trainer_kwargs = dict(
-        lr=args.lr,
-        grad_clip=args.grad_clip,
-        weight_decay=args.weight_decay,
-        use_amp=args.amp,
-        accum_steps=args.accum_steps,
-        pin_memory=train_data.pin_memory,
-        args=args,
+    trainer = Trainer(
+        model=model,
+        loss_fn=loss_fn,
+        **model_artifacts.trainer_runtime_config.to_trainer_kwargs(args=args),
     )
-    trainer = Trainer(model=model, loss_fn=loss_fn, **trainer_kwargs)
-    if bool(args.direct_pose_loss_group_norm_enable) and (not bool(args.direct_pose_loss_leg_split)):
+    if bool(loss_build_config.direct_pose_loss_group_norm_enable) and (not bool(loss_build_config.direct_pose_loss_leg_split)):
         print('[Loss][WARN] direct_pose_loss_group_norm_enable=true but direct_pose_loss_leg_split=false; group norm will have no effect.')
     try:
         resolved_config = dict(vars(args))
     except Exception:
         resolved_config = {}
     resolved_config.update(
-        direct_pose_split_enable=bool(direct_pose_options.split_enable),
+        direct_pose_split_enable=bool(direct_pose_config.split_enable),
         direct_pose_arm_split_enable=bool(direct_pose_arm_split_enable),
         direct_pose_arm_bones=direct_pose_arm_bones_resolved,
-        direct_pose_nonleg_proj_dim=int(direct_pose_options.nonleg_proj_dim),
+        direct_pose_nonleg_proj_dim=int(direct_pose_config.nonleg_proj_dim),
     )
     try:
         cfg_out = train_ctx.out_dir / 'config_resolved.json'
@@ -3116,6 +3030,7 @@ def _build_train_loss_and_trainer(
         model=model,
         loss_fn=loss_fn,
         trainer=trainer,
+        trainer_runtime_config=model_artifacts.trainer_runtime_config,
         bundle_json_path=bundle_json_path,
         resolved_config=resolved_config,
     )
@@ -3146,6 +3061,7 @@ def _attach_train_entry_runtime(
         args=train_ctx.args,
         trainer=build_artifacts.trainer,
         dataset_artifacts=dataset_artifacts,
+        trainer_runtime_config=build_artifacts.trainer_runtime_config,
         norm_template_path=train_ctx.norm_template_path,
         bundle_json_path=build_artifacts.bundle_json_path,
         out_dir=train_ctx.out_dir,
@@ -3214,8 +3130,8 @@ def train_entry():
     _norm_debug_once(
         build_artifacts.trainer,
         train_data.train_loader,
-        thr=float(train_ctx.args.diag_thr),
-        topk=int(train_ctx.args.diag_topk),
+        thr=float(build_artifacts.trainer.diag_thr),
+        topk=int(build_artifacts.trainer.diag_topk),
         print_to_console=False,
     )
 

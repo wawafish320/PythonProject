@@ -357,24 +357,65 @@ class TrainModelsFailFastTest(unittest.TestCase):
         self.assertTrue(torch.allclose(loss._masked_group_mean(values, mask), _masked_group_mean(values, mask)))
         self.assertEqual(loss._stats_float_or(torch.ones(2), default=-1.0), _stats_float_or(torch.ones(2), default=-1.0))
 
-    def test_direct_pose_ctor_unknown_string_modes_use_explicit_defaults(self) -> None:
-        model = _build_direct_pose_leg_model(
-            side_routing=False,
-            phase_mode="bad-phase-mode",
-            direct_pose_leg_mode="bad-leg-mode",
-            gate_mode="bad-gate-mode",
-            direct_pose_leg_contact_order="bad-contact-order",
-            direct_pose_leg_side_cue="bad-side-cue",
+    def test_ctor_unknown_string_modes_fail_fast(self) -> None:
+        cases = (
+            (
+                lambda: _build_direct_pose_leg_model(
+                    side_routing=False,
+                    contact_plan_inject="bad-contact-plan-inject",
+                ),
+                ("contact_plan_inject", "'none', 'contacts', or 'plan_z'"),
+            ),
+            (
+                lambda: _build_direct_pose_leg_model(
+                    side_routing=False,
+                    contact_plan_init_mode="bad-contact-plan-init-mode",
+                ),
+                ("contact_plan_init_mode", "'zeros', 'learnable', 'obs', or 'learnable+obs'"),
+            ),
+            (
+                lambda: _build_direct_pose_leg_model(
+                    side_routing=False,
+                    phase_mode="bad-phase-mode",
+                ),
+                ("direct_pose_phase_z_mode", "'concat' or 'replace_contacts'"),
+            ),
+            (
+                lambda: _build_direct_pose_leg_model(
+                    side_routing=False,
+                    direct_pose_leg_mode="bad-leg-mode",
+                ),
+                ("direct_pose_leg_mode", "'rot6d_add' or 'so3'"),
+            ),
+            (
+                lambda: _build_direct_pose_leg_model(
+                    side_routing=False,
+                    gate_mode="bad-gate-mode",
+                ),
+                ("direct_pose_leg_gate_mode", "'none', 'learned', or 'scale'"),
+            ),
+            (
+                lambda: _build_direct_pose_leg_model(
+                    side_routing=False,
+                    direct_pose_leg_contact_order="bad-contact-order",
+                ),
+                ("direct_pose_leg_contact_order", "'lr' or 'rl'"),
+            ),
+            (
+                lambda: _build_direct_pose_leg_model(
+                    side_routing=False,
+                    direct_pose_leg_side_cue="bad-side-cue",
+                ),
+                ("direct_pose_leg_side_cue", "'none' or 'phase_event_age'"),
+            ),
         )
 
-        self.assertEqual(model.direct_pose_phase_z_mode, "concat")
-        self.assertEqual(model.direct_pose_leg_mode, "rot6d_add")
-        self.assertEqual(model.direct_pose_leg_gate_mode, "none")
-        self.assertEqual(model.direct_pose_leg_contact_order, "lr")
-        self.assertEqual(model.direct_pose_leg_contact_ch_l, 0)
-        self.assertEqual(model.direct_pose_leg_contact_ch_r, 1)
-        self.assertEqual(model.direct_pose_leg_side_cue, "none")
-        self.assertEqual(model.direct_pose_leg_side_cue_dim, 0)
+        for factory, expected_messages in cases:
+            with self.subTest(expected_messages=expected_messages):
+                self._assert_init_failure(
+                    factory,
+                    expected_messages=expected_messages,
+                )
 
     def test_direct_pose_ctor_none_defaults_preserved_for_constructor_cluster(self) -> None:
         model = _build_direct_pose_leg_model(
@@ -1501,7 +1542,7 @@ class TrainModelsFailFastTest(unittest.TestCase):
                     direct_pose_leg_enable=False,
                 ),
                 expected_messages=(
-                    "direct_pose split leg routing metadata registration failed",
+                    "direct_pose leg routing metadata registration failed",
                     "field='direct_pose_leg_joint_idx_tensor'",
                     "joint_indices=[0, 1]",
                     "sentinel split leg idx buffer registration failure",
@@ -1840,13 +1881,17 @@ class TrainModelsFailFastTest(unittest.TestCase):
         self.assertIs(weights_first, weights_second)
         warn_once.assert_called_once()
         self.assertTrue(bool((weights_first.std() > 0.0).detach().cpu().item()))
+        self.assertTrue(loss._joint_weight_cache)
+        cache_keys_before = set(loss._joint_weight_cache.keys())
 
         loss._invalidate_weight_cache()
+        self.assertEqual(loss._joint_weight_cache, {})
         with mock.patch.object(loss, "_warn_once") as warn_once_after:
             weights_recomputed = loss._joint_weight_vector(torch.device("cpu"), torch.float32, 3)
 
         warn_once_after.assert_not_called()
         self.assertTrue(torch.allclose(weights_first, weights_recomputed))
+        self.assertEqual(set(loss._joint_weight_cache.keys()), cache_keys_before)
 
     def test_motion_joint_loss_skeleton_cluster_init_state_contract(self) -> None:
         loss = _build_motion_joint_loss(
@@ -1867,7 +1912,6 @@ class TrainModelsFailFastTest(unittest.TestCase):
             w_contact_meas=0.8,
             w_direct_pose=0.9,
             w_omega_l2=1.1,
-            adaptive_bone_weights=True,
         )
 
         self.assertEqual(loss.w_attn_reg, 0.2)
@@ -1879,7 +1923,6 @@ class TrainModelsFailFastTest(unittest.TestCase):
         self.assertEqual(loss.w_contact_meas, 0.8)
         self.assertEqual(loss.w_direct_pose, 0.9)
         self.assertEqual(loss.w_omega_l2, 1.1)
-        self.assertTrue(loss.use_adaptive_weights)
         self.assertEqual(loss.parents, [-1, 0, 1])
         self.assertEqual(loss.root_idx, 0)
         self.assertEqual(loss._bone_name_to_idx, {"root": 0, "mid": 1, "end": 2})
@@ -2090,7 +2133,6 @@ class TrainModelsFailFastTest(unittest.TestCase):
         )
 
         defaults = loss._direct_pose_default_stats()
-        extra_defaults = loss._direct_pose_extra_defaults()
         expected_default_keys = {
             "direct_pose_geo",
             "direct_pose_geo_deg",
@@ -2128,10 +2170,18 @@ class TrainModelsFailFastTest(unittest.TestCase):
         }
 
         self.assertSetEqual(set(defaults.keys()), expected_default_keys)
-        self.assertTupleEqual(loss._direct_pose_default_stat_keys(), _DIRECT_POSE_DEFAULT_STAT_KEYS)
-        self.assertTupleEqual(loss._direct_pose_component_stat_keys(), _DIRECT_POSE_COMPONENT_STAT_KEYS)
+        self.assertTupleEqual(tuple(defaults.keys()), _DIRECT_POSE_DEFAULT_STAT_KEYS)
+        self.assertTupleEqual(
+            _DIRECT_POSE_COMPONENT_STAT_KEYS,
+            (
+                *_DIRECT_POSE_DEFAULT_STAT_KEYS,
+                "dir_group_norm_w_leg",
+                "dir_group_norm_w_nonleg",
+            ),
+        )
+        extra_default_keys = set(defaults.keys()) - {"direct_pose_objective", "direct_pose_weighted"}
         self.assertSetEqual(
-            set(extra_defaults.keys()),
+            extra_default_keys,
             expected_default_keys - {"direct_pose_objective", "direct_pose_weighted"},
         )
         self.assertEqual(defaults["direct_pose_objective"], 0.0)
@@ -2140,8 +2190,8 @@ class TrainModelsFailFastTest(unittest.TestCase):
         self.assertEqual(defaults["direct_pose_loss_else_weight"], 0.75)
         self.assertEqual(defaults["dir_group_norm_used"], 0.0)
         self.assertTrue(bool(torch.isnan(torch.tensor(defaults["dir_base"])).item()))
-        self.assertNotIn("direct_pose_objective", extra_defaults)
-        self.assertNotIn("direct_pose_weighted", extra_defaults)
+        self.assertNotIn("direct_pose_objective", extra_default_keys)
+        self.assertNotIn("direct_pose_weighted", extra_default_keys)
 
     def test_motion_joint_loss_direct_pose_component_stats_contract_default_path(self) -> None:
         loss = _build_motion_joint_loss()
@@ -2294,7 +2344,10 @@ class TrainModelsFailFastTest(unittest.TestCase):
             update_ema_state=False,
         )
 
-        result = loss._compute_direct_pose_group_norm_from_request(request)  # type: ignore[attr-defined]
+        result = loss._compute_direct_pose_group_norm_result(
+            request,
+            feature_config=loss._resolve_direct_pose_feature_config(),
+        )
 
         self.assertEqual(float(result.objective.detach().cpu()), 5.0)
         self.assertIn("dir_group_norm_w_leg", result.stats)
@@ -2664,10 +2717,19 @@ class TrainModelsFailFastTest(unittest.TestCase):
         with mock.patch.object(loss, "_warn_once"):
             extracted = loss._maybe_get_rot6d(raw)
             flat = loss._extract_rot6d_flat(raw, denorm=True, reproject=False, sanitize=False)
+            joint6_raw = loss._extract_rot6d_joint6(raw, denorm=False, reproject=False, sanitize=False)
+            joint6 = loss._extract_rot6d_joint6(raw, denorm=False, reproject=True, sanitize=True)
             mats = loss._extract_rot6d_mats(raw, denorm=False, reproject=True, sanitize=True)
 
         self.assertTrue(torch.equal(extracted, raw))
         self.assertTrue(torch.allclose(flat, raw * 2.0 + 1.0))
+        self.assertIsNotNone(joint6_raw)
+        assert joint6_raw is not None
+        self.assertTrue(torch.equal(joint6_raw, raw.view(1, 1, 2, 6)))
+        self.assertIsNotNone(joint6)
+        assert joint6 is not None
+        self.assertEqual(tuple(joint6.shape), (1, 1, 2, 6))
+        self.assertTrue(bool(torch.isfinite(joint6).all().detach().cpu().item()))
         self.assertIsNotNone(mats)
         assert mats is not None
         self.assertEqual(tuple(mats.shape), (1, 1, 2, 3, 3))
@@ -2684,7 +2746,7 @@ class TrainModelsFailFastTest(unittest.TestCase):
         with mock.patch.object(loss, "_warn_once"):
             ortho = loss.compute_rot6d_ortho_loss(seq)
             geo, theta, weights = loss.compute_rot6d_geo_loss(seq, seq, return_per_joint=True)
-            mats = loss._rot6d_matrices(seq)
+            mats = loss._extract_rot6d_mats(seq)
             log_loss = loss.compute_rot6d_log_loss(seq, seq)
 
         self.assertEqual(float(ortho.detach().cpu()), 0.0)

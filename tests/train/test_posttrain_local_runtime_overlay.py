@@ -23,7 +23,17 @@ def _make_cfg(**overrides):
         "lambda_reliability_mode": "warmup",
         "lambda_reliability_warmup_steps": 12,
         "lambda_reliability_contact_err_max": 0.75,
-        "lambda_reliability_warmup_joint_scales": {"foot_l": 0.5},
+        "lambda_reliability_warmup_joint_scales": [0.5, 1.0],
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _make_trainer_runtime(**overrides):
+    values = {
+        "direct_pose_grad_monitor_enable": True,
+        "direct_pose_grad_ratio_gate": 0.42,
+        "contacts_pretrain": ContactPretrainRuntime(clamp=1.5, affine_stats=None, affine=None),
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -35,28 +45,31 @@ class PosttrainLocalRuntimeOverlayTest(unittest.TestCase):
             self.assertIs(posttrain._resolve_posttrain_contact_meas_gate_override(raw_value), True)
         for raw_value in ("false", "0", "no", "n"):
             self.assertIs(posttrain._resolve_posttrain_contact_meas_gate_override(raw_value), False)
-        for raw_value in ("auto", "", None, "unexpected"):
+        for raw_value in ("auto", "", None):
             self.assertIsNone(posttrain._resolve_posttrain_contact_meas_gate_override(raw_value))
+        with self.assertRaisesRegex(ValueError, "contact_meas_gate_by_hit"):
+            posttrain._resolve_posttrain_contact_meas_gate_override("unexpected")
 
-    def test_ground_z_slew_limits_keep_pair_fallback_semantics(self) -> None:
+    def test_ground_z_slew_limits_use_central_fail_fast_parser(self) -> None:
         self.assertEqual(
             posttrain._resolve_posttrain_ground_z_slew_limits_m(
                 _make_cfg(contact_meas_ground_z_slew_up_cm=12.5, contact_meas_ground_z_slew_down_cm=-3.0)
             ),
             (0.125, 0.0),
         )
-        self.assertEqual(
+        with self.assertRaisesRegex(ValueError, "contact_meas_ground_z_slew_up_cm"):
             posttrain._resolve_posttrain_ground_z_slew_limits_m(
                 _make_cfg(contact_meas_ground_z_slew_up_cm="bad", contact_meas_ground_z_slew_down_cm=9.0)
-            ),
-            (0.0, 0.0),
-        )
+            )
 
     def test_resolve_posttrain_local_runtime_overlay_normalizes_contract(self) -> None:
         overlay = posttrain._resolve_posttrain_local_runtime_overlay(
-            _make_cfg(contact_meas_gate_by_hit="YES")
+            _make_cfg(contact_meas_gate_by_hit="YES"),
+            trainer_runtime_config=_make_trainer_runtime(),
         )
 
+        self.assertTrue(overlay.direct_pose_grad_monitor_enable)
+        self.assertEqual(overlay.direct_pose_grad_ratio_gate, 0.42)
         self.assertIs(overlay.contact_meas_gate_by_hit_override, True)
         self.assertEqual(overlay.contact_meas_vxy_mode, "abs")
         self.assertEqual(overlay.contact_meas_ground_z_mode, "window")
@@ -66,11 +79,13 @@ class PosttrainLocalRuntimeOverlayTest(unittest.TestCase):
         self.assertEqual(overlay.lambda_reliability_mode, "warmup")
         self.assertEqual(overlay.lambda_reliability_warmup_steps, 12)
         self.assertEqual(overlay.lambda_reliability_contact_err_max, 0.75)
-        self.assertEqual(overlay.lambda_reliability_warmup_joint_scales, {"foot_l": 0.5})
+        self.assertEqual(overlay.lambda_reliability_warmup_joint_scales, [0.5, 1.0])
 
     def test_apply_posttrain_local_runtime_overlay_maps_local_and_contact_fields(self) -> None:
         trainer = SimpleNamespace()
         overlay = posttrain.PosttrainLocalRuntimeOverlay(
+            direct_pose_grad_monitor_enable=True,
+            direct_pose_grad_ratio_gate=0.5,
             contact_meas_gate_by_hit_override=False,
             contact_meas_vxy_mode="signed",
             contact_meas_ground_z_mode="ema",
@@ -106,6 +121,8 @@ class PosttrainLocalRuntimeOverlayTest(unittest.TestCase):
     def test_apply_posttrain_overlay_applies_all_dataclass_fields_except_contact_runtime(self) -> None:
         trainer = SimpleNamespace()
         overlay = posttrain.PosttrainLocalRuntimeOverlay(
+            direct_pose_grad_monitor_enable=False,
+            direct_pose_grad_ratio_gate=0.35,
             contact_meas_gate_by_hit_override=True,
             contact_meas_vxy_mode="abs",
             contact_meas_ground_z_mode="window",

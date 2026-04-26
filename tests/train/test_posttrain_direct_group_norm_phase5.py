@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 import torch
 
@@ -280,6 +281,60 @@ class PosttrainDirectGroupNormPhase5Test(unittest.TestCase):
         self.assertAlmostEqual(float(loss._direct_pose_group_norm_ema["leg"]), 4.0, places=6)
         self.assertAlmostEqual(float(loss._direct_pose_group_norm_ema["nonleg"]), 10.0, places=6)
         self.assertFalse(hasattr(trainer, "_direct_pose_group_norm_ema"))
+
+    def test_finalize_direct_group_norm_runtime_delegates_to_loss_fn_seams(self) -> None:
+        loss = _build_loss(arm_else_balance_enable=True, arm_weight=3.0, else_weight=1.0)
+        trainer = _make_trainer(loss)
+        accum = self._run_accumulate(
+            trainer=trainer,
+            e_dir=torch.tensor([[2.0, 4.0, 6.0]], dtype=torch.float32),
+            weights=_make_weights(),
+        )
+
+        with (
+            mock.patch.object(
+                loss,
+                "_compute_direct_pose_group_base_payload",
+                wraps=loss._compute_direct_pose_group_base_payload,
+            ) as base_payload,
+            mock.patch.object(
+                loss,
+                "_compute_direct_pose_group_norm_shared",
+                wraps=loss._compute_direct_pose_group_norm_shared,
+            ) as norm_shared,
+        ):
+            _finalize_direct_group_norm(
+                finalize_ctx=LambdaFusionFinalizeContext(
+                    trainer=trainer,
+                    model=SimpleNamespace(),
+                    objective="direct",
+                    direct_pose_loss_arm_else_balance_enable=True,
+                    direct_pose_loss_arm_weight=3.0,
+                    direct_pose_loss_else_weight=1.0,
+                    direct_group_norm_enable=True,
+                    direct_group_w_leg=1.0,
+                    direct_group_w_nonleg=1.0,
+                    direct_group_beta=0.5,
+                    direct_group_ratio_min=0.2,
+                    direct_group_ratio_max=5.0,
+                    direct_group_eps=1e-6,
+                ),
+                trainer=trainer,
+                blend_loss_total=torch.tensor(0.0, dtype=torch.float32),
+                objective="direct",
+                dir_geo=torch.tensor(0.0, dtype=torch.float32),
+                dir_leg_base_terms=accum.dir_leg_base_terms,
+                dir_nonleg_base_terms=accum.dir_nonleg_base_terms,
+                dir_arm_base_terms=accum.dir_arm_base_terms,
+                dir_else_base_terms=accum.dir_else_base_terms,
+                dir_leg_base=_sum_term(accum.dir_leg_base_terms),
+                dir_nonleg_base=_sum_term(accum.dir_nonleg_base_terms),
+                dir_arm_base=_sum_term(accum.dir_arm_base_terms),
+                dir_else_base=_sum_term(accum.dir_else_base_terms),
+            )
+
+        base_payload.assert_called_once()
+        norm_shared.assert_called_once()
 
     def test_tool_replace_seed_uses_loss_fn_canonical_state(self) -> None:
         loss = _build_loss(arm_else_balance_enable=False, arm_weight=1.0, else_weight=1.0)
