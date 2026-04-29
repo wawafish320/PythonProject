@@ -30,11 +30,10 @@ import torch
 from torch.utils.data import DataLoader
 
 from train.data.dataset import MotionEventDataset, make_fixedlen_collate
-from train.checkpoint.compat import (
+from train.checkpoint.load_schema import (
     DirectPoseBuildOverrides,
     DirectPoseLoadCompatOptions,
     EventClockBuildOverrides,
-    LambdaFusionBuildOverrides,
     load_event_motion_ckpt_payload,
     prepare_event_motion_ckpt_state_for_load,
     resolve_event_motion_build_state_from_ckpt,
@@ -188,9 +187,6 @@ def main() -> None:
             mode="auto",
             max_delta=0.5,
             has_encoder_bundle=False,
-        ),
-        lambda_fusion_overrides=LambdaFusionBuildOverrides(
-            train_lambda_head=False,
         ),
     )
     contact_plan_enable = bool(

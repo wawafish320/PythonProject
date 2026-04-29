@@ -146,8 +146,8 @@ from .models import (
     EventMotionModel,
     MotionJointLoss,
 )
-from .checkpoint.compat import resume_load_weights_compat as _resume_load_weights_compat
-from .checkpoint.compat import attach_motion_encoder_bundle as _attach_motion_encoder_bundle
+from .checkpoint.load_schema import resume_load_weights_compat as _resume_load_weights_compat
+from .checkpoint.contract import attach_motion_encoder_bundle as _attach_motion_encoder_bundle
 from .checkpoint.fingerprint import (
     build_basetrain_build_trace_manifest,
     build_checkpoint_fingerprint_metadata,

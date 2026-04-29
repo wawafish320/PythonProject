@@ -8,7 +8,7 @@ from unittest import mock
 import torch
 from torch import nn
 
-from train.checkpoint.compat import (
+from train.checkpoint.load_schema import (
     RemovedCheckpointCompatError,
     normalize_direct_pose_split_state_dict_schema,
 )

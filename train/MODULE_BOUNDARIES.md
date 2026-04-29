@@ -104,7 +104,7 @@
 | direct-pose / lambda-fusion / event-clock build override 解析 | trainer runtime attach（→ `runtime_attach.py` + `posttrain.py` 本体） |
 | selective runtime guard / encoder bundle attach | basetrain resume 路径（→ `training_MPL.py`，不共用入口） |
 
-**Import 方向**：可以 import `checkpoint.compat` / `models`；当前从 `training_MPL` 引入 `validate_and_fix_model_` 是历史 re-export，**不要扩大**。
+**Import 方向**：可以 import `checkpoint.load_schema` / `models`；当前从 `training_MPL` 引入 `validate_and_fix_model_` 是历史 re-export，**不要扩大**。
 
 ### 2.8 `train/eval_utils.py`
 

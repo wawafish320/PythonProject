@@ -180,7 +180,7 @@ REPLACE_CFG="$RUN_ROOT/configs/replace_${STAMP}.json"
 REPLACE_CKPT="$REPLACE_OUT_DIR/ckpt_last_${REPLACE_RUN_NAME}.pth"
 REPLACE_GROUP="$RUN_ROOT/replace_clean/eval_model_source_group_summary.json"
 
-S70R_RUN_NAME="WalkF_stage7_70R_from_fresh_tailk7_replace_cleanstepc_s180_${STAMP}"
+S70R_RUN_NAME="WalkF_stage7_70R_from_fresh_tailk7_replace_cleanstepc_lr1e4_s180_${STAMP}"
 S70R_OUT_DIR="$MODEL_ROOT/70R_clean"
 S70R_CFG="$RUN_ROOT/configs/70R_${STAMP}.json"
 S70R_CKPT="$S70R_OUT_DIR/ckpt_last_${S70R_RUN_NAME}.pth"
@@ -272,7 +272,7 @@ specs = [
             "out_dir": os.environ["S70R_OUT_DIR"],
             "run_name": os.environ["S70R_RUN_NAME"],
             "epochs": 1,
-            "lr": 3e-4,
+            "lr": 1e-4,
         },
     ),
     (
@@ -386,6 +386,8 @@ test -f "$REPLACE_CKPT"
 ```
 
 ### 9.5 70R
+
+`S70R_CFG` 在 Step 4 已固定写入 `lr=1e-4`；这里的直接启动命令不再额外覆写学习率。
 
 ```bash
 "$CPU_WRAPPER" "$ROOT/tools/run_posttrain_nonleg_trunk_ablation.py" \
@@ -655,7 +657,7 @@ echo "$RUN_ROOT/run_context.json"
 - 现 default `lr=3e-4` 在当前 refactored 代码线下，是 stage7 regression 的明确 onset 来源
 - `lr=1e-4` 在 step20 处全维优于 `lr=3e-4`（数据见 `70R_lr_probe/sweep_step20_summary.md`）
 - 因此本 experimental chain 已固定 70R `lr=1e-4`；`lr=3e-4` 视为 refactor 期间未及更新的 stale default
-- **Open question (留给主链)**：canonical 主链 §9.5 的 70R default 仍是 `3e-4`，按本轮证据**很可能同样属 stale default**。本文件**不**在本轮直接修改 §9.5；建议下次 canonical 主链复跑前，先用 §9.5 同条件复一遍 `lr=1e-4` vs `lr=3e-4`，再决定是否升格 §9.5 default。
+- 2026-04-29 补充：新的正式入口 `tools/run_stage6final_canonical_downstream.py` 已把 `70R` 默认值收敛到 `lr=1e-4`；旧的 `3e-4` 仅保留为显式 ablation / override 值，不再建议作为 canonical downstream default。
 
 ### 12.3 和 healthy final / historical optima 的当前对比
 
@@ -785,3 +787,58 @@ echo "$RUN_ROOT/run_context.json"
 - 这份 runbook 是 **fresh basetrain ckpt_last donor** 版本，不是 canonical `ep014 donor` 版本。
 - `70R` 当前 runbook 直接调用 `tools/run_posttrain_nonleg_trunk_ablation.py`；本文件默认以当前 `PostTrainModelArtifacts` / `_save_posttrain_outputs(...)` API 为准，如接口再次漂移，再重新评估是否需要临时 shim。
 - 如果你后续想把这条链路再封成单个 runner，优先把本文件中的变量名和 stage 命名直接复用。
+
+---
+
+## 14. Canonical Downstream Entrypoint (2026-04-29 rewrite)
+
+如果你的起点已经不是 fresh basetrain，而是一个**现成的 strict/current `stage6-final` checkpoint**，后续不要再手工敲
+`70a -> replace -> 70R -> 71 -> 72 -> lambda` 这串命令。直接用正式入口：
+
+```bash
+python3 tools/run_stage6final_canonical_downstream.py
+```
+
+默认输入是本轮 0425 成功路径对应的 strict donor：
+
+- `debug_output/_tmp_legacy_ckpt_stage6final_rerun0425_20260429_001234/migrated_ckpts/stage6_final_strict_from0425.pth`
+
+默认会新建一个独立 run root：
+
+- `debug_output/_tmp_stage6final_canonical_downstream_<timestamp>/`
+
+并固定编排：
+
+- `stage6-final -> 70a -> replace -> 70R -> 71 -> 72 -> lambda`
+
+关键约束已经内置在 runner 里：
+
+- `replace` 明确保持 `direct_pose_phase_z_mode='concat'`
+- `70R` 默认学习率固定为 `1e-4`；如需复旧配方，可显式传 `--lr-70r 3e-4`
+- `replace -> 70R` 不再直接拿 replace ckpt 硬 handoff
+- runner 会先 strip replace source 里的 `direct_pose_*`
+- 然后用 `--allow-missing-prefix direct_pose_`
+- 同时配合 donor step0 + `--transplant-prefix direct_pose_` 补回 coherent full `direct_pose_*` bundle
+
+常用显式写法：
+
+```bash
+python3 tools/run_stage6final_canonical_downstream.py \
+  --source-stage6 /abs/path/to/stage6_final_strict.pth \
+  --run-root /abs/path/to/debug_output/_tmp_my_stage6final_downstream
+```
+
+产物重点看：
+
+- `run_result.json`
+- `config_manifest.json`
+- `handoffs/`
+- `evals/`
+- `replace_vs_ref_compare.json`
+- `lambda_vs_ref_compare.json`
+
+如果只想先起训练、不跑评估：
+
+```bash
+python3 tools/run_stage6final_canonical_downstream.py --skip-eval
+```

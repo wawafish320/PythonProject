@@ -124,6 +124,12 @@ def _build_state(
     checkpoint_fingerprints: dict[str, str] | None = None,
     checkpoint_manifest_summary: dict[str, object] | None = None,
 ) -> _posttrain_build_shell.PostTrainModelBuildState:
+    direct_pose_leg_cfg = SimpleNamespace(
+        enable=bool(getattr(model, "direct_pose_leg_enable", False)),
+        bones=tuple(getattr(model, "direct_pose_leg_bones", ()) or ()),
+        mode=str(getattr(model, "direct_pose_leg_mode", "none") or "none"),
+        side_routing=bool(getattr(model, "direct_pose_leg_side_routing", False)),
+    )
     direct_pose_cfg = SimpleNamespace(
         enable=True,
         hidden=int(model.direct_pose_hidden),
@@ -142,6 +148,7 @@ def _build_state(
     return _posttrain_build_shell.PostTrainModelBuildState(
         ckpt_posttrain_cfg={"source": "unit"},
         state_dict={},
+        model_build_config=SimpleNamespace(),
         width=int(model.hidden_dim),
         contact_dim=int(model.contact_dim),
         angvel_dim=int(model.angvel_dim),
@@ -159,6 +166,7 @@ def _build_state(
         event_clock_max_delta=float(model.event_clock_max_delta),
         period_dim_init=int(model.period_dim),
         direct_pose_cfg=direct_pose_cfg,
+        direct_pose_leg_cfg=direct_pose_leg_cfg,
         lambda_fusion_enable=bool(model.lambda_fusion_enable),
         lambda_fusion_mode=str(model.lambda_fusion_mode),
         lambda_fusion_hidden=int(model.lambda_fusion_hidden),

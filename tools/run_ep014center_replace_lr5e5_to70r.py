@@ -134,6 +134,14 @@ def build_markdown(summary: Mapping[str, Any]) -> str:
 
 
 def main() -> int:
+    raise SystemExit(
+        "[FATAL][Removed] replace->70R direct handoff script entry was removed by "
+        "2026-04-28 strict branch unload cleanup. Migration: use "
+        "`tools/run_strict_70r_warmstart_bridge_probe.py` or "
+        "`tools/contractize_strict_posttrain_handoff.py --tensor-donor ... "
+        "--transplant-prefix direct_pose_` to build an explicit warmstart bridge; "
+        "no direct replace ckpt_in handoff replacement."
+    )
     required = [REPLACE_SWEEP_SUMMARY_JSON, DOCS_BASELINE_SUMMARY_JSON, CONFIG_70R, ENCODER_BUNDLE, AFFINE_STATS]
     missing = [str(path) for path in required if not path.is_file()]
     if missing:

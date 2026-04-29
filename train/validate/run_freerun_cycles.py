@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 import torch  # ensure torch is bound before any inner scope uses it
 
-from train.checkpoint.compat import (
+from train.checkpoint.load_schema import (
     ContactPlanBuildOverrides,
     DirectPoseBuildOverrides,
     DirectPoseLoadCompatOptions,
@@ -1238,6 +1238,19 @@ class FreeRunCycleRunner:
                 "Use --phase_reset_source contacts_meas, ttc_gt, or none."
             )
         self.lambda_fusion_apply = bool(getattr(args, "lambda_fusion_apply", False))
+        lambda_rollout_override_raw = getattr(args, "lambda_fusion_use_rollout_step", None)
+        self.lambda_fusion_use_rollout_step_override = None
+        if lambda_rollout_override_raw is not None:
+            text = str(lambda_rollout_override_raw).strip().lower()
+            if text in ("1", "true", "yes", "y", "on"):
+                self.lambda_fusion_use_rollout_step_override = True
+            elif text in ("0", "false", "no", "n", "off"):
+                self.lambda_fusion_use_rollout_step_override = False
+            else:
+                raise SystemExit(
+                    "[FATAL] --lambda_fusion_use_rollout_step expects true|false "
+                    f"(got {lambda_rollout_override_raw!r})"
+                )
         # Stage2: deterministic r_t (shared with posttrain) for λ modulation.
         def _cfg_get(name: str, default: Any) -> Any:
             v = getattr(args, name, None)
@@ -1309,6 +1322,21 @@ class FreeRunCycleRunner:
         if self.model is not None:
             return
 
+        lambda_fusion_overrides = None
+        if self.lambda_fusion_use_rollout_step_override is not None:
+            ckpt_cfg = self.ckpt_payload.ckpt_posttrain_cfg if self.ckpt_payload is not None else None
+            lambda_fusion_overrides = LambdaFusionBuildOverrides(
+                train_lambda_head=bool(
+                    isinstance(ckpt_cfg, dict)
+                    and (ckpt_cfg.get("lambda_fusion_enable", False) or ckpt_cfg.get("train_lambda_head", False))
+                ),
+                mode=str(ckpt_cfg.get("lambda_fusion_mode", "per_joint") if isinstance(ckpt_cfg, dict) else "per_joint"),
+                hidden=int(ckpt_cfg.get("lambda_fusion_hidden", 128) if isinstance(ckpt_cfg, dict) else 128),
+                dropout=float(ckpt_cfg.get("lambda_fusion_dropout", 0.0) if isinstance(ckpt_cfg, dict) else 0.0),
+                logit_init=float(ckpt_cfg.get("lambda_fusion_logit_init", -2.0) if isinstance(ckpt_cfg, dict) else -2.0),
+                use_rollout_step=bool(self.lambda_fusion_use_rollout_step_override),
+            )
+
         build_state = resolve_event_motion_build_state_from_ckpt(
             ckpt_payload=self.ckpt_payload,
             in_state_dim=Dx,
@@ -1332,9 +1360,7 @@ class FreeRunCycleRunner:
                 max_delta=float(getattr(self.args, "event_clock_max_delta", 0.5) or 0.5),
                 has_encoder_bundle=bool(self.encoder_bundle_path and self.encoder_bundle_path.is_file()),
             ),
-            lambda_fusion_overrides=LambdaFusionBuildOverrides(
-                train_lambda_head=False,
-            ),
+            lambda_fusion_overrides=lambda_fusion_overrides,
             include_direct_pose_leg_cfg=True,
         )
         contact_plan_enable = bool(build_state.contact_plan_cfg.enable)
@@ -10197,6 +10223,13 @@ def parse_args() -> argparse.Namespace:
         "--lambda_fusion_apply",
         action="store_true",
         help="Apply Stage2 lambda fusion during rollout update (requires out_direct + lambda_fusion).",
+    )
+    parser.add_argument(
+        "--lambda_fusion_use_rollout_step",
+        type=str,
+        default=None,
+        choices=("true", "false", "on", "off", "1", "0", "yes", "no"),
+        help="Explicit lambda head rollout-step input contract; avoids shape-inferred rollout override in strict eval.",
     )
     parser.add_argument(
         "--lambda_reliability_mode",

@@ -21,8 +21,14 @@ from .utils import (
 )
 from .history import AdaptiveHistoryModule
 from .data.layout import infer_rot_joint_count, resolve_rot6d_slice
-from .checkpoint.compat import (
+from .checkpoint.load_schema import (
     normalize_direct_pose_split_state_dict_schema,
+)
+from .checkpoint.contract import (
+    normalize_contact_plan_init_mode,
+    normalize_direct_pose_leg_gate_mode,
+    normalize_direct_pose_leg_mode,
+    normalize_direct_pose_phase_z_mode,
 )
 from .losses import (
     MotionJointLoss,
@@ -104,77 +110,58 @@ def _normalize_contact_plan_inject(value: Any) -> str:
 
 
 def _normalize_contact_plan_init_mode(value: Any) -> str:
-    mode = str(value or "learnable").strip().lower()
-    if mode in ("learnable_obs", "obs+learnable", "learnable+obs"):
-        return "learnable+obs"
-    if mode in ("zeros", "learnable", "obs"):
-        return mode
-    raise ValueError(
-        "Unsupported contact_plan_init_mode="
-        f"{mode!r}; expected 'zeros', 'learnable', 'obs', or 'learnable+obs'."
-    )
+    normalized_value = None if isinstance(value, str) and value.strip() == "" else value
+    try:
+        return normalize_contact_plan_init_mode(normalized_value, default="learnable", strict=True)
+    except SystemExit as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _normalize_direct_pose_phase_z_mode(value: Any) -> str:
-    if value is None:
-        return "concat"
     if not isinstance(value, str):
+        if value is None:
+            return "concat"
         raise TypeError(
             "direct_pose_phase_z_mode must be a string or None; "
             "expected aliases for {'concat', 'replace_contacts'}; "
             f"got actual_type={type(value).__name__}."
         )
-    mode = value.strip().lower()
-    if mode in ("replace", "replace_contacts", "replace_contact", "phase", "phase_only", "phase_only_hint"):
-        return "replace_contacts"
-    if mode in ("", "concat", "append", "add", "plus", "contacts+phase"):
-        return "concat"
-    raise ValueError(
-        "Unsupported direct_pose_phase_z_mode="
-        f"{mode!r}; expected 'concat' or 'replace_contacts' after alias normalization."
-    )
+    normalized_value = None if value.strip() == "" else value
+    try:
+        return normalize_direct_pose_phase_z_mode(normalized_value, default="concat", strict=True)
+    except SystemExit as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _normalize_direct_pose_leg_mode(value: Any) -> str:
-    if value is None:
-        return "rot6d_add"
     if not isinstance(value, str):
+        if value is None:
+            return "rot6d_add"
         raise TypeError(
             "direct_pose_leg_mode must be a string or None; "
             "expected aliases for {'rot6d_add', 'so3'}; "
             f"got actual_type={type(value).__name__}."
         )
-    mode = value.strip().lower()
-    if mode in ("so3", "omega", "so3_compose", "compose", "exp", "expmap", "log", "axisangle", "axis_angle"):
-        return "so3"
-    if mode in ("", "rot6d_add"):
-        return "rot6d_add"
-    raise ValueError(
-        "Unsupported direct_pose_leg_mode="
-        f"{mode!r}; expected 'rot6d_add' or 'so3' after alias normalization."
-    )
+    normalized_value = None if value.strip() == "" else value
+    try:
+        return normalize_direct_pose_leg_mode(normalized_value, default="rot6d_add", strict=True)
+    except SystemExit as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _normalize_direct_pose_leg_gate_mode(value: Any) -> str:
-    if value is None:
-        return "none"
     if not isinstance(value, str):
+        if value is None:
+            return "none"
         raise TypeError(
             "direct_pose_leg_gate_mode must be a string or None; "
             "expected aliases for {'none', 'learned', 'scale'}; "
             f"got actual_type={type(value).__name__}."
         )
-    mode = value.strip().lower()
-    if mode in ("mlp", "net", "nn", "learn", "learned", "gate"):
-        return "learned"
-    if mode in ("scale", "mag", "magnitude", "logmag", "log_mag", "exp", "alpha"):
-        return "scale"
-    if mode in ("", "none", "off", "disable", "disabled", "0"):
-        return "none"
-    raise ValueError(
-        "Unsupported direct_pose_leg_gate_mode="
-        f"{mode!r}; expected 'none', 'learned', or 'scale' after alias normalization."
-    )
+    try:
+        return normalize_direct_pose_leg_gate_mode(value, default="none", strict=True)
+    except SystemExit as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _normalize_direct_pose_leg_contact_order(value: Any) -> str:

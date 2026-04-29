@@ -6,11 +6,11 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Literal, Mapping, Optional, Sequence
 
 import torch
 
-from train.checkpoint.compat import (
+from train.checkpoint.load_schema import (
     DirectPoseBuildOverrides,
     resolve_direct_pose_build_cfg as _resolve_direct_pose_build_cfg,
 )
@@ -108,6 +108,8 @@ DEFAULT_CONTACT_PLAN_TIME_PE_BASE = 10000.0
 DEFAULT_CONTACT_PLAN_INIT_MODE = "learnable"
 DEFAULT_CONTACT_PLAN_INIT_HIDDEN = 128
 DEFAULT_CONTACT_PLAN_INIT_DROPOUT = 0.0
+STRICT_BRANCH_UNLOAD_CHANGE = "2026-04-28 strict branch unload cleanup"
+STRICT_DIRECT_POSE_SHAPE_INFERENCE_UNLOAD_CHANGE = "2026-04-28 strict direct-pose shape-inference unload"
 
 DEFAULT_EVENT_CLOCK_MAX_DELTA = 0.5
 DEFAULT_EVENT_CLOCK_HIDDEN_DIM = 64
@@ -449,6 +451,34 @@ class ModelBuildConfig:
             "so3_corr_hidden": int(self.so3_corr_hidden),
             "so3_corr_dropout": float(self.so3_corr_dropout),
             "so3_corr_gate_logit_init": float(self.so3_corr_gate_logit_init),
+        }
+
+
+@dataclass(frozen=True)
+class ResolvedBuildTraceEntry:
+    field: str
+    value: Any
+    source: Literal["config", "dataset_facts", "default"]
+    reason: str
+
+
+@dataclass(frozen=True)
+class ResolvedModelBuildConfig:
+    config: ModelBuildConfig
+    trace: tuple[ResolvedBuildTraceEntry, ...]
+
+    def manifest(self) -> dict[str, Any]:
+        return {
+            "config": _json_friendly(self.config.to_model_kwargs()),
+            "trace": [
+                {
+                    "field": str(entry.field),
+                    "value": _json_friendly(entry.value),
+                    "source": str(entry.source),
+                    "reason": str(entry.reason),
+                }
+                for entry in self.trace
+            ],
         }
 
 
@@ -1222,103 +1252,303 @@ def resolve_posttrain_loss_build_config(
     )
 
 
-def resolve_posttrain_model_build_config(
+def _raise_strict_direct_pose_shape_inference_unload(
+    *,
+    field_name: str,
+    reason: str,
+    migration: str,
+) -> None:
+    raise SystemExit(
+        "[FATAL][strict_current_model_build][Removed] config field "
+        f"`{field_name}` entered a retired strict/current direct-pose inference path. "
+        f"Removed by {STRICT_DIRECT_POSE_SHAPE_INFERENCE_UNLOAD_CHANGE}: {reason}. "
+        f"Migration: {migration}."
+    )
+
+
+def _reject_strict_current_direct_pose_shape_inference_inputs(cfg: Any) -> None:
+    for retired_key, canonical_key in (
+        ("direct_pose_hidden_override", "direct_pose_hidden"),
+        ("direct_pose_meas_mode_override", "direct_pose_meas_mode"),
+    ):
+        retired_value = _cfg_value(cfg, retired_key, None)
+        if retired_value is not None:
+            _raise_strict_direct_pose_shape_inference_unload(
+                field_name=retired_key,
+                reason=(
+                    "strict/current direct-pose semantics must come from canonical resolved-config fields, "
+                    "not override shims that were previously paired with checkpoint shape inference"
+                ),
+                migration=(
+                    f"set `{canonical_key}` explicitly in strict/current config; "
+                    "no checkpoint shape/posttrain_cfg replacement"
+                ),
+            )
+
+    semantic_fields = (
+        "direct_pose_hidden",
+        "direct_pose_meas_mode",
+        "direct_pose_feat_source",
+        "direct_pose_time_pe_dim",
+        "direct_pose_use_phase_z",
+        "direct_pose_phase_z_mode",
+        "direct_pose_split_enable",
+        "direct_pose_arm_split_enable",
+        "direct_pose_nonleg_proj_dim",
+    )
+    direct_pose_enable_present = _cfg_has_value(cfg, "direct_pose_enable")
+    direct_pose_enable = _cfg_bool(cfg, "direct_pose_enable", False)
+    train_direct_pose = _cfg_bool(cfg, "train_direct_pose", False)
+    train_lambda_head = _cfg_bool(cfg, "train_lambda_head", False)
+    semantics_present = any(_cfg_has_value(cfg, field) for field in semantic_fields)
+    if (train_direct_pose or train_lambda_head or semantics_present) and (not direct_pose_enable_present):
+        _raise_strict_direct_pose_shape_inference_unload(
+            field_name="direct_pose_enable",
+            reason=(
+                "strict/current direct-pose structure selection can no longer be inferred from "
+                "checkpoint tensors or checkpoint posttrain_cfg"
+            ),
+            migration="set `direct_pose_enable` explicitly in strict/current config; no replacement",
+        )
+
+    if train_lambda_head and (not direct_pose_enable):
+        raise SystemExit(
+            "[FATAL][strict_current_model_build] train_lambda_head=true requires "
+            "direct_pose_enable=true; strict/current lambda stages cannot infer a direct-pose expert from checkpoint state."
+        )
+
+    if not bool(direct_pose_enable):
+        return
+
+    for field_name in (
+        "direct_pose_hidden",
+        "direct_pose_meas_mode",
+        "direct_pose_feat_source",
+        "direct_pose_time_pe_dim",
+    ):
+        if not _cfg_has_value(cfg, field_name):
+            _raise_strict_direct_pose_shape_inference_unload(
+                field_name=field_name,
+                reason=(
+                    "strict/current direct-pose build semantics must be explicit and cannot be recovered "
+                    "from checkpoint tensor shape or checkpoint posttrain_cfg"
+                ),
+                migration=f"set `{field_name}` explicitly in strict/current config; no replacement",
+            )
+
+    feat_source_raw = _cfg_value(cfg, "direct_pose_feat_source", None)
+    feat_source_text = str(feat_source_raw if feat_source_raw is not None else "").strip().lower()
+    if feat_source_text in ("", "auto"):
+        _raise_strict_direct_pose_shape_inference_unload(
+            field_name="direct_pose_feat_source",
+            reason=(
+                "strict/current feature-source semantics can no longer fall back to checkpoint "
+                "shape/posttrain_cfg inference"
+            ),
+            migration="set `direct_pose_feat_source` explicitly in strict/current config; no replacement",
+        )
+
+    direct_pose_time_pe_dim_raw = _cfg_int(cfg, "direct_pose_time_pe_dim", DEFAULT_DIRECT_POSE_TIME_PE_DIM)
+    if direct_pose_time_pe_dim_raw < 0:
+        _raise_strict_direct_pose_shape_inference_unload(
+            field_name="direct_pose_time_pe_dim",
+            reason=(
+                "strict/current time-PE semantics can no longer use auto/negative checkpoint "
+                "shape/posttrain_cfg inference"
+            ),
+            migration="set `direct_pose_time_pe_dim` explicitly with a non-negative even value; no replacement",
+        )
+
+    use_phase_z = _cfg_bool(cfg, "direct_pose_use_phase_z", False)
+    phase_z_mode_present = _cfg_has_value(cfg, "direct_pose_phase_z_mode")
+    if use_phase_z and (not phase_z_mode_present):
+        _raise_strict_direct_pose_shape_inference_unload(
+            field_name="direct_pose_phase_z_mode",
+            reason=(
+                "strict/current phase-z routing semantics must be explicit and cannot be inferred "
+                "from checkpoint tensor shape or checkpoint posttrain_cfg"
+            ),
+            migration="set `direct_pose_phase_z_mode` explicitly when `direct_pose_use_phase_z=true`; no replacement",
+        )
+
+    split_enable = _cfg_bool(cfg, "direct_pose_split_enable", False)
+    arm_split_enable = _cfg_bool(cfg, "direct_pose_arm_split_enable", False)
+    if arm_split_enable and (not _cfg_has_value(cfg, "direct_pose_split_enable")):
+        _raise_strict_direct_pose_shape_inference_unload(
+            field_name="direct_pose_split_enable",
+            reason=(
+                "strict/current arm-split layout semantics must not be implied by other direct-pose flags"
+            ),
+            migration="set `direct_pose_split_enable=true` explicitly when using arm split; no replacement",
+        )
+    if split_enable and (not _cfg_has_value(cfg, "direct_pose_nonleg_proj_dim")):
+        _raise_strict_direct_pose_shape_inference_unload(
+            field_name="direct_pose_nonleg_proj_dim",
+            reason=(
+                "strict/current split-head layout semantics must be explicit and cannot be inferred "
+                "from checkpoint tensor shape or checkpoint posttrain_cfg"
+            ),
+            migration="set `direct_pose_nonleg_proj_dim` explicitly when `direct_pose_split_enable=true`; no replacement",
+        )
+
+
+def resolve_current_model_build_config_with_trace(
     *,
     cfg: Any,
     dataset_facts: DatasetModelFacts,
-    state_dict: Mapping[str, Any],
-    ckpt_posttrain_cfg: Optional[Mapping[str, Any]],
     width: int,
-    checkpoint_period_dim: int,
-    has_encoder_bundle: bool,
-) -> ModelBuildConfig:
-    state = {str(key): value for key, value in state_dict.items()}
-    _reject_direct_pose_reinit_without_train(cfg)
+) -> ResolvedModelBuildConfig:
+    """Resolve the current model build from cfg + dataset facts only.
 
-    direct_pose_cfg_raw = _resolve_direct_pose_build_cfg(
-        out_motion_dim=int(dataset_facts.dy),
-        state_dict=state,
-        ckpt_posttrain_cfg=dict(ckpt_posttrain_cfg) if isinstance(ckpt_posttrain_cfg, Mapping) else None,
-        contact_dim=int(dataset_facts.contact_dim),
-        cond_dim=int(dataset_facts.dc),
-        width=int(width),
-        overrides=DirectPoseBuildOverrides(
-            train_direct_pose=_cfg_bool(cfg, "train_direct_pose", False),
-            direct_pose_reinit=_cfg_bool(cfg, "direct_pose_reinit", False),
-            hidden_override=_cfg_optional_int(cfg, "direct_pose_hidden_override", min_value=1),
-            meas_mode_override=_normalize_optional_direct_pose_meas_mode(
-                _cfg_value(cfg, "direct_pose_meas_mode_override", None),
-                field="direct_pose_meas_mode_override",
-            ),
-            feat_source=_posttrain_direct_pose_feat_source(cfg),
-            time_pe_dim=_posttrain_direct_pose_time_pe_dim(cfg),
-            time_pe_base=_cfg_float(cfg, "direct_pose_time_pe_base", DEFAULT_DIRECT_POSE_TIME_PE_BASE, min_value=0.0),
-            use_phase_z=_cfg_bool(cfg, "direct_pose_use_phase_z", False),
-            phase_z_mode=_posttrain_direct_pose_phase_z_mode(cfg),
-            split_enable=_cfg_bool(cfg, "direct_pose_split_enable", False),
-            arm_split_enable=_cfg_bool(cfg, "direct_pose_arm_split_enable", False),
-            arm_bones=_optional_csv(_cfg_value(cfg, "direct_pose_arm_bones", None)),
-            nonleg_proj_dim=_cfg_int(cfg, "direct_pose_nonleg_proj_dim", 0, min_value=0),
+    This path must not inspect checkpoint tensors or checkpoint posttrain_cfg.
+    It is intended for strict_current_model_build where checkpoints are
+    weights-only inputs.
+    """
+    pose_hist_dim_raw = int(dataset_facts.pose_hist_dim)
+    pose_hist_len_raw = int(dataset_facts.pose_hist_len)
+    arm_split_enable = _cfg_bool(cfg, "direct_pose_arm_split_enable", False)
+    arm_bones = _optional_csv(_cfg_value(cfg, "direct_pose_arm_bones", None))
+    if arm_split_enable and arm_bones is None:
+        arm_bones = str(STAGE6_3WAY_ARMCHAIN_BONES_CSV)
+    _reject_strict_current_direct_pose_shape_inference_inputs(cfg)
+
+    init_mode_raw = _cfg_value(cfg, "contact_plan_init_mode", DEFAULT_CONTACT_PLAN_INIT_MODE)
+    init_mode = normalize_contact_plan_init_mode(
+        init_mode_raw,
+        default=DEFAULT_CONTACT_PLAN_INIT_MODE,
+        strict=True,
+        context="contact_plan_init_mode",
+    )
+    if init_mode != "learnable":
+        raise SystemExit(
+            "[FATAL][strict_current_model_build][Removed] config field "
+            f"`contact_plan_init_mode={init_mode}` entered retired obs-init contact-plan branch. "
+            f"Removed by {STRICT_BRANCH_UNLOAD_CHANGE}: strict/current builds fix "
+            "contact_plan_init_mode=learnable and do not build contact_plan_init_head. "
+            "Migration: strip `contact_plan_init_head.*` during migration and remove obs-init fields from config; "
+            "no strict/current obs-init replacement."
+        )
+    contact_plan = ContactPlanConfig(
+        enable=_cfg_bool(cfg, "contact_plan_enable", False),
+        hidden=_cfg_int(cfg, "contact_plan_hidden", DEFAULT_CONTACT_PLAN_HIDDEN, min_value=1),
+        dropout=_cfg_float(cfg, "contact_plan_dropout", DEFAULT_CONTACT_PLAN_DROPOUT, min_value=0.0),
+        inject=_normalize_contact_plan_inject(_cfg_value(cfg, "contact_plan_inject", DEFAULT_CONTACT_PLAN_INJECT)),
+        inject_detach=_cfg_bool(cfg, "contact_plan_inject_detach", DEFAULT_CONTACT_PLAN_INJECT_DETACH),
+        time_pe_dim=_even_nonnegative_dim(
+            _cfg_int(cfg, "contact_plan_time_pe_dim", DEFAULT_CONTACT_PLAN_TIME_PE_DIM, min_value=0),
+            field="contact_plan_time_pe_dim",
         ),
+        time_pe_base=_cfg_float(cfg, "contact_plan_time_pe_base", DEFAULT_CONTACT_PLAN_TIME_PE_BASE, min_value=0.0),
+        init_mode="learnable",
+        init_hidden=DEFAULT_CONTACT_PLAN_INIT_HIDDEN,
+        init_dropout=DEFAULT_CONTACT_PLAN_INIT_DROPOUT,
     )
+    direct_pose_enable = _cfg_bool(cfg, "direct_pose_enable", False)
+    if _cfg_bool(cfg, "train_direct_pose", False) and not bool(direct_pose_enable):
+        raise SystemExit(
+            "[FATAL][strict_current_model_build] train_direct_pose=true requires "
+            "direct_pose_enable=true; training target cannot implicitly create structure."
+        )
+    direct_pose_feat_source_raw = _cfg_value(cfg, "direct_pose_feat_source", DEFAULT_DIRECT_POSE_FEAT_SOURCE)
+    if str(direct_pose_feat_source_raw if direct_pose_feat_source_raw is not None else "").strip().lower() in ("", "auto"):
+        direct_pose_feat_source_raw = DEFAULT_DIRECT_POSE_FEAT_SOURCE
+    direct_pose_time_pe_dim_raw = _cfg_int(cfg, "direct_pose_time_pe_dim", DEFAULT_DIRECT_POSE_TIME_PE_DIM)
+    if direct_pose_time_pe_dim_raw < 0:
+        direct_pose_time_pe_dim_raw = DEFAULT_DIRECT_POSE_TIME_PE_DIM
     direct_pose = DirectPoseConfig(
-        enable=bool(direct_pose_cfg_raw.enable),
-        hidden=int(direct_pose_cfg_raw.hidden),
-        dropout=0.0,
-        detach_plan=True,
-        meas_mode=str(direct_pose_cfg_raw.meas_mode),
-        meas_drop_prob=0.0,
-        meas_noise_std=0.0,
-        plan_drop_prob=0.0,
-        feat_source=str(direct_pose_cfg_raw.feat_source),
-        time_pe_dim=int(direct_pose_cfg_raw.time_pe_dim),
-        time_pe_base=float(direct_pose_cfg_raw.time_pe_base),
-        use_phase_z=bool(direct_pose_cfg_raw.use_phase_z),
-        phase_z_mode=str(direct_pose_cfg_raw.phase_z_mode),
-        split_enable=bool(direct_pose_cfg_raw.split_enable),
-        nonleg_proj_dim=int(direct_pose_cfg_raw.nonleg_proj_dim),
-        arm_split_enable=bool(direct_pose_cfg_raw.arm_split_enable),
-        arm_bones=_optional_csv(direct_pose_cfg_raw.arm_bones),
-        drop_ckpt_weights=bool(direct_pose_cfg_raw.drop_ckpt_weights),
+        enable=bool(direct_pose_enable),
+        hidden=_cfg_int(cfg, "direct_pose_hidden", DEFAULT_DIRECT_POSE_HIDDEN, min_value=1),
+        dropout=_cfg_float(cfg, "direct_pose_dropout", DEFAULT_DIRECT_POSE_DROPOUT, min_value=0.0),
+        detach_plan=_cfg_bool(cfg, "direct_pose_detach_plan", DEFAULT_DIRECT_POSE_DETACH_PLAN),
+        meas_mode=str(
+            _normalize_direct_pose_meas_mode(
+                _cfg_value(cfg, "direct_pose_meas_mode", DEFAULT_DIRECT_POSE_MEAS_MODE),
+                field="direct_pose_meas_mode",
+            )
+        ),
+        meas_drop_prob=_cfg_float(cfg, "direct_pose_meas_drop_prob", 0.0, min_value=0.0),
+        meas_noise_std=_cfg_float(cfg, "direct_pose_meas_noise_std", 0.0, min_value=0.0),
+        plan_drop_prob=_cfg_float(cfg, "direct_pose_plan_drop_prob", 0.0, min_value=0.0),
+        feat_source=normalize_direct_pose_feat_source(
+            direct_pose_feat_source_raw,
+            default=DEFAULT_DIRECT_POSE_FEAT_SOURCE,
+            strict=True,
+            context="direct_pose_feat_source",
+        ),
+        time_pe_dim=_even_nonnegative_dim(
+            int(direct_pose_time_pe_dim_raw),
+            field="direct_pose_time_pe_dim",
+        ),
+        time_pe_base=_cfg_float(cfg, "direct_pose_time_pe_base", DEFAULT_DIRECT_POSE_TIME_PE_BASE, min_value=0.0),
+        use_phase_z=_cfg_bool(cfg, "direct_pose_use_phase_z", False),
+        phase_z_mode=normalize_direct_pose_phase_z_mode(
+            _cfg_value(cfg, "direct_pose_phase_z_mode", "concat"),
+            default="concat",
+            strict=True,
+            context="direct_pose_phase_z_mode",
+        ),
+        split_enable=_cfg_bool(cfg, "direct_pose_split_enable", False),
+        nonleg_proj_dim=_cfg_int(cfg, "direct_pose_nonleg_proj_dim", 0, min_value=0),
+        arm_split_enable=bool(arm_split_enable),
+        arm_bones=arm_bones,
     )
-    contact_plan = _resolve_posttrain_contact_plan_config(
-        cfg=cfg,
-        facts=dataset_facts,
-        state_dict=state,
-        direct_pose=direct_pose,
+    event_clock_mode = str(_cfg_value(cfg, "event_clock", "auto") or "auto").strip().lower()
+    if event_clock_mode not in ("on", "off"):
+        raise SystemExit(
+            "[FATAL][strict_current_model_build] event_clock must be explicit on|off; "
+            "'auto' would require checkpoint-dependent structure inference."
+        )
+    event_clock_enable = bool(event_clock_mode == "on")
+    lambda_fusion_enable = _cfg_bool(cfg, "lambda_fusion_enable", False)
+    if _cfg_bool(cfg, "train_lambda_head", False) and not bool(lambda_fusion_enable):
+        raise SystemExit(
+            "[FATAL][strict_current_model_build] train_lambda_head=true requires "
+            "lambda_fusion_enable=true; training target cannot implicitly create structure."
+        )
+    lambda_fusion = LambdaFusionConfig(
+        enable=bool(lambda_fusion_enable),
+        mode=normalize_lambda_fusion_mode(
+            _cfg_value(cfg, "lambda_fusion_mode", DEFAULT_LAMBDA_FUSION_MODE),
+            default=DEFAULT_LAMBDA_FUSION_MODE,
+            strict=True,
+            context="lambda_fusion_mode",
+        ),
+        hidden=_cfg_int(cfg, "lambda_fusion_hidden", DEFAULT_LAMBDA_FUSION_HIDDEN, min_value=1),
+        dropout=_cfg_float(cfg, "lambda_fusion_dropout", DEFAULT_LAMBDA_FUSION_DROPOUT, min_value=0.0),
+        detach_err=DEFAULT_LAMBDA_FUSION_DETACH_ERR,
+        logit_init=_cfg_float(cfg, "lambda_fusion_logit_init", DEFAULT_LAMBDA_FUSION_LOGIT_INIT),
+        use_rollout_step=_cfg_bool(cfg, "lambda_fusion_use_rollout_step", DEFAULT_LAMBDA_FUSION_USE_ROLLOUT_STEP),
     )
-    event_clock = _resolve_posttrain_event_clock_config(
-        cfg=cfg,
-        state_dict=state,
-        contact_dim=int(dataset_facts.contact_dim),
-        checkpoint_period_dim=int(checkpoint_period_dim),
-        has_encoder_bundle=bool(has_encoder_bundle),
-    )
-    lambda_fusion = _resolve_posttrain_lambda_fusion_config(
-        cfg=cfg,
-        state_dict=state,
-        width=int(width),
-        contact_dim=int(dataset_facts.contact_dim),
-        contact_plan_enable=bool(contact_plan.enable),
-    )
-    return ModelBuildConfig(
+    config = ModelBuildConfig(
         facts=dataset_facts,
         hidden_dim=int(width),
         num_layers=_cfg_int(cfg, "depth", 2, min_value=1),
         num_heads=_cfg_int(cfg, "num_heads", 4, min_value=1),
         dropout=_cfg_float(cfg, "dropout", 0.0, min_value=0.0),
         context_len=_cfg_int(cfg, "context_len", 16, min_value=1),
-        pose_hist_dim_model=int(dataset_facts.pose_hist_dim),
-        pose_hist_dim_raw=int(dataset_facts.pose_hist_dim),
-        pose_hist_len_raw=int(dataset_facts.pose_hist_len),
+        pose_hist_dim_model=int(pose_hist_dim_raw),
+        pose_hist_dim_raw=int(pose_hist_dim_raw),
+        pose_hist_len_raw=int(pose_hist_len_raw),
         history_export_frames=0,
         history_frame_dim=0,
         contact_plan=contact_plan,
         direct_pose=direct_pose,
         direct_pose_leg=_resolve_posttrain_direct_pose_leg_config(cfg),
-        event_clock=event_clock,
+        event_clock=EventClockConfig(
+            enable=bool(event_clock_enable),
+            max_delta=_cfg_float(cfg, "event_clock_max_delta", DEFAULT_EVENT_CLOCK_MAX_DELTA, min_value=0.0),
+            hidden_dim=_cfg_int(cfg, "event_clock_hidden_dim", DEFAULT_EVENT_CLOCK_HIDDEN_DIM, min_value=1),
+            gate_hidden_dim=_cfg_int(cfg, "event_clock_gate_hidden_dim", DEFAULT_EVENT_CLOCK_GATE_HIDDEN_DIM, min_value=1),
+            period_dim_init=int(dataset_facts.period_dim),
+        ),
         lambda_fusion=lambda_fusion,
     )
+    trace = _build_current_model_build_trace(
+        cfg=cfg,
+        config=config,
+        dataset_facts=dataset_facts,
+    )
+    return ResolvedModelBuildConfig(config=config, trace=tuple(trace))
 
 
 def _resolve_posttrain_contact_plan_config(
@@ -1368,17 +1598,24 @@ def _resolve_posttrain_contact_plan_config(
     init_hidden = _cfg_int(cfg, "contact_plan_init_hidden", DEFAULT_CONTACT_PLAN_INIT_HIDDEN, min_value=1)
     init_dropout = _cfg_float(cfg, "contact_plan_init_dropout", DEFAULT_CONTACT_PLAN_INIT_DROPOUT, min_value=0.0)
     init_has_weights = any(str(key).startswith("contact_plan_init_head.") for key in state_dict.keys())
+    strict_current = _cfg_bool(cfg, "strict_current_model_build", False)
+    if bool(strict_current) and init_mode != "learnable":
+        raise SystemExit(
+            "[FATAL][strict_current_model_build][Removed] config field "
+            f"`contact_plan_init_mode={init_mode}` entered retired obs-init contact-plan branch. "
+            f"Removed by {STRICT_BRANCH_UNLOAD_CHANGE}: strict/current builds fix "
+            "contact_plan_init_mode=learnable. Migration: remove obs-init config fields and strip "
+            "`contact_plan_init_head.*` during migration."
+        )
     if init_has_weights:
-        if init_mode not in ("obs", "learnable+obs"):
+        if bool(strict_current) or init_mode not in ("obs", "learnable+obs"):
             raise SystemExit(
-                "[FATAL][Removed] field 'contact_plan_init_mode' no longer silently changes when "
-                "ckpt contains contact_plan_init_head.* weights. This ModelBuildConfig unification removed "
-                "the posttrain implicit override. Migration: set contact_plan_init_mode='learnable+obs' "
-                "or use a checkpoint without contact_plan_init_head.* weights."
+                "[FATAL][Removed] contact_plan_init_head.* checkpoint weights no longer imply obs-init. "
+                f"Removed by {STRICT_BRANCH_UNLOAD_CHANGE}: checkpoint keys and tensor shapes cannot "
+                "define contact_plan_init_mode/contact_plan_init_hidden at load time. Migration: strip "
+                "`contact_plan_init_head.*` during migration for strict/current learnable init; no "
+                "strict/current obs-init replacement."
             )
-        init_weight = state_dict.get("contact_plan_init_head.1.weight", None)
-        if torch.is_tensor(init_weight) and init_weight.ndim == 2:
-            init_hidden = int(init_weight.shape[0])
     return ContactPlanConfig(
         enable=bool(
             contact_plan_has_weights
@@ -1471,6 +1708,22 @@ def _resolve_posttrain_lambda_fusion_config(
     contact_plan_enable: bool,
 ) -> LambdaFusionConfig:
     lambda_has_weights = any(str(key).startswith("lambda_fusion_head.") for key in state_dict.keys())
+    lambda_fusion_enable = _cfg_bool(cfg, "lambda_fusion_enable", False)
+    train_lambda_head = _cfg_bool(cfg, "train_lambda_head", False)
+    if lambda_has_weights and not bool(lambda_fusion_enable):
+        raise SystemExit(
+            "[FATAL][Removed] lambda_fusion_head.* checkpoint weights are not accepted by a "
+            "non-lambda target. "
+            f"Removed by {STRICT_BRANCH_UNLOAD_CHANGE}: lambda head keys no longer enable "
+            "lambda_fusion or supply non-lambda load-time compat. Migration: strip "
+            "`lambda_fusion_head.*` during migration for non-lambda targets, or use a lambda "
+            "target config with lambda_fusion_enable=true and train_lambda_head=true."
+        )
+    if bool(train_lambda_head) and not bool(lambda_fusion_enable):
+        raise SystemExit(
+            "[FATAL][strict_current_model_build] train_lambda_head=true requires "
+            "lambda_fusion_enable=true; training target cannot implicitly create structure."
+        )
     mode = normalize_lambda_fusion_mode(
         _cfg_value(cfg, "lambda_fusion_mode", DEFAULT_LAMBDA_FUSION_MODE),
         default=DEFAULT_LAMBDA_FUSION_MODE,
@@ -1479,35 +1732,8 @@ def _resolve_posttrain_lambda_fusion_config(
     )
     hidden = _cfg_int(cfg, "lambda_fusion_hidden", DEFAULT_LAMBDA_FUSION_HIDDEN, min_value=1)
     use_rollout_step = _cfg_bool(cfg, "lambda_fusion_use_rollout_step", DEFAULT_LAMBDA_FUSION_USE_ROLLOUT_STEP)
-    if lambda_has_weights:
-        w_in = state_dict.get("lambda_fusion_head.1.weight", None)
-        if torch.is_tensor(w_in) and w_in.ndim == 2:
-            hidden = int(w_in.shape[0])
-            base_in = int(width + (contact_dim if contact_plan_enable else 0))
-            in_features = int(w_in.shape[1])
-            inferred: Optional[bool] = None
-            if in_features == base_in + 1:
-                inferred = True
-            elif in_features == base_in:
-                inferred = False
-            if inferred is not None and inferred != bool(use_rollout_step):
-                raise SystemExit(
-                    "[FATAL][Removed] field 'lambda_fusion_use_rollout_step' no longer silently changes "
-                    "to match lambda_fusion_head.1.weight. This ModelBuildConfig unification removed "
-                    f"the posttrain implicit override. Migration: set lambda_fusion_use_rollout_step={inferred} "
-                    "to match the checkpoint, or train a new lambda_fusion_head."
-                )
-            if inferred is not None:
-                use_rollout_step = bool(inferred)
-        w_out = state_dict.get("lambda_fusion_head.4.weight", None)
-        if torch.is_tensor(w_out) and w_out.ndim == 2:
-            out_dim = int(w_out.shape[0])
-            if out_dim == 1:
-                mode = "global"
-            elif out_dim > 1:
-                mode = "per_joint"
     return LambdaFusionConfig(
-        enable=bool(_cfg_bool(cfg, "train_lambda_head", False) or lambda_has_weights),
+        enable=bool(lambda_fusion_enable),
         mode=str(mode),
         hidden=int(hidden),
         dropout=_cfg_float(cfg, "lambda_fusion_dropout", DEFAULT_LAMBDA_FUSION_DROPOUT, min_value=0.0),
@@ -1823,6 +2049,226 @@ def _normalize_train_tf_mode(value: Any) -> str:
     if text in ("global", "epoch_linear"):
         return text
     raise ValueError("tf_mode must be one of: global | epoch_linear.")
+
+
+def _json_friendly(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _json_friendly(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_friendly(item) for item in value]
+    if torch.is_tensor(value):
+        if value.numel() <= 16:
+            return _json_friendly(value.detach().cpu().tolist())
+        return {
+            "type": "tensor",
+            "shape": [int(dim) for dim in value.shape],
+            "dtype": str(value.dtype),
+        }
+    return str(value)
+
+
+def _cfg_has_value(source: Any, field: str) -> bool:
+    if isinstance(source, Mapping):
+        return field in source
+    return hasattr(source, field)
+
+
+def _cfg_trace_source(source: Any, field: str) -> Literal["config", "default"]:
+    return "config" if _cfg_has_value(source, field) else "default"
+
+
+def _cfg_trace_reason(source: Any, field: str) -> str:
+    if _cfg_has_value(source, field):
+        return f"resolved from cfg.{field} by existing resolver."
+    return f"cfg.{field} absent; existing resolver fallback/default used."
+
+
+def _build_resolved_model_build_trace(
+    *,
+    cfg: Any,
+    config: ModelBuildConfig,
+    dataset_facts: DatasetModelFacts,
+) -> list[ResolvedBuildTraceEntry]:
+    entries: list[ResolvedBuildTraceEntry] = []
+
+    def add(
+        field: str,
+        value: Any,
+        source: Literal["config", "dataset_facts", "default"],
+        reason: str,
+    ) -> None:
+        entries.append(
+            ResolvedBuildTraceEntry(
+                field=str(field),
+                value=value,
+                source=source,
+                reason=str(reason),
+            )
+        )
+
+    def add_dataset_fact(field: str, value: Any) -> None:
+        add(field, value, "dataset_facts", f"copied from DatasetModelFacts.{field.rsplit('.', 1)[-1]}.")
+
+    def add_cfg_field(field: str, value: Any, cfg_field: str) -> None:
+        add(field, value, _cfg_trace_source(cfg, cfg_field), _cfg_trace_reason(cfg, cfg_field))
+
+    def add_existing_resolver(field: str, value: Any, reason: str) -> None:
+        add(
+            field,
+            value,
+            "config",
+            f"{reason}; resolved by existing resolver; exact precedence unchanged.",
+        )
+
+    add_dataset_fact("facts.dx", int(dataset_facts.dx))
+    add_dataset_fact("facts.dy", int(dataset_facts.dy))
+    add_dataset_fact("facts.dc", int(dataset_facts.dc))
+
+    add_existing_resolver(
+        "direct_pose.enable",
+        bool(config.direct_pose.enable),
+        "direct-pose enable may depend on cfg policy and checkpoint shape",
+    )
+    add_existing_resolver(
+        "direct_pose.feat_source",
+        str(config.direct_pose.feat_source),
+        "direct-pose feature source may use cfg override, checkpoint hint, or layout inference",
+    )
+    add_cfg_field("direct_pose.use_phase_z", bool(config.direct_pose.use_phase_z), "direct_pose_use_phase_z")
+    add_existing_resolver(
+        "direct_pose.phase_z_mode",
+        str(config.direct_pose.phase_z_mode),
+        "direct-pose phase-z mode may use cfg override or checkpoint layout inference",
+    )
+    add_cfg_field(
+        "direct_pose.arm_split_enable",
+        bool(config.direct_pose.arm_split_enable),
+        "direct_pose_arm_split_enable",
+    )
+
+    add_cfg_field("direct_pose_leg.enable", bool(config.direct_pose_leg.enable), "direct_pose_leg_enable")
+    add_cfg_field("direct_pose_leg.mode", str(config.direct_pose_leg.mode), "direct_pose_leg_mode")
+    add_cfg_field("direct_pose_leg.gate_mode", str(config.direct_pose_leg.gate_mode), "direct_pose_leg_gate_mode")
+
+    add_existing_resolver(
+        "contact_plan.enable",
+        bool(config.contact_plan.enable),
+        "contact-plan enable may depend on checkpoint modules, dataset facts, and direct-pose state",
+    )
+    add_existing_resolver(
+        "contact_plan.inject",
+        str(config.contact_plan.inject),
+        "contact-plan injection is inferred from encoder input shape and dataset facts",
+    )
+    add_cfg_field("contact_plan.init_mode", str(config.contact_plan.init_mode), "contact_plan_init_mode")
+
+    add_existing_resolver(
+        "event_clock.enable",
+        bool(config.event_clock.enable),
+        "event-clock enable may depend on cfg.event_clock and checkpoint modules",
+    )
+    add_existing_resolver(
+        "event_clock.hidden_dim",
+        int(config.event_clock.hidden_dim),
+        "event-clock hidden width may depend on cfg override or checkpoint tensor shape",
+    )
+    add_existing_resolver(
+        "event_clock.gate_hidden_dim",
+        int(config.event_clock.gate_hidden_dim),
+        "event-clock gate hidden width may depend on cfg override or checkpoint tensor shape",
+    )
+
+    add_existing_resolver(
+        "lambda_fusion.enable",
+        bool(config.lambda_fusion.enable),
+        "lambda-fusion enable may depend on cfg.train_lambda_head and checkpoint modules",
+    )
+    add_existing_resolver(
+        "lambda_fusion.mode",
+        str(config.lambda_fusion.mode),
+        "lambda-fusion mode may depend on cfg override or checkpoint output shape",
+    )
+    return entries
+
+
+def _build_current_model_build_trace(
+    *,
+    cfg: Any,
+    config: ModelBuildConfig,
+    dataset_facts: DatasetModelFacts,
+) -> list[ResolvedBuildTraceEntry]:
+    entries: list[ResolvedBuildTraceEntry] = []
+
+    def add(
+        field: str,
+        value: Any,
+        source: Literal["config", "dataset_facts", "default"],
+        reason: str,
+    ) -> None:
+        entries.append(
+            ResolvedBuildTraceEntry(
+                field=str(field),
+                value=value,
+                source=source,
+                reason=str(reason),
+            )
+        )
+
+    def add_dataset_fact(field: str, value: Any) -> None:
+        add(field, value, "dataset_facts", f"copied from DatasetModelFacts.{field.rsplit('.', 1)[-1]}.")
+
+    def add_cfg_field(field: str, value: Any, cfg_field: str) -> None:
+        add(field, value, _cfg_trace_source(cfg, cfg_field), _cfg_trace_reason(cfg, cfg_field))
+
+    add_dataset_fact("facts.dx", int(dataset_facts.dx))
+    add_dataset_fact("facts.dy", int(dataset_facts.dy))
+    add_dataset_fact("facts.dc", int(dataset_facts.dc))
+
+    direct_pose_enable_source = "config" if _cfg_has_value(cfg, "direct_pose_enable") else "default"
+    add(
+        "direct_pose.enable",
+        bool(config.direct_pose.enable),
+        direct_pose_enable_source,
+        "resolved from cfg.direct_pose_enable; checkpoint facts and training targets are not consulted.",
+    )
+    add_cfg_field("direct_pose.feat_source", str(config.direct_pose.feat_source), "direct_pose_feat_source")
+    add_cfg_field("direct_pose.use_phase_z", bool(config.direct_pose.use_phase_z), "direct_pose_use_phase_z")
+    add_cfg_field("direct_pose.phase_z_mode", str(config.direct_pose.phase_z_mode), "direct_pose_phase_z_mode")
+    add_cfg_field(
+        "direct_pose.arm_split_enable",
+        bool(config.direct_pose.arm_split_enable),
+        "direct_pose_arm_split_enable",
+    )
+
+    add_cfg_field("direct_pose_leg.enable", bool(config.direct_pose_leg.enable), "direct_pose_leg_enable")
+    add_cfg_field("direct_pose_leg.mode", str(config.direct_pose_leg.mode), "direct_pose_leg_mode")
+    add_cfg_field("direct_pose_leg.gate_mode", str(config.direct_pose_leg.gate_mode), "direct_pose_leg_gate_mode")
+
+    add_cfg_field("contact_plan.enable", bool(config.contact_plan.enable), "contact_plan_enable")
+    add_cfg_field("contact_plan.inject", str(config.contact_plan.inject), "contact_plan_inject")
+    add_cfg_field("contact_plan.init_mode", str(config.contact_plan.init_mode), "contact_plan_init_mode")
+
+    event_clock_source = "config" if _cfg_has_value(cfg, "event_clock") else "default"
+    add(
+        "event_clock.enable",
+        bool(config.event_clock.enable),
+        event_clock_source,
+        "resolved from explicit cfg.event_clock on|off; checkpoint facts are not consulted.",
+    )
+    add_cfg_field("event_clock.hidden_dim", int(config.event_clock.hidden_dim), "event_clock_hidden_dim")
+    add_cfg_field("event_clock.gate_hidden_dim", int(config.event_clock.gate_hidden_dim), "event_clock_gate_hidden_dim")
+
+    lambda_enable_source = "config" if _cfg_has_value(cfg, "lambda_fusion_enable") else "default"
+    add(
+        "lambda_fusion.enable",
+        bool(config.lambda_fusion.enable),
+        lambda_enable_source,
+        "resolved from cfg.lambda_fusion_enable; checkpoint facts and training targets are not consulted.",
+    )
+    add_cfg_field("lambda_fusion.mode", str(config.lambda_fusion.mode), "lambda_fusion_mode")
+    return entries
 
 
 def _cfg_value(source: Any, field: str, default: Any) -> Any:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 import torch
 
@@ -21,7 +23,11 @@ __all__ = [
     "PosttrainContractBuildState",
     "PosttrainContractCkptPayload",
     "attach_motion_encoder_bundle",
+    "compute_resolved_build_manifest_hash",
+    "diff_resolved_build_manifests",
     "dump_posttrain_build_cfg",
+    "enforce_strict_current_build_manifest_contract",
+    "flatten_resolved_build_manifest",
     "load_posttrain_effective_cfg",
     "load_posttrain_contract_ckpt_payload",
     "normalize_contact_plan_init_mode",
@@ -117,6 +123,141 @@ _DIRECT_POSE_LEG_MODE_SO3_ALIASES: tuple[str, ...] = (
 )
 _CONTACT_PLAN_INIT_MODE_CANONICAL: tuple[str, ...] = ("zeros", "learnable", "obs", "learnable+obs")
 _LAMBDA_FUSION_MODE_CANONICAL: tuple[str, ...] = ("global", "per_joint")
+_MISSING_MANIFEST_VALUE = object()
+_STRICT_CURRENT_CONTRACT_HINT = (
+    "If loading a legacy checkpoint, migrate it with tools/migrate_legacy_posttrain_ckpt.py. "
+    "If this checkpoint is expected to be strict/current, re-save it with the current build contract."
+)
+
+
+def _json_friendly_manifest_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _json_friendly_manifest_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_friendly_manifest_value(item) for item in value]
+    if torch.is_tensor(value):
+        if value.numel() <= 16:
+            return _json_friendly_manifest_value(value.detach().cpu().tolist())
+        return {
+            "type": "tensor",
+            "shape": [int(dim) for dim in value.shape],
+            "dtype": str(value.dtype),
+        }
+    return str(value)
+
+
+def _canonical_resolved_build_manifest_json(manifest: Mapping[str, Any]) -> str:
+    if not isinstance(manifest, Mapping):
+        raise TypeError(f"resolved build manifest must be a mapping; got {type(manifest).__name__}.")
+    hash_payload: Any = {"config": manifest.get("config", None)} if "config" in manifest else manifest
+    return json.dumps(
+        _json_friendly_manifest_value(hash_payload),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def compute_resolved_build_manifest_hash(manifest: Mapping[str, Any]) -> str:
+    """Return sha256 hex for the canonical JSON hard-contract subset of a build manifest."""
+    payload = _canonical_resolved_build_manifest_json(manifest).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def flatten_resolved_build_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Flatten manifest['config'] into dotted field paths for contract diffs."""
+    if not isinstance(manifest, Mapping):
+        return {"<manifest>": _json_friendly_manifest_value(manifest)}
+    config = manifest.get("config", None)
+    if not isinstance(config, Mapping):
+        return {"config": _json_friendly_manifest_value(config)}
+
+    flattened: dict[str, Any] = {}
+
+    def visit(prefix: str, value: Any) -> None:
+        if isinstance(value, Mapping):
+            if not value:
+                flattened[prefix] = {}
+            for key in sorted(value.keys(), key=lambda item: str(item)):
+                child_path = str(key) if prefix == "" else f"{prefix}.{key}"
+                visit(child_path, value[key])
+            return
+        flattened[prefix] = _json_friendly_manifest_value(value)
+
+    for key in sorted(config.keys(), key=lambda item: str(item)):
+        visit(str(key), config[key])
+    return flattened
+
+
+def _format_manifest_diff_value(value: Any) -> str:
+    if value is _MISSING_MANIFEST_VALUE:
+        return "<missing>"
+    return repr(value)
+
+
+def diff_resolved_build_manifests(
+    current: Mapping[str, Any],
+    checkpoint: Mapping[str, Any],
+) -> list[str]:
+    """Return field-level config diffs as checkpoint/current strings."""
+    current_flat = flatten_resolved_build_manifest(current)
+    checkpoint_flat = flatten_resolved_build_manifest(checkpoint)
+    diffs: list[str] = []
+    for key in sorted(set(current_flat.keys()) | set(checkpoint_flat.keys())):
+        current_value = current_flat.get(key, _MISSING_MANIFEST_VALUE)
+        checkpoint_value = checkpoint_flat.get(key, _MISSING_MANIFEST_VALUE)
+        if checkpoint_value != current_value:
+            diffs.append(
+                f"{key}: checkpoint={_format_manifest_diff_value(checkpoint_value)} "
+                f"current={_format_manifest_diff_value(current_value)}"
+            )
+    return diffs
+
+
+def _format_manifest_diff_lines(diffs: list[str], *, limit: int = 20) -> str:
+    shown = diffs[:limit]
+    suffix = "" if len(diffs) <= limit else f"\n  ... ({len(diffs) - limit} more)"
+    return "\n  " + "\n  ".join(shown) + suffix if shown else "\n  <no config field diffs>"
+
+
+def enforce_strict_current_build_manifest_contract(
+    *,
+    current_manifest: Mapping[str, Any],
+    checkpoint_manifest: Any,
+    checkpoint_manifest_hash: Any,
+) -> None:
+    """Fail fast when a strict-current checkpoint build contract is absent or stale."""
+    if not isinstance(checkpoint_manifest, Mapping):
+        raise SystemExit(
+            "[FATAL][strict_current_model_build] checkpoint missing resolved_build_manifest; "
+            "this is not a strict-current contract checkpoint. "
+            + _STRICT_CURRENT_CONTRACT_HINT
+        )
+
+    computed_checkpoint_hash = compute_resolved_build_manifest_hash(checkpoint_manifest)
+    stored_checkpoint_hash = None if checkpoint_manifest_hash is None else str(checkpoint_manifest_hash).strip()
+    if stored_checkpoint_hash != computed_checkpoint_hash:
+        raise SystemExit(
+            "[FATAL][strict_current_model_build] checkpoint resolved_build_manifest_hash mismatch; "
+            f"stored={stored_checkpoint_hash or '<missing>'} computed={computed_checkpoint_hash}. "
+            "Checkpoint contract is corrupted or stale. "
+            + _STRICT_CURRENT_CONTRACT_HINT
+        )
+
+    current_hash = compute_resolved_build_manifest_hash(current_manifest)
+    if current_hash == computed_checkpoint_hash:
+        return
+
+    diffs = diff_resolved_build_manifests(current_manifest, checkpoint_manifest)
+    raise SystemExit(
+        "[FATAL][strict_current_model_build] resolved build manifest mismatch; "
+        f"checkpoint_hash={computed_checkpoint_hash} current_hash={current_hash}. "
+        + _STRICT_CURRENT_CONTRACT_HINT
+        + "\nField diffs (first 20):"
+        + _format_manifest_diff_lines(diffs, limit=20)
+    )
 
 
 def normalize_direct_pose_leg_gate_mode(

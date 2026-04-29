@@ -63,14 +63,16 @@ class CheckpointFingerprintPhase5EnforceTest(unittest.TestCase):
                     )
                 self.assertIn(mismatch_segment, str(ctx.exception))
 
-    def test_chain_hop_required_mismatches_do_not_raise(self) -> None:
+    def test_chain_hop_required_mismatches_raise(self) -> None:
         for mismatch_segment in ("io_signature_hash", "module_graph_hash", "build_order_hash"):
             with self.subTest(load_context="chain_hop", mismatch_segment=mismatch_segment):
                 summary = _build_compare_summary(train_mode="direct", mismatch_segment=mismatch_segment)
-                _posttrain_build_shell._enforce_posttrain_checkpoint_fingerprint(
-                    summary,
-                    load_context="chain_hop",
-                )
+                with self.assertRaises(SystemExit) as ctx:
+                    _posttrain_build_shell._enforce_posttrain_checkpoint_fingerprint(
+                        summary,
+                        load_context="chain_hop",
+                    )
+                self.assertIn(mismatch_segment, str(ctx.exception))
 
     def test_missing_fingerprint_block_raises_for_resume_and_chain_hop(self) -> None:
         summary = _build_compare_summary(train_mode="direct", missing_fingerprint_block=True)
@@ -83,9 +85,13 @@ class CheckpointFingerprintPhase5EnforceTest(unittest.TestCase):
                     )
                 self.assertIn("fingerprint_block", str(ctx.exception))
 
-    def test_weights_mismatch_is_warning_only(self) -> None:
+    def test_weights_mismatch_raises_on_resume(self) -> None:
+        # Single-track strict-current always enforces required_segments mismatches.
+        # Pre-cut, this segment was warning-only in the legacy strict_current=False mode.
         summary = _build_compare_summary(train_mode="direct", mismatch_segment="weights_hash")
-        _posttrain_build_shell._enforce_posttrain_checkpoint_fingerprint(summary, load_context="resume")
+        with self.assertRaises(SystemExit) as ctx:
+            _posttrain_build_shell._enforce_posttrain_checkpoint_fingerprint(summary, load_context="resume")
+        self.assertIn("weights_hash", str(ctx.exception))
 
     def test_train_policy_mismatch_is_report_only(self) -> None:
         summary = _build_compare_summary(train_mode="lambda", mismatch_segment="train_policy_hash")
@@ -93,11 +99,7 @@ class CheckpointFingerprintPhase5EnforceTest(unittest.TestCase):
 
     def test_report_includes_load_context_policy_without_phase5_banner(self) -> None:
         summary = _build_compare_summary(train_mode="direct", mismatch_segment="io_signature_hash")
-        expected_policies = {
-            "resume": "policy=resume-strict",
-            "chain_hop": "policy=chain_hop-waiver",
-        }
-        for load_context, policy_fragment in expected_policies.items():
+        for load_context in ("resume", "chain_hop"):
             with self.subTest(load_context=load_context):
                 stream = StringIO()
                 with redirect_stdout(stream):
@@ -108,7 +110,7 @@ class CheckpointFingerprintPhase5EnforceTest(unittest.TestCase):
                     )
                 report = stream.getvalue()
                 self.assertIn(f"load_context={load_context}", report)
-                self.assertIn(policy_fragment, report)
+                self.assertIn("policy=strict-current", report)
                 self.assertNotIn("Phase 5 enforce active", report)
 
     def test_missing_load_context_raises_with_hint(self) -> None:
@@ -142,6 +144,7 @@ class CheckpointFingerprintPhase5EnforceTest(unittest.TestCase):
             checkpoint_manifest_summary={"build_trace": {"pipeline": "posttrain"}},
             direct_pose_leg_gate_mode_model="learned",
             direct_pose_leg_gate_power_model=1.0,
+            resolved_build_manifest={"config": {}, "trace": []},
         )
         summary = _build_compare_summary(train_mode="direct")
         fake_model = object()

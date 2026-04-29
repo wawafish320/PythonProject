@@ -70,10 +70,11 @@ from train.checkpoint.contract import (
     POSTTRAIN_CHECKPOINT_CONTRACT_NAME,
     POSTTRAIN_CHECKPOINT_CONTRACT_VERSION,
     PosttrainContractBuildState,
+    compute_resolved_build_manifest_hash,
     dump_posttrain_build_cfg,
+    normalize_direct_pose_leg_gate_mode,
 )
 from train.checkpoint.fingerprint import (
-    COMPONENT_SLOT_ORDER,
     build_checkpoint_fingerprint_metadata,
     build_event_motion_model_io_signature_manifest,
     build_event_motion_model_module_graph_manifest,
@@ -215,6 +216,7 @@ class PostTrainConfig:
     # - auto  : cycle when rollout_cycles>1 else global
     # - none  : disable time_index (no time-PE bias)
     time_index_mode: str
+    width: Optional[int]
     depth: int
     num_heads: int
     dropout: float
@@ -231,6 +233,13 @@ class PostTrainConfig:
 
     # Legacy Stage1-5 target configs are retained for parsing compatibility only;
     # corresponding train_* selectors are retired and rejected via fail-fast checks.
+    contact_plan_enable: bool
+    contact_plan_hidden: int
+    contact_plan_dropout: float
+    contact_plan_inject: str
+    contact_plan_inject_detach: bool
+    contact_plan_time_pe_dim: int
+    contact_plan_time_pe_base: float
     contact_plan_init_mode: str
     contact_plan_init_hidden: int
     contact_plan_init_dropout: float
@@ -244,6 +253,7 @@ class PostTrainConfig:
     event_clock_hidden_dim: Optional[int]
     event_clock_gate_hidden_dim: Optional[int]
     load_context: Optional[str]
+    strict_current_model_build: bool
 
     # Stage2: freeze experts, only train lambda_fusion_head (learn when to trust incremental vs direct).
     train_lambda_head: bool
@@ -306,6 +316,9 @@ class PostTrainConfig:
     # - feat_source: auto|cond|hidden|cond+hidden
     # - time_pe_dim: -1 means "auto (infer from checkpoint)", 0 disables
     direct_pose_feat_source: str
+    direct_pose_enable: bool
+    direct_pose_hidden: int
+    direct_pose_meas_mode: str
     direct_pose_time_pe_dim: int
     direct_pose_time_pe_base: float
     # If true, concatenate phase_z_in (2*contact_dim) into direct head input.
@@ -329,6 +342,9 @@ class PostTrainConfig:
     direct_pose_loss_else_weight: float
     # Optional: when train_direct_pose=true, freeze trunk/leg and train non-leg branch only.
     direct_pose_nonleg_train_only: bool
+    # Optional: when direct_pose_nonleg_train_only=true, also train shared direct_pose_head trunk.
+    # "full" reproduces the historical 70R non-leg recovery runner with --trunk-mode full.
+    direct_pose_nonleg_trunk_mode: str
     direct_pose_reinit: bool
     direct_pose_hidden_override: Optional[int]
     direct_pose_meas_mode_override: Optional[str]
@@ -356,6 +372,7 @@ class PostTrainConfig:
     direct_pose_leg_align_grad_probe_enable: bool
     direct_pose_leg_align_grad_probe_steps: int
 
+    lambda_fusion_enable: bool
     lambda_fusion_mode: str
     lambda_fusion_hidden: int
     lambda_fusion_dropout: float
@@ -420,6 +437,11 @@ _CLI_BOOL_OVERRIDE_KEYS: tuple[str, ...] = (
     "detach_rollout_state",
     "train_direct_pose",
     "train_lambda_head",
+    "strict_current_model_build",
+    "contact_plan_enable",
+    "contact_plan_inject_detach",
+    "direct_pose_enable",
+    "lambda_fusion_enable",
 )
 _CLI_OPTIONAL_FLOAT_OVERRIDE_KEYS: tuple[str, ...] = ("so3_corr_gate_logit_reset",)
 _CLI_OVERRIDE_SKIP_KEYS: tuple[str, ...] = ("config", "paths")
@@ -427,31 +449,41 @@ _CLI_OVERRIDE_SPECIAL_KEYS: set[str] = set(_CLI_OVERRIDE_SKIP_KEYS) | set(_CLI_B
     _CLI_OPTIONAL_FLOAT_OVERRIDE_KEYS
 )
 
-_DIRECT_POSE_LEG_GATE_ALIAS_MAP: Dict[str, str] = {
-    "": "none",
-    "none": "none",
-    "off": "none",
-    "false": "none",
-    "0": "none",
-    "no": "none",
-    "n": "none",
-    "disable": "none",
-    "disabled": "none",
-    "learned": "learned",
-    "on": "learned",
-    "true": "learned",
-    "1": "learned",
-    "yes": "learned",
-    "y": "learned",
-    "scale": "scale",
-    "mag": "scale",
-    "magnitude": "scale",
-    "logmag": "scale",
-    "log_mag": "scale",
-    "exp": "scale",
-    "alpha": "scale",
-}
 _DIRECT_POSE_LEG_GATE_CHOICES: Tuple[str, ...] = ("none", "learned", "scale")
+_STRICT_BRANCH_UNLOAD_CHANGE = "2026-04-28 strict branch unload cleanup"
+_STRICT_DIRECT_POSE_SHAPE_INFERENCE_UNLOAD_CHANGE = "2026-04-28 strict direct-pose shape-inference unload"
+
+
+def _cfg_reject_removed_legacy_checkpoint_boundary(payload: Dict[str, Any]) -> None:
+    if "legacy_checkpoint_compat" in payload:
+        raise SystemExit(
+            "[FATAL][Removed] config field `legacy_checkpoint_compat` is removed. "
+            f"Removed by {_STRICT_BRANCH_UNLOAD_CHANGE}: posttrain mainline no longer accepts a legacy checkpoint "
+            "runtime branch or config opt-in. Migration: delete `legacy_checkpoint_compat` from config/caller and "
+            "migrate legacy checkpoints offline with tools/migrate_legacy_posttrain_ckpt.py before running "
+            "train.posttrain."
+        )
+    if "strict_current_model_build" in payload and (
+        not _as_bool(payload.get("strict_current_model_build", True), default=True)
+    ):
+        raise SystemExit(
+            "[FATAL][Removed] config field `strict_current_model_build=false` is removed. "
+            f"Removed by {_STRICT_BRANCH_UNLOAD_CHANGE}: posttrain mainline is strict/current-only and no longer "
+            "supports a non-strict runtime branch. Migration: delete the field or set "
+            "`strict_current_model_build=true`, and migrate legacy checkpoints offline with "
+            "tools/migrate_legacy_posttrain_ckpt.py before running train.posttrain."
+        )
+
+
+def _cfg_get_direct_pose_leg_gate_mode(payload: Dict[str, Any], key: str, default: str) -> str:
+    raw = _cfg_get_or(payload, key, default)
+    mode = normalize_direct_pose_leg_gate_mode(
+        raw,
+        default=default,
+        strict=False,
+        context=key,
+    )
+    return mode if mode in _DIRECT_POSE_LEG_GATE_CHOICES else str(default)
 
 
 def _cfg_reject_retired_direct_pose_highorder(payload: Dict[str, Any]) -> None:
@@ -504,6 +536,141 @@ def _cfg_reject_retired_direct_pose_highorder(payload: Dict[str, Any]) -> None:
             f"high-order branches: {keys_txt}. "
             "Keep side-routing/sign-gate/rank1/SIC-focus at inert defaults, or use archived repro/validate lanes."
         )
+
+
+def _cfg_reject_strict_retired_contact_plan_obs_init(payload: Dict[str, Any]) -> None:
+    strict_current = _as_bool(payload.get("strict_current_model_build", True), default=True)
+    if not bool(strict_current):
+        return
+
+    hits: list[str] = []
+    mode = str(payload.get("contact_plan_init_mode", "learnable") or "learnable").strip().lower()
+    if mode in ("learnable_obs", "obs+learnable"):
+        mode = "learnable+obs"
+    if mode not in ("", "learnable"):
+        hits.append("contact_plan_init_mode")
+    for key in ("contact_plan_init_hidden", "contact_plan_init_dropout"):
+        if key in payload:
+            hits.append(key)
+    if hits:
+        raise SystemExit(
+            "[FATAL][Removed] strict/current posttrain config contains retired contact-plan obs-init fields "
+            f"{sorted(set(hits))}. Removed by {_STRICT_BRANCH_UNLOAD_CHANGE}: "
+            "strict_current_model_build fixes contact_plan_init_mode=learnable and does not build "
+            "contact_plan_init_head. Migration: delete contact_plan_init_hidden/dropout and strip "
+            "`contact_plan_init_head.*` at migration time; no strict/current obs-init replacement."
+        )
+
+
+def _cfg_reject_strict_direct_pose_shape_inference_boundary(payload: Dict[str, Any]) -> None:
+    strict_current = _as_bool(payload.get("strict_current_model_build", True), default=True)
+    if not bool(strict_current):
+        return
+
+    for retired_key, canonical_key in (
+        ("direct_pose_hidden_override", "direct_pose_hidden"),
+        ("direct_pose_meas_mode_override", "direct_pose_meas_mode"),
+    ):
+        if retired_key not in payload:
+            continue
+        raise SystemExit(
+            "[FATAL][Removed] strict/current posttrain config contains retired direct-pose field "
+            f"`{retired_key}`. Removed by {_STRICT_DIRECT_POSE_SHAPE_INFERENCE_UNLOAD_CHANGE}: "
+            "strict/current direct-pose semantics must come from canonical resolved-config fields, "
+            "not override shims that were previously used with checkpoint layout inference. "
+            f"Migration: set `{canonical_key}` explicitly in config; no checkpoint shape/posttrain_cfg replacement."
+        )
+
+    direct_pose_semantic_fields = (
+        "direct_pose_hidden",
+        "direct_pose_meas_mode",
+        "direct_pose_feat_source",
+        "direct_pose_time_pe_dim",
+        "direct_pose_use_phase_z",
+        "direct_pose_phase_z_mode",
+        "direct_pose_split_enable",
+        "direct_pose_arm_split_enable",
+        "direct_pose_nonleg_proj_dim",
+    )
+    direct_pose_enable_present = "direct_pose_enable" in payload
+    direct_pose_enable = _as_bool(payload.get("direct_pose_enable", False), default=False)
+    train_direct_pose = _as_bool(payload.get("train_direct_pose", False), default=False)
+    train_lambda_head = _as_bool(payload.get("train_lambda_head", False), default=False)
+    direct_pose_semantics_present = any(field in payload for field in direct_pose_semantic_fields)
+    if (train_direct_pose or train_lambda_head or direct_pose_semantics_present) and (not direct_pose_enable_present):
+        raise SystemExit(
+            "[FATAL][Removed] strict/current posttrain config is missing required field `direct_pose_enable`. "
+            f"Removed by {_STRICT_DIRECT_POSE_SHAPE_INFERENCE_UNLOAD_CHANGE}: strict/current direct-pose build "
+            "semantics must be explicit and cannot be recovered from checkpoint shape/posttrain_cfg inference. "
+            "Migration: set `direct_pose_enable` explicitly in config; no checkpoint shape/posttrain_cfg replacement."
+        )
+
+    if not bool(direct_pose_enable):
+        return
+
+    missing = [
+        field
+        for field in (
+            "direct_pose_hidden",
+            "direct_pose_meas_mode",
+            "direct_pose_feat_source",
+            "direct_pose_time_pe_dim",
+        )
+        if field not in payload
+    ]
+    if missing:
+        raise SystemExit(
+            "[FATAL][Removed] strict/current posttrain config is missing required direct-pose fields "
+            f"{missing}. Removed by {_STRICT_DIRECT_POSE_SHAPE_INFERENCE_UNLOAD_CHANGE}: strict/current direct-pose "
+            "build semantics must be explicit and cannot be recovered from checkpoint shape/posttrain_cfg inference. "
+            "Migration: set the missing canonical direct-pose config fields explicitly; no checkpoint "
+            "shape/posttrain_cfg replacement."
+        )
+
+    feat_source_text = str(payload.get("direct_pose_feat_source", "") or "").strip().lower()
+    if feat_source_text in ("", "auto"):
+        raise SystemExit(
+            "[FATAL][Removed] strict/current posttrain config field `direct_pose_feat_source` cannot be "
+            f"{feat_source_text or 'empty'!r}. Removed by {_STRICT_DIRECT_POSE_SHAPE_INFERENCE_UNLOAD_CHANGE}: "
+            "strict/current direct-pose feature-source semantics can no longer be inferred from "
+            "checkpoint shape/posttrain_cfg. Migration: set `direct_pose_feat_source` explicitly; no replacement."
+        )
+
+    try:
+        direct_pose_time_pe_dim = int(payload.get("direct_pose_time_pe_dim"))
+    except (TypeError, ValueError) as exc:
+        raise SystemExit(
+            "[FATAL][Removed] strict/current posttrain config field `direct_pose_time_pe_dim` must be an "
+            "explicit integer. Removed by "
+            f"{_STRICT_DIRECT_POSE_SHAPE_INFERENCE_UNLOAD_CHANGE}: strict/current direct-pose time-PE semantics "
+            "can no longer be inferred from checkpoint shape/posttrain_cfg. Migration: set "
+            "`direct_pose_time_pe_dim` explicitly; no replacement."
+        ) from exc
+    if direct_pose_time_pe_dim < 0:
+        raise SystemExit(
+            "[FATAL][Removed] strict/current posttrain config field "
+            f"`direct_pose_time_pe_dim={direct_pose_time_pe_dim}` entered retired auto-infer direct-pose time-PE "
+            f"path. Removed by {_STRICT_DIRECT_POSE_SHAPE_INFERENCE_UNLOAD_CHANGE}: strict/current direct-pose "
+            "time-PE semantics can no longer be inferred from checkpoint shape/posttrain_cfg. Migration: set "
+            "`direct_pose_time_pe_dim` explicitly with a non-negative even value; no replacement."
+        )
+
+    if _as_bool(payload.get("direct_pose_use_phase_z", False), default=False) and ("direct_pose_phase_z_mode" not in payload):
+        raise SystemExit(
+            "[FATAL][Removed] strict/current posttrain config is missing required field `direct_pose_phase_z_mode`. "
+            f"Removed by {_STRICT_DIRECT_POSE_SHAPE_INFERENCE_UNLOAD_CHANGE}: strict/current phase-z routing "
+            "semantics must be explicit and cannot be inferred from checkpoint shape/posttrain_cfg. "
+            "Migration: set `direct_pose_phase_z_mode` explicitly when `direct_pose_use_phase_z=true`; no replacement."
+        )
+    if _as_bool(payload.get("direct_pose_split_enable", False), default=False) and ("direct_pose_nonleg_proj_dim" not in payload):
+        raise SystemExit(
+            "[FATAL][Removed] strict/current posttrain config is missing required field `direct_pose_nonleg_proj_dim`. "
+            f"Removed by {_STRICT_DIRECT_POSE_SHAPE_INFERENCE_UNLOAD_CHANGE}: strict/current split direct-pose "
+            "layout semantics must be explicit and cannot be inferred from checkpoint shape/posttrain_cfg. "
+            "Migration: set `direct_pose_nonleg_proj_dim` explicitly when `direct_pose_split_enable=true`; no replacement."
+        )
+
+
 def _cfg_parse_path_basic(payload: Dict[str, Any]) -> Dict[str, Any]:
     ckpt_in = _as_path(payload.get("ckpt_in"))
     if ckpt_in is None:
@@ -548,6 +715,7 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
             ("direct_pose_split_enable", _cfg_get_bool, {"key": "direct_pose_split_enable", "default": False}),
             ("direct_pose_arm_split_enable", _cfg_get_bool, {"key": "direct_pose_arm_split_enable", "default": False}),
             ("direct_pose_nonleg_train_only", _cfg_get_bool, {"key": "direct_pose_nonleg_train_only", "default": False}),
+            ("direct_pose_nonleg_trunk_mode", _cfg_get_str_or, {"key": "direct_pose_nonleg_trunk_mode", "default": "none"}),
             ("direct_pose_leg_enable", _cfg_get_bool, {"key": "direct_pose_leg_enable", "default": False}),
             ("direct_pose_leg_train_only", _cfg_get_bool, {"key": "direct_pose_leg_train_only", "default": False}),
             ("direct_pose_leg_gate_train_only", _cfg_get_bool, {"key": "direct_pose_leg_gate_train_only", "default": False}),
@@ -555,15 +723,24 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
             ("direct_pose_leg_stopgrad_main", _cfg_get_bool, {"key": "direct_pose_leg_stopgrad_main", "default": False}),
             ("direct_pose_leg_detach_feat", _cfg_get_bool, {"key": "direct_pose_leg_detach_feat", "default": False}),
             ("direct_pose_leg_max_deg", _cfg_get_float, {"key": "direct_pose_leg_max_deg", "default": 0.0, "min_value": 0.0}),
-            ("direct_pose_leg_gate_mode", _cfg_get_enum, {"key": "direct_pose_leg_gate_mode", "default": "none", "alias_map": _DIRECT_POSE_LEG_GATE_ALIAS_MAP, "choices": _DIRECT_POSE_LEG_GATE_CHOICES}),
+            ("direct_pose_leg_gate_mode", _cfg_get_direct_pose_leg_gate_mode, {"key": "direct_pose_leg_gate_mode", "default": "none"}),
             ("direct_pose_leg_gate_power", _cfg_get_float, {"key": "direct_pose_leg_gate_power", "default": 1.0, "min_value": 1e-8}),
             ("direct_pose_leg_gate_sup_weight", _cfg_get_float, {"key": "direct_pose_leg_gate_sup_weight", "default": 0.0, "min_value": 0.0}),
         ],
     )
     cfg["direct_pose_arm_bones"] = _normalize_optional_csv(payload.get("direct_pose_arm_bones", None))
     cfg["direct_pose_leg_bones"] = payload.get("direct_pose_leg_bones", None)
+    trunk_mode = str(cfg["direct_pose_nonleg_trunk_mode"] or "none").strip().lower()
+    if trunk_mode in ("", "off", "false", "0"):
+        trunk_mode = "none"
+    if trunk_mode not in ("none", "last", "full"):
+        raise ValueError(
+            "direct_pose_nonleg_trunk_mode must be one of: none | last | full "
+            f"(got {cfg['direct_pose_nonleg_trunk_mode']!r})"
+        )
+    cfg["direct_pose_nonleg_trunk_mode"] = trunk_mode
 
-    direct_pose_meas_mode_override = payload.get("direct_pose_meas_mode_override", payload.get("direct_pose_meas_mode", None))
+    direct_pose_meas_mode_override = payload.get("direct_pose_meas_mode_override", None)
     if direct_pose_meas_mode_override is not None:
         direct_pose_meas_mode_override = str(direct_pose_meas_mode_override).strip() or None
     cfg["direct_pose_meas_mode_override"] = direct_pose_meas_mode_override
@@ -687,6 +864,7 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
             ("rollout_include_boundary_raw", _cfg_pick, {"key": "rollout_include_boundary"}),
             ("rollout_random_offset", _cfg_get_bool, {"key": "rollout_random_offset", "default": False}),
             ("time_index_mode", _cfg_get_str_or, {"key": "time_index_mode", "default": "global"}),
+            ("width", _cfg_get_int, {"key": "width", "default": None, "allow_none": True, "min_value": 1}),
             ("depth", _cfg_get_int_or, {"key": "depth", "default": 3}),
             ("num_heads", _cfg_get_int_or, {"key": "num_heads", "default": 4}),
             ("dropout", _cfg_get_float_or, {"key": "dropout", "default": 0.1}),
@@ -697,15 +875,27 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
             ("weight_decay", _cfg_get_float_or, {"key": "weight_decay", "default": _model_build_cfg.DEFAULT_POSTTRAIN_TRAINER_WEIGHT_DECAY}),
             ("so3_corr_gate_logit_reset", _cfg_pick, {"key": "so3_corr_gate_logit_reset"}),
             ("detach_rollout_state", _cfg_get_bool, {"key": "detach_rollout_state", "default": True}),
+            ("contact_plan_enable", _cfg_get_bool, {"key": "contact_plan_enable", "default": False}),
+            ("contact_plan_hidden", _cfg_get_int_or, {"key": "contact_plan_hidden", "default": _model_build_cfg.DEFAULT_CONTACT_PLAN_HIDDEN, "min_value": 1}),
+            ("contact_plan_dropout", _cfg_get_float_or, {"key": "contact_plan_dropout", "default": _model_build_cfg.DEFAULT_CONTACT_PLAN_DROPOUT}),
+            ("contact_plan_inject", _cfg_get_str_or, {"key": "contact_plan_inject", "default": _model_build_cfg.DEFAULT_CONTACT_PLAN_INJECT}),
+            ("contact_plan_inject_detach", _cfg_get_bool, {"key": "contact_plan_inject_detach", "default": _model_build_cfg.DEFAULT_CONTACT_PLAN_INJECT_DETACH}),
+            ("contact_plan_time_pe_dim", _cfg_get_int_or, {"key": "contact_plan_time_pe_dim", "default": _model_build_cfg.DEFAULT_CONTACT_PLAN_TIME_PE_DIM, "min_value": 0}),
+            ("contact_plan_time_pe_base", _cfg_get_float_or, {"key": "contact_plan_time_pe_base", "default": _model_build_cfg.DEFAULT_CONTACT_PLAN_TIME_PE_BASE}),
             ("contact_plan_init_mode", _cfg_get_str_or, {"key": "contact_plan_init_mode", "default": "learnable"}),
             ("contact_plan_init_hidden", _cfg_get_int_or, {"key": "contact_plan_init_hidden", "default": 128}),
             ("contact_plan_init_dropout", _cfg_get_float_or, {"key": "contact_plan_init_dropout", "default": 0.0}),
             ("event_clock", _cfg_get_str_or, {"key": "event_clock", "default": "auto"}),
             ("event_clock_max_delta", _cfg_get_float_or, {"key": "event_clock_max_delta", "default": 0.5}),
             ("load_context_raw", _cfg_pick, {"key": "load_context"}),
+            ("strict_current_model_build_raw", _cfg_pick, {"key": "strict_current_model_build"}),
             ("train_lambda_head", _cfg_get_bool, {"key": "train_lambda_head", "default": False}),
             ("train_direct_pose", _cfg_get_bool, {"key": "train_direct_pose", "default": False}),
+            ("lambda_fusion_enable", _cfg_get_bool, {"key": "lambda_fusion_enable", "default": False}),
             ("direct_pose_feat_source", _cfg_get_str_or, {"key": "direct_pose_feat_source", "default": "auto"}),
+            ("direct_pose_enable", _cfg_get_bool, {"key": "direct_pose_enable", "default": False}),
+            ("direct_pose_hidden", _cfg_get_int_or, {"key": "direct_pose_hidden", "default": _model_build_cfg.DEFAULT_DIRECT_POSE_HIDDEN, "min_value": 1}),
+            ("direct_pose_meas_mode", _cfg_get_str_or, {"key": "direct_pose_meas_mode", "default": _model_build_cfg.DEFAULT_DIRECT_POSE_MEAS_MODE}),
             ("direct_pose_time_pe_base", _cfg_get_float_or, {"key": "direct_pose_time_pe_base", "default": 10000.0}),
             ("direct_pose_use_phase_z", _cfg_get_bool, {"key": "direct_pose_use_phase_z", "default": False}),
             ("direct_pose_phase_z_mode", _cfg_get_str_or, {"key": "direct_pose_phase_z_mode", "default": "concat"}),
@@ -726,6 +916,9 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
     else:
         load_context_text = str(load_context_raw).strip()
         core_cfg["load_context"] = load_context_text or None
+    strict_current_raw = core_cfg.pop("strict_current_model_build_raw", None)
+    strict_current = _as_bool(strict_current_raw, default=True)
+    core_cfg["strict_current_model_build"] = bool(strict_current)
     core_cfg.update(
         _model_build_cfg.resolve_posttrain_lambda_objective_config(payload).to_posttrain_config_dict()
     )
@@ -751,6 +944,9 @@ def _cfg_from_payload(payload: Dict[str, Any]) -> PostTrainConfig:
     if not isinstance(payload, dict):
         raise TypeError("posttrain config payload must be a dict")
     for reject in (
+        _cfg_reject_removed_legacy_checkpoint_boundary,
+        _cfg_reject_strict_retired_contact_plan_obs_init,
+        _cfg_reject_strict_direct_pose_shape_inference_boundary,
         _cfg_reject_retired_direct_pose_highorder,
     ):
         reject(payload)
@@ -3323,52 +3519,6 @@ def _apply_posttrain_local_runtime_overlay(
         setattr(trainer, field_name, getattr(overlay, field_name))
 
 
-_POSTTRAIN_COMPONENT_SLOT_PARAM_PREFIXES: dict[str, tuple[str, ...]] = {
-    "shared_encoder": ("shared_encoder.",),
-    "residual_proj": ("residual_proj.",),
-    "pasa_attention_block": (
-        "_pasa_q.",
-        "_pasa_k.",
-        "_pasa_v.",
-        "_pasa_o.",
-        "_pasa_lnq.",
-        "_pasa_film.",
-        "coupling_norm.",
-    ),
-    "motion_head": ("motion_head.",),
-    "period_encoder": ("period_encoder.",),
-    "bone_residual_adapter_bank": ("_bone_adapters.",),
-    "contact_plan_cell": ("contact_plan_cell.",),
-    "contact_plan_init_z": ("contact_plan_init_z",),
-    "contact_plan_init_head": ("contact_plan_init_head.",),
-    "contact_plan_head": ("contact_plan_head.",),
-    "contact_plan_time_head": ("contact_plan_time_head.",),
-    "event_clock_gate": ("event_clock_gate.",),
-    "event_clock_corrector": ("event_clock_corrector.",),
-    "direct_pose_head": ("direct_pose_head.",),
-    "direct_pose_leg_terminal": ("direct_pose_leg_terminal.",),
-    "direct_pose_out_nonleg": ("direct_pose_out_nonleg.",),
-    "direct_pose_nonleg_proj": ("direct_pose_nonleg_proj.",),
-    "direct_pose_out_arm": ("direct_pose_out_arm.",),
-    "direct_pose_out_else": ("direct_pose_out_else.",),
-    "direct_pose_arm_proj": ("direct_pose_arm_proj.",),
-    "direct_pose_else_proj": ("direct_pose_else_proj.",),
-    "direct_pose_leg_head": ("direct_pose_leg_head.",),
-    "direct_pose_leg_gate_head": ("direct_pose_leg_gate_head.",),
-    "direct_pose_leg_head_shared": ("direct_pose_leg_head_shared.",),
-    "direct_pose_leg_gate_head_shared": ("direct_pose_leg_gate_head_shared.",),
-    "direct_pose_leg_side_embed": ("direct_pose_leg_side_embed.",),
-    "direct_pose_leg_side_sign_gate_head": ("direct_pose_leg_side_sign_gate_head.",),
-    "lambda_fusion_head": ("lambda_fusion_head.",),
-    "so3_delta_corrector": ("so3_delta_corrector.",),
-    "so3_corr_gate_logit": ("so3_corr_gate_logit",),
-    "adaptive_history_module": ("adaptive_history_module.",),
-    "frozen_encoder": ("frozen_encoder.",),
-    "frozen_period_head": ("frozen_period_head.",),
-    "frozen_contact_head": ("frozen_contact_head.",),
-}
-
-
 def _clone_model_state_dict_to_cpu(model: EventMotionModel) -> dict[str, Any]:
     model_state: dict[str, Any] = {}
     for key, value in model.state_dict().items():
@@ -3377,54 +3527,6 @@ def _clone_model_state_dict_to_cpu(model: EventMotionModel) -> dict[str, Any]:
         else:
             model_state[str(key)] = value
     return model_state
-
-
-def _build_posttrain_train_policy_manifest(*, cfg: PostTrainConfig, train_mode: str) -> dict[str, Any]:
-    return {
-        "train_mode": str(train_mode),
-        "rollout_steps": int(getattr(cfg, "rollout_steps", 0) or 0),
-        "rollout_cycles": int(getattr(cfg, "rollout_cycles", 1) or 1),
-        "rollout_include_boundary": bool(getattr(cfg, "rollout_include_boundary", False)),
-        "rollout_random_offset": bool(getattr(cfg, "rollout_random_offset", False)),
-        "time_index_mode": str(getattr(cfg, "time_index_mode", "auto") or "auto"),
-        "detach_rollout_state": bool(getattr(cfg, "detach_rollout_state", False)),
-        "contact_meas_weight": float(cfg.contact_meas_weight),
-        "lambda_reliability_mode": str(cfg.lambda_reliability_mode),
-    }
-
-
-def _build_posttrain_structural_flags(
-    *,
-    artifacts: _posttrain_build_shell.PostTrainModelArtifacts,
-) -> dict[str, Any]:
-    build_state = artifacts.build_state
-    direct_pose_leg_cfg = build_state.direct_pose_leg_cfg
-    return {
-        "direct_pose_enable": bool(build_state.direct_pose_cfg.enable),
-        "lambda_fusion_enable": bool(build_state.lambda_fusion_enable),
-        "contact_plan_enable": bool(build_state.contact_plan_enable),
-        "use_event_clock": bool(build_state.use_event_clock),
-        "direct_pose_leg_enable": bool(direct_pose_leg_cfg.enable),
-        "direct_pose_leg_side_routing": bool(direct_pose_leg_cfg.side_routing),
-        "direct_pose_arm_split_enable": bool(build_state.direct_pose_cfg.arm_split_enable),
-        "direct_pose_leg_mode": str(direct_pose_leg_cfg.mode),
-    }
-
-
-def _build_component_slot_trainable_map(model: EventMotionModel) -> dict[str, bool]:
-    requires_grad_names = {
-        str(name)
-        for name, parameter in model.named_parameters()
-        if bool(getattr(parameter, "requires_grad", False))
-    }
-    trainable_slots: dict[str, bool] = {}
-    for slot in COMPONENT_SLOT_ORDER:
-        prefixes = _POSTTRAIN_COMPONENT_SLOT_PARAM_PREFIXES.get(slot, ())
-        trainable_slots[slot] = any(
-            any(name == prefix or name.startswith(prefix) for prefix in prefixes)
-            for name in requires_grad_names
-        )
-    return trainable_slots
 
 
 def _build_posttrain_contract_build_state(
@@ -3525,6 +3627,7 @@ def _build_posttrain_checkpoint_payload(
     cfg_jsonable["direct_pose_arm_split_enable"] = bool(getattr(model, "direct_pose_arm_split_enable", False))
     cfg_jsonable["direct_pose_arm_bones"] = getattr(model, "direct_pose_arm_bones", None)
     cfg_jsonable["direct_pose_nonleg_train_only"] = bool(getattr(cfg, "direct_pose_nonleg_train_only", False))
+    cfg_jsonable["direct_pose_nonleg_trunk_mode"] = str(getattr(cfg, "direct_pose_nonleg_trunk_mode", "none") or "none")
     cfg_jsonable["direct_pose_leg_gate_mode"] = str(artifacts.direct_pose_leg_gate_mode_model)
     cfg_jsonable["direct_pose_leg_gate_power"] = float(artifacts.direct_pose_leg_gate_power_model)
 
@@ -3532,7 +3635,7 @@ def _build_posttrain_checkpoint_payload(
     trainable_slot_map = (
         {str(key): bool(value) for key, value in trainable_slots.items()}
         if trainable_slots is not None
-        else _build_component_slot_trainable_map(model)
+        else _posttrain_build_shell._build_component_slot_trainable_map(model)
     )
     contract_build_state = _build_posttrain_contract_build_state(
         cfg=cfg,
@@ -3557,14 +3660,30 @@ def _build_posttrain_checkpoint_payload(
             io_signature=build_event_motion_model_io_signature_manifest(model),
             module_graph=build_event_motion_model_module_graph_manifest(model),
             build_trace=build_posttrain_build_trace_manifest(
-                structural_flags=_build_posttrain_structural_flags(artifacts=artifacts),
+                structural_flags=_posttrain_build_shell._build_posttrain_structural_flags(
+                    build_state=artifacts.build_state
+                ),
                 train_mode=str(train_mode),
                 trainable_slots=trainable_slot_map,
             ),
             state_dict=model_state,
-            train_policy=_build_posttrain_train_policy_manifest(cfg=cfg, train_mode=train_mode),
+            train_policy=_posttrain_build_shell._build_posttrain_train_policy_manifest(
+                cfg=cfg,
+                train_mode=train_mode,
+            ),
         )
     )
+    if artifacts.resolved_build_manifest is not None:
+        payload["resolved_build_manifest"] = artifacts.resolved_build_manifest
+        payload["resolved_build_manifest_hash"] = compute_resolved_build_manifest_hash(
+            artifacts.resolved_build_manifest
+        )
+    else:
+        raise SystemExit(
+            "[FATAL][strict_current_model_build] cannot save checkpoint because "
+            "artifacts.resolved_build_manifest is missing; strict path requires a current build contract."
+        )
+    payload["strict_current_model_build"] = bool(cfg.strict_current_model_build)
     return payload
 
 
@@ -3797,6 +3916,7 @@ _POSTTRAIN_ARG_SPECS_RUNTIME_AND_TRAIN = (
         ("--time_index_mode",),
         dict(type=str, help="global|cycle|auto|none (time_index feeding for contact_plan time-PE)."),
     ),
+    (("--width",), dict(type=int, help="Current model hidden width. Required by the default strict checkpoint path.")),
     (("--depth",), dict(type=int)),
     (("--num_heads",), dict(type=int)),
     (("--dropout",), dict(type=float)),
@@ -3822,6 +3942,13 @@ _POSTTRAIN_ARG_SPECS_RUNTIME_AND_TRAIN = (
         dict(type=str, help="true|false; whether to finetune direct_pose_head (direct expert) via rollout loss"),
     ),
     (("--contact_plan_init_mode",), dict(type=str, help=argparse.SUPPRESS)),
+    (("--contact_plan_enable",), dict(type=str, help="true|false; explicit current-build contact plan enable.")),
+    (("--contact_plan_hidden",), dict(type=int, help="Current-build contact plan hidden width.")),
+    (("--contact_plan_dropout",), dict(type=float, help=argparse.SUPPRESS)),
+    (("--contact_plan_inject",), dict(type=str, help="Current-build contact injection: none|contacts|plan_z.")),
+    (("--contact_plan_inject_detach",), dict(type=str, help=argparse.SUPPRESS)),
+    (("--contact_plan_time_pe_dim",), dict(type=int, help="Current-build contact plan time-PE dim.")),
+    (("--contact_plan_time_pe_base",), dict(type=float, help=argparse.SUPPRESS)),
     (("--contact_plan_init_hidden",), dict(type=int, help=argparse.SUPPRESS)),
     (("--contact_plan_init_dropout",), dict(type=float, help=argparse.SUPPRESS)),
     (
@@ -3845,6 +3972,18 @@ _POSTTRAIN_ARG_SPECS_RUNTIME_AND_TRAIN = (
 
 _POSTTRAIN_ARG_SPECS_DIRECT_POSE_BUILD = (
     (
+        ("--direct_pose_enable",),
+        dict(type=str, help="true|false; explicit current-build direct pose head enable."),
+    ),
+    (
+        ("--direct_pose_hidden",),
+        dict(type=int, help="Current-build direct pose hidden width."),
+    ),
+    (
+        ("--direct_pose_meas_mode",),
+        dict(type=str, help="Current-build direct pose measurement mode: concat|mode_select."),
+    ),
+    (
         ("--direct_pose_split_enable",),
         dict(type=str, help="true|false; split direct output heads into leg/non-leg with shared trunk (B2)."),
     ),
@@ -3863,6 +4002,10 @@ _POSTTRAIN_ARG_SPECS_DIRECT_POSE_BUILD = (
     (
         ("--direct_pose_nonleg_train_only",),
         dict(type=str, help="true|false; when train_direct_pose, freeze trunk/leg and train non-leg branch only."),
+    ),
+    (
+        ("--direct_pose_nonleg_trunk_mode",),
+        dict(type=str, choices=("none", "last", "full"), help="When nonleg_train_only=true, also train direct_pose_head trunk: none|last|full."),
     ),
     (
         ("--direct_pose_leg_enable",),
@@ -4090,6 +4233,7 @@ _POSTTRAIN_ARG_SPECS_CONTACT_MEAS = (
 
 
 _POSTTRAIN_ARG_SPECS_LAMBDA_FUSION = (
+    (("--lambda_fusion_enable",), dict(type=str, help="true|false; explicit current-build lambda_fusion_head enable.")),
     (("--lambda_fusion_mode",), dict(type=str, help="global|per_joint")),
     (("--lambda_fusion_hidden",), dict(type=int)),
     (("--lambda_fusion_dropout",), dict(type=float)),
@@ -4211,13 +4355,14 @@ def main() -> None:
         direct_pose_leg_train_only=bool(getattr(cfg, "direct_pose_leg_train_only", False)),
         direct_pose_leg_gate_train_only=bool(getattr(cfg, "direct_pose_leg_gate_train_only", False)),
         direct_pose_nonleg_train_only=bool(getattr(cfg, "direct_pose_nonleg_train_only", False)),
+        direct_pose_nonleg_trunk_mode=str(getattr(cfg, "direct_pose_nonleg_trunk_mode", "none") or "none"),
     )
     model.train()
 
     params, names = _select_trainable_params(model)
     if not params:
         raise SystemExit("[FATAL] No trainable parameters selected for post-train.")
-    trainable_slots = _build_component_slot_trainable_map(model)
+    trainable_slots = _posttrain_build_shell._build_component_slot_trainable_map(model)
     print(f"[posttrain] trainable={len(params)} params: {', '.join(names[:8])}{' ...' if len(names)>8 else ''}")
     expected_prefix_map: Dict[str, Tuple[str, ...]] = {
         "lambda": ("lambda_fusion_head",),
