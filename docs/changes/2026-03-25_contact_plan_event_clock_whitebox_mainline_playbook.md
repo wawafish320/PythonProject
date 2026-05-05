@@ -23,6 +23,40 @@ Companion evidence memo:
 2. 后续如果真的要落地代码，只回收最小 debug hooks
 3. **不要**把当前分支的实验性 loss、训练开关、grad probe、临时工具整包带回 `main`
 
+### 1.1 2026-05-05 评估口径对齐（runbook §15，0504 71 实验）
+
+这份 playbook 后续提到的 `final lambda`，默认指向下面这个产物：
+
+- `debug_output/_tmp_71_lr1e4_lowlr_downstream_20260504/evals/lambda/group_summary.json`
+
+对齐时保留两个参照：
+
+- 首版 downstream 复现：  
+  `debug_output/_tmp_70r_dense_to_lambda_20260504_r2/evals/lambda/group_summary.json`
+- 同代码线 healthy final anchor：  
+  `debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source_group_summary.json`
+
+当前三者关键读数（`kept_steps=344/434`）：
+
+| lane | all_ex_root mean / p95 | leg mean / p95 |
+|---|---:|---:|
+| healthy final (2026-04-18) | `0.131884 / 0.439573` | `0.173059 / 0.474623` |
+| dense downstream r2 (`71 lr=3e-4`) | `0.096919 / 0.311584` | `0.160309 / 0.392986` |
+| **0504 71 实验 final** (`71 lr=1e-4`, lowlr) | `0.093424 / 0.309132` | `0.158343 / 0.417908` |
+
+对 `dense r2 -> 0504 final`：
+
+- `all_ex_root` 更好（mean `-0.003495`，p95 `-0.002452`）
+- `leg mean` 更好（`-0.001966`），但 `leg p95` 更差（`+0.024921`）
+
+所以当前口径是：0504 final 作为默认 final lambda；同时在涉及 tail 风险时必须并列看 `leg p95`。
+
+主线落地 acceptance criteria（speed-scaling 维度）：
+
+1. 在 evaluator policy `heuristic_v2_td_split_raw_gate_cv_relative1x` 下，plan/auto 路径 `0.8~1.2x` 不出现 `status=fail` 即视为该维度合格。
+2. `status=warn` 允许，但必须在 evidence 文档留痕，并附 reopen 条件链接到
+   `docs/changes/2026-03-25_contact_plan_event_clock_whitebox_mainline_evidence.md` §2.2。
+
 ---
 
 ## 2. 本次建议带回主线的东西

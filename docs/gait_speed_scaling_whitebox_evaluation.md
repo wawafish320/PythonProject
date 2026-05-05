@@ -8,6 +8,41 @@
 
 ---
 
+## 零、2026-05-05 现状对齐（按 runbook 0504 后缀 71 实验 final 产物）
+
+本节只做“当前评估锚点”对齐，不改正文的 evaluator 设计。
+
+对齐依据：
+
+- runbook：`docs/basetrain_to_posttrain_top7_fresh_chain_runbook.md` §15
+- 默认 final lambda（0504 71 实验）：  
+  `debug_output/_tmp_71_lr1e4_lowlr_downstream_20260504/evals/lambda/group_summary.json`
+- 首版 downstream 对照：  
+  `debug_output/_tmp_70r_dense_to_lambda_20260504_r2/evals/lambda/group_summary.json`
+- 同代码线 healthy final anchor：  
+  `debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source_group_summary.json`
+
+三条线关键指标（mask: `cycle_gte=1`, `drop_wrap=true`, `kept_steps=344`, `total_steps=434`）：
+
+| lane | all_ex_root mean / p95 | leg mean / p95 | nonleg mean / p95 |
+|---|---:|---:|---:|
+| healthy final (2026-04-18) | `0.131884 / 0.439573` | `0.173059 / 0.474623` | `0.122981 / 0.434047` |
+| dense downstream r2 (`71 lr=3e-4`) | `0.096919 / 0.311584` | `0.160309 / 0.392986` | `0.083213 / 0.287950` |
+| **0504 71 实验 final** (`71 lr=1e-4`, lowlr) | `0.093424 / 0.309132` | `0.158343 / 0.417908` | `0.079388 / 0.274671` |
+
+当前结论（仅基于 group summary）：
+
+- 0504 final 相对 dense r2：`all_ex_root` 和 `nonleg` 继续改善。
+- `leg` 呈现 mean 更好、p95 更差的 trade-off（`0.392986 -> 0.417908`）。
+- 在 `debug_output/_tmp_71_lr1e4_lowlr_downstream_20260504/run_result.json` 中，`72` 与 `lambda` 指标完全一致；当前 lane 下 `lambda` 仍是 downstream no-op。
+
+边界说明：
+
+- 本节评估只覆盖 pose group 指标（`all_ex_root/leg/nonleg/arm/else`）。
+- `E_speed / E_skate_weighted / E_phase_mono / E_cycle_speed_consistency` 等白盒速度扩展指标，本节未复跑，不应从上述数字外推。
+
+---
+
 ## 一、问题背景
 
 当前速度扩展任务不是传统的 supervised benchmark。
@@ -293,10 +328,18 @@ E_cycle_speed_consistency(s)
 
 - 不只记录 mean，还记录 cycle-wise `std / count / outlier_ratio`
 - 避免均值正常但个别 cycle 跳变被掩盖
-- P0 先加 touchdown sanity gate：若某侧脚 touchdown count 与预期 cycle 数偏离超过 `±1`，直接标记该 scale 为 `td_unstable`
-- 当 `contact_source=auto` 时，不应按“rising edge 最多”直接选源；应优先选择 touchdown 更稳定的源
-  （先比较 `td_unstable / count_error / 左右脚计数差 / interval_cv`，再用 `meas -> plan -> teacher` 做 tie-break）
-- 一旦 `td_unstable`，该 scale 的 C1 / C2 不进入数值 pass/fail，而转入“事件检测不可靠”的单独 failure mode
+- P0 touchdown gate 建议拆成两类：
+  - `td_count_unstable`：best 通道 count 与预期偏离超 `±1`（hard fail）
+  - `td_channel_diverge`：左右脚通道计数分歧（默认 warn，但仅在 best 通道本身 clean 时成立）
+- best 通道 clean 的建议条件：`count_error <= 1` 且 `interval_cv` 有限并在合理范围内（当前实现阈值 `<= 0.50`）
+- `contact_source=auto` 在 gate 模式下只在 `meas / plan` 之间排序；`teacher` 只作为 reference 统计导出，不参与选源
+- touchdown 统计建议同时导出 raw / smoothed 两路（如 3-frame majority vote）：
+  - gate 用 raw
+  - smoothed 只用于诊断，不参与 status
+
+> **Known limitation（2026-05-05）**：`interval_cv <= 0.50` 当前是固定阈值，没有用 healthy anchor 在 1.0x 的 cycle-wise interval 分布做标定。
+> 在 v4 评测下（`debug_output/_tmp_speed_eval_20260505/final_lambda_0504_71_whitebox_v4_*`），plan 全 5 个 scale `clean=True`、meas 在 `0.8/1.0/1.2x` 正确触发 `clean=False`，目前不漏不杀，因此不动。
+> 后续若 healthy anchor (`_tmp_tail_top7_fresh_chain_20260418_074813`) 的 whitebox 复跑可用，再考虑改为 per-source 自适应阈值（按各源 1.0x 的 interval_cv 分位数定）。届时本节应同步更新阈值口径。
 
 #### C2：单调性校验（P0 主指标）
 
@@ -801,16 +844,18 @@ pred: scale=s 的 mean ||root_vel_xy||
 - `L_i(s)` 定义为同侧脚连续两次 touchdown 时刻 root planar position 差的范数
 - 这一项不必一开始就依赖 model 内部的 `contacts_plan`
 - `v_pred(s)` 仍建议复用 denorm 后的 root planar speed
-- 若某侧脚 touchdown count 与预期 cycle 数偏离超过 `±1`，建议直接打上 `td_unstable` 标签，避免把事件检测失败误判成运动学不自洽
-- 若 `contact_source=auto`，建议先在 `contacts_meas / contacts_plan / teacher contacts` 三者上做稳定性排序，
-  再选用于 cycle 边界的 touchdown 源，而不是只看 edge 数量
+- 若 best 通道 touchdown count 与预期 cycle 数偏离超过 `±1`，建议直接打上 `td_count_unstable`（hard fail）
+- 若只出现左右脚计数分歧，建议打 `td_channel_diverge`；只有在 best 通道 clean 时可降为 warn
+- 若 `contact_source=auto`（gate mode），建议只在 `contacts_meas / contacts_plan` 里做稳定性排序；
+  `teacher contacts` 仅导出 `td_stats_teacher` 供 diff，不参与 gate 选源
 
 建议优先顺序：
 
-1. 先用 touchdown 稳定性最好的源（常见为 `teacher` 或干净的 `meas/plan`）
-2. 配合 root planar position 重建 cycle-wise `T_i(s)` 与 `L_i(s)`
-3. 先做 touchdown count sanity check，再计算 C1 / C2
-4. 后续再补 `contacts_plan` / `contacts_meas` 的对比诊断
+1. gate 模式先在 `meas/plan` 里选 touchdown 稳定性更好的源
+2. `teacher` 单独保留 reference 统计，不进入 gate status
+3. 配合 root planar position 重建 cycle-wise `T_i(s)` 与 `L_i(s)`
+4. 先做 touchdown sanity check，再计算 C1 / C2
+5. 后续再补 `contacts_plan` / `contacts_meas` 的对比诊断
 
 ### 11.4 `E_phase_mono / E_phase_jitter` 对应字段
 
@@ -961,8 +1006,10 @@ pred: scale=s 的 mean ||root_vel_xy||
 满足：
 
 - `R_leg` 上升明显，但 `R_nonleg` 仍稳定
-- 或某个 scale 被标记为 `td_unstable`，但其余主指标仍大体可解释
+- 或某个 scale 出现 `td_channel_diverge=true`，且 best 通道仍满足 clean 条件
 - 或 `E_cycle_speed_consistency` 开始偏大
+- 或 `freq_std_hz / freq_hz > 0.10`
+- 或 `stride_std_length / stride_length > 0.10`
 - 或 `f(s)` / `L(s)` 出现轻微反单调或局部跳变
 - 或 `E_cycle_consistency` 有可解释退化
 
@@ -972,14 +1019,19 @@ pred: scale=s 的 mean ||root_vel_xy||
 当前倍率已接近 D-only 的安全边界，但尚未完全失控。
 ```
 
+plan `1.2x` mild CV fray 于 2026-05-05 收口为 known accepted boundary，不构成阻塞合并失败模式；读数与 reopen 条件见 evidence §2.2（`docs/changes/2026-03-25_contact_plan_event_clock_whitebox_mainline_evidence.md`）。
+
 ### 13.3 `fail`
 
 满足任一：
 
 - `E_speed` 明显失真
 - `R_nonleg` 也同步恶化
-- 或 touchdown 检测在该 scale 持续 `td_unstable`
+- 或 `td_count_unstable=true`
+- 或 `td_channel_diverge=true` 且 best 通道不 clean
 - `E_cycle_speed_consistency` 明显失配
+- 或 `freq_std_hz / freq_hz > 0.20`
+- 或 `stride_std_length / stride_length > 0.20`
 - `f(s)` / `L(s)` 与倍率关系反单调或跳变式失稳
 - `E_cycle_consistency` 出现跳变式恶化
 

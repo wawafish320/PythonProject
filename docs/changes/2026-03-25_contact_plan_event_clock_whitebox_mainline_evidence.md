@@ -45,6 +45,76 @@ Companion playbook:
 - 每轮只改一条路径；
 - 可以直接把“当前步显式输入”“carry state”“corrector content”“meas-driven signals”分开看。
 
+### 2.1 2026-05-05 对齐锚点（runbook §15，0504 71 实验）
+
+为避免旧文档里“final lambda”口径漂移，当前统一按
+`docs/basetrain_to_posttrain_top7_fresh_chain_runbook.md` §15（2026-05-04 分支）记账。
+
+本轮用于对齐的三个产物：
+
+- 首版 downstream 复现（`71 lr=3e-4`）  
+  `debug_output/_tmp_70r_dense_to_lambda_20260504_r2/evals/lambda/group_summary.json`
+- 0504 的 71 实验 final（`71 lr=1e-4` lowlr lane）  
+  `debug_output/_tmp_71_lr1e4_lowlr_downstream_20260504/evals/lambda/group_summary.json`
+- 同代码线 healthy final anchor（2026-04-18）  
+  `debug_output/_tmp_tail_top7_fresh_chain_20260418_074813/lambda_clean/eval_model_source_group_summary.json`
+
+| lane | all_ex_root mean / p95 | leg mean / p95 |
+|---|---:|---:|
+| healthy final (2026-04-18) | `0.131884 / 0.439573` | `0.173059 / 0.474623` |
+| dense downstream r2 (`71 lr=3e-4`) | `0.096919 / 0.311584` | `0.160309 / 0.392986` |
+| **0504 71 实验 final** (`71 lr=1e-4`, lowlr) | `0.093424 / 0.309132` | `0.158343 / 0.417908` |
+
+对 `dense r2 -> 0504 final` 的直接变化：
+
+- `all_ex_root`: mean `-0.003495`，p95 `-0.002452`
+- `leg`: mean `-0.001966`，p95 `+0.024921`
+
+即：0504 final 在整体和 leg mean 上更优，但 leg p95 不占优。  
+这组结果不改变本文的 white-box 因果结论，只影响 downstream 选型时的多目标权衡。
+
+### 2.2 2026-05-05 speed-scaling whitebox 收口（evaluator v4）
+
+evaluator 与规范在本日已对齐到统一口径，相关产物：
+
+- `debug_output/_tmp_speed_eval_20260505/final_lambda_0504_71_whitebox_v4_auto.json`
+- `debug_output/_tmp_speed_eval_20260505/final_lambda_0504_71_whitebox_v4_plan.json`
+- `debug_output/_tmp_speed_eval_20260505/final_lambda_0504_71_whitebox_v4_meas.json`
+
+| source | 0.8 | 0.9 | 1.0 | 1.1 | 1.2 |
+|---|---|---|---|---|---|
+| plan / auto | pass | pass | pass | pass | warn |
+| meas | fail | pass | fail | warn | fail |
+
+读数（cycle-wise CV，5-cycle rollout）：
+
+| source | scale | freq_cv | stride_cv | E_cycle_cons | clean | trigger |
+|---|---:|---:|---:|---:|---|---|
+| plan | 1.0 | 0.345 | 0.321 | 0.027 | True | — |
+| plan | 1.2 | 0.458 | 0.368 | 0.009 | True | freq_cv ratio +33% → warn |
+| meas | 1.0 | 1.037 | 0.552 | 0.044 | False | clean=False → fail |
+| meas | 1.1 | 0.343 | 0.327 | 0.021 | True  | td_channel_diverge → warn |
+| meas | 0.8/1.2 | 0.76 / 0.95 | 0.57 / 0.69 | 0.03 | False | clean=False → fail |
+
+对本文档主结论的支撑（不替代）：
+
+- **D-only 在 ±10% 区间稳定**：plan 路径 `0.8 ~ 1.1x` 全 pass，`E_cycle_speed_consistency ≤ 0.027`、`R_leg / R_nonleg ≈ 1.0`，
+  与 §3 结论 A/B 中"现有 plan/event-clock 写回链在 ±10% 速度偏移内可解释"的整体判断一致。
+- **D-only 在 ±20% 开始出现 mild fray**：plan `1.2x` 的 `freq_cv` 相对 1.0x 上涨约 `+33%`（`0.345 → 0.458`），E_cycle 反而下降，
+  属于 "cycle 边界变松但内部一致性仍 OK" 的退化形态，**还不到结构性失稳**。
+  这是后续判断"是否需要引入 contact anchor 来稳 ±20% 边界"的一个新数据点；本文档的 white-box 因果结论本身不变。
+- **Accepted boundary 决议（2026-05-05）**：在 evaluator policy
+  `heuristic_v2_td_split_raw_gate_cv_relative1x` 下，plan/auto 路径 `1.2x` 读数为
+  `freq_cv 0.345 → 0.458`（相对 `1.0x` `+33%`），`status=warn`；该点正式收口为
+  **D-only ±20% 的已知 accepted boundary（非阻塞）**。
+  reopen 条件仅两条：
+  1) 后续同口径复跑进入 `status=fail`；
+  2) deploy 端 `1.2x` 出现可观察视觉/物理异常。
+- **meas 路径的 fail 与本文档的 speed-scaling 收口正交**：meas 在 `0.8 / 1.0 / 1.2x` 反复触发 `td_best_channel_clean=False`，
+  在 `0.9 / 1.1x` 又恢复正常，这种 scale 间 non-smooth 失稳更像是 contact-meas head 自身的输出抖动，
+  而不是 speed scaling 引入的问题。**该问题已拆出独立 issue**，参见
+  `docs/Problems/active/2026-05-05_meas_contact_head_jitter.md`。
+
 ---
 
 ## 3. 核心数据结论

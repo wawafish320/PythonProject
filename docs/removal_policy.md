@@ -117,9 +117,9 @@ removal boundary:
 
 ---
 
-## 5) Ckpt compat 层的边界（`train/checkpoint/compat.py`）
+## 5) Ckpt load schema 边界（`train/checkpoint/load_schema.py`）
 
-compat 层**只允许** schema reshape，**不允许** semantic mapping。
+load schema 层**只允许** schema reshape，**不允许** semantic mapping。
 
 | 允许 | 不允许 |
 |---|---|
@@ -128,9 +128,9 @@ compat 层**只允许** schema reshape，**不允许** semantic mapping。
 | Tensor dtype 升降级（fp32 ↔ fp16） | "老的 contact_meas 当成新的 pretrain_contact 用" |
 | 显式 `partial_load` 时按白名单跳过指定 key | "老 ckpt 缺这个 key，用默认初始化" |
 
-判定标准：**如果 reshape 后两份 ckpt 在所有输入下输出位精确相同，是 schema reshape；否则是 semantic mapping，不允许进 compat 层**。
+判定标准：**如果 reshape 后两份 ckpt 在所有输入下输出位精确相同，是 schema reshape；否则是 semantic mapping，不允许进 load schema 层**。
 
-semantic mapping 的正确归宿是 fail-fast（§2 Step 2）+ 显式迁移工具（`tools/migrate_*.py`），**不是** compat 层。
+semantic mapping 的正确归宿是 fail-fast（§2 Step 2）+ 显式迁移工具（`tools/migrate_*.py`），**不是** load schema 层。
 
 ---
 

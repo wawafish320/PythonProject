@@ -1,5 +1,7 @@
 # 训练系统架构与思路详解
 
+> Archived (2026-05-04): 这是 2025-12 早期架构总览，不是 current canonical。当前 basetrain 入口看 `../basetrain_pipeline.md`、`../../train/TRAINING_GUIDE.md` 和 `../../train/MODULE_BOUNDARIES.md`。
+>
 > 本文档详细分析了整个训练系统的架构、数据流程、模型设计和训练策略
 > 生成日期: 2025-12-25
 
@@ -16,7 +18,7 @@
 7. [评估系统](#评估系统)
 8. [配置系统](#配置系统)
 9. [关键创新点](#关键创新点)
-10. [Contact Loop Closure & Stage2 λ Fusion](contact_loop_closure_design.md)
+10. [Contact Loop Closure & Stage2 λ Fusion](../contact_loop_closure_design.md)
 
 ---
 
@@ -397,7 +399,7 @@ pos = fk_positions_from_rot6d(
 
 ## 训练流程
 
-> 说明：关于 **Contact-loop / Stage2（λ Gate + SO(3) on-manifold 融合，把 `out_direct` 真正接入 rollout）** 的完整设计、诊断与验收指标，见 `docs/contact_loop_closure_design.md`。
+> 说明：关于 **Contact-loop / Stage2（λ Gate + SO(3) on-manifold 融合，把 `out_direct` 真正接入 rollout）** 的完整设计、诊断与验收指标，见 `../contact_loop_closure_design.md`。
 
 ### training_MPL.py: Trainer类
 

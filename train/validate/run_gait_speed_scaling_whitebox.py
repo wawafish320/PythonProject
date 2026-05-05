@@ -56,6 +56,15 @@ class RolloutTrace:
     cycle_start_indices: List[int]
     cycle_stop_indices: List[int]
     td_unstable: bool
+    td_count_unstable: bool
+    td_channel_diverge: bool
+    td_best_channel_clean: bool
+    td_unstable_smoothed: bool
+    td_count_unstable_smoothed: bool
+    td_channel_diverge_smoothed: bool
+    td_best_channel_clean_smoothed: bool
+    td_teacher_raw: Dict[str, Any]
+    td_teacher_smoothed: Dict[str, Any]
 
 
 def _parse_args() -> argparse.Namespace:
@@ -329,6 +338,7 @@ def _touchdown_stats(
     *,
     threshold: float,
     rounds: int,
+    smooth: bool = False,
 ) -> Dict[str, Any]:
     stats: Dict[str, Any] = {
         "available": False,
@@ -341,6 +351,9 @@ def _touchdown_stats(
         "over_target": float("inf"),
         "interval_cv": float("inf"),
         "td_unstable": True,
+        "td_count_unstable": True,
+        "td_channel_diverge": True,
+        "td_best_channel_clean": False,
     }
     if contact_signal is None or contact_signal.ndim != 2 or contact_signal.shape[1] <= 0:
         return stats
@@ -353,10 +366,20 @@ def _touchdown_stats(
     min_events = max(2, int(rounds) - 1)
     max_events = max(min_events, target_count + 2)
 
+    active = contact_signal > float(threshold)
+    if bool(smooth):
+        # 3-frame majority vote on contact-active mask (diagnostic only).
+        active_i = active.astype(np.int8, copy=False)
+        if int(active_i.shape[0]) >= 3:
+            prev = np.vstack([active_i[:1], active_i[:-1]])
+            curr = active_i
+            nxt = np.vstack([active_i[1:], active_i[-1:]])
+            active = (prev + curr + nxt) >= 2
+
     channel_events: List[List[int]] = []
     channel_scores: List[tuple[float, float, float, float, float]] = []
-    for ch in range(int(contact_signal.shape[1])):
-        events = _rising_edges(contact_signal[:, ch], threshold=threshold).tolist()
+    for ch in range(int(active.shape[1])):
+        events = _rising_edges_active(active[:, ch]).tolist()
         channel_events.append(events)
         count = len(events)
         count_error = abs(count - target_count)
@@ -391,9 +414,10 @@ def _touchdown_stats(
     else:
         interval_cv = float("inf")
 
-    td_unstable = best_count < min_events or best_count > max_events
-    if len(counts) >= 2 and channel_gap > 1:
-        td_unstable = True
+    td_count_unstable = best_count < min_events or best_count > max_events
+    td_channel_diverge = len(counts) >= 2 and channel_gap > 1
+    td_best_channel_clean = (count_error <= 1) and math.isfinite(interval_cv) and (interval_cv <= 0.50)
+    td_unstable = bool(td_count_unstable or td_channel_diverge)
 
     stats.update(
         {
@@ -407,6 +431,9 @@ def _touchdown_stats(
             "over_target": int(over_target),
             "interval_cv": float(interval_cv),
             "td_unstable": bool(td_unstable),
+            "td_count_unstable": bool(td_count_unstable),
+            "td_channel_diverge": bool(td_channel_diverge),
+            "td_best_channel_clean": bool(td_best_channel_clean),
         }
     )
     return stats
@@ -437,9 +464,9 @@ def _choose_contact_series(
     source_priority = {
         "meas": 0.0,
         "plan": 1.0,
-        "teacher": 2.0,
     }
-    for key in ("meas", "plan", "teacher"):
+    # Gate-mode auto: only choose between model-driven sources.
+    for key in ("meas", "plan"):
         arr = candidates.get(key)
         stats = _touchdown_stats(arr, threshold=threshold, rounds=rounds)
         if not bool(stats.get("available", False)):
@@ -464,6 +491,13 @@ def _rising_edges(signal: np.ndarray, threshold: float) -> np.ndarray:
     if signal.ndim != 1 or signal.size <= 0:
         return np.zeros((0,), dtype=np.int64)
     active = signal > float(threshold)
+    rises = np.nonzero((~active[:-1]) & active[1:])[0] + 1
+    return rises.astype(np.int64, copy=False)
+
+
+def _rising_edges_active(active: np.ndarray) -> np.ndarray:
+    if active.ndim != 1 or active.size <= 0:
+        return np.zeros((0,), dtype=np.int64)
     rises = np.nonzero((~active[:-1]) & active[1:])[0] + 1
     return rises.astype(np.int64, copy=False)
 
@@ -681,6 +715,31 @@ def _run_scaled_trace(
     touchdown_channel = int(contact_stats.get("best_channel", 0))
     touchdown_indices = list(contact_stats.get("best_events", []))
     td_unstable = bool(contact_stats.get("td_unstable", True))
+    td_count_unstable = bool(contact_stats.get("td_count_unstable", True))
+    td_channel_diverge = bool(contact_stats.get("td_channel_diverge", True))
+    td_best_channel_clean = bool(contact_stats.get("td_best_channel_clean", False))
+    contact_stats_smoothed = _touchdown_stats(
+        contact_signal,
+        threshold=touchdown_threshold,
+        rounds=rounds,
+        smooth=True,
+    )
+    td_unstable_smoothed = bool(contact_stats_smoothed.get("td_unstable", True))
+    td_count_unstable_smoothed = bool(contact_stats_smoothed.get("td_count_unstable", True))
+    td_channel_diverge_smoothed = bool(contact_stats_smoothed.get("td_channel_diverge", True))
+    td_best_channel_clean_smoothed = bool(contact_stats_smoothed.get("td_best_channel_clean", False))
+    td_teacher_raw = _touchdown_stats(
+        contacts_teacher,
+        threshold=touchdown_threshold,
+        rounds=rounds,
+        smooth=False,
+    )
+    td_teacher_smoothed = _touchdown_stats(
+        contacts_teacher,
+        threshold=touchdown_threshold,
+        rounds=rounds,
+        smooth=True,
+    )
     cycle_starts, cycle_stops = _build_cycle_boundaries(
         touchdown_indices,
         total_steps=int(pred_y_raw.shape[0]),
@@ -688,6 +747,7 @@ def _run_scaled_trace(
     )
     if not cycle_starts:
         td_unstable = True
+        td_count_unstable = True
 
     return RolloutTrace(
         scale=float(scale),
@@ -705,6 +765,15 @@ def _run_scaled_trace(
         cycle_start_indices=[int(x) for x in cycle_starts],
         cycle_stop_indices=[int(x) for x in cycle_stops],
         td_unstable=bool(td_unstable),
+        td_count_unstable=bool(td_count_unstable),
+        td_channel_diverge=bool(td_channel_diverge),
+        td_best_channel_clean=bool(td_best_channel_clean),
+        td_unstable_smoothed=bool(td_unstable_smoothed),
+        td_count_unstable_smoothed=bool(td_count_unstable_smoothed),
+        td_channel_diverge_smoothed=bool(td_channel_diverge_smoothed),
+        td_best_channel_clean_smoothed=bool(td_best_channel_clean_smoothed),
+        td_teacher_raw=dict(td_teacher_raw),
+        td_teacher_smoothed=dict(td_teacher_smoothed),
     )
 
 
@@ -769,9 +838,50 @@ def _compute_cycle_speed_metrics(
 
 def _heuristic_status(
     entry: Dict[str, Any],
+    *,
+    freq_cv_ref: float,
+    stride_cv_ref: float,
 ) -> str:
-    if bool(entry.get("td_unstable", False)):
+    if bool(entry.get("td_count_unstable", False)):
         return "fail"
+    if not bool(entry.get("td_best_channel_clean", False)):
+        return "fail"
+    if bool(entry.get("td_channel_diverge", False)):
+        return "warn"
+
+    freq_cv = entry.get("freq_cv")
+    stride_cv = entry.get("stride_cv")
+    if (isinstance(freq_cv, (int, float)) and math.isfinite(float(freq_cv)) and float(freq_cv) > 0.60) or (
+        isinstance(stride_cv, (int, float)) and math.isfinite(float(stride_cv)) and float(stride_cv) > 0.60
+    ):
+        return "fail"
+
+    freq_ratio = float("nan")
+    freq_delta = float("nan")
+    if isinstance(freq_cv, (int, float)) and math.isfinite(float(freq_cv)) and math.isfinite(float(freq_cv_ref)):
+        freq_ratio = float(freq_cv) / max(abs(float(freq_cv_ref)), 1e-8)
+        freq_delta = float(freq_cv) - float(freq_cv_ref)
+
+    stride_ratio = float("nan")
+    stride_delta = float("nan")
+    if isinstance(stride_cv, (int, float)) and math.isfinite(float(stride_cv)) and math.isfinite(float(stride_cv_ref)):
+        stride_ratio = float(stride_cv) / max(abs(float(stride_cv_ref)), 1e-8)
+        stride_delta = float(stride_cv) - float(stride_cv_ref)
+
+    if (
+        (math.isfinite(freq_ratio) and freq_ratio > 1.60)
+        or (math.isfinite(freq_delta) and freq_delta > 0.20)
+        or (math.isfinite(stride_ratio) and stride_ratio > 1.60)
+        or (math.isfinite(stride_delta) and stride_delta > 0.20)
+    ):
+        return "fail"
+    if (
+        (math.isfinite(freq_ratio) and freq_ratio > 1.30)
+        or (math.isfinite(freq_delta) and freq_delta > 0.10)
+        or (math.isfinite(stride_ratio) and stride_ratio > 1.30)
+        or (math.isfinite(stride_delta) and stride_delta > 0.10)
+    ):
+        return "warn"
     e_cycle = entry.get("E_cycle_speed_consistency")
     r_nonleg = entry.get("R_nonleg")
     e_cycle_leg = entry.get("E_cycle_leg")
@@ -792,6 +902,32 @@ def _heuristic_status(
         ):
             return "warn"
     return "pass"
+
+
+def _apply_status_policy(per_scale: Dict[str, Dict[str, Any]]) -> None:
+    # Baseline CV is calibrated from 1.0x inside the same selected source lane.
+    baseline_by_source: Dict[str, Dict[str, float]] = {}
+    for key, entry in per_scale.items():
+        if abs(float(entry.get("scale", float("nan"))) - 1.0) > 1e-8:
+            continue
+        src = str(entry.get("touchdown_source") or entry.get("contact_source_used") or "unknown")
+        baseline_by_source[src] = {
+            "freq_cv_ref": float(entry.get("freq_cv", float("nan"))),
+            "stride_cv_ref": float(entry.get("stride_cv", float("nan"))),
+        }
+
+    for _, entry in per_scale.items():
+        src = str(entry.get("touchdown_source") or entry.get("contact_source_used") or "unknown")
+        ref = baseline_by_source.get(src, {})
+        freq_cv_ref = float(ref.get("freq_cv_ref", float("nan")))
+        stride_cv_ref = float(ref.get("stride_cv_ref", float("nan")))
+        entry["freq_cv_ref"] = freq_cv_ref
+        entry["stride_cv_ref"] = stride_cv_ref
+        entry["status"] = _heuristic_status(
+            entry,
+            freq_cv_ref=freq_cv_ref,
+            stride_cv_ref=stride_cv_ref,
+        )
 
 
 def _attach_monotonic_flags(per_scale: Dict[str, Dict[str, Any]]) -> None:
@@ -835,6 +971,16 @@ def _series_payload(trace: RolloutTrace) -> Dict[str, Any]:
         "touchdown_indices": [int(x) for x in trace.touchdown_indices],
         "cycle_start_indices": [int(x) for x in trace.cycle_start_indices],
         "cycle_stop_indices": [int(x) for x in trace.cycle_stop_indices],
+        "td_unstable": bool(trace.td_unstable),
+        "td_count_unstable": bool(trace.td_count_unstable),
+        "td_channel_diverge": bool(trace.td_channel_diverge),
+        "td_best_channel_clean": bool(trace.td_best_channel_clean),
+        "td_unstable_smoothed": bool(trace.td_unstable_smoothed),
+        "td_count_unstable_smoothed": bool(trace.td_count_unstable_smoothed),
+        "td_channel_diverge_smoothed": bool(trace.td_channel_diverge_smoothed),
+        "td_best_channel_clean_smoothed": bool(trace.td_best_channel_clean_smoothed),
+        "td_teacher_raw": dict(trace.td_teacher_raw),
+        "td_teacher_smoothed": dict(trace.td_teacher_smoothed),
         "root_speed": [float(x) for x in np.asarray(trace.root_speed).tolist()],
     }
     if trace.contacts_meas is not None:
@@ -944,19 +1090,36 @@ def main() -> None:
             "v_tgt": float(v_tgt),
             "E_speed": float(e_speed),
             "touchdown_source": trace.contact_source_used,
+            "contact_source_used": trace.contact_source_used,
+            "source": trace.contact_source_used,
             "touchdown_channel": int(trace.touchdown_channel),
             "touchdown_count": int(len(trace.touchdown_indices)),
             "cycle_count": int(cycle_stats["cycle_count"]),
             "template_cycle_count": int(template_cycles),
             "td_unstable": bool(trace.td_unstable),
+            "td_count_unstable": bool(trace.td_count_unstable),
+            "td_channel_diverge": bool(trace.td_channel_diverge),
+            "td_best_channel_clean": bool(trace.td_best_channel_clean),
+            "td_unstable_smoothed": bool(trace.td_unstable_smoothed),
+            "td_count_unstable_smoothed": bool(trace.td_count_unstable_smoothed),
+            "td_channel_diverge_smoothed": bool(trace.td_channel_diverge_smoothed),
+            "td_best_channel_clean_smoothed": bool(trace.td_best_channel_clean_smoothed),
+            "td_teacher_raw": dict(trace.td_teacher_raw),
+            "td_teacher_smoothed": dict(trace.td_teacher_smoothed),
             "E_cycle_speed_consistency": cycle_stats["E_cycle_speed_consistency"],
             "cycle_speed_outlier_ratio": cycle_stats["cycle_speed_outlier_ratio"],
             "period_s": cycle_stats["period_s"],
             "period_std_s": cycle_stats["period_std_s"],
             "freq_hz": cycle_stats["freq_hz"],
             "freq_std_hz": cycle_stats["freq_std_hz"],
+            "freq_cv": (float(cycle_stats["freq_std_hz"]) / max(abs(float(cycle_stats["freq_hz"])), 1e-8))
+            if isinstance(cycle_stats["freq_hz"], (int, float)) and isinstance(cycle_stats["freq_std_hz"], (int, float)) and math.isfinite(float(cycle_stats["freq_hz"])) and math.isfinite(float(cycle_stats["freq_std_hz"]))
+            else float("nan"),
             "stride_length": cycle_stats["stride_length"],
             "stride_std_length": cycle_stats["stride_std_length"],
+            "stride_cv": (float(cycle_stats["stride_std_length"]) / max(abs(float(cycle_stats["stride_length"])), 1e-8))
+            if isinstance(cycle_stats["stride_length"], (int, float)) and isinstance(cycle_stats["stride_std_length"], (int, float)) and math.isfinite(float(cycle_stats["stride_length"])) and math.isfinite(float(cycle_stats["stride_std_length"]))
+            else float("nan"),
             "leg_metric_deg": aligned["leg_deg"],
             "nonleg_metric_deg": aligned["nonleg_deg"],
             "R_leg": float(aligned["leg_deg"] / max(ref_aligned["leg_deg"], 1e-8)),
@@ -965,11 +1128,11 @@ def main() -> None:
             "E_cycle_leg": cycle_consistency["leg_deg"],
             "E_cycle_nonleg": cycle_consistency["nonleg_deg"],
         }
-        entry["status"] = _heuristic_status(entry)
         per_scale[scale_key] = entry
         if bool(args.export_series):
             optional_series[scale_key] = _series_payload(trace)
 
+    _apply_status_policy(per_scale)
     _attach_monotonic_flags(per_scale)
 
     payload: Dict[str, Any] = {
@@ -995,13 +1158,15 @@ def main() -> None:
             "reference_leg_metric_deg": float(ref_aligned["leg_deg"]),
             "reference_nonleg_metric_deg": float(ref_aligned["nonleg_deg"]),
             "reference_template_cycle_count": int(ref_cycle_count),
-            "status_policy": "heuristic_v0",
-            "touchdown_source_policy": "stable_touchdown_v1",
+            "status_policy": "heuristic_v2_td_split_raw_gate_cv_relative1x",
+            "gate_validity": "diagnostic_teacher_source" if str(args.contact_source) == "teacher" else "gate",
+            "touchdown_source_policy": "stable_touchdown_v2_meas_plan_gate",
             "notes": [
                 "E_speed uses carried root velocity after applying scaled cond_raw speed.",
                 "R_leg/R_nonleg are aligned-to-original-GT degradation proxies, not scaled-GT errors.",
                 "Cycle consistency compares normalized predicted cycles against the 1.0x predicted template.",
-                "When contact_source=auto, touchdown source selection prefers stable per-cycle anchors before source priority.",
+                "Gate-mode contact_source=auto only chooses from meas/plan; teacher touchdown stats are exported as diagnostic reference.",
+                "Status gates on raw touchdown stats; smoothed touchdown stats are diagnostic-only.",
             ],
         },
         "per_scale": per_scale,

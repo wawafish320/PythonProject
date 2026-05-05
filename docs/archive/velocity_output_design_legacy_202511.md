@@ -1,5 +1,7 @@
 # 运动模型速度输入输出优化设计文档
 
+> Archived (2026-05-04): 这是 2025-11 的未落地/旧方向设计，不是 current layout 或 implementation plan。当前布局、训练入口和模块边界分别以 `raw_data/processed_data/norm_template.json`、`../../train/TRAINING_GUIDE.md`、`../../train/MODULE_BOUNDARIES.md` 为准。
+>
 ## 文档信息
 - **创建时间**: 2025-11-28
 - **版本**: v1.0

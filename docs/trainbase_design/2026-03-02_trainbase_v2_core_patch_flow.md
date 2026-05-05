@@ -9,7 +9,7 @@
 
 > Last updated: 2026-03-09  
 > 目标：在不破坏 Stage6→Stage7 主链质量的前提下，降低 train(base) 维护复杂度，明确“哪些属于 base core、哪些属于 patch 实验层”。
-> Update (2026-03-09): `whitebox` runtime/validate lane 已从当前 mainline 退休；本文若提到 `whitebox`，除非明确标成 historical/archive，否则都应按当前 contract 替换为 `pretrain_contact`。
+> Update (2026-05-04): 本文是 v2 迁移期决策记录；其中 `whitebox` retirement / mainline 表述按历史上下文阅读。当前 `contacts_meas_source` 可执行选项以 `train/validate/run_freerun_cycles.py` parser 为准。
 
 关联输入文档：
 - `docs/Problems/active/2026-03-02_trainbase_simplify_review.md`
@@ -25,7 +25,7 @@
 3. **Patch 保留**：`event_clock`、`learned/whitebox meas 细节稳定化`（这些目前仍有场景耦合和不确定性）。
 4. 简化迁移顺序按风险执行（2026-03-04 更新）：
    - Step C：`contact_phase_state` 已从主链移除（完成）
-   - Step B：`posttrain contact_meas_provider` 已移除，主链固定 `pretrain_contact`（`whitebox` runtime 已退休）
+   - Step B：`posttrain contact_meas_provider` 已移除，主链固定 `pretrain_contact`（whitebox 相关说法按 2026-03 迁移期上下文阅读）
    - Step A：`event_clock` 归因后再决策（最后）
 
 ---
@@ -222,5 +222,5 @@ event_clock_mode: auto            # auto | on | off
 - 主运行入口与命令链：`docs/posttrain_pipeline.md`
 - 本文：trainbase v2 分层与治理（core/patch）
 - 闭环机制细节：`docs/contact_loop_closure_design.md`
-- learned meas 结构与调试：`docs/contact_meas_head_redesign_lowerbody_nohist.md`
+- learned meas 结构与调试历史记录：`docs/contact_meas_head_redesign_lowerbody_nohist.md`
 - 历史 white-box / phase-TTA 路线已从仓库主文档集中移除，不再作为当前入口

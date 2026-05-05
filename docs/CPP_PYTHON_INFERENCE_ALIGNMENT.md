@@ -9,7 +9,7 @@
 | 产物 | 生成于 Python 端 | 被谁消费 | 备注 |
 | --- | --- | --- | --- |
 | `raw_data/processed_data/norm_template.json` | `train/convert_json_to_npz.py` + `train/training_MPL.py` | `UEnemyAnimInstance::LoadSchemaAndStats` (`SchemaJsonPath`) | 携带 `state_layout / output_layout / Mu* / Std* / tanh_scales / rot6d_spec / cond_norm_config` |
-| ONNX 模型 (`*.onnx` 或 `UNNEModelData`) | `train/training_MPL.py` 导出的 checkpoint/ONNX | `FFusedEventMotionModel::Initialize` | 输入顺序固定：State, Cond, Contacts, AngVel Aux, PoseHist Aux |
+| ONNX 模型 (`*.onnx` 或 `UNNEModelData`) | `train/training_MPL.py` 导出的 checkpoint/ONNX | `FFusedEventMotionModel::Initialize` | 输入顺序固定：State, Cond, Contacts, AngVel Aux, PoseHist Aux, PlanZ；输出顺序固定：MotionPred, PlanZNext |
 | Teacher 参考 (`validate/teacher_predictions/*.json`) | `train/validate/run_teacher_rollout.py` | `UEnemyAnimInstance`（可选） | 用于 Teacher 模式验证 & 回退 |
 
 > **约束**：任何改动布局/特征维度的训练改动，必须同步更新 `norm_template.json` 并在 UE 中重新指定 `SchemaJsonPath`。RootYaw 已废弃，不再在 NPZ/推理中使用；骨盆朝向直接由 rot6d 学习。
@@ -32,30 +32,35 @@
 | `Cond` | 条件输入 | 0 | `CondDim`（当前 7） | 4 × action one-hot + 2 × 平面方向 + 1 × 速度，支持 `ECondNormMode` |
 | `Output.BoneRotations6D` | 输出 | 0 | 276 | `DenormY_Z_To_Raw` → reproject → 写入 `PredictedLocal` |
 
-> 若未来增加/删除 slice，请同步修改 `train/layout.py` 里的 key、重新生成 schema，并在本文档补充更新。
+> 若未来增加/删除 slice，请同步修改 `train/data/layout.py` 里的 key、重新生成 schema，并在本文档补充更新。
 
 ---
 
 ## 3. 推理张量契约
 
-UE C++ 端在 `FFusedEventMotionModel::Forward` 中严格要求 5 个输入张量；其要点如下：
+当前 Python 导出入口是 `train.training_MPL.export_onnx_step_stateful_nophase`。ONNX step 模型是显式状态契约：UE 端必须持有并回灌 `plan_z`，不能把模型当成单输出无状态 head。
 
 | 输入序号 | 含义 | 维度 | 生产方 |
 | --- | --- | --- | --- |
-| 0 | `State` | `Dx`（420） | `CarryX_Norm`（上一帧 X_norm，经 `NormalizeXRaw_To_Z` 和自回归更新） |
-| 1 | `Cond` | `CondDim`（默认 7） | `BuildCondVector`（Teacher 模式可直接复制 `CurrentTeacherCondRaw`） |
-| 2 | `ContactsAux` | 2 | `UpdateFootContacts` 输出，按 `MuX/StdX` 重新白化 |
-| 3 | `AngVelAux` | `BoneAngularVelocities` size（138） | 来自 `CurrentTeacherAngVelNorm` 或运行时估计 |
-| 4 | `PoseHistAux` | `PoseHistoryLen * tracked_bones * 6` | `BuildPoseHistoryFeature`（维度由 schema 决定） |
+| 0 | `state` | `[B, Dx]`, `float32` | `CarryX_Norm`（上一帧 X_norm，经 `NormalizeXRaw_To_Z` 和自回归更新） |
+| 1 | `cond` | `[B, CondDim]`, `float32` | `BuildCondVector`（Teacher 模式可直接复制 `CurrentTeacherCondRaw`） |
+| 2 | `contacts` | `[B, ContactDim]`, `float32` | `UpdateFootContacts` / external contacts source；维度由 schema/model 决定 |
+| 3 | `angvel` | `[B, AngVelDim]`, `float32` | 来自 `CurrentTeacherAngVelNorm` 或运行时估计 |
+| 4 | `pose_hist` | `[B, PoseHistDim]`, `float32` | `BuildPoseHistoryFeature`（维度由 schema 决定） |
+| 5 | `plan_z` | `[B, ContactPlanHidden]`, `float32` | UE 显式持有；首帧置零，之后使用上一帧 `plan_z_next` |
 
-输出张量只有 1 个：`Y_norm`（长度 276），对应骨骼 6D 旋转增量。
+| 输出序号 | 含义 | 维度 | 消费方 |
+| --- | --- | --- | --- |
+| 0 | `motion_pred` | `[B, Dy]`, `float32` | `DenormY_Z_To_Raw` 后用于 rot6d delta compose / pose update |
+| 1 | `plan_z_next` | `[B, ContactPlanHidden]`, `float32` | 写回 UE runtime carry，下一步作为输入 `plan_z` |
 
 **强制步骤**：
-1. Python 端导出的 ONNX 必须以 `State, Cond, Contacts, AngVel, PoseHist` 的顺序声明输入；否则 UE 无法正确绑定。
+1. Python 端导出的 ONNX 必须以 `state, cond, contacts, angvel, pose_hist, plan_z` 的顺序声明输入，并以 `motion_pred, plan_z_next` 的顺序声明输出；否则 UE 无法正确绑定。
 2. 运行时在每次 `RunSync` 之后执行：
-   - `DenormY_Z_To_Raw`: `Y_norm * StdY + MuY`
+   - `DenormY_Z_To_Raw`: `motion_pred * StdY + MuY`
    - `reproject_rot6d`: 将 6D 列向量重新正交；det < 0 时翻转派生列
    - `compose_rot6d_delta`: `R_next = ΔR @ R_prev`（Python 同名函数在 `train/geometry.py`）
+   - 保存 `plan_z_next`，下一帧作为 `plan_z` 输入；reset 时同步清零
 
 ---
 

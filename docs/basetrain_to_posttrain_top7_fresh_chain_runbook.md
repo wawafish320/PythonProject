@@ -842,3 +842,190 @@ python3 tools/run_stage6final_canonical_downstream.py \
 ```bash
 python3 tools/run_stage6final_canonical_downstream.py --skip-eval
 ```
+
+---
+
+## 15. Experimental Branch — 用 `70R(1e-4 / 60 / last)` 替换默认 `70R`（2026-05-04）
+
+这个分支**不要直接覆盖**上面的 canonical fresh chain。推荐作为独立 `_tmp_*` run root 并行记录。
+
+本节对应的实验含义是：
+
+- `stage6 -> 70a -> replace` 保持不变
+- 只把 `70R` 改成：
+  - `lr=1e-4`
+  - `epochs=1`
+  - `steps_per_epoch=60`
+  - `save_step_ckpts=0,1,20`
+  - downstream 入口固定取 `70R ckpt_last`
+- 然后继续跑 `71 -> 72 -> lambda`
+
+`71` 的配置需要单独记账。首版 downstream helper 使用的是旧默认 `71 lr=3e-4`，后续 2026-05-04 选点/降 LR 实验证明：
+
+- `71` 不是 early-stop 问题：在现有 `lr=3e-4` checkpoint 里，`step120 == last` 是最佳点；`step40/60/90` 都不能解决 mean 回吐。
+- 更优的第一改动是把 `71 lr` 从 `3e-4` 降到 `1e-4`，其它 leg-only 语义保持不变。
+- 对本节的 dense `70R(1e-4 / 60 / last)` 输入，`71 lr=1e-4` 的最佳点是 `step90`，不是 `last`。
+
+这条分支已经完成过一次完整验证，核心结论是：
+
+- `70R last` 相比 fresh-chain `70R last` 更好，尤其是 `all_ex_root / leg`
+- 首版 `71 lr=3e-4` 改善会传到 downstream：
+  - `71 final`: `all_ex_root mean=0.120385`, `leg mean=0.292303`
+  - `lambda final`: `all_ex_root mean=0.096919`, `leg mean=0.160309`
+- follow-up `71 lr=1e-4` 在 71 本层显著更强：
+  - dense `70R -> 71 lr1e4 step90`: `all_ex_root mean=0.102371`, `p95=0.336560`, `leg mean=0.190973`, `leg p95=0.504251`
+
+对应已完成产物：
+
+- `70R`: `debug_output/_tmp_70r_next_denseckpt_20260504_r6`
+- downstream: `debug_output/_tmp_70r_dense_to_lambda_20260504_r2`
+- `71 checkpoint select`: `debug_output/_tmp_71_ckpt_select_20260504/summary.md`
+- `71 lr1e4 probe`: `debug_output/_tmp_71_lr1e4_probe_20260504/summary.md`
+
+### 15.1 推荐入口
+
+如果你的起点已经是一个**现成的 strict/current `replace` checkpoint**，不要手工改 §9 的命令串。直接分成两步：
+
+1. 先生成新的 `70R(1e-4 / 60 / last)`
+2. 再从这个 `70R ckpt_last` 继续跑 `71 -> 72 -> lambda`
+3. 如果要采用当前更优 71，必须把 71 recipe 显式改成 §15.4 的 `lr=1e-4` 版本
+
+### 15.2 Step A — 起 `70R(1e-4 / 60 / last)`
+
+```bash
+STAMP="$(date +%Y%m%d_%H%M%S)"
+
+STRICT_REPLACE_CKPT="$ROOT/debug_output/_tmp_strict_stageB_finalstate_20260427_080658/stageB_strict/replace/checkpoints/ckpt_last_replace_strictB_20260427_080803.pth"
+DIRECT_POSE_DONOR_STEP0="$ROOT/debug_output/_tmp_strict_contract_fullchain_preflight_20260426_173158/70R_lr_probe/lr1e4_step20/checkpoints/ckpt_step_000000_WalkF_stage7_70R_lr1e4_step20_20260426_173158.pth"
+
+BRANCH70R_ROOT="$ROOT/debug_output/_tmp_70r_next_denseckpt_${STAMP}"
+BRANCH70R_NAME="70R_next_denseckpt_${STAMP}"
+
+python3 tools/run_strict_70r_trunkfull_probe.py \
+  --source-replace-ckpt "$STRICT_REPLACE_CKPT" \
+  --run-root "$BRANCH70R_ROOT" \
+  --run-name "$BRANCH70R_NAME" \
+  --lr 1e-4 \
+  --epochs 1 \
+  --steps-per-epoch 60 \
+  --save-step-ckpts 0,1,20 \
+  --eval-steps 20,last \
+  --tensor-donor-ckpt "$DIRECT_POSE_DONOR_STEP0" \
+  --transplant-prefix direct_pose_
+```
+
+关键产物：
+
+- `70R last ckpt`:
+  - `"$BRANCH70R_ROOT/checkpoints/ckpt_last_${BRANCH70R_NAME}.pth"`
+- `70R eval`:
+  - `"$BRANCH70R_ROOT/evals/step_last/group_summary.json"`
+- `70R summary`:
+  - `"$BRANCH70R_ROOT/probe_summary.json"`
+
+### 15.3 Step B — 从新的 `70R ckpt_last` 继续到 `lambda`（首版复现）
+
+这一步复现的是首版 downstream：`71` 仍走 helper 默认 `lr=3e-4`。它适合复现 `debug_output/_tmp_70r_dense_to_lambda_20260504_r2`，但不是当前推荐的最优 71 配置。
+
+```bash
+NEXT70R_CKPT="$BRANCH70R_ROOT/checkpoints/ckpt_last_${BRANCH70R_NAME}.pth"
+BRANCHDOWN_ROOT="$ROOT/debug_output/_tmp_70r_dense_to_lambda_${STAMP}"
+
+python3 tools/run_strict_70r_to_lambda_downstream.py \
+  --source-70r "$NEXT70R_CKPT" \
+  --run-root "$BRANCHDOWN_ROOT"
+```
+
+这个 helper 现在已经内置处理 strict/current handoff 所需的 fingerprint refresh，覆盖：
+
+- `70R -> 71`
+- `71(last) -> 72`
+- `72 -> lambda`
+
+关键产物：
+
+- `71 final`:
+  - `"$BRANCHDOWN_ROOT/evals/71/group_summary.json"`
+- `lambda final`:
+  - `"$BRANCHDOWN_ROOT/evals/lambda/group_summary.json"`
+- 全链汇总:
+  - `"$BRANCHDOWN_ROOT/run_result.json"`
+
+### 15.4 71 配置补充 — 推荐 `lr=1e-4`
+
+如果目标是继续优化 71，而不是只复现首版 downstream，`71` 固定使用下面这组字段：
+
+```json
+{
+  "lr": 0.0001,
+  "epochs": 1,
+  "steps_per_epoch": 120,
+  "save_step_ckpts": "0,1,5,20,40,60,90,120",
+  "direct_pose_leg_train_only": true,
+  "direct_pose_nonleg_train_only": false,
+  "direct_pose_leg_stopgrad_main": true,
+  "direct_pose_leg_align_weight": 0.0,
+  "strict_current_model_build": true
+}
+```
+
+保留的 71 语义：
+
+- `train_direct_pose=true`
+- `train_lambda_head=false`
+- `direct_pose_leg_enable=true`
+- `direct_pose_leg_mode=so3`
+- `direct_pose_leg_detach_feat=true`
+- `direct_pose_loss_leg_split=true`
+- `direct_pose_stepc_unified_leg_terminal=true`
+
+选点规则：
+
+- dense `70R(1e-4 / 60 / last)` 输入：优先取 `71 lr1e4 step90`
+- sibling lowlr `70R(7e-5 / 60 / last)` 输入：优先取 `71 lr1e4 step120/last`
+- 不建议把 `steps_per_epoch` 先缩到 `60`；已评估的 `step60` 不如后续 checkpoint
+
+已验证指标：
+
+| lane | 71 ckpt | all mean | all p95 | leg mean | leg p95 |
+|---|---|---:|---:|---:|---:|
+| dense `70R 1e-4/60/last` | `lr1e4 step90` | 0.102371 | 0.336560 | 0.190973 | 0.504251 |
+| lowlr `70R 7e-5/60/last` | `lr1e4 step120/last` | 0.097820 | 0.325507 | 0.183066 | 0.464128 |
+| lowlr + downstream `72/lambda` | `lambda final` | 0.093424 | 0.309132 | 0.158343 | 0.417908 |
+
+对应产物：
+
+- dense/lowlr 71 lr1e4 probe:
+  - `debug_output/_tmp_71_lr1e4_probe_20260504/summary.md`
+- lowlr best downstream:
+  - `debug_output/_tmp_71_lr1e4_lowlr_downstream_20260504/run_result.json`
+
+### 15.5 如何嵌回 fresh chain 记账
+
+如果你只是想在这份 fresh runbook 语义下记录这个实验，推荐把链路记成：
+
+- 首版复现：`stage6 -> 70a -> warmstart copy -> replace -> 70R(1e-4, 60, pick last) -> 71(lr=3e-4, pick last) -> 72 -> lambda`
+- 当前推荐：`stage6 -> 70a -> warmstart copy -> replace -> 70R(1e-4, 60, pick last) -> 71(lr=1e-4, pick step90 for dense) -> 72 -> lambda`
+
+这里有两个边界要注意：
+
+- 这不是把 §9 的 canonical `70R s180` 原地改掉，而是新增一个 parallel branch
+- downstream 入口仍然用 `70R ckpt_last`，不需要改成 `step20`
+
+### 15.6 当前建议
+
+基于 2026-05-04 这轮结果，如果只在 `70R` 层做一个最小替换，当前最值得保留的是：
+
+- `70R = lr=1e-4, epochs=1, steps_per_epoch=60, pick last`
+
+如果允许同时改 71，当前更推荐：
+
+- `70R = lr=1e-4, epochs=1, steps_per_epoch=60, pick last`
+- `71 = lr=1e-4, epochs=1, steps_per_epoch=120`
+- dense 70R 输入下 pick `71 step90`
+
+原因是它满足三点：
+
+- `70R` 本层比 fresh-chain 旧 `70R last` 更强
+- 改善可以稳定传到 `71` 和 `lambda`，不是只停留在 `70R` 单点
+- `71 lr=1e-4` 同时改善 `all mean / all p95 / leg mean / leg p95`，比 `lr=3e-4` 的 tail-only calibrator 更稳

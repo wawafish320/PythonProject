@@ -1,0 +1,52 @@
+{
+  "primary_metric": "GeoLocalDeg",
+  "root_motion_quality_policy": "sanity_only",
+  "motion_quality_contains_model_driven_fields": false,
+  "anti_cheating_not_evaluable_fields": [
+    "pred_root_pos_series",
+    "pred_root_speed_series",
+    "gt_root_pos_series",
+    "gt_root_speed_series",
+    "velocity_ratio_mean",
+    "velocity_ratio_std",
+    "root_displacement_ratio",
+    "root_net_displacement_ratio",
+    "freeze_lag_score"
+  ],
+  "source_trace": {
+    "eval_input_cond_raw": "train/validate/run_freerun_cycles.py:2416-2438",
+    "eval_cond_step_selection": "train/validate/run_freerun_cycles.py:4484-4492",
+    "eval_free_carry_writeback": "train/validate/run_freerun_cycles.py:6719-6729",
+    "predx_gtx_alignment": "train/validate/run_freerun_cycles.py:6830-6854",
+    "motion_quality_export": "train/validate/run_freerun_cycles.py:6901-6907",
+    "free_carry_runtime_slices": "train/rollout_kernel.py:120-160",
+    "free_carry_contract_update": "train/rollout_kernel.py:273-342",
+    "train_rollout_shared_carry": "train/training_MPL.py:1917-1933",
+    "scheduled_sampling_pilot_consumption": "tools/run_walkf_scheduled_sampling_pilot.py:290-333,492-544"
+  },
+  "field_classification": {
+    "available": "composite",
+    "pred_velocity_mean": "contract-driven",
+    "gt_velocity_mean": "contract-driven",
+    "velocity_ratio_mean": "composite",
+    "pred_velocity_std": "contract-driven",
+    "gt_velocity_std": "contract-driven",
+    "velocity_ratio_std": "composite",
+    "velocity_step_ratio_mean": "composite",
+    "velocity_step_ratio_std": "composite",
+    "freeze_lag_score": "composite",
+    "freeze_lag_best_lag_frames": "composite",
+    "freeze_lag_best_corr": "composite",
+    "pred_root_speed_series": "contract-driven",
+    "gt_root_speed_series": "contract-driven",
+    "velocity_step_ratio_series": "composite",
+    "pred_root_path_length": "contract-driven",
+    "gt_root_path_length": "contract-driven",
+    "root_displacement_ratio": "composite",
+    "pred_root_net_displacement": "contract-driven",
+    "gt_root_net_displacement": "contract-driven",
+    "root_net_displacement_ratio": "composite",
+    "pred_root_pos_series": "contract-driven",
+    "gt_root_pos_series": "contract-driven"
+  }
+}

@@ -99,7 +99,7 @@ posttrain 入口（`train.posttrain`）会反过来 **import `Trainer`** 并直�
 下列模块属于 patch lane，**默认可关、不参与 base canonical**：
 
 - `event_clock`（contact_plan 残差校正）——auto/on/off，basetrain 默认不强制启用
-- learned `contact_meas` 头 —— `whitebox` runtime 已在 2026-03-09 退休，learned 头作为研究 patch 保留
+- learned `contact_meas` 头 / external meas source 诊断 —— 不参与 base canonical；当前可执行 source choices 以 `train/validate/run_freerun_cycles.py` parser 为准
 
 启用任一 patch 模块都属于偏离 default base lane；要走 `docs/trainbase_design/2026-03-02_trainbase_v2_core_patch_flow.md` 描述的 patch lane 决策。
 
@@ -149,7 +149,7 @@ posttrain 怎么消费这个 handoff、怎么续训 `70a → replace → 70R →
 ## 9) Caveats
 
 - `Trainer` class 体量仍然很大（约 1900 行），是已知结构债——拆分时序见 `docs/refactor/2026-04-18_posttrain_training_mpl_zone_map.md`，本文不重复。
-- `train_architecture_overview.md`（2025-12-25）是早期总览，**不是当前 canonical**——其中提到的 `dataset.py` 平铺、`train_configurator.py`、缺失的 `rollout_kernel` / `runtime_attach` 等都已经变化。如果两份文档冲突，**以本文档为准**。
+- `docs/archive/train_architecture_overview_legacy_202512.md` 是早期总览，**不是当前 canonical**——其中提到的 `dataset.py` 平铺、`train_configurator.py`、缺失的 `rollout_kernel` / `runtime_attach` 等都已经变化。如果两份文档冲突，**以本文档为准**。
 - patch lane（`event_clock` / learned `contact_meas`）的 mainline 决策见 `docs/trainbase_design/2026-03-02_trainbase_v2_core_patch_flow.md`，那是 v2 迁移期决策记录，**不是当前架构总览**。
 
 ---
@@ -163,4 +163,4 @@ posttrain 怎么消费这个 handoff、怎么续训 `70a → replace → 70R →
 | `docs/posttrain_pipeline.md` | posttrain 当前 canonical | basetrain handoff 之后的下游 |
 | `docs/refactor/2026-04-18_posttrain_training_mpl_zone_map.md` | 拆分时序 / shared seam | 历史依据 |
 | `docs/trainbase_design/2026-03-02_trainbase_v2_core_patch_flow.md` | v2 Core/Patch 迁移决策 | 历史决策记录，非当前架构 |
-| `docs/train_architecture_overview.md` | 早期系统总览（2025-12-25） | 已过时，仅历史参考 |
+| `docs/archive/train_architecture_overview_legacy_202512.md` | 早期系统总览（2025-12-25） | 已归档，仅历史参考 |

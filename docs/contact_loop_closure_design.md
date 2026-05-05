@@ -126,8 +126,8 @@ R_blend = Exp(λ_eff * ω) @ R_inc
 当 meas 要隐式学习 “FK + foot evidence” 时很容易退化成常数输出，`contacts_err` 失真。
 
 当前建议：
-- 历史调试里曾大量使用 white-box meas 做定位，但相关专项文档已移除
-- 当前执行口径以 `docs/posttrain_pipeline.md` 与 `docs/contact_meas_head_redesign_lowerbody_nohist.md` 为准
+- 历史调试里曾大量使用 white-box meas 做定位；当前 `run_freerun_cycles` 仍保留 `contacts_meas_source=whitebox` 作为诊断 source
+- 当前执行口径以 `docs/posttrain_pipeline.md` 和当前 CLI/parser 为准；`docs/contact_meas_head_redesign_lowerbody_nohist.md` 只作为历史调试记录
 
 ### 4.3 time-PE 在 multi-cycle 下 OOD（需严格对齐）
 
@@ -371,12 +371,9 @@ PYTHONPATH=. python train/validate/run_freerun_cycles.py \
 - 让 direct 能看到 **观测驱动的 anchor**（`pose_history / contacts_meas / foot state` → phase/起步态提示）
 - 或先把 `contacts_plan` 做到真正稳定且可泛化（multi-cycle 时域对齐 + 更可靠的初始化/输入）
 
-代码落地（本 repo 已实现）：
+当前 strict/current 约束：
 
-- `EventMotionModel.contact_plan_init_mode=learnable+obs`：cold-start 时用 `plan_z0 = init_z + init_head(obs0)`  
-  其中 `obs0 = [contacts_meas0, angvel0, pose_history0]`（都来自当前可观测，不需要显式 global phase / clip 绝对位置）。
-- 对应训练开关：
-  - 主训练：`--contact_plan_init_mode learnable+obs --contact_plan_init_hidden 128`
-  - posttrain：`--train_contact_plan_init true --contact_plan_init_mode learnable+obs`
+- `contact_plan_init_mode=learnable+obs` / `obs` 属于 retired obs-init branch；strict/current build 固定 `contact_plan_init_mode=learnable`，不再构建 `contact_plan_init_head`。
+- posttrain strict/current config 中出现 `contact_plan_init_mode` 非 `learnable`，或出现 `contact_plan_init_hidden` / `contact_plan_init_dropout`，会 fail-fast。
 
 同时建议保留一个硬约束意识：只要 `dir > inc` 的区间还很长，Round0 就不可能靠融合变得比 inc 更好。

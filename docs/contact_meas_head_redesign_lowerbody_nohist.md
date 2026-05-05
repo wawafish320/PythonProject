@@ -1,14 +1,15 @@
 ## ContactMeas Head 重设计对接文档（v1）
 
-> Update (2026-01): 本 repo 默认已切到 v1（lower-body + no-hist）meas head；本文保留 legacy head 的问题复盘，并补充 freerun/OOD 与 “contacts_meas 来源钉死” 的调试/验证流程。  
+> Status (2026-05-04): archived design / debugging note. 本文记录 lower-body + no-hist meas head 的历史设计和调试结论，不是 current implementation contract。当前可执行 CLI 选项以 `train/validate/run_freerun_cycles.py` parser 为准；`ContactMeasHeadLowerBodyNoHistV1` 与 `LOWER_BODY_INDICES_V1` 已于 2026-04-17 从 `train/models.py` 删除。
+> Historical update (2026-01): 当时默认切到 v1（lower-body + no-hist）meas head；本文保留 legacy head 的问题复盘，并补充 freerun/OOD 与 “contacts_meas 来源钉死” 的调试/验证流程。
 > Update (2026-01-08): 目前已确认 **teacher 上 learned meas 近乎完美，但 freerun 下 learned/whitebox meas 都可能失稳**，表现为两类互斥的失败模式：  
 > 1) **阈值抖动（event 过密）**：`period_min` 可到 2 帧，导致 phase reset/event-clock 被“抖”坏；  
 > 2) **event starvation（几乎无事件）**：meas 被推到阈值同侧的常量附近，phase reset 失效。  
 > 注意：简单的 closed-loop rollout BCE 监督（不做对齐/约束）可能把模型从 (1) 推向 (2)（看似 flips 少了，但事件直接消失，且 meas-vs-GT 误差不一定下降）。
-> Update (2026-03-09): 当前主线 `train.validate.run_freerun_cycles` 已不再支持 `contacts_meas_source=whitebox`。本文中 `whitebox` 相关表述仅保留作历史诊断记录；当前执行建议应使用 `model|gt|zero|pretrain_contact`。
+> Update (2026-05-04): `train.validate.run_freerun_cycles` 当前仍支持 `contacts_meas_source=whitebox`，但本文的 whitebox 结论只作为历史诊断记录；不要把本文当作 current source policy。
 
 ### 背景
-当前 `contact_meas_head` 的设计目标是提供一个**便宜/可微/不依赖物理引擎**的 contact measurement（`contacts_meas`），并在闭环中形成残差：
+历史 `contact_meas_head` 的设计目标是提供一个**便宜/可微/不依赖物理引擎**的 contact measurement（`contacts_meas`），并在闭环中形成残差：
 
 > `contacts_err = contacts_plan - contacts_meas`
 
@@ -24,18 +25,18 @@
   - rollout 输入来源：`train/training_MPL.py`（`pose_hist` buffer/seq、`angvel` state/seq）
   - teacher 调试脚本：`train/validate/run_teacher_rollout.py`
 
-> 说明：legacy `pose_hist`-based meas head 已不再支持；如需使用请回退代码/重新训练。当前默认实现见下节 v1。
+> 说明：legacy `pose_hist`-based meas head 已不再支持；如需使用请回退代码/重新训练。下节 v1 也是历史设计记录，不是 current 默认实现。
 
-### v1 实现（当前默认：lower-body + no-hist）
+### v1 实现（历史设计：lower-body + no-hist）
 - meas head 结构：`LN_pose + LN_angvel -> concat -> MLP -> logits`（prob 用 `sigmoid(logits)`）
 - meas head 输入：`[pose_lower(t), angvel_lower(t)]`（仅当前帧 `state_t`，不使用 `pose_hist`）
 - 对接位置：
-  - head 定义：`ContactMeasHeadLowerBodyNoHistV1` in `train/models.py`
-  - lower-body 关节子集：`LOWER_BODY_INDICES_V1` in `train/models.py`
-  - 推理/验证可用 `--contacts_meas_source {model,gt,zero,pretrain_contact}` 固定 meas 来源：`train/validate/run_freerun_cycles.py`
+  - 历史 head 定义：`ContactMeasHeadLowerBodyNoHistV1`（已从 `train/models.py` 删除）
+  - 历史 lower-body 关节子集：`LOWER_BODY_INDICES_V1`（已从 `train/models.py` 删除）
+  - 推理/验证当前可用 `--contacts_meas_source {model,whitebox,gt,zero,pretrain_contact}` 固定 meas 来源：`train/validate/run_freerun_cycles.py`
 
 ### 已定位的问题（机制层结论）
-我们已经确认：当前 head 在训练阶段就学到了“姿态模式 ↔ 步态阶段”的 **spurious correlation**，且该相关性在不同动作/转向下会失效甚至反向，导致推理端出现 clip-dependent 的系统性问题。
+历史调试确认：该 head 在训练阶段就学到了“姿态模式 ↔ 步态阶段”的 **spurious correlation**，且该相关性在不同动作/转向下会失效甚至反向，导致推理端出现 clip-dependent 的系统性问题。
 
 核心表现（已通过工具链与归因确认）：
 1) **上肢/躯干作为 phase proxy**
@@ -187,7 +188,7 @@ PYTHONPATH=. python -m train.validate.run_freerun_cycles \
   --npz-root raw_data/processed_data \
   --rounds 5 --time-index-mode auto --depth 3 \
   --lambda_fusion_apply --so3_corr_apply \
-  # contacts_meas_source: model|gt|zero|pretrain_contact
+  # contacts_meas_source: model|whitebox|gt|zero|pretrain_contact
   --contacts_meas_source model \
   --log_contacts \
   --out debug_output/<out_dir> --force
@@ -197,7 +198,8 @@ PYTHONPATH=. python -m train.validate.run_freerun_cycles \
 - `model`：learned meas head 生效（通常也会有 `ContactMeasLogitsPerC`）
 - `gt`：oracle 外部 meas（只用于离线验收/上限对照，deploy 不存在）
 - `pretrain_contact`：冻结的 pretrain contact head 生效（当前主线外部 contacts 路由）
-- `whitebox` / `whitebox_init`：仅会出现在历史 JSON / 旧快照中；当前主线不再作为运行分支保留
+- `whitebox`：运行时 whitebox contacts 分支；适合诊断，不代表 deploy contract
+- `whitebox_init`：历史/特定 fallback 标记，读旧 JSON 时按当时配置解释
 
 > 注意：`--direct_pose_meas_source` 只影响 direct head 的 meas hint（`direct_pose_meas_override`），**不等价于** `contacts_meas_source`（后者才驱动 phase reset/contacts_err）。
 
