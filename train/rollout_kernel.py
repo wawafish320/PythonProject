@@ -260,6 +260,7 @@ class RolloutModelStepRequest:
     enable_reprojection: bool
     include_boundary: bool
     cycle_len: int
+    inject_dropout: bool = False
     cond_raw_offset: int = 1
     yaw_gt_fn: Optional[Callable[[int], Optional[torch.Tensor]]] = None
 
@@ -713,6 +714,7 @@ def prepare_rollout_contacts_input(
     *,
     motion_t: torch.Tensor,
     pose_hist_t: Optional[torch.Tensor],
+    inject_dropout: bool = False,
 ) -> Optional[torch.Tensor]:
     if not bool(getattr(model, "contact_plan_enable", False)):
         return None
@@ -720,7 +722,11 @@ def prepare_rollout_contacts_input(
     fn = getattr(trainer, "_predict_pretrain_contacts_from_frozen", None)
     if callable(fn):
         try:
-            contacts_in_t = fn(motion_step_t=motion_t, pose_hist_step_t=pose_hist_t)
+            contacts_in_t = fn(
+                motion_step_t=motion_t,
+                pose_hist_step_t=pose_hist_t,
+                inject_dropout=bool(inject_dropout),
+            )
         except Exception:
             contacts_in_t = None
     if contacts_in_t is None:
@@ -865,6 +871,7 @@ def execute_rollout_model_step(
         model,
         motion_t=motion,
         pose_hist_t=pose_hist_t,
+        inject_dropout=bool(request.inject_dropout),
     )
 
     time_base_local, time_index_seed = resolve_rollout_time_controls(
@@ -913,6 +920,7 @@ def resolve_rollout_step_inputs(
     yaw_gt_fn: Optional[Callable[[int], Optional[torch.Tensor]]] = None,
     model: Any = None,
     time_index_seed: Optional[int] = None,
+    inject_dropout: bool = False,
 ) -> RolloutStepInputs:
     _, pose_history_t = resolve_rollout_pose_history(
         pose_hist_state=rollout.pose_hist_state,
@@ -924,6 +932,7 @@ def resolve_rollout_step_inputs(
         model if model is not None else getattr(trainer, "model", None),
         motion_t=rollout.motion,
         pose_hist_t=pose_history_t,
+        inject_dropout=bool(inject_dropout),
     )
     cond_input, cond_raw_for_env, _, reprojection_applied = prepare_rollout_cond(
         trainer,

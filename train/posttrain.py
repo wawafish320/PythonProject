@@ -84,8 +84,10 @@ from train.data.io import config_to_jsonable as _cfg_to_jsonable
 from train.configuration.norm_spec import (
     ContactPretrainRuntime,
     merge_norm_spec,
+    resolve_contact_pretrain_runtime,
 )
 from train.models import EventMotionModel, MotionJointLoss
+from train import diagnostics as _diagnostics
 from train.runtime_attach import (
     apply_contacts_pretrain_runtime,
     apply_loss_runtime_from_trainer,
@@ -427,6 +429,8 @@ class PostTrainConfig:
     # Posttrain rollout frozen-contact runtime knobs.
     posttrain_contacts_pretrain_clamp: float
     posttrain_contacts_pretrain_affine_stats: Optional[str]
+    posttrain_contacts_pretrain_dropout_injection_mode: str
+    posttrain_contacts_pretrain_dropout_prob: float
 
     seed: int
 
@@ -902,6 +906,22 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
             ("direct_pose_reinit", _cfg_get_bool, {"key": "direct_pose_reinit", "default": False}),
             ("posttrain_contacts_pretrain_clamp", _cfg_get_float, {"key": "posttrain_contacts_pretrain_clamp", "default": _model_build_cfg.DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_CLAMP, "min_value": 0.0}),
             ("posttrain_contacts_pretrain_affine_stats", _cfg_pick, {"key": "posttrain_contacts_pretrain_affine_stats"}),
+            (
+                "posttrain_contacts_pretrain_dropout_injection_mode",
+                _cfg_get_str_or,
+                {
+                    "key": "posttrain_contacts_pretrain_dropout_injection_mode",
+                    "default": _model_build_cfg.DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_DROPOUT_INJECTION_MODE,
+                },
+            ),
+            (
+                "posttrain_contacts_pretrain_dropout_prob",
+                _cfg_get_float,
+                {
+                    "key": "posttrain_contacts_pretrain_dropout_prob",
+                    "default": _model_build_cfg.DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_DROPOUT_PROB,
+                },
+            ),
             ("seed", _cfg_get_int_or, {"key": "seed", "default": 0}),
         ],
     )
@@ -937,6 +957,35 @@ def _cfg_parse_lambda_rollout(payload: Dict[str, Any]) -> Dict[str, Any]:
     if affine_spec is not None:
         affine_spec = str(affine_spec).strip() or None
     core_cfg["posttrain_contacts_pretrain_affine_stats"] = affine_spec
+    mode_raw = core_cfg.get(
+        "posttrain_contacts_pretrain_dropout_injection_mode",
+        _model_build_cfg.DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_DROPOUT_INJECTION_MODE,
+    )
+    prob_raw = core_cfg.get(
+        "posttrain_contacts_pretrain_dropout_prob",
+        _model_build_cfg.DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_DROPOUT_PROB,
+    )
+    try:
+        contacts_pretrain_runtime = resolve_contact_pretrain_runtime(
+            clamp_raw=core_cfg["posttrain_contacts_pretrain_clamp"],
+            affine_stats_raw=core_cfg["posttrain_contacts_pretrain_affine_stats"],
+            dropout_injection_mode_raw=mode_raw,
+            dropout_prob_raw=prob_raw,
+            warn=False,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        message = message.replace(
+            "contacts_pretrain_dropout_injection_mode",
+            "posttrain_contacts_pretrain_dropout_injection_mode",
+        )
+        message = message.replace(
+            "contacts_pretrain_dropout_prob",
+            "posttrain_contacts_pretrain_dropout_prob",
+        )
+        raise ValueError(message) from exc
+    core_cfg["posttrain_contacts_pretrain_dropout_injection_mode"] = contacts_pretrain_runtime.dropout_injection_mode
+    core_cfg["posttrain_contacts_pretrain_dropout_prob"] = float(contacts_pretrain_runtime.dropout_prob)
     return core_cfg
 
 
@@ -1060,6 +1109,7 @@ def _rollout_step_common(
         enable_reprojection=bool(enable_reprojection),
         include_boundary=bool(include_boundary),
         cycle_len=int(cycle_len),
+        inject_dropout=True,
         cond_raw_offset=1,
         yaw_gt_fn=yaw_gt_fn,
     )
@@ -2145,6 +2195,13 @@ def _lambda_rollout_unroll_single_step(*, t: int, ctx: LambdaRolloutStepContext)
     cond_raw_step = step_common["cond_raw_step"]
     rollout_step_t = step_common["rollout_step_t"]
     y_prev_raw = state["y_prev_raw"]
+
+    if bool(getattr(model, "contact_plan_enable", False)) and contacts_in_t is None:
+        raise RuntimeError(
+            "[FATAL][route-sync] rollout step returned contacts_in_t=None while contact_plan_enable=true. "
+            "posttrain requires deploy route encoder_input->frozen_encoder->frozen_contact_head; "
+            "cached hidden or fallback paths are not allowed."
+        )
 
     delta_norm, direct_norm, lam = _lambda_rollout_decode_model_outputs(ret=ret, objective=objective, B=B, J=J)
 
@@ -3292,6 +3349,7 @@ def _run_training_loop(*, cfg: PostTrainConfig, train_mode: str, model: EventMot
     leg_align_grad_probe_steps = max(0, int(getattr(cfg, "direct_pose_leg_align_grad_probe_steps", 0) or 0))
     global_step = 0
     save_step_set = _parse_int_set_spec(getattr(cfg, "save_step_ckpts", None))
+    route_contract_checked = False
 
     def _save_step_snapshot(step_idx: int) -> None:
         if int(step_idx) < 0:
@@ -3309,6 +3367,14 @@ def _run_training_loop(*, cfg: PostTrainConfig, train_mode: str, model: EventMot
         bad_steps = 0
         for it in range(steps_per_epoch):
             batch = next(batch_iter)
+            if not route_contract_checked:
+                route_evidence = _diagnostics.verify_posttrain_contact_route_contract(
+                    trainer=trainer,
+                    model=model,
+                    batch=batch,
+                )
+                setattr(trainer, "_posttrain_route_contract_evidence", route_evidence)
+                route_contract_checked = True
             opt.zero_grad(set_to_none=True)
             if direct_mode:
                 rollout_mode_kwargs_step = dict(rollout_mode_kwargs)
@@ -4228,6 +4294,18 @@ _POSTTRAIN_ARG_SPECS_CONTACT_MEAS = (
     (
         ("--posttrain_contacts_pretrain_affine_stats",),
         dict(type=str, help="Optional affine stats JSON path or JSON string (scale/bias/eps) for pretrain contact calibration."),
+    ),
+    (
+        ("--posttrain_contacts_pretrain_dropout_injection_mode",),
+        dict(
+            type=str,
+            choices=("off", "encoder_input", "hidden"),
+            help="Frozen-contact dropout injection point for training path: off|encoder_input|hidden.",
+        ),
+    ),
+    (
+        ("--posttrain_contacts_pretrain_dropout_prob",),
+        dict(type=float, help="Frozen-contact dropout probability in [0,1)."),
     ),
 )
 

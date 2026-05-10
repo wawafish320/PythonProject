@@ -21,6 +21,8 @@ class ContactsPretrainRuntimeAttachTest(unittest.TestCase):
                 clamp=1.25,
                 affine_stats="stats.json",
                 affine={"scale": [1.0, 1.0], "bias": [0.0, 0.0], "eps": 1e-6},
+                dropout_injection_mode="hidden",
+                dropout_prob=0.2,
             ),
         )
 
@@ -32,12 +34,16 @@ class ContactsPretrainRuntimeAttachTest(unittest.TestCase):
             trainer.contacts_pretrain_affine,
             {"scale": [1.0, 1.0], "bias": [0.0, 0.0], "eps": 1e-6},
         )
+        self.assertEqual(trainer.contacts_pretrain_dropout_injection_mode, "hidden")
+        self.assertEqual(trainer.contacts_pretrain_dropout_prob, 0.2)
         self.assertEqual(trainer.posttrain_contacts_pretrain_clamp, 1.25)
         self.assertEqual(trainer.posttrain_contacts_pretrain_affine_stats_spec, "stats.json")
         self.assertEqual(
             trainer.posttrain_contacts_pretrain_affine,
             {"scale": [1.0, 1.0], "bias": [0.0, 0.0], "eps": 1e-6},
         )
+        self.assertEqual(trainer.posttrain_contacts_pretrain_dropout_injection_mode, "hidden")
+        self.assertEqual(trainer.posttrain_contacts_pretrain_dropout_prob, 0.2)
 
     def test_predict_pretrain_contacts_loud_fails_on_partial_neutral_attach(self) -> None:
         trainer = Trainer.__new__(Trainer)

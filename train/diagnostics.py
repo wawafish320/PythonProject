@@ -19,7 +19,7 @@ from .geometry import (
 )
 from .data.io import speed_from_X_layout as _speed_from_X_layout
 from .models import DEFAULT_DIRECT_POSE_LEG_BONES, STAGE6_3WAY_ARMCHAIN_BONES
-from .utils import grad_norm_of_module, safe_int_scalar, warn_once
+from .utils import _build_pretrain_contact_encoder_input, grad_norm_of_module, safe_int_scalar, warn_once
 
 
 _DIAG_WARN_ONCE_KEYS: set[str] = set()
@@ -98,6 +98,156 @@ def _diag_warn_once(key: str, message: str, exc: Optional[BaseException] = None)
         message=message,
         exc=exc,
     )
+
+
+def verify_posttrain_contact_route_contract(
+    *,
+    trainer: Any,
+    model: Any,
+    batch: Dict[str, torch.Tensor],
+) -> Dict[str, Any]:
+    if not bool(getattr(model, "contact_plan_enable", False)):
+        return {"enabled": False}
+
+    fn = getattr(trainer, "_predict_pretrain_contacts_from_frozen", None)
+    if not callable(fn):
+        raise RuntimeError(
+            "[FATAL][route-sync] Trainer missing _predict_pretrain_contacts_from_frozen; "
+            "posttrain requires route encoder_input->frozen_encoder->frozen_contact_head."
+        )
+    enc = getattr(model, "frozen_encoder", None)
+    head = getattr(model, "frozen_contact_head", None)
+    if enc is None or head is None:
+        raise RuntimeError(
+            "[FATAL][route-sync] model missing frozen_encoder/frozen_contact_head; "
+            "posttrain requires route encoder_input->frozen_encoder->frozen_contact_head."
+        )
+
+    motion_seq = batch.get("motion")
+    if (not torch.is_tensor(motion_seq)) or motion_seq.dim() != 3:
+        raise RuntimeError(
+            "[FATAL][route-sync] batch.motion must be [B,T,Dx] tensor for route probe; "
+            f"got type={type(motion_seq).__name__}, shape={tuple(motion_seq.shape) if torch.is_tensor(motion_seq) else None}."
+        )
+    model_dtype = next(model.parameters()).dtype
+    model_device = trainer.device
+    motion_step_t = motion_seq[:, 0].to(device=model_device, dtype=model_dtype)
+    pose_hist_seq = batch.get("pose_hist")
+    pose_hist_step_t = None
+    if torch.is_tensor(pose_hist_seq):
+        if pose_hist_seq.dim() == 3:
+            pose_hist_step_t = pose_hist_seq[:, 0].to(device=model_device, dtype=model_dtype)
+        elif pose_hist_seq.dim() == 2:
+            pose_hist_step_t = pose_hist_seq.to(device=model_device, dtype=model_dtype)
+        else:
+            raise RuntimeError(
+                "[FATAL][route-sync] batch.pose_hist must be [B,T,Dh] or [B,Dh]; "
+                f"got shape={tuple(pose_hist_seq.shape)}."
+            )
+
+    enc_inputs_seen: list[torch.Tensor] = []
+    head_inputs_seen: list[torch.Tensor] = []
+
+    def _enc_pre_hook(_module: torch.nn.Module, inputs: tuple[Any, ...]) -> None:
+        if inputs and torch.is_tensor(inputs[0]):
+            enc_inputs_seen.append(inputs[0].detach())
+
+    def _head_pre_hook(_module: torch.nn.Module, inputs: tuple[Any, ...]) -> None:
+        if inputs and torch.is_tensor(inputs[0]):
+            head_inputs_seen.append(inputs[0].detach())
+
+    h_enc = enc.register_forward_pre_hook(_enc_pre_hook)
+    h_head = head.register_forward_pre_hook(_head_pre_hook)
+    try:
+        contacts_in_t = fn(
+            motion_step_t=motion_step_t,
+            pose_hist_step_t=pose_hist_step_t,
+            inject_dropout=False,
+        )
+    finally:
+        h_enc.remove()
+        h_head.remove()
+
+    if not torch.is_tensor(contacts_in_t):
+        raise RuntimeError(
+            "[FATAL][route-sync] _predict_pretrain_contacts_from_frozen returned non-tensor; "
+            "posttrain cannot proceed without deploy-route contacts input."
+        )
+    if not enc_inputs_seen:
+        raise RuntimeError(
+            "[FATAL][route-sync] frozen_encoder was not called by _predict_pretrain_contacts_from_frozen."
+        )
+    if not head_inputs_seen:
+        raise RuntimeError(
+            "[FATAL][route-sync] frozen_contact_head was not called by _predict_pretrain_contacts_from_frozen."
+        )
+
+    enc_call_input = enc_inputs_seen[-1]
+    if enc_call_input.dim() == 3 and int(enc_call_input.size(1)) == 1:
+        enc_call_input = enc_call_input[:, 0]
+    if enc_call_input.dim() != 2:
+        raise RuntimeError(
+            "[FATAL][route-sync] frozen_encoder input must be [B,D] or [B,1,D]; "
+            f"got shape={tuple(enc_inputs_seen[-1].shape)}."
+        )
+
+    cdim = int(getattr(model, "contact_dim", 0) or 0)
+    in_dim = int(getattr(model, "encoder_input_dim", 0) or 0)
+    angvel_slice = getattr(trainer, "angvel_x_slice", None)
+    if not isinstance(angvel_slice, slice):
+        angvel_slice = getattr(model, "_contact_meas_state_angvel_slice", None)
+    pre_clamp_raw = getattr(trainer, "contacts_pretrain_clamp", 1.0)
+    try:
+        pre_clamp = float(pre_clamp_raw or 0.0)
+    except Exception:
+        pre_clamp = 1.0
+    if not (_math.isfinite(float(pre_clamp)) and float(pre_clamp) > 0.0):
+        pre_clamp = 0.0
+
+    expected_enc_in = _build_pretrain_contact_encoder_input(
+        motion_step_t,
+        pose_hist_step_t,
+        contact_dim=cdim,
+        encoder_input_dim=in_dim,
+        angvel_slice=angvel_slice,
+        clamp_val=float(pre_clamp),
+    )
+    if expected_enc_in.shape != enc_call_input.shape:
+        raise RuntimeError(
+            "[FATAL][route-sync] encoder_input shape mismatch between expected builder and encoder call: "
+            f"expected={tuple(expected_enc_in.shape)} got={tuple(enc_call_input.shape)}."
+        )
+    route_diff = (expected_enc_in - enc_call_input.to(device=expected_enc_in.device, dtype=expected_enc_in.dtype)).abs().max()
+    route_diff_max = float(route_diff.detach().cpu().item()) if torch.is_tensor(route_diff) else float("nan")
+    if not _math.isfinite(route_diff_max) or route_diff_max > 1e-6:
+        raise RuntimeError(
+            "[FATAL][route-sync] encoder_input content mismatch; route builder and encoder call diverged "
+            f"(max_abs_diff={route_diff_max:.3e})."
+        )
+
+    evidence = {
+        "enabled": True,
+        "route_contract": "encoder_input->frozen_encoder->frozen_contact_head",
+        "encoder_input_shape": [int(v) for v in enc_call_input.shape],
+        "encoder_input_dtype": str(enc_call_input.dtype).replace("torch.", ""),
+        "encoder_input_device": str(enc_call_input.device),
+        "head_input_shape": [int(v) for v in head_inputs_seen[-1].shape],
+        "head_input_dtype": str(head_inputs_seen[-1].dtype).replace("torch.", ""),
+        "head_input_device": str(head_inputs_seen[-1].device),
+        "contacts_in_shape": [int(v) for v in contacts_in_t.shape],
+        "contacts_in_dtype": str(contacts_in_t.dtype).replace("torch.", ""),
+        "contacts_in_device": str(contacts_in_t.device),
+        "encoder_input_max_abs_diff": float(route_diff_max),
+    }
+    print(
+        "[posttrain][route-sync] PASS "
+        f"route={evidence['route_contract']} "
+        f"enc_shape={tuple(evidence['encoder_input_shape'])} "
+        f"head_in_shape={tuple(evidence['head_input_shape'])} "
+        f"contacts_shape={tuple(evidence['contacts_in_shape'])} "
+        f"max_abs_diff={float(evidence['encoder_input_max_abs_diff']):.3e}"
+    )
+    return evidence
 
 
 def _maybe_optimize_dataset_index(ds, args):

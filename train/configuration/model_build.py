@@ -66,8 +66,12 @@ DEFAULT_TRAIN_FREERUN_DEBUG_PATH = None
 DEFAULT_TRAIN_ENABLE_GRAD_CONNECTION_TEST = True
 DEFAULT_TRAINBASE_CONTACTS_PRETRAIN_CLAMP = 1.0
 DEFAULT_TRAINBASE_CONTACTS_PRETRAIN_AFFINE_STATS = None
+DEFAULT_TRAINBASE_CONTACTS_PRETRAIN_DROPOUT_INJECTION_MODE = "off"
+DEFAULT_TRAINBASE_CONTACTS_PRETRAIN_DROPOUT_PROB = 0.0
 DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_CLAMP = 1.0
 DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_AFFINE_STATS = None
+DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_DROPOUT_INJECTION_MODE = "off"
+DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_DROPOUT_PROB = 0.0
 
 DEFAULT_POSTTRAIN_CONTACT_MEAS_WEIGHT = 0.0
 DEFAULT_POSTTRAIN_CONTACT_MEAS_GATE_BY_HIT = "auto"
@@ -819,6 +823,20 @@ def resolve_train_trainer_runtime_config(
                 "trainbase_contacts_pretrain_affine_stats",
                 DEFAULT_TRAINBASE_CONTACTS_PRETRAIN_AFFINE_STATS,
             ),
+            dropout_injection_mode_raw=_cfg_value(
+                args,
+                "trainbase_contacts_pretrain_dropout_injection_mode",
+                DEFAULT_TRAINBASE_CONTACTS_PRETRAIN_DROPOUT_INJECTION_MODE,
+            ),
+            dropout_prob_raw=_cfg_float_range(
+                args,
+                "trainbase_contacts_pretrain_dropout_prob",
+                DEFAULT_TRAINBASE_CONTACTS_PRETRAIN_DROPOUT_PROB,
+                min_value=0.0,
+                max_value=1.0,
+                min_inclusive=True,
+                max_inclusive=False,
+            ),
             warn=True,
             warn_prefix="[MPL]",
         ),
@@ -902,6 +920,20 @@ def resolve_posttrain_trainer_runtime_config(
                 cfg,
                 "posttrain_contacts_pretrain_affine_stats",
                 DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_AFFINE_STATS,
+            ),
+            dropout_injection_mode_raw=_cfg_value(
+                cfg,
+                "posttrain_contacts_pretrain_dropout_injection_mode",
+                DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_DROPOUT_INJECTION_MODE,
+            ),
+            dropout_prob_raw=_cfg_float_range(
+                cfg,
+                "posttrain_contacts_pretrain_dropout_prob",
+                DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_DROPOUT_PROB,
+                min_value=0.0,
+                max_value=1.0,
+                min_inclusive=True,
+                max_inclusive=False,
             ),
             warn=False,
         ),

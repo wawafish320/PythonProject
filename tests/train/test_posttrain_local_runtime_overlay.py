@@ -20,6 +20,8 @@ def _make_cfg(**overrides):
         "contact_meas_ground_z_slew_down_cm": -3.0,
         "posttrain_contacts_pretrain_clamp": 1.5,
         "posttrain_contacts_pretrain_affine_stats": None,
+        "posttrain_contacts_pretrain_dropout_injection_mode": "hidden",
+        "posttrain_contacts_pretrain_dropout_prob": 0.25,
         "lambda_reliability_mode": "warmup",
         "lambda_reliability_warmup_steps": 12,
         "lambda_reliability_contact_err_max": 0.75,
@@ -33,7 +35,13 @@ def _make_trainer_runtime(**overrides):
     values = {
         "direct_pose_grad_monitor_enable": True,
         "direct_pose_grad_ratio_gate": 0.42,
-        "contacts_pretrain": ContactPretrainRuntime(clamp=1.5, affine_stats=None, affine=None),
+        "contacts_pretrain": ContactPretrainRuntime(
+            clamp=1.5,
+            affine_stats=None,
+            affine=None,
+            dropout_injection_mode="hidden",
+            dropout_prob=0.25,
+        ),
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -76,6 +84,8 @@ class PosttrainLocalRuntimeOverlayTest(unittest.TestCase):
         self.assertAlmostEqual(overlay.contact_meas_ground_z_max_up_m, 0.125)
         self.assertAlmostEqual(overlay.contact_meas_ground_z_max_down_m, 0.0)
         self.assertEqual(overlay.contacts_pretrain.clamp, 1.5)
+        self.assertEqual(overlay.contacts_pretrain.dropout_injection_mode, "hidden")
+        self.assertEqual(overlay.contacts_pretrain.dropout_prob, 0.25)
         self.assertEqual(overlay.lambda_reliability_mode, "warmup")
         self.assertEqual(overlay.lambda_reliability_warmup_steps, 12)
         self.assertEqual(overlay.lambda_reliability_contact_err_max, 0.75)
@@ -94,7 +104,13 @@ class PosttrainLocalRuntimeOverlayTest(unittest.TestCase):
             contact_meas_ground_z_quantile=0.3,
             contact_meas_ground_z_max_up_m=0.04,
             contact_meas_ground_z_max_down_m=0.05,
-            contacts_pretrain=ContactPretrainRuntime(clamp=1.25, affine_stats=None, affine=None),
+            contacts_pretrain=ContactPretrainRuntime(
+                clamp=1.25,
+                affine_stats=None,
+                affine=None,
+                dropout_injection_mode="encoder_input",
+                dropout_prob=0.4,
+            ),
             lambda_reliability_mode="warmup",
             lambda_reliability_warmup_steps=30,
             lambda_reliability_contact_err_max=0.8,
@@ -104,6 +120,8 @@ class PosttrainLocalRuntimeOverlayTest(unittest.TestCase):
         posttrain._apply_posttrain_local_runtime_overlay(trainer, overlay)
 
         self.assertEqual(trainer.posttrain_contacts_pretrain_clamp, 1.25)
+        self.assertEqual(trainer.posttrain_contacts_pretrain_dropout_injection_mode, "encoder_input")
+        self.assertEqual(trainer.posttrain_contacts_pretrain_dropout_prob, 0.4)
         self.assertTrue(trainer.contacts_pretrain_runtime_attached)
         self.assertIs(trainer.contact_meas_gate_by_hit_override, False)
         self.assertEqual(trainer.contact_meas_vxy_mode, "signed")

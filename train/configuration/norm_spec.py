@@ -33,6 +33,8 @@ class ContactPretrainRuntime:
     clamp: float
     affine_stats: Optional[str]
     affine: Optional[Dict[str, Any]]
+    dropout_injection_mode: str = "off"
+    dropout_prob: float = 0.0
 
 
 def _warn(message: str, *, warn: bool, warn_prefix: str = "") -> None:
@@ -161,6 +163,8 @@ def resolve_contact_pretrain_runtime(
     *,
     clamp_raw: Any,
     affine_stats_raw: Any,
+    dropout_injection_mode_raw: Any = "off",
+    dropout_prob_raw: Any = 0.0,
     warn: bool = False,
     warn_prefix: str = "",
 ) -> ContactPretrainRuntime:
@@ -179,10 +183,30 @@ def resolve_contact_pretrain_runtime(
             warn=warn,
             warn_prefix=warn_prefix,
         )
+    mode_text = str(dropout_injection_mode_raw if dropout_injection_mode_raw is not None else "off").strip().lower()
+    if mode_text == "":
+        mode_text = "off"
+    if mode_text not in ("off", "encoder_input", "hidden"):
+        raise ValueError(
+            "contacts_pretrain_dropout_injection_mode must be one of: off|encoder_input|hidden; "
+            f"got {dropout_injection_mode_raw!r}."
+        )
+    try:
+        dropout_prob = float(dropout_prob_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"contacts_pretrain_dropout_prob must be a finite float in [0,1); got {dropout_prob_raw!r}."
+        ) from exc
+    if (not math.isfinite(dropout_prob)) or dropout_prob < 0.0 or dropout_prob >= 1.0:
+        raise ValueError(
+            f"contacts_pretrain_dropout_prob must be in [0,1); got {dropout_prob}."
+        )
     return ContactPretrainRuntime(
         clamp=float(clamp),
         affine_stats=affine_stats,
         affine=affine,
+        dropout_injection_mode=mode_text,
+        dropout_prob=float(dropout_prob),
     )
 
 

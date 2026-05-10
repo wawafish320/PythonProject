@@ -346,6 +346,7 @@ def evaluate_freerun(
                         contacts_in_t = trainer._predict_pretrain_contacts_from_frozen(
                             motion_step_t=motion_raw,
                             pose_hist_step_t=pose_hist_t,
+                            inject_dropout=False,
                         )
                     except Exception:
                         contacts_in_t = None

@@ -538,6 +538,7 @@ class Trainer:
         *,
         motion_step_t: Optional[torch.Tensor],
         pose_hist_step_t: Optional[torch.Tensor],
+        inject_dropout: bool = False,
     ) -> Optional[torch.Tensor]:
         import torch
 
@@ -565,6 +566,8 @@ class Trainer:
                     'contacts_pretrain_clamp',
                     'contacts_pretrain_affine_stats_spec',
                     'contacts_pretrain_affine',
+                    'contacts_pretrain_dropout_injection_mode',
+                    'contacts_pretrain_dropout_prob',
                 )
                 if not hasattr(self, field_name)
             ]
@@ -581,6 +584,27 @@ class Trainer:
             pre_clamp = 1.0
         if not (_math.isfinite(float(pre_clamp)) and float(pre_clamp) > 0.0):
             pre_clamp = 0.0
+        dropout_mode_raw = getattr(self, 'contacts_pretrain_dropout_injection_mode', 'off')
+        dropout_mode = str(dropout_mode_raw or 'off').strip().lower()
+        if dropout_mode == '':
+            dropout_mode = 'off'
+        if dropout_mode not in ('off', 'encoder_input', 'hidden'):
+            raise RuntimeError(
+                "contacts_pretrain dropout injection mode must be one of off|encoder_input|hidden; "
+                f"got {dropout_mode_raw!r}."
+            )
+        dropout_prob_raw = getattr(self, 'contacts_pretrain_dropout_prob', 0.0)
+        try:
+            dropout_prob = float(dropout_prob_raw)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "contacts_pretrain dropout prob must be a finite float in [0,1); "
+                f"got {dropout_prob_raw!r}."
+            ) from exc
+        if (not _math.isfinite(dropout_prob)) or dropout_prob < 0.0 or dropout_prob >= 1.0:
+            raise RuntimeError(
+                f"contacts_pretrain dropout prob must be in [0,1); got {dropout_prob}."
+            )
         encoder_input = _build_pretrain_contact_encoder_input(
             motion_step_t,
             pose_hist_step_t,
@@ -589,10 +613,14 @@ class Trainer:
             angvel_slice=angvel_slice,
             clamp_val=float(pre_clamp),
         )
+        if bool(inject_dropout) and dropout_mode == "encoder_input" and dropout_prob > 0.0:
+            encoder_input = F.dropout(encoder_input, p=float(dropout_prob), training=True)
         affine_spec = parse_pretrain_contact_affine_spec(getattr(self, 'contacts_pretrain_affine', None))
         try:
             with torch.no_grad():
                 hidden = enc(encoder_input.unsqueeze(1), return_summary=False)
+                if bool(inject_dropout) and dropout_mode == "hidden" and dropout_prob > 0.0:
+                    hidden = F.dropout(hidden, p=float(dropout_prob), training=True)
                 logits = head(hidden)
         except Exception:
             return None
@@ -1086,6 +1114,7 @@ class Trainer:
                 step_idx=int(idx),
             ),
             model=self.model,
+            inject_dropout=True,
         )
         with self._amp_context(rollout.amp_enabled):
             ret, delta_out, period_pred = _rollout_kernel.forward_rollout_model_step(
@@ -2600,6 +2629,19 @@ def _parser_add_model_args(p: argparse.ArgumentParser) -> None:
         type=str,
         default=None,
         help='可选的 pretrain_contact affine stats JSON / JSON-string；格式与 posttrain affine_stats.json 一致。',
+    )
+    p.add_argument(
+        '--trainbase_contacts_pretrain_dropout_injection_mode',
+        type=str,
+        default='off',
+        choices=['off', 'encoder_input', 'hidden'],
+        help='训练时 frozen-contact 路径 dropout 注入点：off|encoder_input|hidden。',
+    )
+    p.add_argument(
+        '--trainbase_contacts_pretrain_dropout_prob',
+        type=float,
+        default=0.0,
+        help='训练时 frozen-contact 路径 dropout 概率，取值区间 [0,1)。',
     )
     p.add_argument('--contact_plan_hidden', type=int, default=64, help='contacts_plan GRU hidden dim')
     p.add_argument('--contact_plan_dropout', type=float, default=0.0, help='contacts_plan head dropout')

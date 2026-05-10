@@ -29,6 +29,14 @@ class TrainerRuntimeConfigTest(unittest.TestCase):
         self.assertEqual(cfg.diag_thr, mb.DEFAULT_TRAIN_DIAG_THR)
         self.assertEqual(cfg.direct_pose_grad_monitor_enable, mb.DEFAULT_DIRECT_POSE_GRAD_MONITOR_ENABLE)
         self.assertEqual(cfg.direct_pose_grad_ratio_gate, mb.DEFAULT_DIRECT_POSE_GRAD_RATIO_GATE)
+        self.assertEqual(
+            cfg.contacts_pretrain.dropout_injection_mode,
+            mb.DEFAULT_TRAINBASE_CONTACTS_PRETRAIN_DROPOUT_INJECTION_MODE,
+        )
+        self.assertEqual(
+            cfg.contacts_pretrain.dropout_prob,
+            mb.DEFAULT_TRAINBASE_CONTACTS_PRETRAIN_DROPOUT_PROB,
+        )
 
         args_obj = SimpleNamespace(run_name="unit")
         self.assertEqual(
@@ -56,6 +64,8 @@ class TrainerRuntimeConfigTest(unittest.TestCase):
                 history_dropout_prob=0.0,
                 diag_thr=0.0,
                 direct_pose_grad_ratio_gate=0.0,
+                trainbase_contacts_pretrain_dropout_injection_mode="encoder_input",
+                trainbase_contacts_pretrain_dropout_prob=0.35,
             ),
             model_build_config=SimpleNamespace(hidden_dim=640),
             pin_memory=False,
@@ -71,6 +81,8 @@ class TrainerRuntimeConfigTest(unittest.TestCase):
         self.assertEqual(cfg.history_dropout_prob, 0.0)
         self.assertEqual(cfg.diag_thr, 0.0)
         self.assertEqual(cfg.direct_pose_grad_ratio_gate, 0.0)
+        self.assertEqual(cfg.contacts_pretrain.dropout_injection_mode, "encoder_input")
+        self.assertEqual(cfg.contacts_pretrain.dropout_prob, 0.35)
 
         self.assertEqual(
             cfg.to_adaptive_history_kwargs(),
@@ -97,6 +109,14 @@ class TrainerRuntimeConfigTest(unittest.TestCase):
         self.assertEqual(cfg.accum_steps, mb.DEFAULT_POSTTRAIN_TRAINER_ACCUM_STEPS)
         self.assertEqual(cfg.pin_memory, mb.DEFAULT_POSTTRAIN_TRAINER_PIN_MEMORY)
         self.assertEqual(cfg.contacts_pretrain.clamp, mb.DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_CLAMP)
+        self.assertEqual(
+            cfg.contacts_pretrain.dropout_injection_mode,
+            mb.DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_DROPOUT_INJECTION_MODE,
+        )
+        self.assertEqual(
+            cfg.contacts_pretrain.dropout_prob,
+            mb.DEFAULT_POSTTRAIN_CONTACTS_PRETRAIN_DROPOUT_PROB,
+        )
         self.assertEqual(cfg.direct_pose_grad_monitor_enable, mb.DEFAULT_DIRECT_POSE_GRAD_MONITOR_ENABLE)
         self.assertEqual(cfg.direct_pose_grad_ratio_gate, mb.DEFAULT_DIRECT_POSE_GRAD_RATIO_GATE)
 
@@ -118,6 +138,8 @@ class TrainerRuntimeConfigTest(unittest.TestCase):
                 lr=0.0,
                 weight_decay=0.0,
                 posttrain_contacts_pretrain_clamp=0.0,
+                posttrain_contacts_pretrain_dropout_injection_mode="hidden",
+                posttrain_contacts_pretrain_dropout_prob=0.2,
                 direct_pose_grad_ratio_gate=0.0,
             ),
             model_build_config=SimpleNamespace(),
@@ -126,6 +148,8 @@ class TrainerRuntimeConfigTest(unittest.TestCase):
         self.assertEqual(cfg.lr, 0.0)
         self.assertEqual(cfg.weight_decay, 0.0)
         self.assertEqual(cfg.contacts_pretrain.clamp, 0.0)
+        self.assertEqual(cfg.contacts_pretrain.dropout_injection_mode, "hidden")
+        self.assertEqual(cfg.contacts_pretrain.dropout_prob, 0.2)
         self.assertEqual(cfg.direct_pose_grad_ratio_gate, 0.0)
         self.assertEqual(
             cfg.to_trainer_kwargs(),
@@ -138,6 +162,22 @@ class TrainerRuntimeConfigTest(unittest.TestCase):
                 "pin_memory": mb.DEFAULT_POSTTRAIN_TRAINER_PIN_MEMORY,
             },
         )
+
+    def test_train_contacts_pretrain_dropout_prob_must_be_in_closed_open_range(self) -> None:
+        with self.assertRaisesRegex(ValueError, "trainbase_contacts_pretrain_dropout_prob"):
+            mb.resolve_train_trainer_runtime_config(
+                args=SimpleNamespace(trainbase_contacts_pretrain_dropout_prob=1.0),
+                model_build_config=SimpleNamespace(hidden_dim=640),
+                pin_memory=False,
+            )
+
+    def test_train_contacts_pretrain_dropout_mode_must_be_known(self) -> None:
+        with self.assertRaisesRegex(ValueError, "contacts_pretrain_dropout_injection_mode"):
+            mb.resolve_train_trainer_runtime_config(
+                args=SimpleNamespace(trainbase_contacts_pretrain_dropout_injection_mode="bad_mode"),
+                model_build_config=SimpleNamespace(hidden_dim=640),
+                pin_memory=False,
+            )
 
 
 if __name__ == "__main__":

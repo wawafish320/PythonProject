@@ -118,10 +118,14 @@ def apply_contacts_pretrain_runtime(
     setattr(trainer, "contacts_pretrain_clamp", float(runtime.clamp))
     setattr(trainer, "contacts_pretrain_affine_stats_spec", runtime.affine_stats)
     setattr(trainer, "contacts_pretrain_affine", runtime.affine)
+    setattr(trainer, "contacts_pretrain_dropout_injection_mode", str(runtime.dropout_injection_mode))
+    setattr(trainer, "contacts_pretrain_dropout_prob", float(runtime.dropout_prob))
 
     setattr(trainer, f"{owner_prefix_txt}_contacts_pretrain_clamp", float(runtime.clamp))
     setattr(trainer, f"{owner_prefix_txt}_contacts_pretrain_affine_stats_spec", runtime.affine_stats)
     setattr(trainer, f"{owner_prefix_txt}_contacts_pretrain_affine", runtime.affine)
+    setattr(trainer, f"{owner_prefix_txt}_contacts_pretrain_dropout_injection_mode", str(runtime.dropout_injection_mode))
+    setattr(trainer, f"{owner_prefix_txt}_contacts_pretrain_dropout_prob", float(runtime.dropout_prob))
     setattr(trainer, "contacts_pretrain_runtime_attached", True)
     return trainer
 
