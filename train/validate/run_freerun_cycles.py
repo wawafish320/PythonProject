@@ -105,6 +105,56 @@ def _load_json(path: Path) -> Dict[str, Any]:
         return json.load(f)
 
 
+def _ckpt_cfg_bool(cfg: Any, key: str) -> bool:
+    if not isinstance(cfg, dict):
+        return False
+    value = cfg.get(key, False)
+    if isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "y", "on")
+    return bool(value)
+
+
+def _build_lambda_eval_contract(
+    *,
+    state_dict: Dict[str, Any],
+    ckpt_posttrain_cfg: Any,
+    lambda_fusion_apply: bool,
+    allow_lambda_apply_off_ablation: bool,
+) -> Dict[str, Any]:
+    lambda_keys_n = int(sum(1 for key in state_dict.keys() if str(key).startswith("lambda_fusion_head.")))
+    lambda_fusion_enable = _ckpt_cfg_bool(ckpt_posttrain_cfg, "lambda_fusion_enable")
+    train_lambda_head = _ckpt_cfg_bool(ckpt_posttrain_cfg, "train_lambda_head")
+    requires_apply = bool(lambda_keys_n > 0 and lambda_fusion_enable and train_lambda_head)
+    violation = bool(requires_apply and not bool(lambda_fusion_apply))
+    valid_for_final_conclusion = not violation
+    if violation and bool(allow_lambda_apply_off_ablation):
+        note = (
+            "final-lambda checkpoint evaluated with lambda_fusion_apply=false; "
+            "accepted only as an explicit ablation, not for promotion/final conclusions."
+        )
+    elif violation:
+        note = "final-lambda checkpoint requires --lambda_fusion_apply for promotion/final eval."
+    elif requires_apply:
+        note = "final-lambda checkpoint contract satisfied."
+    else:
+        note = "checkpoint does not require lambda_fusion_apply under the final-lambda contract."
+    return {
+        "lambda_keys_n": lambda_keys_n,
+        "lambda_fusion_enable": bool(lambda_fusion_enable),
+        "train_lambda_head": bool(train_lambda_head),
+        "lambda_fusion_apply": bool(lambda_fusion_apply),
+        "allow_lambda_apply_off_ablation": bool(allow_lambda_apply_off_ablation),
+        "requires_lambda_fusion_apply": bool(requires_apply),
+        "lambda_eval_contract_violation": bool(violation),
+        "valid_for_final_conclusion": bool(valid_for_final_conclusion),
+        "note": note,
+    }
+
+
 def _legacy_phase_attr_name(suffix: str) -> str:
     return "contact" + "_phase" + "_state_" + str(suffix)
 
@@ -1238,6 +1288,25 @@ class FreeRunCycleRunner:
                 "Use --phase_reset_source contacts_meas, ttc_gt, or none."
             )
         self.lambda_fusion_apply = bool(getattr(args, "lambda_fusion_apply", False))
+        self.allow_lambda_apply_off_ablation = bool(getattr(args, "allow_lambda_apply_off_ablation", False))
+        self.lambda_eval_contract = _build_lambda_eval_contract(
+            state_dict=self.state_dict,
+            ckpt_posttrain_cfg=self._ckpt_posttrain_cfg,
+            lambda_fusion_apply=bool(self.lambda_fusion_apply),
+            allow_lambda_apply_off_ablation=bool(self.allow_lambda_apply_off_ablation),
+        )
+        if (
+            bool(self.lambda_eval_contract.get("lambda_eval_contract_violation", False))
+            and not bool(self.allow_lambda_apply_off_ablation)
+        ):
+            raise SystemExit(
+                "[FATAL] final-lambda checkpoint eval requires --lambda_fusion_apply. "
+                f"lambda_keys_n={int(self.lambda_eval_contract.get('lambda_keys_n', 0))}, "
+                f"lambda_fusion_enable={bool(self.lambda_eval_contract.get('lambda_fusion_enable', False))}, "
+                f"train_lambda_head={bool(self.lambda_eval_contract.get('train_lambda_head', False))}. "
+                "For an explicit ablation, pass --allow_lambda_apply_off_ablation; that output is marked "
+                "valid_for_final_conclusion=false."
+            )
         lambda_rollout_override_raw = getattr(args, "lambda_fusion_use_rollout_step", None)
         self.lambda_fusion_use_rollout_step_override = None
         if lambda_rollout_override_raw is not None:
@@ -2001,6 +2070,17 @@ class FreeRunCycleRunner:
             "log_contact_plan_logits_decomp": bool(getattr(self, "log_contact_plan_logits_decomp", False)),
             "event_clock": str(getattr(self.args, "event_clock", "auto") or "auto"),
             "lambda_fusion_apply": bool(self.lambda_fusion_apply),
+            "allow_lambda_apply_off_ablation": bool(self.allow_lambda_apply_off_ablation),
+            "lambda_eval_contract": dict(getattr(self, "lambda_eval_contract", {}) or {}),
+            "lambda_eval_contract_violation": bool(
+                (getattr(self, "lambda_eval_contract", {}) or {}).get("lambda_eval_contract_violation", False)
+            ),
+            "valid_for_final_conclusion": bool(
+                (getattr(self, "lambda_eval_contract", {}) or {}).get("valid_for_final_conclusion", True)
+            ),
+            "lambda_eval_contract_note": str(
+                (getattr(self, "lambda_eval_contract", {}) or {}).get("note", "")
+            ),
             "so3_corr_apply": bool(getattr(self.trainer, "so3_corr_apply", False)) if self.trainer is not None else False,
             "debug_so3_corr": bool(getattr(self.args, "debug_so3_corr", False)),
             "debug_rot_gain": bool(getattr(self.args, "debug_rot_gain", False)),
@@ -6713,6 +6793,13 @@ def _run_freerun_cycles(
     predX_raw = None
     gtX_raw = None
     root_pos_err: Optional[torch.Tensor] = None  # [free_steps]
+    root_pos_err_round_offset_corr: Optional[torch.Tensor] = None  # [free_steps]
+    root_pos_err_round_offset_corr_axis: Optional[torch.Tensor] = None  # [free_steps, Droot]
+    root_disp_err_start_to_current: Optional[torch.Tensor] = None  # [free_steps]
+    root_disp_err_start_to_current_delta: Optional[torch.Tensor] = None  # [free_steps]
+    root_step_disp_err: Optional[torch.Tensor] = None  # [free_steps], first step is anchored to 0
+    root_pos_round_offset_cycle_disp_xyz: Optional[List[float]] = None
+    root_pos_metric_tensor_meta: Optional[Dict[str, Any]] = None
     root_vel_mae: Optional[torch.Tensor] = None  # [free_steps]
     if predX is not None and getattr(trainer, "normalizer", None) is not None:
         try:
@@ -6723,6 +6810,57 @@ def _run_freerun_cycles(
             if isinstance(rootpos_sl, slice):
                 diff = predX_raw[..., rootpos_sl] - gtX_raw[..., rootpos_sl]
                 root_pos_err = torch.norm(diff, dim=-1).mean(dim=0)  # [free_steps]
+                if int(T_cycle) > 1 and int(free_steps) > 0:
+                    try:
+                        state_seq_base_raw = trainer.normalizer.denorm_x(
+                            state_seq_base.reshape(-1, state_seq_base.shape[-1])
+                        ).view_as(state_seq_base)
+                        base_root = state_seq_base_raw[..., rootpos_sl]  # [B, T_cycle, Droot]
+                        cycle_net_disp = base_root[:, int(T_cycle) - 1, :] - base_root[:, 0, :]  # [B, Droot]
+                        step_ids = (
+                            torch.arange(int(free_steps), device=gtX_raw.device, dtype=torch.long)
+                            + int(gt_start)
+                            + 1
+                        )
+                        cycle_ids = torch.div(step_ids, int(T_cycle), rounding_mode="floor").to(dtype=gtX_raw.dtype)
+                        gt_root_corr = gtX_raw[..., rootpos_sl] + cycle_ids.view(1, -1, 1) * cycle_net_disp.unsqueeze(1)
+                        diff_corr = predX_raw[..., rootpos_sl] - gt_root_corr
+                        root_pos_err_round_offset_corr = torch.norm(diff_corr, dim=-1).mean(dim=0)
+                        root_pos_err_round_offset_corr_axis = diff_corr.mean(dim=0)
+
+                        pred_root = predX_raw[..., rootpos_sl]
+                        pred_disp = pred_root - pred_root[:, :1, :]
+                        gt_disp = gt_root_corr - gt_root_corr[:, :1, :]
+                        disp_err = torch.norm(pred_disp - gt_disp, dim=-1).mean(dim=0)
+                        root_disp_err_start_to_current = disp_err
+                        root_disp_err_start_to_current_delta = torch.zeros_like(disp_err)
+                        if int(disp_err.numel()) > 1:
+                            root_disp_err_start_to_current_delta[1:] = disp_err[1:] - disp_err[:-1]
+
+                        root_step_disp_err = torch.zeros_like(disp_err)
+                        if int(pred_root.shape[1]) > 1:
+                            pred_step_disp = pred_root[:, 1:, :] - pred_root[:, :-1, :]
+                            gt_step_disp = gt_root_corr[:, 1:, :] - gt_root_corr[:, :-1, :]
+                            root_step_disp_err[1:] = torch.norm(pred_step_disp - gt_step_disp, dim=-1).mean(dim=0)
+
+                        root_pos_round_offset_cycle_disp_xyz = [
+                            float(v) for v in cycle_net_disp.mean(dim=0).detach().cpu().tolist()
+                        ]
+                        root_pos_metric_tensor_meta = {
+                            "pred_rootpos_shape": list(pred_root.shape),
+                            "gt_rootpos_shape": list(gt_root_corr.shape),
+                            "cycle_ids_shape": list(cycle_ids.shape),
+                            "dtype": str(pred_root.dtype).replace("torch.", ""),
+                            "device": str(pred_root.device),
+                        }
+                    except Exception:
+                        root_pos_err_round_offset_corr = None
+                        root_pos_err_round_offset_corr_axis = None
+                        root_disp_err_start_to_current = None
+                        root_disp_err_start_to_current_delta = None
+                        root_step_disp_err = None
+                        root_pos_round_offset_cycle_disp_xyz = None
+                        root_pos_metric_tensor_meta = None
             rootvel_sl = free_carry_cfg.rootvel_x_slice
             if isinstance(rootvel_sl, slice):
                 diff = predX_raw[..., rootvel_sl] - gtX_raw[..., rootvel_sl]
@@ -6731,6 +6869,13 @@ def _run_freerun_cycles(
             predX_raw = None
             gtX_raw = None
             root_pos_err = None
+            root_pos_err_round_offset_corr = None
+            root_pos_err_round_offset_corr_axis = None
+            root_disp_err_start_to_current = None
+            root_disp_err_start_to_current_delta = None
+            root_step_disp_err = None
+            root_pos_round_offset_cycle_disp_xyz = None
+            root_pos_metric_tensor_meta = None
             root_vel_mae = None
 
     # ---- Per‑round metrics ---------------------------------------------------
@@ -6768,6 +6913,20 @@ def _run_freerun_cycles(
     extra["direct_alignment_max_shift"] = int(direct_alignment_max_shift)
     extra["direct_alignment_joints"] = str(direct_alignment_joints or "")
     extra["direct_alignment_include_round0"] = bool(direct_alignment_include_round0)
+    if root_pos_round_offset_cycle_disp_xyz is not None:
+        rootpos_contract: Dict[str, Any] = {
+            "method": "gt_rootpos_plus_cycle_idx_times_cycle_net_disp",
+            "cycle_len_steps": int(T_cycle),
+            "cycle_net_disp_xyz_m": list(root_pos_round_offset_cycle_disp_xyz),
+            "gt_index_base_offset": int(gt_start) + 1,
+        }
+        if isinstance(root_pos_metric_tensor_meta, dict):
+            rootpos_contract["tensor_meta"] = dict(root_pos_metric_tensor_meta)
+        extra["rootpos_round_offset_correction"] = rootpos_contract
+        extra["root_walk_displacement_metric"] = {
+            "method": "compare_pred_and_offset_corrected_gt_displacement_from_first_aligned_step",
+            "first_step_delta_is_zero": True,
+        }
     if bool(export_direct_leg_omega_grad) and (direct_leg_omega_grad_meta or direct_leg_omega_grad_steps):
         payload = dict(direct_leg_omega_grad_meta) if isinstance(direct_leg_omega_grad_meta, dict) else {"enabled": True}
         payload["steps"] = direct_leg_omega_grad_steps
@@ -9195,6 +9354,37 @@ def _run_freerun_cycles(
             "EventClockLambdaCorrMean": ec_lam_corr_mean_t,
             "EventClockLambdaCorrStd": ec_lam_corr_std_t,
             "RootPosErr": float(root_pos_err[t].item()) if root_pos_err is not None else None,
+            "RootPosErrRaw": float(root_pos_err[t].item()) if root_pos_err is not None else None,
+            "RootPosErrRoundOffsetCorr": (
+                float(root_pos_err_round_offset_corr[t].item()) if root_pos_err_round_offset_corr is not None else None
+            ),
+            "RootPosErrOffsetCorrected": (
+                float(root_pos_err_round_offset_corr[t].item()) if root_pos_err_round_offset_corr is not None else None
+            ),
+            "RootPosErrRoundOffsetCorrX": (
+                float(root_pos_err_round_offset_corr_axis[t, 0].item())
+                if (root_pos_err_round_offset_corr_axis is not None and root_pos_err_round_offset_corr_axis.shape[-1] >= 1)
+                else None
+            ),
+            "RootPosErrRoundOffsetCorrY": (
+                float(root_pos_err_round_offset_corr_axis[t, 1].item())
+                if (root_pos_err_round_offset_corr_axis is not None and root_pos_err_round_offset_corr_axis.shape[-1] >= 2)
+                else None
+            ),
+            "RootPosErrRoundOffsetCorrZ": (
+                float(root_pos_err_round_offset_corr_axis[t, 2].item())
+                if (root_pos_err_round_offset_corr_axis is not None and root_pos_err_round_offset_corr_axis.shape[-1] >= 3)
+                else None
+            ),
+            "RootDispErrStartToCurrent": (
+                float(root_disp_err_start_to_current[t].item()) if root_disp_err_start_to_current is not None else None
+            ),
+            "RootDispErrStartToCurrentDelta": (
+                float(root_disp_err_start_to_current_delta[t].item())
+                if root_disp_err_start_to_current_delta is not None
+                else None
+            ),
+            "RootStepDispErr": float(root_step_disp_err[t].item()) if root_step_disp_err is not None else None,
             "RootVelMAE": float(root_vel_mae[t].item()) if root_vel_mae is not None else None,
         }
         if so3_debug_steps:
@@ -9298,6 +9488,18 @@ def _run_freerun_cycles(
         root_pos_err_mean: Optional[float] = None
         root_pos_err_start: Optional[float] = None
         root_pos_err_end: Optional[float] = None
+        root_pos_err_round_offset_corr_mean: Optional[float] = None
+        root_pos_err_round_offset_corr_start: Optional[float] = None
+        root_pos_err_round_offset_corr_end: Optional[float] = None
+        root_disp_err_start_to_current_mean: Optional[float] = None
+        root_disp_err_start_to_current_start: Optional[float] = None
+        root_disp_err_start_to_current_end: Optional[float] = None
+        root_disp_err_start_to_current_delta_mean: Optional[float] = None
+        root_disp_err_start_to_current_delta_end: Optional[float] = None
+        root_disp_err_start_to_current_delta_positive_frac: Optional[float] = None
+        root_step_disp_err_mean: Optional[float] = None
+        root_step_disp_err_p95: Optional[float] = None
+        root_step_disp_err_end: Optional[float] = None
         root_vel_mae_mean: Optional[float] = None
         root_vel_mae_start: Optional[float] = None
         root_vel_mae_end: Optional[float] = None
@@ -9414,6 +9616,28 @@ def _run_freerun_cycles(
             root_pos_err_mean = float(seg.mean().item())
             root_pos_err_start = float(seg[0].item()) if seg.numel() > 0 else None
             root_pos_err_end = float(seg[-1].item()) if seg.numel() > 0 else None
+        if root_pos_err_round_offset_corr is not None:
+            seg = root_pos_err_round_offset_corr[t0:t1]
+            root_pos_err_round_offset_corr_mean = float(seg.mean().item())
+            root_pos_err_round_offset_corr_start = float(seg[0].item()) if seg.numel() > 0 else None
+            root_pos_err_round_offset_corr_end = float(seg[-1].item()) if seg.numel() > 0 else None
+        if root_disp_err_start_to_current is not None:
+            seg = root_disp_err_start_to_current[t0:t1]
+            root_disp_err_start_to_current_mean = float(seg.mean().item())
+            root_disp_err_start_to_current_start = float(seg[0].item()) if seg.numel() > 0 else None
+            root_disp_err_start_to_current_end = float(seg[-1].item()) if seg.numel() > 0 else None
+        if root_disp_err_start_to_current_delta is not None:
+            seg = root_disp_err_start_to_current_delta[t0:t1]
+            root_disp_err_start_to_current_delta_mean = float(seg.mean().item())
+            root_disp_err_start_to_current_delta_end = float(seg[-1].item()) if seg.numel() > 0 else None
+            if seg.numel() > 0:
+                root_disp_err_start_to_current_delta_positive_frac = float((seg > 0).to(torch.float32).mean().item())
+        if root_step_disp_err is not None:
+            seg = root_step_disp_err[t0:t1]
+            root_step_disp_err_mean = float(seg.mean().item())
+            root_step_disp_err_end = float(seg[-1].item()) if seg.numel() > 0 else None
+            if seg.numel() > 0:
+                root_step_disp_err_p95 = float(torch.quantile(seg.detach().float().cpu(), 0.95).item())
 
         if root_vel_mae is not None:
             seg = root_vel_mae[t0:t1]
@@ -9453,6 +9677,24 @@ def _run_freerun_cycles(
             "RootPosErrMean": root_pos_err_mean,
             "RootPosErrStart": root_pos_err_start,
             "RootPosErrEnd": root_pos_err_end,
+            "RootPosErrRawMean": root_pos_err_mean,
+            "RootPosErrRawStart": root_pos_err_start,
+            "RootPosErrRawEnd": root_pos_err_end,
+            "RootPosErrRoundOffsetCorrMean": root_pos_err_round_offset_corr_mean,
+            "RootPosErrRoundOffsetCorrStart": root_pos_err_round_offset_corr_start,
+            "RootPosErrRoundOffsetCorrEnd": root_pos_err_round_offset_corr_end,
+            "RootPosErrOffsetCorrectedMean": root_pos_err_round_offset_corr_mean,
+            "RootPosErrOffsetCorrectedStart": root_pos_err_round_offset_corr_start,
+            "RootPosErrOffsetCorrectedEnd": root_pos_err_round_offset_corr_end,
+            "RootDispErrStartToCurrentMean": root_disp_err_start_to_current_mean,
+            "RootDispErrStartToCurrentStart": root_disp_err_start_to_current_start,
+            "RootDispErrStartToCurrentEnd": root_disp_err_start_to_current_end,
+            "RootDispErrStartToCurrentDeltaMean": root_disp_err_start_to_current_delta_mean,
+            "RootDispErrStartToCurrentDeltaEnd": root_disp_err_start_to_current_delta_end,
+            "RootDispErrStartToCurrentDeltaPositiveFrac": root_disp_err_start_to_current_delta_positive_frac,
+            "RootStepDispErrMean": root_step_disp_err_mean,
+            "RootStepDispErrP95": root_step_disp_err_p95,
+            "RootStepDispErrEnd": root_step_disp_err_end,
             "RootVelMAEMean": root_vel_mae_mean,
             "RootVelMAEStart": root_vel_mae_start,
             "RootVelMAEEnd": root_vel_mae_end,
@@ -10223,6 +10465,14 @@ def parse_args() -> argparse.Namespace:
         "--lambda_fusion_apply",
         action="store_true",
         help="Apply Stage2 lambda fusion during rollout update (requires out_direct + lambda_fusion).",
+    )
+    parser.add_argument(
+        "--allow_lambda_apply_off_ablation",
+        action="store_true",
+        help=(
+            "Allow evaluating a final-lambda checkpoint with lambda_fusion_apply=false as an explicit ablation. "
+            "The output JSON is marked valid_for_final_conclusion=false."
+        ),
     )
     parser.add_argument(
         "--lambda_fusion_use_rollout_step",
