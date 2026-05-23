@@ -29,6 +29,13 @@ from typing import Any, Iterable
 TOOL_VERSION = "v1_checkpoint_smoke_only"
 LEGACY_REMOVED_MARKERS = ("[Removed]", "contact_plan_init_head")
 ROLLOUT_FATAL_MARKERS = ("[ERR]", "[FATAL]")
+TEACHER_RUNNER_CONTRACT_MARKER = "explicit_cond_raw_source_v1"
+SELECTION_SEMANTICS_NOTE = (
+    "Selection results emitted with teacher_runner_contract_marker="
+    "explicit_cond_raw_source_v1 are NOT directly comparable to results "
+    "produced before commit 81bc95e (teacher rollout did not propagate "
+    "raw cond into rollout carry); always compare like-for-like."
+)
 FAILURE_CLASSES = (
     "PASS",
     "LEGACY_REMOVED_FIELD",
@@ -119,6 +126,46 @@ def _load_teacher_clip(teacher: Path) -> str:
 
 def _teacher_artifact_path(out_dir: Path, clip: str) -> Path:
     return out_dir / f"{clip}_teacher_pred.json"
+
+
+def _read_teacher_runner_contract(teacher_artifact: Path) -> dict[str, Any]:
+    """Read the teacher_runner_contract block emitted by run_teacher_rollout.py.
+
+    Returns a dict with cond_raw_source / cond_raw_resolver_version / cond_raw_shape /
+    cond_raw_dtype. If the artifact is missing or the block is absent (older binary), the
+    returned dict carries explicit ``status`` markers so the selection summary stays
+    auditable rather than silently inheriting a None.
+    """
+    if not teacher_artifact.is_file():
+        return {
+            "status": "teacher_artifact_missing",
+            "cond_raw_source": None,
+            "cond_raw_resolver_version": None,
+        }
+    try:
+        with teacher_artifact.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as exc:
+        return {
+            "status": "teacher_artifact_unreadable",
+            "cond_raw_source": None,
+            "cond_raw_resolver_version": None,
+            "error": str(exc),
+        }
+    contract = payload.get("teacher_runner_contract")
+    if not isinstance(contract, dict):
+        return {
+            "status": "contract_block_missing",
+            "cond_raw_source": None,
+            "cond_raw_resolver_version": None,
+        }
+    return {
+        "status": "ok",
+        "cond_raw_source": contract.get("cond_raw_source"),
+        "cond_raw_resolver_version": contract.get("cond_raw_resolver_version"),
+        "cond_raw_shape": contract.get("cond_raw_shape"),
+        "cond_raw_dtype": contract.get("cond_raw_dtype"),
+    }
 
 
 def _freerun_artifact_path(out_dir: Path, clip: str) -> Path:
@@ -405,6 +452,7 @@ def _smoke_candidate(
         combined_text=f"{teacher_text}\n{free_text}",
     )
     status = "PASS" if failure_class == "PASS" else "FAIL"
+    teacher_contract = _read_teacher_runner_contract(teacher_artifact)
 
     result = {
         "index": int(index),
@@ -425,6 +473,7 @@ def _smoke_candidate(
         "free_fatal_marker_hits": list(free_stage.get("fatal_marker_hits") or []),
         "teacher": teacher_stage,
         "free_run": free_stage,
+        "teacher_runner_contract": teacher_contract,
         "status": status,
         "failure_class": failure_class,
         "failure_reason": _failure_reason(failure_class, teacher=teacher_stage, free_run=free_stage),
@@ -445,22 +494,29 @@ def _write_summary_md(path: Path, summary: dict[str, Any], *, repo_root: Path) -
         f"- pass_count: {summary['pass_count']}",
         f"- hard_block_no_compatible_checkpoint: `{str(summary['hard_block_no_compatible_checkpoint']).lower()}`",
         f"- failure_class_counts: `{summary['failure_class_counts']}`",
+        f"- teacher_runner_contract_marker: `{summary['teacher_runner_contract_marker']}`",
+        f"- teacher_runner_cond_raw_source_counts: `{summary['teacher_runner_cond_raw_source_counts']}`",
         "",
-        "| idx | failure_class | checkpoint | teacher_rc | teacher_artifact | free_rc | free_artifact | result |",
-        "| ---: | --- | --- | ---: | --- | ---: | --- | --- |",
+        f"> selection_semantics_note: {summary['selection_semantics_note']}",
+        "",
+        "| idx | failure_class | checkpoint | teacher_rc | teacher_artifact | cond_raw_source | free_rc | free_artifact | result |",
+        "| ---: | --- | --- | ---: | --- | --- | ---: | --- | --- |",
     ]
     for rec in summary["results"]:
         ckpt = _rel(Path(rec["checkpoint_path"]), repo_root=repo_root)
         result_path = _rel(Path(rec["result_artifact_path"]), repo_root=repo_root)
         teacher_art = "yes" if rec["teacher_artifact_exists"] else "no"
         free_art = "yes" if rec["free_artifact_exists"] else "no"
+        contract = rec.get("teacher_runner_contract") or {}
+        cond_raw_source = str(contract.get("cond_raw_source") or contract.get("status") or "unknown")
         lines.append(
-            "| {idx} | `{failure}` | `{ckpt}` | {teacher_rc} | {teacher_art} | {free_rc} | {free_art} | `{result}` |".format(
+            "| {idx} | `{failure}` | `{ckpt}` | {teacher_rc} | {teacher_art} | `{cond_src}` | {free_rc} | {free_art} | `{result}` |".format(
                 idx=int(rec["index"]),
                 failure=rec["failure_class"],
                 ckpt=ckpt,
                 teacher_rc=rec["teacher_returncode"],
                 teacher_art=teacher_art,
+                cond_src=cond_raw_source,
                 free_rc=rec["free_returncode"],
                 free_art=free_art,
                 result=result_path,
@@ -595,6 +651,16 @@ def main() -> None:
         },
         "checkpoint_commit_pin": checkpoint_commit_pin,
         "checkpoint_commit_pin_source": checkpoint_commit_pin_source,
+        "teacher_runner_contract_marker": TEACHER_RUNNER_CONTRACT_MARKER,
+        "selection_semantics_note": SELECTION_SEMANTICS_NOTE,
+        "teacher_runner_cond_raw_source_counts": dict(
+            sorted(
+                Counter(
+                    str((rec.get("teacher_runner_contract") or {}).get("cond_raw_source") or "none")
+                    for rec in results
+                ).items()
+            )
+        ),
         "warnings": list(pin_warnings),
         "candidate_count_expanded": int(total_expanded),
         "candidate_count_scanned": int(len(results)),
