@@ -22,6 +22,15 @@ Implemented modes are read-only:
   ``transition_done``, or any combined-membership score. ``turn_dyn``
   is forbidden from combined membership by contract; routing it through
   the boundary path raises ``FailFastError``.
+* ``pose_reference_scale_check`` (Layer B.1) —
+  ``raw_data/processed_data/*.npz`` schema + Walk_F-only ``pose_dyn``
+  / ``pose_rel`` reference scale + degeneracy + query inspection
+  projected onto Walk_F scale, on the 5-clip set. Strictly read-only.
+  It does NOT emit query leave/return intervals, attractor membership,
+  combined-membership scores, EventHead targets, ``handoff_ready``,
+  ``transition_done``, cross-attractor claims, or transition truth.
+  ``turn_dyn`` and any query self-median/MAD rescaling raise
+  ``FailFastError``.
 """
 from __future__ import annotations
 
@@ -45,6 +54,7 @@ SUPPORTED_MODES = (
     "reference_scale_check",
     "phase_library_check",
     "query_boundary_check",
+    "pose_reference_scale_check",
 )
 
 TRACK_BY_MODE = {
@@ -53,6 +63,9 @@ TRACK_BY_MODE = {
     "reference_scale_check": "walk_f_reference_scale_and_degeneracy",
     "phase_library_check": "walk_f_phase_library_self_consistency",
     "query_boundary_check": "walk_f_query_leave_return_boundary_audit",
+    "pose_reference_scale_check": (
+        "walk_f_pose_reference_scale_and_degeneracy"
+    ),
 }
 TRACK_ROLE_BY_MODE = {
     "yaw_debug": "debug_only_not_attractor_definition",
@@ -62,6 +75,9 @@ TRACK_ROLE_BY_MODE = {
     "query_boundary_check": (
         "query_boundary_audit_not_attractor_membership_not_transition_truth"
     ),
+    "pose_reference_scale_check": (
+        "pose_reference_scale_and_degeneracy_prerequisite_not_membership"
+    ),
 }
 SCOPE_BY_MODE = {
     "yaw_debug": "walk_turn_yaw_activity_descriptive_oracle",
@@ -70,6 +86,9 @@ SCOPE_BY_MODE = {
     "phase_library_check": "walk_f_phase_library_self_consistency_single_trajectory",
     "query_boundary_check": (
         "walk_f_self_baseline_band_plus_query_leave_return_with_censoring_audit"
+    ),
+    "pose_reference_scale_check": (
+        "walk_f_pose_dyn_pose_rel_reference_scale_and_degeneracy_processed_data_only"
     ),
 }
 
@@ -242,6 +261,90 @@ LAYER_C1_NEIGHBOR_CONSISTENCY_TOL_FRAMES: int = int(
 )
 LAYER_C1_MIN_VALID_QUERY_COUNT: int = 12
 LAYER_C1_MIN_VALID_QUERY_FRACTION: float = 0.50
+
+# pose_reference_scale_check (Layer B.1) constants ------------------------
+# Layer B.1 consumes raw_data/processed_data/<clip>.npz. It does NOT
+# re-derive query per-channel medians; Walk_F is the only reference. It
+# does NOT compute any combined-membership / combined-score and does
+# NOT emit leave/return intervals. turn_dyn is hard-rejected at every
+# entry point.
+LAYER_B1_REFERENCE_CLIP: str = "Walk_F"
+LAYER_B1_QUERY_FAMILY: tuple[str, ...] = (
+    "Walk_L_To_L",
+    "Walk_L_To_R",
+    "Walk_R_To_L",
+    "Walk_R_To_R",
+)
+LAYER_B1_REQUIRED_CLIP_SET: frozenset[str] = frozenset(
+    [LAYER_B1_REFERENCE_CLIP, *LAYER_B1_QUERY_FAMILY]
+)
+LAYER_B1_PROCESSED_DATA_SUBDIR: str = "processed_data"
+LAYER_B1_BONE_COUNT: int = 46
+LAYER_B1_POSE_DYN_AXES: tuple[str, ...] = ("x", "y", "z")
+LAYER_B1_POSE_REL_COMPONENT_LABELS: tuple[str, ...] = (
+    "c0",
+    "c1",
+    "c2",
+    "c3",
+    "c4",
+    "c5",
+)
+# Per-group epsilon_mad: bone-local quiescent bones (fingers etc.) can
+# sit near zero on a forward walk; threshold is upper-inclusive.
+LAYER_B1_FEATURE_GROUPS: dict[str, dict[str, Any]] = {
+    "pose_dyn": {
+        "source": "processed_data_npz_bone_ang_vel_local_rad_per_sec",
+        "source_npz_key": "bone_ang_vel",
+        "source_rank": 3,
+        "source_last_dim": 3,
+        "extracted_channel_count": LAYER_B1_BONE_COUNT * 3,
+        "unit_label": "rad_per_sec_bone_local",
+        "epsilon_mad": 1.0e-4,
+        "group_ablation_role": (
+            "bone_local_angular_velocity_pose_dynamics"
+        ),
+    },
+    "pose_rel": {
+        "source": (
+            "processed_data_npz_bone_rot6d_local_first_difference_times_fps"
+        ),
+        "source_npz_key": "bone_rot6d",
+        "source_rank": 3,
+        "source_last_dim": 6,
+        "extracted_channel_count": LAYER_B1_BONE_COUNT * 6,
+        "unit_label": "local_6d_component_per_sec",
+        "epsilon_mad": 1.0e-4,
+        "group_ablation_role": (
+            "bone_local_rot6d_first_difference_relative_pose_delta_velocity"
+        ),
+    },
+}
+LAYER_B1_EXCLUDED_FEATURE_GROUPS: dict[str, str] = {
+    "turn_dyn": (
+        "excluded by Layer B.1 contract §1 rule 3; turn_dyn is "
+        "reference-degenerate on Walk_F per Layer B and MUST NEVER be "
+        "folded into combined-membership / combined-score evidence"
+    ),
+    "root_body": (
+        "not_in_scope_layerB1; covered by reference_scale_check (Layer B) "
+        "and phase_library_check (Layer C minimal)"
+    ),
+    "root_body_vel_only": (
+        "not_in_scope_layerB1; covered by phase_library_check (Layer C minimal)"
+    ),
+    "root_body_pos_vel": (
+        "not_in_scope_layerB1; covered by phase_library_check (Layer C minimal)"
+    ),
+    "contact": (
+        "not_in_scope_layerB1; covered by reference_scale_check (Layer B) "
+        "and phase_library_check (Layer C minimal)"
+    ),
+    "absolute_RootYaw": (
+        "excluded by canonical planar translation / global-yaw quotient "
+        "(scaffold v1 §1.2)"
+    ),
+    "yaw_activity_debug": "debug oracle only; not pose-scale evidence",
+}
 
 
 class FailFastError(RuntimeError):
@@ -2951,6 +3054,757 @@ def _process_query_clip_boundary_check(
 
 
 # -----------------------------------------------------------------------
+# pose_reference_scale_check (Layer B.1) — Walk_F-only pose reference
+# scale + degeneracy + processed-data schema audit
+# -----------------------------------------------------------------------
+
+
+def _layer_b1_forbid_turn_dyn(group_name: str, context: str) -> None:
+    """Binary guardrail per Layer B.1 contract §1 rule 3.
+
+    Routing ``turn_dyn`` (or any future degenerate group) through a
+    Layer B.1 helper that touches combined-membership semantics is a
+    contract violation. There is NO tolerance threshold under which
+    ``turn_dyn`` is "almost allowed".
+    """
+    if group_name == "turn_dyn":
+        raise FailFastError(
+            "[walk_f_causal_state_probe] Layer B.1 contract §1 rule 3 "
+            "violation: turn_dyn MUST NEVER be folded into combined-"
+            f"membership / combined-score evidence (entry={context!r}). "
+            "Walk_F turn_dyn is reference-degenerate per Layer B; routing "
+            "it through this entry point would silently produce an "
+            "unbounded combined score. No silent fallback "
+            "(docs/removal_policy.md §3-§4)."
+        )
+
+
+LAYER_B1_ALLOWED_SCALE_SOURCE: str = "walk_f"
+
+
+def _layer_b1_forbid_query_self_rescale(
+    context: str, *, scale_source: str | None = None
+) -> None:
+    """Binary guardrail per Layer B.1 contract §1 rule 2.
+
+    Any normalization helper that builds a query z-statistic MUST
+    declare ``scale_source = "walk_f"``. Any other value (including
+    ``"query_self"``, ``"per_clip"``, ``None``, etc.) raises.
+    Helpers that have no business normalising still call this with no
+    declared source as a defense-in-depth sentinel.
+    """
+    raise FailFastError(
+        "[walk_f_causal_state_probe] Layer B.1 contract §1 rule 2 "
+        "violation: query clips MUST NOT re-derive their own per-channel "
+        f"median/MAD scale (entry={context!r}, scale_source="
+        f"{scale_source!r}; only {LAYER_B1_ALLOWED_SCALE_SOURCE!r} is "
+        "permitted). Walk_F is the only reference scale; query "
+        "inspection is Walk_F-projected only. No silent fallback "
+        "(docs/removal_policy.md §3-§4)."
+    )
+
+
+def _load_clip_processed_data(
+    raw_root: Path,
+    clip: str,
+    *,
+    json_frame_count: int,
+    json_fps: float,
+) -> dict[str, Any]:
+    """Load + schema-validate ``raw_data/processed_data/<clip>.npz``.
+
+    Validates: required keys, ranks, shapes, dtypes, finite values,
+    bone count, meta_json units / spaces, FPS vs raw JSON, frame
+    count vs raw JSON. Reads the NPZ with ``allow_pickle=True`` only
+    because ``meta_json`` and ``bone_names`` are object arrays;
+    numeric arrays are validated by explicit shape / dtype checks.
+    """
+    npz_path = raw_root / LAYER_B1_PROCESSED_DATA_SUBDIR / f"{clip}.npz"
+    if not npz_path.is_file():
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 processed-data NPZ "
+            f"missing: {npz_path}. contract={CONTRACT} requires every "
+            "listed clip's processed_data/*.npz to be present; no silent "
+            "skip is allowed (docs/removal_policy.md §3-§4)."
+        )
+    with np.load(npz_path, allow_pickle=True) as data:
+        required_keys = (
+            "bone_ang_vel",
+            "bone_rot6d",
+            "bone_names",
+            "parents",
+            "FPS",
+            "meta_json",
+        )
+        missing = [k for k in required_keys if k not in data.files]
+        if missing:
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+                f"missing required keys: {missing!r}. Refusing silent "
+                "fallback to raw JSON for pose features."
+            )
+        bone_ang_vel = np.asarray(data["bone_ang_vel"])
+        bone_rot6d = np.asarray(data["bone_rot6d"])
+        bone_names = np.asarray(data["bone_names"])
+        parents = np.asarray(data["parents"])
+        fps_arr = np.asarray(data["FPS"])
+        meta_obj = data["meta_json"].item()
+
+    if bone_ang_vel.dtype != np.float32:
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"bone_ang_vel dtype={bone_ang_vel.dtype} expected float32."
+        )
+    if bone_rot6d.dtype != np.float32:
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"bone_rot6d dtype={bone_rot6d.dtype} expected float32."
+        )
+    if parents.dtype != np.int32:
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"parents dtype={parents.dtype} expected int32."
+        )
+    if fps_arr.dtype != np.int32:
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"FPS dtype={fps_arr.dtype} expected int32."
+        )
+    if fps_arr.shape != ():
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"FPS shape={fps_arr.shape} expected scalar ()."
+        )
+    if bone_ang_vel.ndim != 3 or bone_ang_vel.shape[1:] != (
+        LAYER_B1_BONE_COUNT,
+        3,
+    ):
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"bone_ang_vel shape={bone_ang_vel.shape} expected "
+            f"(T, {LAYER_B1_BONE_COUNT}, 3)."
+        )
+    if bone_rot6d.ndim != 3 or bone_rot6d.shape[1:] != (
+        LAYER_B1_BONE_COUNT,
+        6,
+    ):
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"bone_rot6d shape={bone_rot6d.shape} expected "
+            f"(T, {LAYER_B1_BONE_COUNT}, 6)."
+        )
+    if bone_names.shape != (LAYER_B1_BONE_COUNT,):
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"bone_names shape={bone_names.shape} expected "
+            f"({LAYER_B1_BONE_COUNT},)."
+        )
+    if parents.shape != (LAYER_B1_BONE_COUNT,):
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"parents shape={parents.shape} expected "
+            f"({LAYER_B1_BONE_COUNT},)."
+        )
+    if bone_ang_vel.shape[0] != bone_rot6d.shape[0]:
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"frame counts disagree: bone_ang_vel T={bone_ang_vel.shape[0]} "
+            f"vs bone_rot6d T={bone_rot6d.shape[0]}."
+        )
+    t_npz = int(bone_ang_vel.shape[0])
+    if t_npz != int(json_frame_count):
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"T={t_npz} disagrees with raw JSON len(Frames)="
+            f"{int(json_frame_count)} for clip {clip!r}."
+        )
+    if t_npz < MIN_FRAMES_FOR_PHASE_ESTIMABILITY:
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"T={t_npz} below MIN_FRAMES_FOR_PHASE_ESTIMABILITY="
+            f"{MIN_FRAMES_FOR_PHASE_ESTIMABILITY}; refusing to extract."
+        )
+    npz_fps = int(fps_arr)
+    if npz_fps != int(round(float(json_fps))):
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"FPS={npz_fps} disagrees with raw JSON FPS={float(json_fps)} "
+            f"for clip {clip!r}."
+        )
+    if not np.all(np.isfinite(bone_ang_vel)):
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            "bone_ang_vel contains non-finite values."
+        )
+    if not np.all(np.isfinite(bone_rot6d)):
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            "bone_rot6d contains non-finite values."
+        )
+
+    if isinstance(meta_obj, (bytes, bytearray)):
+        meta_obj = meta_obj.decode("utf-8")
+    if isinstance(meta_obj, str):
+        try:
+            meta_obj = json.loads(meta_obj)
+        except json.JSONDecodeError as exc:
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+                f"meta_json string is not valid JSON: {exc}"
+            ) from exc
+    if not isinstance(meta_obj, dict):
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"meta_json is not a dict (got {type(meta_obj).__name__})."
+        )
+    units = meta_obj.get("units")
+    if units != "meters":
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"meta_json.units={units!r} expected 'meters'."
+        )
+    spaces = meta_obj.get("spaces", {})
+    if not isinstance(spaces, dict):
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"meta_json.spaces is not a dict (got "
+            f"{type(spaces).__name__})."
+        )
+    bone_rot_space = spaces.get("bone_rotations")
+    if bone_rot_space != "local_6d":
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"meta_json.spaces.bone_rotations={bone_rot_space!r} expected "
+            "'local_6d'. Layer B.1 refuses silent space conversion."
+        )
+    bone_ang_space = spaces.get("bone_angular_velocities")
+    if bone_ang_space != "local_rad_per_sec":
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer B.1 NPZ {npz_path} "
+            f"meta_json.spaces.bone_angular_velocities="
+            f"{bone_ang_space!r} expected 'local_rad_per_sec'. Layer B.1 "
+            "refuses silent unit conversion."
+        )
+
+    bone_names_list = [str(b) for b in bone_names.tolist()]
+    return {
+        "clip": clip,
+        "npz_path": str(npz_path),
+        "bone_ang_vel_f64": bone_ang_vel.astype(np.float64),
+        "bone_rot6d_f64": bone_rot6d.astype(np.float64),
+        "bone_names": bone_names_list,
+        "parents": parents.astype(np.int64).tolist(),
+        "fps_npz": npz_fps,
+        "fps_used": float(json_fps),
+        "frame_count_npz": t_npz,
+        "meta_json_units": units,
+        "meta_json_spaces_bone_rotations": bone_rot_space,
+        "meta_json_spaces_bone_angular_velocities": bone_ang_space,
+    }
+
+
+def _layer_b1_build_pose_dyn_matrix(
+    npz_payload: dict[str, Any],
+) -> tuple[np.ndarray, list[str]]:
+    arr = npz_payload["bone_ang_vel_f64"]
+    t_npz = arr.shape[0]
+    matrix = arr.reshape(t_npz, LAYER_B1_BONE_COUNT * 3)
+    channels: list[str] = []
+    for bone in npz_payload["bone_names"]:
+        for axis in LAYER_B1_POSE_DYN_AXES:
+            channels.append(f"bone_ang_vel.{bone}.{axis}")
+    if len(channels) != matrix.shape[1]:
+        raise FailFastError(
+            "[walk_f_causal_state_probe] Layer B.1 pose_dyn channel count "
+            f"{len(channels)} != matrix C={matrix.shape[1]}."
+        )
+    return matrix, channels
+
+
+def _layer_b1_build_pose_rel_matrix(
+    npz_payload: dict[str, Any],
+) -> tuple[np.ndarray, list[str]]:
+    arr = npz_payload["bone_rot6d_f64"]
+    t_npz = arr.shape[0]
+    flat = arr.reshape(t_npz, LAYER_B1_BONE_COUNT * 6)
+    fps = float(npz_payload["fps_used"])
+    matrix = np.zeros((t_npz, LAYER_B1_BONE_COUNT * 6), dtype=np.float64)
+    if t_npz >= 2:
+        matrix[1:] = (flat[1:] - flat[:-1]) * fps
+    channels: list[str] = []
+    for bone in npz_payload["bone_names"]:
+        for comp in LAYER_B1_POSE_REL_COMPONENT_LABELS:
+            channels.append(f"bone_rot6d_dot.{bone}.{comp}")
+    if len(channels) != matrix.shape[1]:
+        raise FailFastError(
+            "[walk_f_causal_state_probe] Layer B.1 pose_rel channel count "
+            f"{len(channels)} != matrix C={matrix.shape[1]}."
+        )
+    return matrix, channels
+
+
+def _layer_b1_build_group_matrix(
+    group_name: str,
+    npz_payload: dict[str, Any],
+) -> tuple[np.ndarray, list[str]]:
+    _layer_b1_forbid_turn_dyn(group_name, "_layer_b1_build_group_matrix")
+    if group_name == "pose_dyn":
+        return _layer_b1_build_pose_dyn_matrix(npz_payload)
+    if group_name == "pose_rel":
+        return _layer_b1_build_pose_rel_matrix(npz_payload)
+    raise FailFastError(
+        f"[walk_f_causal_state_probe] Layer B.1 unknown feature group "
+        f"{group_name!r}; supported={list(LAYER_B1_FEATURE_GROUPS.keys())}."
+    )
+
+
+def _layer_b1_per_channel_walk_f_scale(
+    matrix: np.ndarray,
+    channels: list[str],
+) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for j, ch in enumerate(channels):
+        out[ch] = _compute_channel_scale(matrix[:, j])
+    return out
+
+
+def _layer_b1_walk_f_group_reference_scale(
+    group_name: str,
+    group_def: dict[str, Any],
+    matrix: np.ndarray,
+    channels: list[str],
+    n_frames: int,
+) -> dict[str, Any]:
+    """Walk_F-only per-group reference scale + degeneracy + phase status.
+
+    Channel-level degeneracy uses ``mad <= epsilon_mad`` (upper-
+    inclusive, matches Layer B at line 1367). Group-level degeneracy
+    is True iff every channel is degenerate. ``phase_structure_status``
+    is the contract §6 enum and is computed via
+    ``_classify_phase_structure_status`` (shared with Layer B).
+    """
+    epsilon = float(group_def["epsilon_mad"])
+    channel_summaries: dict[str, Any] = {}
+    max_mad = 0.0
+    any_not_all_finite = False
+    all_channel_degenerate = True
+    channel_degenerate_count = 0
+    per_channel_scale = _layer_b1_per_channel_walk_f_scale(matrix, channels)
+    for ch in channels:
+        stats = per_channel_scale[ch]
+        channel_mad = stats["mad"]
+        channel_degenerate = bool(
+            channel_mad is not None and channel_mad <= epsilon
+        )
+        if channel_degenerate:
+            channel_degenerate_count += 1
+        if channel_mad is None:
+            all_channel_degenerate = False
+        elif not channel_degenerate:
+            all_channel_degenerate = False
+        if channel_mad is not None and channel_mad > max_mad:
+            max_mad = float(channel_mad)
+        if not stats["all_finite"]:
+            any_not_all_finite = True
+        channel_summaries[ch] = {
+            **stats,
+            "epsilon_mad_estimator_only": epsilon,
+            "channel_degenerate_by_epsilon_mad": channel_degenerate,
+        }
+    group_degenerate = bool(all_channel_degenerate)
+    phase_status, layer_c_candidate = _classify_phase_structure_status(
+        n_frames=n_frames,
+        group_all_finite=not any_not_all_finite,
+        group_degenerate=group_degenerate,
+    )
+    return {
+        "group": group_name,
+        "unit_label": group_def["unit_label"],
+        "source": group_def["source"],
+        "source_npz_key": group_def["source_npz_key"],
+        "extracted_matrix_shape": [int(matrix.shape[0]), int(matrix.shape[1])],
+        "extracted_matrix_dtype": str(matrix.dtype),
+        "extracted_matrix_device": "cpu",
+        "group_ablation_role": group_def["group_ablation_role"],
+        "epsilon_mad_estimator_only": epsilon,
+        "channels": channel_summaries,
+        "group_max_channel_mad": float(max_mad),
+        "group_reference_degenerate": group_degenerate,
+        "channel_degenerate_count": int(channel_degenerate_count),
+        "channel_total_count": int(len(channels)),
+        "phase_structure_status": phase_status,
+        "phase_structure_status_enum_source": (
+            "docs/aperiodic_transition/"
+            "2026-05-22_walk_f_causal_state_scaffold_v1.md:255"
+        ),
+        "layer_c_candidate": bool(layer_c_candidate),
+        "phase_estimable_candidate": bool(layer_c_candidate),
+        "phase_structure_layer_b1_definition": (
+            "Layer B.1 emits only {phase_degenerate, insufficient_evidence}. "
+            "phase_structured requires a predictive-loss comparison vs a "
+            "phase-agnostic baseline (scaffold v1 §3.4) and is out of scope. "
+            "Non-degenerate groups get insufficient_evidence with "
+            "layer_c_candidate=True."
+        ),
+    }
+
+
+def _layer_b1_query_channel_walk_f_projected(
+    query_value: np.ndarray,
+    walk_f_channel_scale: dict[str, Any],
+    epsilon_mad: float,
+    *,
+    scale_source: str,
+) -> dict[str, Any]:
+    """Per-channel query inspection under Walk_F-projected z-statistics.
+
+    The denominator is ``max(walk_f_robust_std_from_mad, epsilon_mad)``
+    so a degenerate Walk_F channel does not blow up to infinite
+    z-scores. Caller skips this when Walk_F's group is degenerate
+    (see _process_clip_pose_reference_scale_check).
+
+    Layer B.1 contract §1 rule 2: ``scale_source`` MUST equal
+    ``"walk_f"``. Any other value raises ``FailFastError`` via
+    ``_layer_b1_forbid_query_self_rescale``. This is the only
+    normalization entry point on the Layer B.1 query path; the
+    sentinel is now load-bearing rather than advisory.
+    """
+    if scale_source != LAYER_B1_ALLOWED_SCALE_SOURCE:
+        _layer_b1_forbid_query_self_rescale(
+            "_layer_b1_query_channel_walk_f_projected",
+            scale_source=scale_source,
+        )
+    median_f = walk_f_channel_scale.get("median")
+    robust_std = walk_f_channel_scale.get("robust_std_from_mad")
+    if median_f is None or robust_std is None:
+        return {
+            "walk_f_projected_z_median": None,
+            "walk_f_projected_z_mad": None,
+            "walk_f_projected_z_p05": None,
+            "walk_f_projected_z_p50": None,
+            "walk_f_projected_z_p95": None,
+            "walk_f_projected_z_max_abs": None,
+            "n_values": int(query_value.size),
+            "n_finite": int(np.sum(np.isfinite(query_value))),
+            "all_finite": bool(np.all(np.isfinite(query_value))),
+            "denominator_used": None,
+            "denominator_floor_epsilon_mad": float(epsilon_mad),
+            "walk_f_median": None,
+            "walk_f_robust_std_from_mad": None,
+        }
+    denom = float(max(float(robust_std), float(epsilon_mad)))
+    finite_mask = np.isfinite(query_value)
+    if int(finite_mask.sum()) == 0:
+        return {
+            "walk_f_projected_z_median": None,
+            "walk_f_projected_z_mad": None,
+            "walk_f_projected_z_p05": None,
+            "walk_f_projected_z_p50": None,
+            "walk_f_projected_z_p95": None,
+            "walk_f_projected_z_max_abs": None,
+            "n_values": int(query_value.size),
+            "n_finite": 0,
+            "all_finite": False,
+            "denominator_used": denom,
+            "denominator_floor_epsilon_mad": float(epsilon_mad),
+            "walk_f_median": float(median_f),
+            "walk_f_robust_std_from_mad": float(robust_std),
+        }
+    z = (query_value[finite_mask] - float(median_f)) / denom
+    z_median = float(np.median(z))
+    z_mad = float(np.median(np.abs(z - z_median)))
+    return {
+        "walk_f_projected_z_median": z_median,
+        "walk_f_projected_z_mad": z_mad,
+        "walk_f_projected_z_p05": float(np.quantile(z, 0.05)),
+        "walk_f_projected_z_p50": float(np.quantile(z, 0.50)),
+        "walk_f_projected_z_p95": float(np.quantile(z, 0.95)),
+        "walk_f_projected_z_max_abs": float(np.max(np.abs(z))),
+        "n_values": int(query_value.size),
+        "n_finite": int(finite_mask.sum()),
+        "all_finite": bool(int(finite_mask.sum()) == int(query_value.size)),
+        "denominator_used": denom,
+        "denominator_floor_epsilon_mad": float(epsilon_mad),
+        "walk_f_median": float(median_f),
+        "walk_f_robust_std_from_mad": float(robust_std),
+    }
+
+
+def _layer_b1_query_group_inspection(
+    *,
+    group_name: str,
+    group_def: dict[str, Any],
+    query_matrix: np.ndarray,
+    query_channels: list[str],
+    walk_f_reference_block: dict[str, Any],
+) -> dict[str, Any]:
+    """Build per-channel query inspection block for one group.
+
+    Inspection has two layers:
+      * ``walk_f_projected_z_summary``: per-channel z under Walk_F
+        median + MAD (the only reference scale).
+      * ``query_self_scale_inspection_only``: per-channel raw scale
+        on the query clip itself, clearly labelled as inspection-only
+        and never aggregated. Computing it via _compute_channel_scale
+        is NOT a "rescale" because nothing downstream divides by it;
+        the §1 rule 2 guardrail is enforced at the projection-helper
+        level (no code path divides by query MAD).
+
+    Returns a single dict matching the contract §7 per-clip-per-group
+    block.
+    """
+    _layer_b1_forbid_turn_dyn(group_name, "_layer_b1_query_group_inspection")
+    epsilon = float(group_def["epsilon_mad"])
+    walk_f_channels = walk_f_reference_block["channels"]
+    walk_f_group_degenerate = bool(
+        walk_f_reference_block["group_reference_degenerate"]
+    )
+    phase_status = (
+        "phase_degenerate"
+        if walk_f_group_degenerate
+        else "insufficient_evidence"
+    )
+    channel_blocks: dict[str, Any] = {}
+    for j, ch in enumerate(query_channels):
+        query_col = query_matrix[:, j]
+        if walk_f_group_degenerate:
+            walk_f_projected = {
+                "walk_f_projected_z_median": None,
+                "walk_f_projected_z_mad": None,
+                "walk_f_projected_z_p05": None,
+                "walk_f_projected_z_p50": None,
+                "walk_f_projected_z_p95": None,
+                "walk_f_projected_z_max_abs": None,
+                "n_values": int(query_col.size),
+                "n_finite": int(np.sum(np.isfinite(query_col))),
+                "all_finite": bool(np.all(np.isfinite(query_col))),
+                "denominator_used": None,
+                "denominator_floor_epsilon_mad": float(epsilon),
+                "walk_f_median": walk_f_channels[ch].get("median"),
+                "walk_f_robust_std_from_mad": walk_f_channels[ch].get(
+                    "robust_std_from_mad"
+                ),
+                "skipped_reason": (
+                    "walk_f_group_reference_degenerate_skip_z_projection"
+                ),
+            }
+        else:
+            walk_f_projected = _layer_b1_query_channel_walk_f_projected(
+                query_col,
+                walk_f_channels[ch],
+                epsilon,
+                scale_source=LAYER_B1_ALLOWED_SCALE_SOURCE,
+            )
+        query_self = _compute_channel_scale(query_col)
+        channel_blocks[ch] = {
+            "walk_f_projected_z_summary": walk_f_projected,
+            "query_self_scale_inspection_only": {
+                **query_self,
+                "inspection_only_note": (
+                    "Per-channel raw scale for the query clip is "
+                    "inspection-only. It MUST NOT be aggregated into "
+                    "the Walk_F reference scale "
+                    "(Layer B.1 contract §1 rule 2)."
+                ),
+            },
+        }
+    return {
+        "group": group_name,
+        "unit_label": group_def["unit_label"],
+        "source": group_def["source"],
+        "source_npz_key": group_def["source_npz_key"],
+        "extracted_matrix_shape": [
+            int(query_matrix.shape[0]),
+            int(query_matrix.shape[1]),
+        ],
+        "extracted_matrix_dtype": str(query_matrix.dtype),
+        "extracted_matrix_device": "cpu",
+        "group_ablation_role": group_def["group_ablation_role"],
+        "epsilon_mad_estimator_only": epsilon,
+        "channels": channel_blocks,
+        "reference_degenerate": walk_f_group_degenerate,
+        "reference_degenerate_source": (
+            "walk_f_per_group_reference_degenerate_inherited"
+        ),
+        "phase_structure_status": phase_status,
+        "phase_structure_status_enum_source": (
+            "docs/aperiodic_transition/"
+            "2026-05-22_walk_f_causal_state_scaffold_v1.md:255"
+        ),
+        "layer_c_candidate": bool(
+            not walk_f_group_degenerate
+        ),
+        "boundary_detection_status": (
+            "not_emitted_by_this_tool_layer_b1_reference_scale_only"
+        ),
+    }
+
+
+def _layer_b1_processed_data_schema_block(
+    npz_payload: dict[str, Any],
+) -> dict[str, Any]:
+    bone_ang_vel = npz_payload["bone_ang_vel_f64"]
+    bone_rot6d = npz_payload["bone_rot6d_f64"]
+    t_npz = int(bone_ang_vel.shape[0])
+    return {
+        "npz_path": npz_payload["npz_path"],
+        "arrays": {
+            "bone_ang_vel": {
+                "key": "bone_ang_vel",
+                "rank": 3,
+                "shape": [
+                    t_npz,
+                    LAYER_B1_BONE_COUNT,
+                    3,
+                ],
+                "dtype_on_disk": "float32",
+                "dtype_used": "float64",
+                "device": "cpu",
+                "finite_coverage": {
+                    "n_total": int(bone_ang_vel.size),
+                    "n_finite": int(np.sum(np.isfinite(bone_ang_vel))),
+                    "all_finite": bool(
+                        np.all(np.isfinite(bone_ang_vel))
+                    ),
+                },
+            },
+            "bone_rot6d": {
+                "key": "bone_rot6d",
+                "rank": 3,
+                "shape": [
+                    t_npz,
+                    LAYER_B1_BONE_COUNT,
+                    6,
+                ],
+                "dtype_on_disk": "float32",
+                "dtype_used": "float64",
+                "device": "cpu",
+                "finite_coverage": {
+                    "n_total": int(bone_rot6d.size),
+                    "n_finite": int(np.sum(np.isfinite(bone_rot6d))),
+                    "all_finite": bool(np.all(np.isfinite(bone_rot6d))),
+                },
+            },
+            "bone_names": {
+                "key": "bone_names",
+                "rank": 1,
+                "shape": [LAYER_B1_BONE_COUNT],
+                "dtype_on_disk": "object",
+                "dtype_used": "python_str_list",
+                "device": "cpu",
+            },
+            "parents": {
+                "key": "parents",
+                "rank": 1,
+                "shape": [LAYER_B1_BONE_COUNT],
+                "dtype_on_disk": "int32",
+                "dtype_used": "python_int_list",
+                "device": "cpu",
+            },
+            "FPS": {
+                "key": "FPS",
+                "rank": 0,
+                "shape": [],
+                "dtype_on_disk": "int32",
+                "dtype_used": "python_int_scalar",
+                "device": "cpu",
+            },
+        },
+        "meta_json_units": npz_payload["meta_json_units"],
+        "meta_json_spaces_bone_rotations": npz_payload[
+            "meta_json_spaces_bone_rotations"
+        ],
+        "meta_json_spaces_bone_angular_velocities": npz_payload[
+            "meta_json_spaces_bone_angular_velocities"
+        ],
+        "meta_json_fps": npz_payload["fps_npz"],
+        "bone_names_count": int(len(npz_payload["bone_names"])),
+        "parents_count": int(len(npz_payload["parents"])),
+    }
+
+
+def _process_clip_pose_reference_scale_check(
+    *,
+    clip_info: dict[str, Any],
+    npz_payload: dict[str, Any],
+    is_reference: bool,
+    walk_f_reference_scale_per_group: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build per-clip Layer B.1 audit block.
+
+    Reference clips compute Walk_F's per-channel scale + degeneracy
+    (the authoritative reference). Query clips reuse Walk_F's
+    reference block and produce per-channel Walk_F-projected z
+    summaries; their own per-channel raw scale is reported as
+    inspection-only and NEVER aggregated.
+    """
+    t_npz = int(npz_payload["frame_count_npz"])
+    schema_block = _layer_b1_processed_data_schema_block(npz_payload)
+    feature_groups_block: dict[str, Any] = {}
+    for group_name, group_def in LAYER_B1_FEATURE_GROUPS.items():
+        matrix, channels = _layer_b1_build_group_matrix(
+            group_name, npz_payload
+        )
+        if is_reference:
+            feature_groups_block[group_name] = (
+                _layer_b1_walk_f_group_reference_scale(
+                    group_name=group_name,
+                    group_def=group_def,
+                    matrix=matrix,
+                    channels=channels,
+                    n_frames=t_npz,
+                )
+            )
+        else:
+            if walk_f_reference_scale_per_group is None:
+                raise FailFastError(
+                    "[walk_f_causal_state_probe] Layer B.1 query clip "
+                    f"{clip_info['clip']!r} processed before Walk_F "
+                    "reference scale was computed; refusing to emit "
+                    "query inspection without a reference scale."
+                )
+            walk_f_block = walk_f_reference_scale_per_group[group_name]
+            feature_groups_block[group_name] = (
+                _layer_b1_query_group_inspection(
+                    group_name=group_name,
+                    group_def=group_def,
+                    query_matrix=matrix,
+                    query_channels=channels,
+                    walk_f_reference_block=walk_f_block,
+                )
+            )
+    return {
+        "clip": clip_info["clip"],
+        "raw_json_path": clip_info["raw_json_path"],
+        "npz_path": npz_payload["npz_path"],
+        "fps": clip_info["fps"],
+        "frame_count": int(clip_info["frame_count"]),
+        "track": TRACK_BY_MODE["pose_reference_scale_check"],
+        "track_role": TRACK_ROLE_BY_MODE["pose_reference_scale_check"],
+        "clip_role": (
+            "reference_clip" if is_reference else "query_clip_not_reference"
+        ),
+        "contributes_to_reference_scale": bool(is_reference),
+        "processed_data_schema": schema_block,
+        "frame_alignment": {
+            "json_frame_count": int(clip_info["frame_count"]),
+            "npz_bone_ang_vel_T": t_npz,
+            "npz_bone_rot6d_T": t_npz,
+            "aligned": True,
+        },
+        "feature_groups_layer_b1": feature_groups_block,
+        "excluded_feature_groups_layer_b1": LAYER_B1_EXCLUDED_FEATURE_GROUPS,
+        "attractor_membership_status": "not_emitted_by_this_tool",
+        "event_head_target_status": "not_emitted_by_this_tool",
+        "handoff_ready_status": "not_emitted_by_this_tool",
+        "transition_done_status": "not_emitted_by_this_tool",
+        "cross_attractor_claim_status": "forbidden_by_contract",
+        "transition_truth_promotion": "forbidden_by_contract",
+        "combined_membership_score_status": "forbidden_by_contract",
+    }
+
+
+# -----------------------------------------------------------------------
 # Artifact writers
 # -----------------------------------------------------------------------
 
@@ -4544,6 +5398,469 @@ def _build_summary_query_boundary_check(
     return summary
 
 
+def _build_summary_pose_reference_scale_check(
+    raw_root: Path,
+    clips: list[str],
+    per_clip: list[dict[str, Any]],
+    per_clip_paths: list[str],
+) -> dict[str, Any]:
+    """Layer B.1 summary: Walk_F pose_dyn / pose_rel reference scale +
+    degeneracy + processed-data schema audit on the 5-clip set.
+
+    Reference scale is computed exclusively from clips with
+    ``contributes_to_reference_scale == True`` (i.e. Walk_F). Query
+    (non-reference) clip per-channel raw scale is present for
+    inspection only and is NEVER aggregated into the Walk_F
+    reference scale. No combined-membership / combined-score, no
+    leave/return interval, no attractor membership, no EventHead
+    target, no handoff_ready / transition_done, no cross-attractor
+    claim is emitted.
+    """
+    if frozenset(clips) != LAYER_B1_REQUIRED_CLIP_SET:
+        raise FailFastError(
+            "[walk_f_causal_state_probe] Layer B.1 summary requires --clips "
+            f"set-equal to {sorted(LAYER_B1_REQUIRED_CLIP_SET)!r}; got "
+            f"{clips!r}. Refusing to emit a mixed / partial-family artifact "
+            "(docs/removal_policy.md §3-§4)."
+        )
+
+    reference_clips = [
+        e for e in per_clip if e["contributes_to_reference_scale"]
+    ]
+    query_clips = [
+        e for e in per_clip if not e["contributes_to_reference_scale"]
+    ]
+    if len(reference_clips) != 1:
+        raise FailFastError(
+            "[walk_f_causal_state_probe] Layer B.1 summary expected exactly "
+            f"one reference clip after CLI validation; got "
+            f"{len(reference_clips)}. This indicates the CLI guard was "
+            "bypassed."
+        )
+
+    reference_per_group: dict[str, Any] = reference_clips[0][
+        "feature_groups_layer_b1"
+    ]
+
+    feature_groups_meta = {
+        name: {
+            "source": group_def["source"],
+            "source_npz_key": group_def["source_npz_key"],
+            "extracted_channel_count": int(
+                group_def["extracted_channel_count"]
+            ),
+            "unit_label": group_def["unit_label"],
+            "epsilon_mad_estimator_only": float(group_def["epsilon_mad"]),
+            "group_ablation_role": group_def["group_ablation_role"],
+        }
+        for name, group_def in LAYER_B1_FEATURE_GROUPS.items()
+    }
+
+    phase_status_summary: dict[str, Any] = {}
+    for name in LAYER_B1_FEATURE_GROUPS:
+        ref = reference_per_group[name]
+        phase_status_summary[name] = {
+            "phase_structure_status": ref["phase_structure_status"],
+            "layer_c_candidate": bool(ref["layer_c_candidate"]),
+            "phase_estimable_candidate": bool(
+                ref["phase_estimable_candidate"]
+            ),
+            "group_reference_degenerate": bool(
+                ref["group_reference_degenerate"]
+            ),
+            "group_max_channel_mad": float(ref["group_max_channel_mad"]),
+            "epsilon_mad_estimator_only": float(
+                ref["epsilon_mad_estimator_only"]
+            ),
+            "channel_degenerate_count": int(ref["channel_degenerate_count"]),
+            "channel_total_count": int(ref["channel_total_count"]),
+        }
+
+    frame_alignment_per_clip: list[dict[str, Any]] = []
+    per_query_clip_inspection: list[dict[str, Any]] = []
+    for entry in per_clip:
+        frame_alignment_per_clip.append(
+            {
+                "clip": entry["clip"],
+                "json_frame_count": int(
+                    entry["frame_alignment"]["json_frame_count"]
+                ),
+                "npz_bone_ang_vel_T": int(
+                    entry["frame_alignment"]["npz_bone_ang_vel_T"]
+                ),
+                "npz_bone_rot6d_T": int(
+                    entry["frame_alignment"]["npz_bone_rot6d_T"]
+                ),
+                "aligned": bool(entry["frame_alignment"]["aligned"]),
+            }
+        )
+        if entry["contributes_to_reference_scale"]:
+            continue
+        compact_groups: dict[str, Any] = {}
+        for group_name, group_payload in entry[
+            "feature_groups_layer_b1"
+        ].items():
+            compact_groups[group_name] = {
+                "phase_structure_status": group_payload[
+                    "phase_structure_status"
+                ],
+                "reference_degenerate": bool(
+                    group_payload["reference_degenerate"]
+                ),
+                "reference_degenerate_source": group_payload[
+                    "reference_degenerate_source"
+                ],
+                "layer_c_candidate": bool(group_payload["layer_c_candidate"]),
+                "extracted_matrix_shape": group_payload[
+                    "extracted_matrix_shape"
+                ],
+                "extracted_matrix_dtype": group_payload[
+                    "extracted_matrix_dtype"
+                ],
+                "extracted_matrix_device": group_payload[
+                    "extracted_matrix_device"
+                ],
+                "epsilon_mad_estimator_only": float(
+                    group_payload["epsilon_mad_estimator_only"]
+                ),
+                "group_ablation_role": group_payload["group_ablation_role"],
+                "source": group_payload["source"],
+                "source_npz_key": group_payload["source_npz_key"],
+                "boundary_detection_status": group_payload[
+                    "boundary_detection_status"
+                ],
+                "channel_count_inspected": int(
+                    len(group_payload["channels"])
+                ),
+            }
+        per_query_clip_inspection.append(
+            {
+                "clip": entry["clip"],
+                "raw_json_path": entry["raw_json_path"],
+                "npz_path": entry["npz_path"],
+                "fps": entry["fps"],
+                "frame_count": int(entry["frame_count"]),
+                "clip_role": entry["clip_role"],
+                "feature_groups_layer_b1_compact": compact_groups,
+                "full_inspection_artifact_path_note": (
+                    "Per-channel walk_f_projected_z_summary + "
+                    "query_self_scale_inspection_only blocks are stored "
+                    "in the per-clip artifact JSON."
+                ),
+            }
+        )
+
+    # Wire per-clip artifact path back into the compact per-query block.
+    clip_to_path: dict[str, str] = {}
+    for entry, path in zip(per_clip, per_clip_paths, strict=True):
+        clip_to_path[entry["clip"]] = path
+    for q in per_query_clip_inspection:
+        q["full_inspection_artifact_path"] = clip_to_path.get(q["clip"])
+
+    insufficient: list[dict[str, Any]] = []
+    for name, st in phase_status_summary.items():
+        if st["phase_structure_status"] == "phase_degenerate":
+            insufficient.append(
+                {
+                    "clip": LAYER_B1_REFERENCE_CLIP,
+                    "where": (
+                        f"per_group_reference_scale.{name}."
+                        "phase_structure_status"
+                    ),
+                    "status": "phase_degenerate",
+                    "reason": (
+                        "Reference scale at or below estimator-level "
+                        "absolute MAD epsilon on every channel; this "
+                        "group MUST NOT be used as combined-membership "
+                        "evidence or normalised by a zero-variance "
+                        "reference (scaffold v1 §3.3)."
+                    ),
+                }
+            )
+        elif st["phase_structure_status"] == "insufficient_evidence":
+            insufficient.append(
+                {
+                    "clip": LAYER_B1_REFERENCE_CLIP,
+                    "where": (
+                        f"per_group_reference_scale.{name}."
+                        "phase_structure_status"
+                    ),
+                    "status": "insufficient_evidence",
+                    "layer_c_candidate": bool(st["layer_c_candidate"]),
+                    "reason": (
+                        "Non-degenerate Walk_F group, but Layer B.1 cannot "
+                        "promote this to phase_structured: that requires a "
+                        "predictive-loss comparison vs a phase-agnostic "
+                        "baseline (scaffold v1 §3.4). Marked "
+                        "layer_c_candidate=True."
+                    ),
+                }
+            )
+    insufficient.extend(
+        [
+            {
+                "clip": None,
+                "where": "class_level_attractor_claim",
+                "status": "INSUFFICIENT_EVIDENCE",
+                "reason": (
+                    "Walk_F remains a single 88-frame trajectory "
+                    "(scaffold v1 §4); class-level recurrence is not "
+                    "established. Layer B.1 only audits pose reference "
+                    "scale + degeneracy on this single-trajectory baseline."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "membership_status",
+                "status": "not_implemented_layerB1",
+                "reason": (
+                    "Layer B.1 computes per-feature-group reference scale + "
+                    "degeneracy + processed-data schema audit only. "
+                    "Membership / leave-return / predictive loss are out of "
+                    "scope (see Layer C minimal + Layer C.1)."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "phase_library / leave_one_phase_baseline / predictive_loss",
+                "status": "not_implemented_layerB1",
+                "reason": (
+                    "Numerical phase score and leave-one-phase baseline "
+                    "are out of Layer B.1 scope."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "leave_interval / return_interval / censoring",
+                "status": "not_emitted_by_this_tool",
+                "reason": (
+                    "Layer B.1 contract §9: leave/return intervals and "
+                    "censoring flags are reserved for Layer C.1 only."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "combined_membership_score",
+                "status": "forbidden_by_contract",
+                "reason": (
+                    "Layer B.1 reports per-feature-group reference scale "
+                    "and degeneracy separately. No combined-membership / "
+                    "combined-score is computed; turn_dyn is hard-rejected "
+                    "at every entry point."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "event_head_target_status",
+                "status": "not_emitted_by_this_tool",
+                "reason": (
+                    "Layer B.1 is read-only and produces no EventHead "
+                    "target, no handoff_ready, no transition_done."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "transition_truth_promotion",
+                "status": "forbidden_by_contract",
+                "reason": (
+                    "Reference scale / degeneracy tags MUST NOT be promoted "
+                    "to transition truth, training labels, or runtime "
+                    "switching behavior."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "cross_attractor_claim_status",
+                "status": "forbidden_by_contract",
+                "reason": (
+                    "reference_family is locked to Walk_F. No Walk -> Run / "
+                    "Walk -> Idle / etc claims are derivable from this "
+                    "audit (scaffold v1 §2)."
+                ),
+            },
+        ]
+    )
+
+    estimation_grid = {
+        "feature_groups_layer_b1": feature_groups_meta,
+        "epsilon_mad_grid_status_per_group": {
+            name: "single_point_per_group_layerB1"
+            for name in LAYER_B1_FEATURE_GROUPS
+        },
+        "min_frames_for_phase_estimability_estimator_only": (
+            MIN_FRAMES_FOR_PHASE_ESTIMABILITY
+        ),
+        "mad_to_gaussian_sigma_constant": MAD_TO_GAUSSIAN_SIGMA,
+        "note": (
+            "Per-group epsilon_mad values are estimator-level numeric "
+            "thresholds and are NOT contract definition. MAD / std / ptp "
+            "/ mean_abs are always reported per channel so a reviewer can "
+            "re-judge."
+        ),
+    }
+
+    processed_data_root = str(raw_root / LAYER_B1_PROCESSED_DATA_SUBDIR)
+    schema_pass = all(
+        e["frame_alignment"]["aligned"]
+        and all(
+            e["processed_data_schema"]["arrays"][k]
+            .get("finite_coverage", {})
+            .get("all_finite", True)
+            for k in ("bone_ang_vel", "bone_rot6d")
+        )
+        for e in per_clip
+    )
+    schema_status_reason = (
+        "schema_pass_every_clip_aligned_and_finite"
+        if schema_pass
+        else "schema_fail_unexpected_post_validation_state"
+    )
+
+    summary = _common_summary_root(
+        "pose_reference_scale_check", raw_root, clips, per_clip_paths
+    )
+    summary.update(
+        {
+            "layer": "Layer B.1",
+            "layer_b1_contract_doc": (
+                "docs/aperiodic_transition/"
+                "2026-05-23_walk_f_causal_state_layerb1_pose_reference_scale_contract.md"
+            ),
+            "layer_b1_contract_status": "pass" if schema_pass else "fail",
+            "expected_insufficient_evidence_is_contract_pass": True,
+            "definition_layer": {
+                "attractor_definition_status": "not_emitted_by_this_tool",
+                "causal_state_definition_status": "not_emitted_by_this_tool",
+                "current_reference_family": REFERENCE_FAMILY,
+                "membership_evidence_status": "not_implemented_layerB1",
+                "scope_caveat": (
+                    "Walk_F is a single 88-frame trajectory (scaffold v1 "
+                    "§4). Layer B.1 only emits per-feature-group reference "
+                    "scale + degeneracy + processed-data schema audit. No "
+                    "membership / boundary / predictive loss is computed."
+                ),
+            },
+            "estimation_grid": estimation_grid,
+            "included_feature_groups": list(LAYER_B1_FEATURE_GROUPS.keys()),
+            "excluded_feature_groups": LAYER_B1_EXCLUDED_FEATURE_GROUPS,
+            "feature_groups_meta": feature_groups_meta,
+            "raw_root": str(raw_root),
+            "processed_data_root": processed_data_root,
+            "processed_data_schema_status": "pass" if schema_pass else "fail",
+            "processed_data_schema_status_reason": schema_status_reason,
+            "reference_family": REFERENCE_FAMILY,
+            "query_family": list(LAYER_B1_QUERY_FAMILY),
+            "reference_clip_names_resolved": [
+                e["clip"] for e in reference_clips
+            ],
+            "query_clip_names": [e["clip"] for e in query_clips],
+            "input_clip_policy": (
+                "clips_must_set_equal_walk_f_plus_4_turn_clips_no_duplicates"
+            ),
+            "reference_scale_source": (
+                "reference_clips_only"
+                if reference_clips
+                else "no_reference_clip_present"
+            ),
+            "reference_clip_status": "single_trajectory_reference_only",
+            "reference_clip_status_reason": (
+                "Walk_F is a single trajectory (scaffold v1 §4); "
+                "class-level recurrence is INSUFFICIENT_EVIDENCE. Layer "
+                "B.1 reports single-trajectory pose reference scale only."
+            ),
+            "per_group_reference_scale": reference_per_group,
+            "phase_structure_status_per_group": phase_status_summary,
+            "phase_structure_status_enum": [
+                "phase_structured",
+                "phase_degenerate",
+                "insufficient_evidence",
+            ],
+            "phase_structure_status_enum_source": (
+                "docs/aperiodic_transition/"
+                "2026-05-22_walk_f_causal_state_scaffold_v1.md:255"
+            ),
+            "frame_alignment_per_clip": frame_alignment_per_clip,
+            "per_query_clip_inspection": per_query_clip_inspection,
+            "query_clip_inspection_only_note": (
+                "Per-channel query raw scale numbers are present in the "
+                "per-clip artifact JSONs for inspection only. They MUST "
+                "NOT be aggregated into the Walk_F reference scale. "
+                "Enforcement: _layer_b1_query_channel_walk_f_projected "
+                "is the only normalization entry point on the query "
+                "path and requires scale_source='walk_f'; any other "
+                "value raises FailFastError via "
+                "_layer_b1_forbid_query_self_rescale. No other code "
+                "path in Layer B.1 normalises query channels."
+            ),
+            "walk_f_baseline": "single_trajectory_walk_f_pose_reference_scale_only",
+            "sensitivity_summary": {
+                "epsilon_mad_grid_status": "single_point_per_group_layerB1",
+                "rotation_grid_sensitivity_status": "not_emitted_in_this_mode",
+                "translation_grid_sensitivity_status": "not_emitted_in_this_mode",
+                "predictive_loss_sensitivity_status": "not_implemented_layerB1",
+                "yaw_activity_threshold_grid_status": "not_emitted_in_this_mode",
+                "history_window_sensitivity_status": "not_emitted_in_this_mode",
+                "future_horizon_sensitivity_status": "not_emitted_in_this_mode",
+                "neighborhood_radius_sensitivity_status": (
+                    "not_emitted_in_this_mode"
+                ),
+                "band_quantile_sensitivity_status": "not_emitted_in_this_mode",
+            },
+            "causal_state_track_status": (
+                "pose_reference_scale_and_degeneracy_layer_b1"
+            ),
+            "quotient_definition_status": (
+                "bone_local_frame_inherent_invariance_no_explicit_se2_reapply"
+            ),
+            "phase_library_status": (
+                "not_implemented_layerB1_see_phase_library_check"
+            ),
+            "predictive_loss_status": (
+                "not_implemented_layerB1_see_phase_library_check"
+            ),
+            "attractor_membership_status": "not_emitted_by_this_tool",
+            "event_head_target_status": "not_emitted_by_this_tool",
+            "handoff_ready_status": "not_emitted_by_this_tool",
+            "transition_done_status": "not_emitted_by_this_tool",
+            "cross_attractor_claim_status": "forbidden_by_contract",
+            "transition_truth_promotion": "forbidden_by_contract",
+            "combined_membership_score_status": (
+                "forbidden_by_contract_groups_reported_separately"
+            ),
+            "turn_dyn_routing_policy": (
+                "fail_fast_on_any_combined_membership_entry_point"
+            ),
+            "query_self_rescale_policy": (
+                "load_bearing_scale_source_param_walk_f_only_fail_fast_otherwise"
+            ),
+            "query_self_rescale_policy_enforced_at": (
+                "_layer_b1_query_channel_walk_f_projected.scale_source_kwarg"
+            ),
+            "insufficient_evidence": insufficient,
+            "notes": [
+                "Layer B.1 audits raw_data/processed_data/<clip>.npz "
+                "schema + frame alignment + finite coverage and emits "
+                "Walk_F-only per-feature-group reference scale + "
+                "degeneracy for pose_dyn (bone_ang_vel) and pose_rel "
+                "(bone_rot6d first-difference times FPS).",
+                "bone_ang_vel and bone_rot6d are in bone-LOCAL frame per "
+                "meta_json.spaces; the canonical SE(2) yaw quotient is "
+                "NOT re-applied to these groups (doing so would double-"
+                "count the local-frame transform).",
+                "Walk_F is the only reference. Query clip per-channel "
+                "raw scale is reported as inspection_only and never "
+                "aggregated into the Walk_F reference scale.",
+                "turn_dyn is hard-rejected at every Layer B.1 entry "
+                "point via _layer_b1_forbid_turn_dyn.",
+                "No combined-membership / combined-score is emitted; no "
+                "leave/return interval is emitted; no attractor "
+                "membership is emitted.",
+            ],
+        }
+    )
+    return summary
+
+
 # -----------------------------------------------------------------------
 # CLI dispatch
 # -----------------------------------------------------------------------
@@ -4585,7 +5902,13 @@ def main(argv: list[str] | None = None) -> int:
             "query leave/return interval + censoring audit on the 4 turn "
             "clips; emits NO attractor membership, NO EventHead target, NO "
             "handoff_ready, NO transition_done, NO cross-attractor claim, "
-            "and rejects turn_dyn at every combined-membership entry point)."
+            "and rejects turn_dyn at every combined-membership entry point); "
+            "pose_reference_scale_check (Layer B.1, processed_data NPZ "
+            "schema + Walk_F-only pose_dyn / pose_rel reference scale + "
+            "degeneracy + query inspection projected onto Walk_F scale; "
+            "emits NO query leave/return, NO membership, NO combined score, "
+            "NO transition truth, and rejects turn_dyn and query-self "
+            "median/MAD rescaling at every entry point)."
         ),
     )
     parser.add_argument(
@@ -4594,7 +5917,8 @@ def main(argv: list[str] | None = None) -> int:
         type=str,
         help=(
             "yaw_debug | gauge_check | reference_scale_check | "
-            "phase_library_check | query_boundary_check. "
+            "phase_library_check | query_boundary_check | "
+            "pose_reference_scale_check. "
             "Unknown mode -> fail-fast (docs/removal_policy.md §3-§4)."
         ),
     )
@@ -4653,6 +5977,28 @@ def main(argv: list[str] | None = None) -> int:
                 f"[walk_f_causal_state_probe] --mode query_boundary_check "
                 f"requires --clips set-equal to "
                 f"{sorted(LAYER_C1_REQUIRED_CLIP_SET)!r} (Layer C.1 contract "
+                f"§2). Got {args.clips!r}; missing={missing!r}, "
+                f"extra={extra!r}. No silent fallback by "
+                "docs/removal_policy.md §3-§4."
+            )
+    if mode == "pose_reference_scale_check":
+        if len(args.clips) != len(set(args.clips)):
+            duplicates = sorted(
+                {c for c in args.clips if args.clips.count(c) > 1}
+            )
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] --mode pose_reference_scale_check "
+                f"received duplicate clip entries in --clips: {duplicates!r}. "
+                "Layer B.1 contract §2 requires set-equality (no duplicates) "
+                f"to {sorted(LAYER_B1_REQUIRED_CLIP_SET)!r}. Refusing to run."
+            )
+        if frozenset(args.clips) != LAYER_B1_REQUIRED_CLIP_SET:
+            missing = sorted(LAYER_B1_REQUIRED_CLIP_SET - set(args.clips))
+            extra = sorted(set(args.clips) - LAYER_B1_REQUIRED_CLIP_SET)
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] --mode pose_reference_scale_check "
+                f"requires --clips set-equal to "
+                f"{sorted(LAYER_B1_REQUIRED_CLIP_SET)!r} (Layer B.1 contract "
                 f"§2). Got {args.clips!r}; missing={missing!r}, "
                 f"extra={extra!r}. No silent fallback by "
                 "docs/removal_policy.md §3-§4."
@@ -4759,6 +6105,57 @@ def main(argv: list[str] | None = None) -> int:
             per_clip,
             per_clip_paths,
             internal_se2_precondition,
+        )
+    elif mode == "pose_reference_scale_check":
+        npz_by_clip: dict[str, dict[str, Any]] = {}
+        for info in clip_infos:
+            npz_by_clip[info["clip"]] = _load_clip_processed_data(
+                args.raw_root,
+                info["clip"],
+                json_frame_count=int(info["frame_count"]),
+                json_fps=float(info["fps"]),
+            )
+        # Build Walk_F reference scale FIRST so query clips can reuse it.
+        walk_f_info_list = [
+            info for info in clip_infos
+            if info["clip"] == LAYER_B1_REFERENCE_CLIP
+        ]
+        if len(walk_f_info_list) != 1:
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] Layer B.1 expected exactly one "
+                f"Walk_F clip after CLI validation; got {len(walk_f_info_list)}. "
+                "This indicates the CLI clip-set guard was bypassed."
+            )
+        walk_f_info = walk_f_info_list[0]
+        walk_f_per_clip_entry = _process_clip_pose_reference_scale_check(
+            clip_info=walk_f_info,
+            npz_payload=npz_by_clip[walk_f_info["clip"]],
+            is_reference=True,
+            walk_f_reference_scale_per_group=None,
+        )
+        walk_f_reference_scale_per_group = walk_f_per_clip_entry[
+            "feature_groups_layer_b1"
+        ]
+        per_clip = []
+        for info in clip_infos:
+            if info["clip"] == LAYER_B1_REFERENCE_CLIP:
+                per_clip.append(walk_f_per_clip_entry)
+            else:
+                per_clip.append(
+                    _process_clip_pose_reference_scale_check(
+                        clip_info=info,
+                        npz_payload=npz_by_clip[info["clip"]],
+                        is_reference=False,
+                        walk_f_reference_scale_per_group=(
+                            walk_f_reference_scale_per_group
+                        ),
+                    )
+                )
+        per_clip_paths = _write_per_clip(
+            args.out_dir, per_clip, "pose_reference_scale_check"
+        )
+        summary = _build_summary_pose_reference_scale_check(
+            args.raw_root, args.clips, per_clip, per_clip_paths
         )
     elif mode == "query_boundary_check":
         contact_by_clip = {
@@ -4877,6 +6274,34 @@ def main(argv: list[str] | None = None) -> int:
                 f"{st['config_count']} "
                 f"reference_degenerate={st['reference_degenerate']} "
                 f"active_channels={st['active_channels']}"
+            )
+    elif mode == "pose_reference_scale_check":
+        print(
+            f"[walk_f_causal_state_probe] reference_family={REFERENCE_FAMILY} "
+            f"query_family={summary['query_family']} "
+            f"layer_b1_contract_status={summary['layer_b1_contract_status']} "
+            f"processed_data_schema_status="
+            f"{summary['processed_data_schema_status']} "
+            "expected_insufficient_evidence_is_contract_pass="
+            f"{summary['expected_insufficient_evidence_is_contract_pass']}"
+        )
+        for name, st in summary["phase_structure_status_per_group"].items():
+            print(
+                f"[walk_f_causal_state_probe] group={name} "
+                f"phase_structure_status={st['phase_structure_status']} "
+                f"reference_degenerate={st['group_reference_degenerate']} "
+                f"layer_c_candidate={st['layer_c_candidate']} "
+                f"channel_degenerate={st['channel_degenerate_count']}/"
+                f"{st['channel_total_count']} "
+                f"group_max_channel_mad={st['group_max_channel_mad']:.3e} "
+                f"epsilon_mad={st['epsilon_mad_estimator_only']:.3e}"
+            )
+        for entry in per_clip:
+            print(
+                f"[walk_f_causal_state_probe] clip={entry['clip']} "
+                f"frames={entry['frame_count']} "
+                f"role={entry['clip_role']} "
+                f"npz={entry['npz_path']}"
             )
     elif mode == "query_boundary_check":
         print(
