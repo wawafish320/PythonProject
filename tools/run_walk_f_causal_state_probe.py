@@ -5380,7 +5380,13 @@ def _build_summary_pose_phase_library_check(
             "transition_done_status": "not_emitted_by_this_tool",
             "query_leave_return_status": "not_emitted_by_this_tool",
             "cross_attractor_claim_status": "forbidden_by_contract",
-            "combined_membership_score_status": "forbidden_by_contract",
+            "transition_truth_promotion": "forbidden_by_contract",
+            "combined_membership_score_status": (
+                "forbidden_by_contract_groups_reported_separately"
+            ),
+            "turn_dyn_routing_policy": (
+                "fail_fast_on_any_combined_membership_entry_point"
+            ),
             "phase_library_status": "walk_f_pose_self_consistency_only_layer_c2",
             "predictive_loss_status": (
                 "walk_f_leave_one_neighborhood_self_test_only_pose_groups"
