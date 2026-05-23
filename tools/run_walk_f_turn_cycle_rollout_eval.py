@@ -117,17 +117,13 @@ def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
 
 
 def _run_cmd(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(cmd, cwd=str(cwd), text=True, capture_output=True)
-    if proc.returncode != 0:
-        raise PilotError(
-            "Command failed:\n"
-            + " ".join(cmd)
-            + "\n--- stdout ---\n"
-            + proc.stdout
-            + "\n--- stderr ---\n"
-            + proc.stderr
-        )
-    return proc
+    return subprocess.run(cmd, cwd=str(cwd), text=True, capture_output=True)
+
+
+def _dir_listing(path: Path) -> list[str]:
+    if not path.is_dir():
+        return []
+    return sorted(p.name for p in path.iterdir())
 
 
 def _clip_length(npz_path: Path) -> int:
@@ -184,7 +180,6 @@ def _make_teacher_cmd(
         "--device",
         str(device),
         "--force",
-        "--quiet",
     ]
 
 
@@ -578,43 +573,35 @@ def main() -> int:
                 device=args.device,
             )
 
-            teacher_proc = None
-            teacher_cmd_error = None
-            try:
-                teacher_proc = _run_cmd(teacher_cmd, repo_root)
-            except PilotError as ex:
-                teacher_cmd_error = str(ex)
+            teacher_proc = _run_cmd(teacher_cmd, repo_root)
             teacher_artifact = _teacher_json_path(teacher_out, clip)
-            if teacher_cmd_error is not None or not teacher_artifact.is_file():
+            if teacher_proc.returncode != 0 or not teacher_artifact.is_file():
                 run_manifest["rollout_failures"].append(
                     {
                         "clip": clip,
                         "stage": "teacher",
-                        "artifact_path": str(teacher_artifact),
-                        "error": teacher_cmd_error,
+                        "expected_artifact_path": str(teacher_artifact),
+                        "expected_artifact_dir_listing": _dir_listing(teacher_artifact.parent),
+                        "returncode": int(teacher_proc.returncode),
+                        "stdout": str(teacher_proc.stdout),
+                        "stderr": str(teacher_proc.stderr),
                         "artifact_missing": not teacher_artifact.is_file(),
-                        "stdout": None if teacher_proc is None else teacher_proc.stdout,
-                        "stderr": None if teacher_proc is None else teacher_proc.stderr,
                     }
                 )
 
-            freerun_proc = None
-            freerun_cmd_error = None
-            try:
-                freerun_proc = _run_cmd(freerun_cmd, repo_root)
-            except PilotError as ex:
-                freerun_cmd_error = str(ex)
+            freerun_proc = _run_cmd(freerun_cmd, repo_root)
             freerun_artifact = _freerun_json_path(freerun_out, clip)
-            if freerun_cmd_error is not None or not freerun_artifact.is_file():
+            if freerun_proc.returncode != 0 or not freerun_artifact.is_file():
                 run_manifest["rollout_failures"].append(
                     {
                         "clip": clip,
                         "stage": "free_run",
-                        "artifact_path": str(freerun_artifact),
-                        "error": freerun_cmd_error,
+                        "expected_artifact_path": str(freerun_artifact),
+                        "expected_artifact_dir_listing": _dir_listing(freerun_artifact.parent),
+                        "returncode": int(freerun_proc.returncode),
+                        "stdout": str(freerun_proc.stdout),
+                        "stderr": str(freerun_proc.stderr),
                         "artifact_missing": not freerun_artifact.is_file(),
-                        "stdout": None if freerun_proc is None else freerun_proc.stdout,
-                        "stderr": None if freerun_proc is None else freerun_proc.stderr,
                     }
                 )
             run_manifest["rollout_commands"].append(
@@ -723,6 +710,7 @@ def main() -> int:
 
     valid_rows = [r for r in rows if r.get("invalid_reason") is None]
     baseline_blocked = bool(len(valid_rows) == 0)
+    exit_status = 2 if (args.baseline_strict_valid_rows and baseline_blocked) else 0
     summary = {
         "tool": "run_walk_f_turn_cycle_rollout_eval",
         "runner_version": RUNNER_VERSION,
@@ -736,7 +724,9 @@ def main() -> int:
         "total_rows": int(len(rows)),
         "valid_rows": int(len(valid_rows)),
         "invalid_rows": int(len(invalid_rows)),
+        "rollout_failures_count": int(len(run_manifest["rollout_failures"])),
         "baseline_blocked_no_valid_paired_rows": baseline_blocked,
+        "exit_status": int(exit_status),
         "failure_taxonomy_verdict": verdict,
         "failure_taxonomy_evidence": verdict_evidence,
         "frozen_sources": {
@@ -798,7 +788,7 @@ def main() -> int:
 
     print(f"[rollout-eval] out_dir={out_dir}")
     print(f"[rollout-eval] verdict={verdict} valid_rows={len(valid_rows)}/{len(rows)}")
-    if args.baseline_strict_valid_rows and baseline_blocked:
+    if exit_status == 2:
         raise PilotError(
             "baseline_blocked_no_valid_paired_rows: no valid paired teacher/free-run rows. "
             "No compatible fixed checkpoint found for existing run_teacher_rollout + run_freerun_cycles pair under tested schema."
