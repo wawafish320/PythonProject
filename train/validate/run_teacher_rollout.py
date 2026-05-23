@@ -267,6 +267,66 @@ def _min_length(*arrays: Optional[np.ndarray]) -> int:
     return min(lengths)
 
 
+_COND_RAW_RESOLVER_VERSION = "explicit_cond_raw_source_v1"
+_COND_RAW_SOURCE_EXPLICIT_RAW = "teacher.cond_raw"
+_COND_RAW_SOURCE_EXPLICIT_TGT_RAW = "teacher.cond_tgt_raw"
+_COND_RAW_SOURCE_FALLBACK_COND = "teacher.cond_as_raw_carry"
+
+
+def resolve_cond_raw_carry(
+    teacher_block: Dict[str, object],
+    *,
+    cond_arr: np.ndarray,
+    teacher_path: Path,
+) -> Tuple[np.ndarray, str]:
+    """Resolve the raw carry condition sequence for teacher rollout in an explicit, auditable way.
+
+    Selection priority (no silent fallback to None / zeros):
+      1. ``teacher.cond_raw`` — explicit raw carry contract field.
+      2. ``teacher.cond_tgt_raw`` — explicit target-time raw contract field.
+      3. ``teacher.cond`` — current export contract emits raw ``cond_in`` here
+         (export_teacher_batches.py L224-L253). Marked as ``teacher.cond_as_raw_carry``
+         so callers can audit that it was the load-bearing source.
+
+    Raises ValueError if none of the three is present / well-shaped. Never silently
+    substitutes zeros — that would mask a teacher-batch contract regression.
+
+    Returns (cond_raw_arr, cond_raw_source).
+      - cond_raw_arr: np.ndarray shape=[T, Dc], dtype=float32, device=cpu (numpy).
+      - cond_raw_source: one of the three string markers above.
+    """
+    candidates: List[Tuple[str, object]] = [
+        (_COND_RAW_SOURCE_EXPLICIT_RAW, teacher_block.get("cond_raw")),
+        (_COND_RAW_SOURCE_EXPLICIT_TGT_RAW, teacher_block.get("cond_tgt_raw")),
+        (_COND_RAW_SOURCE_FALLBACK_COND, teacher_block.get("cond")),
+    ]
+    chosen_source: Optional[str] = None
+    chosen_arr: Optional[np.ndarray] = None
+    for source, payload in candidates:
+        if payload is None:
+            continue
+        arr = np.asarray(payload, dtype=np.float32)
+        if arr.ndim != 2:
+            raise ValueError(
+                f"{teacher_path}: raw condition source '{source}' has invalid ndim={arr.ndim}; "
+                f"expected 2 ([T, Dc])."
+            )
+        chosen_source = source
+        chosen_arr = arr
+        break
+    if chosen_arr is None or chosen_source is None:
+        raise ValueError(
+            f"{teacher_path}: no raw condition source available "
+            f"(missing cond_raw / cond_tgt_raw / cond). Refuse silent zero fallback."
+        )
+    if chosen_arr.shape[1] != cond_arr.shape[1]:
+        raise ValueError(
+            f"{teacher_path}: raw condition dim mismatch from source '{chosen_source}': "
+            f"raw={chosen_arr.shape[1]} teacher.cond={cond_arr.shape[1]}."
+        )
+    return chosen_arr, chosen_source
+
+
 def _shift_time_axis(x: np.ndarray, shift: int) -> np.ndarray:
     """Shift along time axis with edge padding. new[t] = old[clip(t - shift)]."""
     if x is None or not isinstance(x, np.ndarray):
@@ -665,16 +725,16 @@ class TeacherRolloutRunner:
             raise ValueError(f"{teacher_path}: missing 'teacher' payload.")
         state_arr = np.asarray(teacher_block.get("state_norm"), dtype=np.float32)
         cond_arr = np.asarray(teacher_block.get("cond"), dtype=np.float32)
-        cond_raw_src = teacher_block.get("cond_raw", teacher_block.get("cond_tgt_raw", teacher_block.get("cond")))
-        cond_raw_arr = np.asarray(cond_raw_src, dtype=np.float32)
         if state_arr.ndim != 2 or cond_arr.ndim != 2:
             raise ValueError(f"{teacher_path}: invalid state/cond shapes.")
-        if cond_raw_arr.ndim != 2:
-            raise ValueError(f"{teacher_path}: invalid raw condition shape for rollout carry.")
-        if cond_raw_arr.shape[1] != cond_arr.shape[1]:
-            raise ValueError(
-                f"{teacher_path}: raw condition dim mismatch: raw={cond_raw_arr.shape[1]} "
-                f"teacher={cond_arr.shape[1]}."
+        cond_raw_arr, cond_raw_source = resolve_cond_raw_carry(
+            teacher_block, cond_arr=cond_arr, teacher_path=teacher_path
+        )
+        if not quiet:
+            print(
+                f"[INFO] {clip_name}: cond_raw_source={cond_raw_source} "
+                f"resolver={_COND_RAW_RESOLVER_VERSION} "
+                f"shape={tuple(cond_raw_arr.shape)} dtype={cond_raw_arr.dtype}"
             )
         npz_path = resolve_npz_path(clip_name, data.get("source_json"), npz_root)
         ds, clip = self._build_dataset(npz_path)
@@ -824,6 +884,12 @@ class TeacherRolloutRunner:
             },
             "layouts": data.get("layouts", {}),
             "teacher": teacher_block,
+            "teacher_runner_contract": {
+                "cond_raw_source": cond_raw_source,
+                "cond_raw_resolver_version": _COND_RAW_RESOLVER_VERSION,
+                "cond_raw_shape": [int(x) for x in cond_raw_arr.shape],
+                "cond_raw_dtype": str(cond_raw_arr.dtype),
+            },
             "aux_inputs": {
                 "contacts": contacts.tolist() if contacts.shape[1] > 0 else [],
                 "angvel_norm": angvel.tolist() if angvel.shape[1] > 0 else [],
