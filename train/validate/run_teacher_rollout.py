@@ -665,8 +665,17 @@ class TeacherRolloutRunner:
             raise ValueError(f"{teacher_path}: missing 'teacher' payload.")
         state_arr = np.asarray(teacher_block.get("state_norm"), dtype=np.float32)
         cond_arr = np.asarray(teacher_block.get("cond"), dtype=np.float32)
+        cond_raw_src = teacher_block.get("cond_raw", teacher_block.get("cond_tgt_raw", teacher_block.get("cond")))
+        cond_raw_arr = np.asarray(cond_raw_src, dtype=np.float32)
         if state_arr.ndim != 2 or cond_arr.ndim != 2:
             raise ValueError(f"{teacher_path}: invalid state/cond shapes.")
+        if cond_raw_arr.ndim != 2:
+            raise ValueError(f"{teacher_path}: invalid raw condition shape for rollout carry.")
+        if cond_raw_arr.shape[1] != cond_arr.shape[1]:
+            raise ValueError(
+                f"{teacher_path}: raw condition dim mismatch: raw={cond_raw_arr.shape[1]} "
+                f"teacher={cond_arr.shape[1]}."
+            )
         npz_path = resolve_npz_path(clip_name, data.get("source_json"), npz_root)
         ds, clip = self._build_dataset(npz_path)
         self._ensure_model_ready(ds)
@@ -675,11 +684,12 @@ class TeacherRolloutRunner:
         angvel = clip.angvel_norm if clip.angvel_norm is not None else np.zeros((state_arr.shape[0], self.angvel_dim or 0), dtype=np.float32)
         pose_hist = clip.pose_hist_norm if clip.pose_hist_norm is not None else np.zeros((state_arr.shape[0], self.pose_hist_dim or 0), dtype=np.float32)
         gt_norm = clip.Y
-        usable_len = _min_length(state_arr, cond_arr, contacts, angvel, pose_hist, gt_norm)
+        usable_len = _min_length(state_arr, cond_arr, cond_raw_arr, contacts, angvel, pose_hist, gt_norm)
         if usable_len < state_arr.shape[0]:
             print(f"[WARN] {clip_name}: trimming teacher sequence from {state_arr.shape[0]} to {usable_len} frames.")
         state_arr = state_arr[:usable_len]
         cond_arr = cond_arr[:usable_len]
+        cond_raw_arr = cond_raw_arr[:usable_len]
         contacts = contacts[:usable_len]
         angvel = angvel[:usable_len]
         pose_hist = pose_hist[:usable_len]
@@ -712,6 +722,7 @@ class TeacherRolloutRunner:
         else:
             state_t = torch.from_numpy(state_arr).unsqueeze(0).to(self.device)
             cond_t = torch.from_numpy(cond_arr).unsqueeze(0).to(self.device)
+            cond_raw_t = torch.from_numpy(cond_raw_arr).unsqueeze(0).to(self.device)
             contacts_t = (
                 torch.from_numpy(contacts).unsqueeze(0).to(self.device) if contacts.shape[1] > 0 else None
             )
@@ -749,6 +760,7 @@ class TeacherRolloutRunner:
                 preds, _ = self.trainer._rollout_sequence(
                     state_t,
                     cond_t,
+                    cond_raw_seq=cond_raw_t,
                     contacts_seq=contacts_t,
                     angvel_seq=angvel_t,
                     pose_hist_seq=pose_hist_t,
