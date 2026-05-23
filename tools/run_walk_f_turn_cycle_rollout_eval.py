@@ -44,6 +44,7 @@ LOCKED_C2_SUMMARY_PATH = Path(
 RUNNER_VERSION = "v1_neighborhood_proxy_only_no_band_blind"
 CONTRACT_DOC_PATH = "docs/aperiodic_transition/2026-05-24_walk_f_turn_cycle_rollout_eval_pilot_contract.md"
 CONTRACT_SECTION_ACKNOWLEDGED = CONTRACT_DOC_PATH + " §4.1"
+FATAL_ROLLOUT_MARKERS = ("[ERR]", "[Removed]")
 
 FAILURE_LABELS = {
     "PROMISING_IN_FAMILY",
@@ -124,6 +125,16 @@ def _dir_listing(path: Path) -> list[str]:
     if not path.is_dir():
         return []
     return sorted(p.name for p in path.iterdir())
+
+
+def _raise_if_fatal_rollout_markers(*, stage: str, clip: str, stdout: str, stderr: str) -> None:
+    text = f"{stdout}\n{stderr}"
+    hits = [m for m in FATAL_ROLLOUT_MARKERS if m in text]
+    if hits:
+        raise PilotError(
+            f"{stage} rollout reported fatal markers for clip={clip}: markers={hits}. "
+            "Stopgap for upstream CLI exit-code hygiene."
+        )
 
 
 def _clip_length(npz_path: Path) -> int:
@@ -574,12 +585,23 @@ def main() -> int:
             )
 
             teacher_proc = _run_cmd(teacher_cmd, repo_root)
+            teacher_marker_error = None
+            try:
+                _raise_if_fatal_rollout_markers(
+                    stage="teacher",
+                    clip=clip,
+                    stdout=str(teacher_proc.stdout),
+                    stderr=str(teacher_proc.stderr),
+                )
+            except PilotError as ex:
+                teacher_marker_error = str(ex)
             teacher_artifact = _teacher_json_path(teacher_out, clip)
-            if teacher_proc.returncode != 0 or not teacher_artifact.is_file():
+            if teacher_proc.returncode != 0 or not teacher_artifact.is_file() or teacher_marker_error is not None:
                 run_manifest["rollout_failures"].append(
                     {
                         "clip": clip,
                         "stage": "teacher",
+                        "error": teacher_marker_error,
                         "expected_artifact_path": str(teacher_artifact),
                         "expected_artifact_dir_listing": _dir_listing(teacher_artifact.parent),
                         "returncode": int(teacher_proc.returncode),
@@ -590,12 +612,23 @@ def main() -> int:
                 )
 
             freerun_proc = _run_cmd(freerun_cmd, repo_root)
+            freerun_marker_error = None
+            try:
+                _raise_if_fatal_rollout_markers(
+                    stage="free_run",
+                    clip=clip,
+                    stdout=str(freerun_proc.stdout),
+                    stderr=str(freerun_proc.stderr),
+                )
+            except PilotError as ex:
+                freerun_marker_error = str(ex)
             freerun_artifact = _freerun_json_path(freerun_out, clip)
-            if freerun_proc.returncode != 0 or not freerun_artifact.is_file():
+            if freerun_proc.returncode != 0 or not freerun_artifact.is_file() or freerun_marker_error is not None:
                 run_manifest["rollout_failures"].append(
                     {
                         "clip": clip,
                         "stage": "free_run",
+                        "error": freerun_marker_error,
                         "expected_artifact_path": str(freerun_artifact),
                         "expected_artifact_dir_listing": _dir_listing(freerun_artifact.parent),
                         "returncode": int(freerun_proc.returncode),
