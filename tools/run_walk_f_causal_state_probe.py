@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Walk_F causal-state scaffold v1 — read-only probes.
 
-Two modes are implemented, both read-only:
+Implemented modes are read-only:
 
 * ``yaw_debug`` (Layer 0 / Track 1) — Walk-turn descriptive oracle on
   raw ``RootYaw``. Debug-only; must not be promoted to attractor /
@@ -12,6 +12,9 @@ Two modes are implemented, both read-only:
   §1.2. Prerequisite for the future causal-state membership track.
   Does NOT estimate causal-state membership, attractor membership,
   phase library, predictive loss, or EventHead targets.
+* ``phase_library_check`` (Layer C minimal) — Walk_F-only phase-library
+  self-consistency under a fixed estimator grid. It does NOT run query
+  leave/return boundary detection and does NOT emit membership labels.
 """
 from __future__ import annotations
 
@@ -29,22 +32,30 @@ CONTRACT = "walk_f_causal_state_scaffold_v1"
 TOOL_NAME = "run_walk_f_causal_state_probe"
 REFERENCE_FAMILY = ["Walk_F"]
 
-SUPPORTED_MODES = ("yaw_debug", "gauge_check", "reference_scale_check")
+SUPPORTED_MODES = (
+    "yaw_debug",
+    "gauge_check",
+    "reference_scale_check",
+    "phase_library_check",
+)
 
 TRACK_BY_MODE = {
     "yaw_debug": "yaw_activity_debug",
     "gauge_check": "walk_f_causal_state_scaffold_prerequisite",
     "reference_scale_check": "walk_f_reference_scale_and_degeneracy",
+    "phase_library_check": "walk_f_phase_library_self_consistency",
 }
 TRACK_ROLE_BY_MODE = {
     "yaw_debug": "debug_only_not_attractor_definition",
     "gauge_check": "gauge_sanity_prerequisite_not_attractor_definition",
     "reference_scale_check": "reference_scale_and_degeneracy_prerequisite_not_membership",
+    "phase_library_check": "walk_f_only_self_consistency_not_membership_boundary",
 }
 SCOPE_BY_MODE = {
     "yaw_debug": "walk_turn_yaw_activity_descriptive_oracle",
     "gauge_check": "canonical_yaw_quotient_invariance_sanity",
     "reference_scale_check": "walk_f_per_feature_group_reference_scale_and_degeneracy",
+    "phase_library_check": "walk_f_phase_library_self_consistency_single_trajectory",
 }
 
 # yaw_debug constants -----------------------------------------------------
@@ -130,6 +141,55 @@ MIN_FRAMES_FOR_PHASE_ESTIMABILITY = 4
 # MAD-to-Gaussian-equivalent-sigma constant; reported alongside raw MAD
 # so a reviewer can compare against a std baseline if they want to.
 MAD_TO_GAUSSIAN_SIGMA = 1.4826
+
+# phase_library_check (Layer C minimal) constants --------------------------
+LAYER_C_HISTORY_WINDOW_FRAMES = (6, 12)
+LAYER_C_FUTURE_HORIZON_FRAMES = (6, 12)
+LAYER_C_NEIGHBORHOOD_RADIUS_FRAMES = (4, 8)
+LAYER_C_DISTANCE_METRICS = ("z_mse", "z_l1")
+LAYER_C_MIN_VALID_QUERY_FRACTION = 0.50
+LAYER_C_MIN_VALID_QUERY_COUNT = 12
+LAYER_C_IMPROVEMENT_TOL = 0.0
+LAYER_C_FEATURE_GROUPS: dict[str, dict[str, Any]] = {
+    "root_body_vel_only": {
+        "channels": ("body_root_vel_xy.x", "body_root_vel_xy.y"),
+        "source": "canonical_quotient_feature_layer_a",
+        "group_ablation_role": "preferred_root_body_no_clip_start_displacement",
+        "epsilon_mad": FEATURE_GROUPS_LAYER_B["root_body"]["epsilon_mad"],
+    },
+    "root_body_pos_vel": {
+        "channels": (
+            "body_root_pos_xy.x",
+            "body_root_pos_xy.y",
+            "body_root_vel_xy.x",
+            "body_root_vel_xy.y",
+        ),
+        "source": "canonical_quotient_feature_layer_a",
+        "group_ablation_role": (
+            "reported_ablation_only_clip_start_displacement_may_leak_elapsed_progress"
+        ),
+        "epsilon_mad": FEATURE_GROUPS_LAYER_B["root_body"]["epsilon_mad"],
+    },
+    "contact": {
+        "channels": (
+            "foot_L_soft_contact_score",
+            "foot_R_soft_contact_score",
+        ),
+        "source": "raw_data_foot_evidence_soft_contact_score",
+        "group_ablation_role": "independent_contact_self_consistency_view",
+        "epsilon_mad": FEATURE_GROUPS_LAYER_B["contact"]["epsilon_mad"],
+    },
+}
+LAYER_C_EXCLUDED_FEATURE_GROUPS: dict[str, str] = {
+    "turn_dyn": (
+        "excluded because Layer B marks Walk_F turn_dyn degenerate; do not "
+        "normalize or combine zero-variance yaw dynamics into phase evidence"
+    ),
+    "pose_dyn": "not_run; processed_data/*.npz schema not validated in Layer C minimal",
+    "pose_rel": "not_run; needs a separate non-template contract",
+    "absolute_RootYaw": "excluded by planar translation / global-yaw quotient contract",
+    "yaw_activity_debug": "debug oracle only; not phase-library evidence",
+}
 
 
 class FailFastError(RuntimeError):
@@ -1348,6 +1408,539 @@ def _process_clip_reference_scale_check(
 
 
 # -----------------------------------------------------------------------
+# phase_library_check (Layer C minimal) — Walk_F self-consistency only
+# -----------------------------------------------------------------------
+
+
+def _quantile_summary(values: list[float] | np.ndarray) -> dict[str, Any]:
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return {
+            "n": int(arr.size),
+            "n_finite": 0,
+            "all_finite": False,
+            "min": None,
+            "p05": None,
+            "p25": None,
+            "p50": None,
+            "p75": None,
+            "p95": None,
+            "max": None,
+            "mean": None,
+        }
+    return {
+        "n": int(arr.size),
+        "n_finite": int(finite.size),
+        "all_finite": bool(finite.size == arr.size),
+        "min": float(np.min(finite)),
+        "p05": float(np.quantile(finite, 0.05)),
+        "p25": float(np.quantile(finite, 0.25)),
+        "p50": float(np.quantile(finite, 0.50)),
+        "p75": float(np.quantile(finite, 0.75)),
+        "p95": float(np.quantile(finite, 0.95)),
+        "max": float(np.max(finite)),
+        "mean": float(np.mean(finite)),
+    }
+
+
+def _metric_loss_1d(a: np.ndarray, b: np.ndarray, metric: str) -> float:
+    if a.shape != b.shape:
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] metric shape mismatch: {a.shape} vs {b.shape}"
+        )
+    diff = np.asarray(a - b, dtype=np.float64)
+    if metric == "z_mse":
+        return float(np.mean(diff * diff))
+    if metric == "z_l1":
+        return float(np.mean(np.abs(diff)))
+    raise FailFastError(
+        f"[walk_f_causal_state_probe] unknown Layer C distance_metric={metric!r}; "
+        f"supported={list(LAYER_C_DISTANCE_METRICS)}"
+    )
+
+
+def _metric_loss_rows(query: np.ndarray, candidates: np.ndarray, metric: str) -> np.ndarray:
+    if candidates.ndim != 2 or query.ndim != 1 or candidates.shape[1] != query.shape[0]:
+        raise FailFastError(
+            "[walk_f_causal_state_probe] row metric shape mismatch: "
+            f"query={query.shape} candidates={candidates.shape}"
+        )
+    diff = candidates - query.reshape(1, -1)
+    if metric == "z_mse":
+        return np.mean(diff * diff, axis=1)
+    if metric == "z_l1":
+        return np.mean(np.abs(diff), axis=1)
+    raise FailFastError(
+        f"[walk_f_causal_state_probe] unknown Layer C distance_metric={metric!r}; "
+        f"supported={list(LAYER_C_DISTANCE_METRICS)}"
+    )
+
+
+def _build_layer_c_group_matrix(
+    *,
+    group_name: str,
+    group_def: dict[str, Any],
+    channel_arrays: dict[str, np.ndarray],
+) -> dict[str, Any]:
+    """Return robust-normalized Walk_F channel matrix for one Layer C group.
+
+    Output ``z_matrix`` is float64 CPU numpy with shape ``(T, C_active)``.
+    Channels with non-finite values or MAD at/below the estimator epsilon are
+    excluded from the active matrix and reported explicitly.
+    """
+    epsilon = float(group_def["epsilon_mad"])
+    active_names: list[str] = []
+    excluded: list[dict[str, Any]] = []
+    stats_by_channel: dict[str, Any] = {}
+    z_cols: list[np.ndarray] = []
+    n_frames: int | None = None
+
+    for channel_name in group_def["channels"]:
+        if channel_name not in channel_arrays:
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] Layer C channel {channel_name!r} "
+                f"missing for group {group_name!r}; refusing silent skip."
+            )
+        arr = np.asarray(channel_arrays[channel_name], dtype=np.float64)
+        if arr.ndim != 1:
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] Layer C channel {channel_name!r} "
+                f"shape must be (T,), got {arr.shape}."
+            )
+        if n_frames is None:
+            n_frames = int(arr.shape[0])
+        elif int(arr.shape[0]) != n_frames:
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] Layer C channel length mismatch in "
+                f"group {group_name!r}: expected {n_frames}, got {arr.shape[0]} "
+                f"for {channel_name!r}."
+            )
+
+        stats = _compute_channel_scale(arr)
+        mad = stats["mad"]
+        robust_std = stats["robust_std_from_mad"]
+        stats_by_channel[channel_name] = {
+            **stats,
+            "epsilon_mad_estimator_only": epsilon,
+        }
+
+        if not stats["all_finite"]:
+            excluded.append(
+                {
+                    "channel": channel_name,
+                    "reason": "non_finite_values",
+                    "mad": mad,
+                    "robust_std_from_mad": robust_std,
+                }
+            )
+            continue
+        if mad is None or robust_std is None or mad <= epsilon or robust_std <= 0.0:
+            excluded.append(
+                {
+                    "channel": channel_name,
+                    "reason": "reference_degenerate_by_mad",
+                    "mad": mad,
+                    "robust_std_from_mad": robust_std,
+                }
+            )
+            continue
+
+        median = float(stats["median"])
+        scale = float(robust_std)
+        z_cols.append(((arr - median) / scale).astype(np.float64))
+        active_names.append(channel_name)
+
+    if n_frames is None:
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer C group {group_name!r} has no channels."
+        )
+
+    if z_cols:
+        z_matrix = np.stack(z_cols, axis=1).astype(np.float64)
+    else:
+        z_matrix = np.zeros((n_frames, 0), dtype=np.float64)
+
+    return {
+        "group": group_name,
+        "z_matrix": z_matrix,
+        "active_channels": active_names,
+        "excluded_channels": excluded,
+        "channel_scale": stats_by_channel,
+        "reference_degenerate": bool(len(active_names) == 0),
+        "source": group_def["source"],
+        "group_ablation_role": group_def["group_ablation_role"],
+    }
+
+
+def _build_phase_windows(
+    z_matrix: np.ndarray,
+    history_window_frames: int,
+    future_horizon_frames: int,
+) -> dict[str, Any]:
+    if z_matrix.ndim != 2:
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer C z_matrix must be (T, C), got {z_matrix.shape}."
+        )
+    t_frames = list(
+        range(
+            int(history_window_frames) - 1,
+            int(z_matrix.shape[0]) - int(future_horizon_frames),
+        )
+    )
+    if not t_frames:
+        return {
+            "phase_frames": np.asarray([], dtype=np.int64),
+            "history_windows": np.zeros((0, 0), dtype=np.float64),
+            "future_windows": np.zeros((0, 0), dtype=np.float64),
+        }
+
+    history_rows: list[np.ndarray] = []
+    future_rows: list[np.ndarray] = []
+    for t in t_frames:
+        hist = z_matrix[t - history_window_frames + 1 : t + 1]
+        fut = z_matrix[t + 1 : t + future_horizon_frames + 1]
+        history_rows.append(hist.reshape(-1))
+        future_rows.append(fut.reshape(-1))
+
+    return {
+        "phase_frames": np.asarray(t_frames, dtype=np.int64),
+        "history_windows": np.stack(history_rows, axis=0).astype(np.float64),
+        "future_windows": np.stack(future_rows, axis=0).astype(np.float64),
+    }
+
+
+def _run_layer_c_config(
+    *,
+    z_matrix: np.ndarray,
+    history_window_frames: int,
+    future_horizon_frames: int,
+    neighborhood_radius_frames: int,
+    distance_metric: str,
+) -> dict[str, Any]:
+    windows = _build_phase_windows(
+        z_matrix,
+        history_window_frames=history_window_frames,
+        future_horizon_frames=future_horizon_frames,
+    )
+    phase_frames: np.ndarray = windows["phase_frames"]
+    history_windows: np.ndarray = windows["history_windows"]
+    future_windows: np.ndarray = windows["future_windows"]
+    candidate_count = int(phase_frames.shape[0])
+    if candidate_count == 0:
+        raise FailFastError(
+            "[walk_f_causal_state_probe] Layer C produced no valid phase "
+            f"candidates for H={history_window_frames}, F={future_horizon_frames}; "
+            "the fixed grid is incompatible with the reference clip."
+        )
+
+    phase_losses: list[float] = []
+    agnostic_losses: list[float] = []
+    relative_improvements: list[float] = []
+    loss_percentiles: list[float] = []
+    confidence_gaps: list[float] = []
+    phase_hat_frames: list[int] = []
+    matched_offsets: list[int] = []
+    loss_curve: list[dict[str, Any]] = []
+    loss_percentile_curve: list[dict[str, Any]] = []
+    phase_confidence_gap_curve: list[dict[str, Any]] = []
+    skipped_queries: list[dict[str, Any]] = []
+
+    for query_i, t in enumerate(phase_frames):
+        nonlocal_mask = np.abs(phase_frames - int(t)) > int(neighborhood_radius_frames)
+        candidate_indices = np.nonzero(nonlocal_mask)[0]
+        if candidate_indices.size == 0:
+            skipped_queries.append(
+                {
+                    "query_frame": int(t),
+                    "reason": "no_nonlocal_candidates_after_neighborhood_exclusion",
+                }
+            )
+            continue
+
+        hist_q = history_windows[query_i]
+        fut_q = future_windows[query_i]
+        hist_candidates = history_windows[candidate_indices]
+        fut_candidates = future_windows[candidate_indices]
+
+        hist_distances = _metric_loss_rows(hist_q, hist_candidates, distance_metric)
+        order = np.argsort(hist_distances)
+        best_local = int(order[0])
+        best_candidate_index = int(candidate_indices[best_local])
+        best_phase_frame = int(phase_frames[best_candidate_index])
+        best_history_distance = float(hist_distances[best_local])
+        if order.shape[0] > 1:
+            second_history_distance = float(hist_distances[int(order[1])])
+            confidence_gap = float(second_history_distance - best_history_distance)
+            confidence_gaps.append(confidence_gap)
+        else:
+            second_history_distance = None
+            confidence_gap = None
+
+        phase_loss = _metric_loss_1d(
+            fut_q,
+            future_windows[best_candidate_index],
+            distance_metric,
+        )
+        baseline_future = np.median(fut_candidates, axis=0)
+        agnostic_loss = _metric_loss_1d(fut_q, baseline_future, distance_metric)
+        denom = max(abs(agnostic_loss), 1.0e-12)
+        rel_improvement = float((agnostic_loss - phase_loss) / denom)
+
+        candidate_future_losses = _metric_loss_rows(fut_q, fut_candidates, distance_metric)
+        percentile = float(np.mean(candidate_future_losses <= phase_loss) * 100.0)
+
+        phase_losses.append(float(phase_loss))
+        agnostic_losses.append(float(agnostic_loss))
+        relative_improvements.append(rel_improvement)
+        loss_percentiles.append(percentile)
+        phase_hat_frames.append(best_phase_frame)
+        matched_offsets.append(int(best_phase_frame - int(t)))
+
+        loss_curve.append(
+            {
+                "query_frame": int(t),
+                "matched_phase_frame": best_phase_frame,
+                "matched_phase_offset_frames": int(best_phase_frame - int(t)),
+                "phase_loss": float(phase_loss),
+                "phase_agnostic_loss": float(agnostic_loss),
+                "relative_improvement": rel_improvement,
+            }
+        )
+        loss_percentile_curve.append(
+            {
+                "query_frame": int(t),
+                "phase_loss_percentile_vs_nonlocal_candidate_futures": percentile,
+            }
+        )
+        phase_confidence_gap_curve.append(
+            {
+                "query_frame": int(t),
+                "matched_phase_frame": best_phase_frame,
+                "best_history_distance": best_history_distance,
+                "second_best_history_distance": second_history_distance,
+                "phase_confidence_gap": confidence_gap,
+            }
+        )
+
+    valid_query_count = int(len(phase_losses))
+    valid_query_fraction = float(valid_query_count) / float(candidate_count)
+    median_improvement = (
+        float(np.median(np.asarray(relative_improvements, dtype=np.float64)))
+        if relative_improvements
+        else None
+    )
+    config_valid = (
+        valid_query_count >= LAYER_C_MIN_VALID_QUERY_COUNT
+        and valid_query_fraction >= LAYER_C_MIN_VALID_QUERY_FRACTION
+    )
+    beats_baseline = bool(
+        config_valid
+        and median_improvement is not None
+        and median_improvement > LAYER_C_IMPROVEMENT_TOL
+    )
+
+    if not config_valid:
+        config_status = "insufficient_valid_queries"
+    elif beats_baseline:
+        config_status = "phase_lookup_beats_phase_agnostic_baseline"
+    else:
+        config_status = "phase_lookup_does_not_beat_phase_agnostic_baseline"
+
+    return {
+        "history_window_frames": int(history_window_frames),
+        "future_horizon_frames": int(future_horizon_frames),
+        "neighborhood_radius_frames": int(neighborhood_radius_frames),
+        "distance_metric": distance_metric,
+        "valid_phase_candidate_count": candidate_count,
+        "valid_query_count": valid_query_count,
+        "valid_query_fraction": valid_query_fraction,
+        "min_valid_query_count_estimator_only": LAYER_C_MIN_VALID_QUERY_COUNT,
+        "min_valid_query_fraction_estimator_only": LAYER_C_MIN_VALID_QUERY_FRACTION,
+        "config_status": config_status,
+        "beats_phase_agnostic_baseline": beats_baseline,
+        "median_relative_improvement": median_improvement,
+        "phase_loss_quantiles": _quantile_summary(phase_losses),
+        "phase_agnostic_loss_quantiles": _quantile_summary(agnostic_losses),
+        "relative_improvement_quantiles": _quantile_summary(relative_improvements),
+        "loss_percentile_quantiles": _quantile_summary(loss_percentiles),
+        "phase_confidence_gap_quantiles": _quantile_summary(confidence_gaps),
+        "phase_hat_curve_summary": {
+            "matched_phase_frame_quantiles": _quantile_summary(phase_hat_frames),
+            "matched_phase_offset_frame_quantiles": _quantile_summary(matched_offsets),
+            "unique_matched_phase_frame_count": int(len(set(phase_hat_frames))),
+        },
+        "loss_curve": loss_curve,
+        "loss_percentile_curve": loss_percentile_curve,
+        "phase_confidence_gap": phase_confidence_gap_curve,
+        "skipped_queries": skipped_queries,
+    }
+
+
+def _summarise_layer_c_group(
+    *,
+    group_payload: dict[str, Any],
+    config_results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    reference_degenerate = bool(group_payload["reference_degenerate"])
+    active_channels = list(group_payload["active_channels"])
+
+    if reference_degenerate:
+        phase_structure_status = "phase_degenerate"
+        evidence_status = "INSUFFICIENT_EVIDENCE"
+        self_consistency_signal_status = "not_testable_reference_degenerate"
+    else:
+        valid_configs = [c for c in config_results if c["valid_query_count"] > 0]
+        beat_flags = [bool(c["beats_phase_agnostic_baseline"]) for c in config_results]
+        all_configs_valid = all(
+            c["config_status"] != "insufficient_valid_queries" for c in config_results
+        )
+        if not valid_configs or not all_configs_valid:
+            self_consistency_signal_status = "insufficient_valid_queries_across_grid"
+        elif all(beat_flags):
+            self_consistency_signal_status = (
+                "consistent_signal_detected_single_trajectory_only"
+            )
+        elif any(beat_flags):
+            self_consistency_signal_status = (
+                "mixed_across_estimator_grid_expected_single_trajectory_limitation"
+            )
+        else:
+            self_consistency_signal_status = "no_phase_lookup_advantage_detected"
+        phase_structure_status = "insufficient_evidence"
+        evidence_status = "INSUFFICIENT_EVIDENCE"
+
+    phase_medians = [
+        c["phase_loss_quantiles"]["p50"]
+        for c in config_results
+        if c["phase_loss_quantiles"]["p50"] is not None
+    ]
+    agnostic_medians = [
+        c["phase_agnostic_loss_quantiles"]["p50"]
+        for c in config_results
+        if c["phase_agnostic_loss_quantiles"]["p50"] is not None
+    ]
+    improvement_medians = [
+        c["median_relative_improvement"]
+        for c in config_results
+        if c["median_relative_improvement"] is not None
+    ]
+
+    return {
+        "phase_structure_status": phase_structure_status,
+        "evidence_status": evidence_status,
+        "self_consistency_signal_status": self_consistency_signal_status,
+        "reference_degenerate": reference_degenerate,
+        "active_channels": active_channels,
+        "excluded_channels": group_payload["excluded_channels"],
+        "channel_scale": group_payload["channel_scale"],
+        "source": group_payload["source"],
+        "group_ablation_role": group_payload["group_ablation_role"],
+        "config_results": config_results,
+        "baseline_loss_quantiles": _quantile_summary(agnostic_medians),
+        "loss_curve_summary": {
+            "phase_loss_median_across_configs": _quantile_summary(phase_medians),
+            "phase_agnostic_loss_median_across_configs": _quantile_summary(agnostic_medians),
+            "median_relative_improvement_across_configs": _quantile_summary(
+                improvement_medians
+            ),
+        },
+        "phase_hat_curve_summary": {
+            "unique_matched_phase_frame_count_by_config": [
+                c["phase_hat_curve_summary"]["unique_matched_phase_frame_count"]
+                for c in config_results
+            ],
+        },
+    }
+
+
+def _process_clip_phase_library_check(
+    clip_info: dict[str, Any],
+    contact_signals: dict[str, np.ndarray],
+) -> dict[str, Any]:
+    yaw_rad: np.ndarray = clip_info["root_yaw_rad"]
+    pos_xy: np.ndarray = clip_info["root_pos_xy_m"]
+    vel_xy: np.ndarray = clip_info["root_vel_xy_mps"]
+    fps: float = clip_info["fps"]
+
+    quotient = _canonical_quotient_features(yaw_rad, pos_xy, vel_xy, fps)
+    channel_arrays = _extract_layer_b_channels(quotient, contact_signals)
+
+    per_group: dict[str, Any] = {}
+    for group_name, group_def in LAYER_C_FEATURE_GROUPS.items():
+        group_payload = _build_layer_c_group_matrix(
+            group_name=group_name,
+            group_def=group_def,
+            channel_arrays=channel_arrays,
+        )
+        config_results: list[dict[str, Any]] = []
+        if not group_payload["reference_degenerate"]:
+            z_matrix: np.ndarray = group_payload["z_matrix"]
+            for history_window_frames in LAYER_C_HISTORY_WINDOW_FRAMES:
+                for future_horizon_frames in LAYER_C_FUTURE_HORIZON_FRAMES:
+                    for neighborhood_radius_frames in LAYER_C_NEIGHBORHOOD_RADIUS_FRAMES:
+                        for distance_metric in LAYER_C_DISTANCE_METRICS:
+                            config_results.append(
+                                _run_layer_c_config(
+                                    z_matrix=z_matrix,
+                                    history_window_frames=history_window_frames,
+                                    future_horizon_frames=future_horizon_frames,
+                                    neighborhood_radius_frames=neighborhood_radius_frames,
+                                    distance_metric=distance_metric,
+                                )
+                            )
+        per_group[group_name] = _summarise_layer_c_group(
+            group_payload=group_payload,
+            config_results=config_results,
+        )
+
+    return {
+        "clip": clip_info["clip"],
+        "raw_json_path": clip_info["raw_json_path"],
+        "fps": fps,
+        "frame_count": clip_info["frame_count"],
+        "track": TRACK_BY_MODE["phase_library_check"],
+        "track_role": TRACK_ROLE_BY_MODE["phase_library_check"],
+        "clip_role": "reference_clip",
+        "feature_groups_layer_c": per_group,
+        "excluded_feature_groups_layer_c": LAYER_C_EXCLUDED_FEATURE_GROUPS,
+        "membership_status": "not_implemented_layerC_minimal",
+        "query_boundary_status": "not_run_layerC_minimal_reserved_for_layerC1",
+    }
+
+
+def _build_internal_se2_precondition(
+    clip_infos: list[dict[str, Any]],
+) -> dict[str, Any]:
+    per_clip_gauge = [_process_clip_gauge_check(info) for info in clip_infos]
+    yaw_sanity = _build_yaw_invariance_sanity(per_clip_gauge)
+    translation_sanity = _build_translation_invariance_sanity(per_clip_gauge)
+    se2_sanity = _build_se2_gauge_sanity(
+        yaw_sanity,
+        translation_sanity,
+        per_clip_gauge,
+    )
+    return {
+        "status": se2_sanity["status"],
+        "source": "internal_lightweight_layerA_rerun_not_external_artifact",
+        "yaw_invariance_sanity": yaw_sanity,
+        "translation_invariance_sanity": translation_sanity,
+        "se2_gauge_sanity": se2_sanity,
+        "per_clip": [
+            {
+                "clip": entry["clip"],
+                "max_abs_error_over_rotation_grid": entry["max_abs_error_over_rotation_grid"],
+                "max_abs_error_over_translation_grid": entry["max_abs_error_over_translation_grid"],
+                "max_abs_error_over_se2_grid": entry["max_abs_error_over_se2_grid"],
+                "rotation_finite_coverage": entry["rotation_finite_coverage"],
+                "translation_finite_coverage": entry["translation_finite_coverage"],
+            }
+            for entry in per_clip_gauge
+        ],
+    }
+
+
+# -----------------------------------------------------------------------
 # Artifact writers
 # -----------------------------------------------------------------------
 
@@ -2154,6 +2747,286 @@ def _build_summary_reference_scale_check(
     return summary
 
 
+def _build_summary_phase_library_check(
+    raw_root: Path,
+    clips: list[str],
+    per_clip: list[dict[str, Any]],
+    per_clip_paths: list[str],
+    internal_se2_precondition: dict[str, Any],
+) -> dict[str, Any]:
+    """Layer C minimal summary: Walk_F-only phase-library self-consistency.
+
+    This intentionally does not include query leave/return boundary fields.
+    Those require membership boundary/censoring semantics and are reserved for
+    Layer C.1 by the Layer C minimal contract.
+    """
+    if clips != REFERENCE_FAMILY:
+        raise FailFastError(
+            "[walk_f_causal_state_probe] phase_library_check summary requires "
+            f"clips exactly {REFERENCE_FAMILY}, got {clips!r}."
+        )
+    if len(per_clip) != 1 or per_clip[0]["clip"] != REFERENCE_FAMILY[0]:
+        raise FailFastError(
+            "[walk_f_causal_state_probe] phase_library_check summary received "
+            "non-Walk_F per_clip payload; refusing to emit a mixed-reference artifact."
+        )
+
+    entry = per_clip[0]
+    feature_groups = entry["feature_groups_layer_c"]
+
+    phase_status_summary: dict[str, Any] = {}
+    compact_feature_groups: dict[str, Any] = {}
+    insufficient: list[dict[str, Any]] = []
+    for group_name, group_payload in feature_groups.items():
+        phase_status_summary[group_name] = {
+            "phase_structure_status": group_payload["phase_structure_status"],
+            "evidence_status": group_payload["evidence_status"],
+            "self_consistency_signal_status": group_payload[
+                "self_consistency_signal_status"
+            ],
+            "reference_degenerate": group_payload["reference_degenerate"],
+            "active_channels": group_payload["active_channels"],
+            "excluded_channel_count": len(group_payload["excluded_channels"]),
+            "config_count": len(group_payload["config_results"]),
+            "configs_beating_baseline_count": int(
+                sum(
+                    bool(c["beats_phase_agnostic_baseline"])
+                    for c in group_payload["config_results"]
+                )
+            ),
+            "group_ablation_role": group_payload["group_ablation_role"],
+        }
+        compact_feature_groups[group_name] = {
+            "phase_structure_status": group_payload["phase_structure_status"],
+            "evidence_status": group_payload["evidence_status"],
+            "self_consistency_signal_status": group_payload[
+                "self_consistency_signal_status"
+            ],
+            "reference_degenerate": group_payload["reference_degenerate"],
+            "active_channels": group_payload["active_channels"],
+            "excluded_channels": group_payload["excluded_channels"],
+            "group_ablation_role": group_payload["group_ablation_role"],
+            "baseline_loss_quantiles": group_payload["baseline_loss_quantiles"],
+            "loss_curve_summary": group_payload["loss_curve_summary"],
+            "phase_hat_curve_summary": group_payload["phase_hat_curve_summary"],
+            "config_results_summary": [
+                {
+                    "history_window_frames": c["history_window_frames"],
+                    "future_horizon_frames": c["future_horizon_frames"],
+                    "neighborhood_radius_frames": c["neighborhood_radius_frames"],
+                    "distance_metric": c["distance_metric"],
+                    "valid_phase_candidate_count": c["valid_phase_candidate_count"],
+                    "valid_query_count": c["valid_query_count"],
+                    "valid_query_fraction": c["valid_query_fraction"],
+                    "config_status": c["config_status"],
+                    "beats_phase_agnostic_baseline": c[
+                        "beats_phase_agnostic_baseline"
+                    ],
+                    "median_relative_improvement": c[
+                        "median_relative_improvement"
+                    ],
+                    "phase_loss_quantiles": c["phase_loss_quantiles"],
+                    "phase_agnostic_loss_quantiles": c[
+                        "phase_agnostic_loss_quantiles"
+                    ],
+                }
+                for c in group_payload["config_results"]
+            ],
+            "full_curve_artifact_path": per_clip_paths[0],
+        }
+        if group_payload["evidence_status"] == "INSUFFICIENT_EVIDENCE":
+            insufficient.append(
+                {
+                    "clip": REFERENCE_FAMILY[0],
+                    "where": f"feature_groups_layer_c.{group_name}.phase_structure_status",
+                    "status": "INSUFFICIENT_EVIDENCE",
+                    "phase_structure_status": group_payload["phase_structure_status"],
+                    "reason": (
+                        "Layer C minimal is a Walk_F single-trajectory "
+                        "self-consistency audit. INSUFFICIENT_EVIDENCE is an "
+                        "expected contract-pass result when the estimator grid "
+                        "is mixed, the group is degenerate, or valid nonlocal "
+                        "candidates are insufficient."
+                    ),
+                }
+            )
+
+    insufficient.extend(
+        [
+            {
+                "clip": None,
+                "where": "class_level_attractor_claim",
+                "status": "INSUFFICIENT_EVIDENCE",
+                "reason": (
+                    "Walk_F is still one 88-frame trajectory. Layer C minimal "
+                    "does not establish class-level recurrence."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "query_leave_return_boundary",
+                "status": "not_run_layerC_minimal_reserved_for_layerC1",
+                "reason": (
+                    "leave_interval / return_interval / censoring fields require "
+                    "query phase lookup and membership boundary logic; omitted "
+                    "from Layer C minimal by contract."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "event_head_target_status",
+                "status": "not_emitted_by_this_tool",
+                "reason": (
+                    "Layer C minimal is read-only and produces no EventHead "
+                    "target, no handoff_ready, no transition_done."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "transition_truth_promotion",
+                "status": "forbidden_by_contract",
+                "reason": (
+                    "Phase-library self-consistency MUST NOT be promoted to "
+                    "transition truth or runtime switching behavior."
+                ),
+            },
+        ]
+    )
+
+    summary = _common_summary_root(
+        "phase_library_check",
+        raw_root,
+        clips,
+        per_clip_paths,
+    )
+    summary.update(
+        {
+            "definition_layer": {
+                "attractor_definition_status": "not_implemented_layerC_minimal",
+                "causal_state_definition_status": "not_implemented_layerC_minimal",
+                "current_reference_family": REFERENCE_FAMILY,
+                "membership_evidence_status": "not_implemented_layerC_minimal",
+                "scope_caveat": (
+                    "Walk_F is a single 88-frame trajectory. Layer C minimal "
+                    "checks intra-trajectory phase-library self-consistency "
+                    "only; class-level recurrence and attractor membership "
+                    "remain INSUFFICIENT_EVIDENCE."
+                ),
+            },
+            "layer": "Layer C minimal",
+            "layer_c_contract_doc": (
+                "docs/aperiodic_transition/"
+                "2026-05-23_walk_f_causal_state_layerc_minimal_contract.md"
+            ),
+            "layer_c_contract_status": "pass",
+            "expected_insufficient_evidence_is_contract_pass": True,
+            "reference_family": REFERENCE_FAMILY,
+            "reference_clip_names_resolved": [REFERENCE_FAMILY[0]],
+            "query_clip_names": [],
+            "input_clip_policy": "clips_must_equal_reference_family_walk_f_only",
+            "internal_se2_gauge_precondition": internal_se2_precondition,
+            "estimation_grid": {
+                "history_window_frames": list(LAYER_C_HISTORY_WINDOW_FRAMES),
+                "future_horizon_frames": list(LAYER_C_FUTURE_HORIZON_FRAMES),
+                "neighborhood_radius_frames": list(
+                    LAYER_C_NEIGHBORHOOD_RADIUS_FRAMES
+                ),
+                "distance_metric": list(LAYER_C_DISTANCE_METRICS),
+                "grid_point_count": int(
+                    len(LAYER_C_HISTORY_WINDOW_FRAMES)
+                    * len(LAYER_C_FUTURE_HORIZON_FRAMES)
+                    * len(LAYER_C_NEIGHBORHOOD_RADIUS_FRAMES)
+                    * len(LAYER_C_DISTANCE_METRICS)
+                ),
+                "min_valid_query_count_estimator_only": LAYER_C_MIN_VALID_QUERY_COUNT,
+                "min_valid_query_fraction_estimator_only": (
+                    LAYER_C_MIN_VALID_QUERY_FRACTION
+                ),
+                "improvement_tol_estimator_only": LAYER_C_IMPROVEMENT_TOL,
+                "note": (
+                    "All grid points are reported. A single successful setting "
+                    "is not sufficient; mixed results remain "
+                    "INSUFFICIENT_EVIDENCE."
+                ),
+            },
+            "included_feature_groups": list(LAYER_C_FEATURE_GROUPS.keys()),
+            "excluded_feature_groups": LAYER_C_EXCLUDED_FEATURE_GROUPS,
+            "phase_structure_status_per_group": phase_status_summary,
+            "self_consistency_signal_per_group": {
+                group_name: {
+                    "self_consistency_signal_status": payload[
+                        "self_consistency_signal_status"
+                    ],
+                    "loss_curve_summary": payload["loss_curve_summary"],
+                    "phase_hat_curve_summary": payload["phase_hat_curve_summary"],
+                }
+                for group_name, payload in feature_groups.items()
+            },
+            "walk_f_leave_one_neighborhood_baseline": {
+                "clip": REFERENCE_FAMILY[0],
+                "baseline_type": (
+                    "phase_agnostic_median_future_from_same_nonlocal_candidate_set"
+                ),
+                "neighborhood_exclusion_rule": "abs(candidate_frame - query_frame) > radius",
+                "ill_conditioned_single_trajectory_caveat": (
+                    "Neighborhood radius choices trade off between too few "
+                    "independent candidates and local phase leakage."
+                ),
+            },
+            "feature_groups_layer_c": compact_feature_groups,
+            "full_curve_artifact_policy": (
+                "Root summary is compact. Full per-config loss_curve, "
+                "loss_percentile_curve, and phase_confidence_gap arrays are "
+                "stored in the per-clip artifact path."
+            ),
+            "per_clip": [
+                {
+                    "clip": entry["clip"],
+                    "clip_role": entry["clip_role"],
+                    "frame_count": entry["frame_count"],
+                    "fps": entry["fps"],
+                    "feature_groups_layer_c_detail_artifact_path": per_clip_paths[0],
+                    "phase_structure_status_per_group": phase_status_summary,
+                    "excluded_feature_groups_layer_c": entry[
+                        "excluded_feature_groups_layer_c"
+                    ],
+                    "membership_status": entry["membership_status"],
+                    "query_boundary_status": entry["query_boundary_status"],
+                }
+            ],
+            "sensitivity_summary": {
+                "history_window_sensitivity_status": "reported_full_grid",
+                "future_horizon_sensitivity_status": "reported_full_grid",
+                "neighborhood_radius_sensitivity_status": "reported_full_grid",
+                "distance_metric_sensitivity_status": "reported_full_grid",
+                "query_boundary_sensitivity_status": "not_run_layerC_minimal",
+            },
+            "causal_state_track_status": "self_consistency_only_layerC_minimal",
+            "quotient_definition_status": "internal_layerA_se2_precondition_passed",
+            "attractor_membership_status": "not_implemented_layerC_minimal",
+            "phase_library_status": "walk_f_self_consistency_only",
+            "predictive_loss_status": "walk_f_leave_one_neighborhood_self_test_only",
+            "query_leave_return_status": "not_run_layerC_minimal_reserved_for_layerC1",
+            "event_head_target_status": "not_emitted_by_this_tool",
+            "handoff_ready_status": "not_emitted_by_this_tool",
+            "transition_done_status": "not_emitted_by_this_tool",
+            "transition_truth_promotion": "forbidden_by_contract",
+            "insufficient_evidence": insufficient,
+            "notes": [
+                "Layer C minimal does not read external gauge_check artifacts; "
+                "it reruns a lightweight internal SE(2) sanity precondition.",
+                "INSUFFICIENT_EVIDENCE can be the expected contract-pass "
+                "result on the current 88-frame single Walk_F trajectory.",
+                "leave/return/censoring fields are intentionally absent and "
+                "reserved for Layer C.1.",
+                "turn_dyn is excluded from membership / phase evidence because "
+                "Layer B found it degenerate on Walk_F.",
+            ],
+        }
+    )
+    return summary
+
+
 # -----------------------------------------------------------------------
 # CLI dispatch
 # -----------------------------------------------------------------------
@@ -2189,9 +3062,10 @@ def main(argv: list[str] | None = None) -> int:
             "boundary + planar translation invariance); "
             "reference_scale_check (Layer B, Walk_F per-feature-group "
             "reference scale + degeneracy + contract-§6 "
-            "phase_structure_status enum). NONE of these modes estimate "
-            "causal-state membership, attractor membership, phase "
-            "library, predictive loss, or EventHead targets."
+            "phase_structure_status enum); phase_library_check (Layer C "
+            "minimal, Walk_F-only leave-one-neighborhood self-consistency). "
+            "NONE of these modes estimate attractor membership, query "
+            "leave/return boundaries, or EventHead targets."
         ),
     )
     parser.add_argument(
@@ -2199,7 +3073,7 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         type=str,
         help=(
-            "yaw_debug | gauge_check | reference_scale_check. "
+            "yaw_debug | gauge_check | reference_scale_check | phase_library_check. "
             "Unknown mode -> fail-fast (docs/removal_policy.md §3-§4)."
         ),
     )
@@ -2248,6 +3122,25 @@ def main(argv: list[str] | None = None) -> int:
                 "No silent INSUFFICIENT_EVIDENCE fallback by §1.1 + "
                 "docs/removal_policy.md §3-§4."
             )
+    if mode == "phase_library_check":
+        if args.clips != REFERENCE_FAMILY:
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] --mode phase_library_check "
+                f"requires --clips exactly {REFERENCE_FAMILY}; got {args.clips!r}. "
+                "Layer C minimal is Walk_F self-consistency only. Query "
+                "leave/return/censoring clips are reserved for Layer C.1; no "
+                "silent membership-boundary expansion is allowed."
+            )
+        internal_se2_precondition = _build_internal_se2_precondition(clip_infos)
+        if internal_se2_precondition["status"] != "pass":
+            raise FailFastError(
+                "[walk_f_causal_state_probe] --mode phase_library_check internal "
+                "SE(2) gauge precondition did not pass; refusing to run Layer C "
+                "self-consistency because quotient invariance is a prerequisite. "
+                f"status={internal_se2_precondition['status']!r}"
+            )
+    else:
+        internal_se2_precondition = None
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2278,6 +3171,31 @@ def main(argv: list[str] | None = None) -> int:
         per_clip_paths = _write_per_clip(args.out_dir, per_clip, "reference_scale_check")
         summary = _build_summary_reference_scale_check(
             args.raw_root, args.clips, per_clip, per_clip_paths
+        )
+    elif mode == "phase_library_check":
+        contact_by_clip = {
+            info["clip"]: _load_clip_contact_signals(args.raw_root, info["clip"])
+            for info in clip_infos
+        }
+        per_clip = [
+            _process_clip_phase_library_check(
+                info,
+                contact_by_clip[info["clip"]],
+            )
+            for info in clip_infos
+        ]
+        per_clip_paths = _write_per_clip(args.out_dir, per_clip, "phase_library_check")
+        if internal_se2_precondition is None:
+            raise FailFastError(
+                "[walk_f_causal_state_probe] internal SE(2) precondition missing "
+                "for phase_library_check; refusing to emit artifact."
+            )
+        summary = _build_summary_phase_library_check(
+            args.raw_root,
+            args.clips,
+            per_clip,
+            per_clip_paths,
+            internal_se2_precondition,
         )
     else:
         # Unreachable; _validate_mode already raises. Kept as defense in depth.
@@ -2326,6 +3244,32 @@ def main(argv: list[str] | None = None) -> int:
                 f"[walk_f_causal_state_probe] clip={entry['clip']} "
                 f"frames={entry['frame_count']} "
                 f"role={entry['clip_role']}"
+            )
+    elif mode == "phase_library_check":
+        print(
+            f"[walk_f_causal_state_probe] reference_family={REFERENCE_FAMILY} "
+            f"reference_clip_names_resolved={summary['reference_clip_names_resolved']} "
+            f"query_clip_names={summary['query_clip_names']} "
+            f"layer_c_contract_status={summary['layer_c_contract_status']} "
+            "expected_insufficient_evidence_is_contract_pass="
+            f"{summary['expected_insufficient_evidence_is_contract_pass']}"
+        )
+        print(
+            f"[walk_f_causal_state_probe] internal_se2_precondition="
+            f"{summary['internal_se2_gauge_precondition']['status']} "
+            f"max_abs_error_overall="
+            f"{summary['internal_se2_gauge_precondition']['se2_gauge_sanity']['max_abs_error_overall']:.3e}"
+        )
+        for name, st in summary["phase_structure_status_per_group"].items():
+            print(
+                f"[walk_f_causal_state_probe] group={name} "
+                f"phase_structure_status={st['phase_structure_status']} "
+                f"evidence_status={st['evidence_status']} "
+                f"self_consistency_signal_status={st['self_consistency_signal_status']} "
+                f"configs_beating_baseline={st['configs_beating_baseline_count']}/"
+                f"{st['config_count']} "
+                f"reference_degenerate={st['reference_degenerate']} "
+                f"active_channels={st['active_channels']}"
             )
     else:
         print(
