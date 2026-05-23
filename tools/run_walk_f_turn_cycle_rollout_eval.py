@@ -13,7 +13,6 @@ import argparse
 import json
 import math
 import os
-import statistics
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -305,35 +304,6 @@ def _c1_clip_artifact(summary_payload: dict[str, Any], clip: str) -> Path:
     raise PilotError(f"Cannot resolve C.1 per-clip artifact path for clip={clip}")
 
 
-def _band_thresholds_from_c1(c1_clip_payload: dict[str, Any]) -> dict[str, float]:
-    out: dict[str, float] = {}
-    groups = c1_clip_payload.get("feature_groups_layer_c1", {})
-    for group_name, payload in groups.items():
-        cfgs = payload.get("configs", [])
-        vals: list[float] = []
-        for cfg in cfgs:
-            v = cfg.get("band_quantile_value")
-            if isinstance(v, (int, float)) and math.isfinite(float(v)):
-                vals.append(float(v))
-        if vals:
-            out[group_name] = float(statistics.median(vals))
-    return out
-
-
-def _band_metrics_from_curve(curve: np.ndarray, thresholds: dict[str, float]) -> tuple[dict[str, float], dict[str, int], dict[str, float]]:
-    rates: dict[str, float] = {}
-    counts: dict[str, int] = {}
-    return_like: dict[str, float] = {}
-    for group_name, thr in thresholds.items():
-        vio = curve > float(thr)
-        cnt = int(np.sum(vio))
-        rate = float(cnt / max(1, curve.size))
-        rates[group_name] = rate
-        counts[group_name] = cnt
-        return_like[group_name] = float(1.0 - rate)
-    return rates, counts, return_like
-
-
 def _collect_c1_neighborhood_direction(c1_clip_payload: dict[str, Any], phase_start: int, horizon: int) -> dict[str, dict[str, float]]:
     out: dict[str, dict[str, float]] = {}
     groups = c1_clip_payload.get("feature_groups_layer_c1", {})
@@ -375,7 +345,6 @@ def _classify_failure(rows: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
     drift_flags = []
     carry_early = []
     teacher_turn_means = []
-    blind_flags = []
     ambiguity_flags = []
 
     for row in valid_rows:
@@ -391,22 +360,10 @@ def _classify_failure(rows: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
         if row["clip_role"] == "turn_query":
             teacher_turn_means.append(float(t["mean"]))
 
-        teacher_band = row["band_violation_rate_by_group"]["teacher"]
-        freerun_band = row["band_violation_rate_by_group"]["free_run"]
-        if teacher_band and freerun_band:
-            deltas = [abs(float(freerun_band[g]) - float(teacher_band.get(g, 0.0))) for g in freerun_band.keys()]
-            blind_flags.append(bool(np.mean(deltas) <= 0.05 and ratio <= 1.15))
-
-        # ambiguity criterion part-1: std/mean > 0.5 over phase_start grid (row-level proxy uses group spread)
-        rl = row["return_like_rate_by_group"]["free_run"]
-        vals = [float(v) for v in rl.values() if isinstance(v, (int, float)) and math.isfinite(float(v))]
-        part1 = False
-        if vals:
-            m = float(np.mean(vals))
-            if abs(m) > 1e-8:
-                part1 = bool((float(np.std(vals)) / abs(m)) > 0.5)
-
-        # ambiguity criterion part-2: C.1 two-neighborhood slope directions conflict
+        # ambiguity proxy: C.1 two-neighborhood slope directions conflict.
+        # NOTE: true std/mean return-rate criterion is deferred until same-scale
+        # band primitive recomputation is implemented.
+        part1 = True
         part2 = False
         neigh = row.get("c1_neighborhood_direction", {})
         for g, d in neigh.items():
@@ -437,17 +394,12 @@ def _classify_failure(rows: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
         if t_mean >= 0.05:
             return "TRAINING_MECHANISM_FAIL.CAPACITY", {"turn_teacher_mean": t_mean}
 
-    blind_rate = float(np.mean(np.asarray(blind_flags, dtype=np.float64))) if blind_flags else 0.0
-    if blind_rate >= 0.6:
-        return "TRAINING_MECHANISM_FAIL.OBJECTIVE_BLIND_TO_BAND", {"blind_rate": blind_rate}
-
     ambiguous_rate = float(np.mean(np.asarray(ambiguity_flags, dtype=np.float64))) if ambiguity_flags else 0.0
     if ambiguous_rate >= 0.5:
         return "DATA_INSUFFICIENT_OR_AMBIGUOUS", {"ambiguous_rate": ambiguous_rate}
 
     return "PROMISING_IN_FAMILY", {
         "drift_rate": drift_rate,
-        "blind_rate": blind_rate,
         "ambiguous_rate": ambiguous_rate,
     }
 
@@ -470,6 +422,11 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--turn-phase-start-policy", type=str, default="locked", choices=("locked", "zero_only"))
     ap.add_argument("--horizon", type=int, default=LOCKED_HORIZON)
     ap.add_argument("--skip-rollouts", action="store_true", help="Do not rerun rollouts; require existing rollout artifacts.")
+    ap.add_argument(
+        "--baseline-strict-valid-rows",
+        action="store_true",
+        help="Fail with non-zero exit when valid_rows == 0 (recommended for baseline runs).",
+    )
     ap.add_argument("--c1-summary", type=str, default=str(LOCKED_C1_SUMMARY_PATH))
     ap.add_argument("--c2-summary", type=str, default=str(LOCKED_C2_SUMMARY_PATH))
     return ap.parse_args()
@@ -585,6 +542,7 @@ def main() -> int:
             "runtime_arbiter_switch_changes": "forbidden",
         },
         "rollout_commands": [],
+        "rollout_failures": [],
     }
 
     if not args.skip_rollouts:
@@ -613,20 +571,44 @@ def main() -> int:
                 device=args.device,
             )
 
-            teacher_proc = _run_cmd(teacher_cmd, repo_root)
+            teacher_proc = None
+            teacher_cmd_error = None
+            try:
+                teacher_proc = _run_cmd(teacher_cmd, repo_root)
+            except PilotError as ex:
+                teacher_cmd_error = str(ex)
             teacher_artifact = _teacher_json_path(teacher_out, clip)
-            if not teacher_artifact.is_file():
-                raise PilotError(
-                    "Teacher rollout command returned success but artifact missing: "
-                    f"{teacher_artifact}\n--- stdout ---\n{teacher_proc.stdout}\n--- stderr ---\n{teacher_proc.stderr}"
+            if teacher_cmd_error is not None or not teacher_artifact.is_file():
+                run_manifest["rollout_failures"].append(
+                    {
+                        "clip": clip,
+                        "stage": "teacher",
+                        "artifact_path": str(teacher_artifact),
+                        "error": teacher_cmd_error,
+                        "artifact_missing": not teacher_artifact.is_file(),
+                        "stdout": None if teacher_proc is None else teacher_proc.stdout,
+                        "stderr": None if teacher_proc is None else teacher_proc.stderr,
+                    }
                 )
 
-            freerun_proc = _run_cmd(freerun_cmd, repo_root)
+            freerun_proc = None
+            freerun_cmd_error = None
+            try:
+                freerun_proc = _run_cmd(freerun_cmd, repo_root)
+            except PilotError as ex:
+                freerun_cmd_error = str(ex)
             freerun_artifact = _freerun_json_path(freerun_out, clip)
-            if not freerun_artifact.is_file():
-                raise PilotError(
-                    "Free-run rollout command returned success but artifact missing: "
-                    f"{freerun_artifact}\n--- stdout ---\n{freerun_proc.stdout}\n--- stderr ---\n{freerun_proc.stderr}"
+            if freerun_cmd_error is not None or not freerun_artifact.is_file():
+                run_manifest["rollout_failures"].append(
+                    {
+                        "clip": clip,
+                        "stage": "free_run",
+                        "artifact_path": str(freerun_artifact),
+                        "error": freerun_cmd_error,
+                        "artifact_missing": not freerun_artifact.is_file(),
+                        "stdout": None if freerun_proc is None else freerun_proc.stdout,
+                        "stderr": None if freerun_proc is None else freerun_proc.stderr,
+                    }
                 )
             run_manifest["rollout_commands"].append(
                 {
@@ -643,8 +625,6 @@ def main() -> int:
     for clip in clips:
         c1_clip_path = _c1_clip_artifact(c1_summary, clip) if clip != REFERENCE_CLIP else None
         c1_clip_payload = _load_json(c1_clip_path) if c1_clip_path and c1_clip_path.is_file() else None
-        thresholds = _band_thresholds_from_c1(c1_clip_payload) if c1_clip_payload else {}
-
         teacher_path = _teacher_json_path(teacher_out, clip)
         freerun_path = _freerun_json_path(freerun_out, clip)
 
@@ -663,6 +643,16 @@ def main() -> int:
                 "clip_role": key.clip_role,
                 "teacher_artifact_path": str(teacher_path),
                 "free_run_artifact_path": str(freerun_path),
+                "teacher_loss_summary": None,
+                "free_run_loss_summary": None,
+                "band_violation_rate_by_group": "schema_unavailable_metric_scale_mismatch",
+                "out_of_band_frame_count_by_group": "schema_unavailable_metric_scale_mismatch",
+                "return_like_rate_by_group": "schema_unavailable_metric_scale_mismatch",
+                "band_metric_status": (
+                    "metric_scale_mismatch: C1 band_quantile_value is phase-loss scale, "
+                    "while current runner uses rollout loss proxies (teacher MSEnormY / free-run selected step metric)."
+                ),
+                "c1_neighborhood_direction": {},
                 "invalid_reason": None,
             }
 
@@ -699,8 +689,6 @@ def main() -> int:
                 t_stats = _curve_stats("MSEnormY", teacher_curve)
                 f_stats = _curve_stats(metric_key, free_curve)
 
-                t_band_rate, t_band_count, t_return_like = _band_metrics_from_curve(teacher_curve, thresholds)
-                f_band_rate, f_band_count, f_return_like = _band_metrics_from_curve(free_curve, thresholds)
                 neigh_dir = (
                     _collect_c1_neighborhood_direction(c1_clip_payload, key.phase_start, int(args.horizon))
                     if c1_clip_payload
@@ -711,18 +699,6 @@ def main() -> int:
                     {
                         "teacher_loss_summary": t_stats.to_dict(),
                         "free_run_loss_summary": f_stats.to_dict(),
-                        "band_violation_rate_by_group": {
-                            "teacher": t_band_rate,
-                            "free_run": f_band_rate,
-                        },
-                        "out_of_band_frame_count_by_group": {
-                            "teacher": t_band_count,
-                            "free_run": f_band_count,
-                        },
-                        "return_like_rate_by_group": {
-                            "teacher": t_return_like,
-                            "free_run": f_return_like,
-                        },
                         "c1_neighborhood_direction": neigh_dir,
                         "teacher_loss_window": [float(x) for x in teacher_curve.tolist()],
                         "free_run_loss_window": [float(x) for x in free_curve.tolist()],
@@ -739,6 +715,7 @@ def main() -> int:
         raise PilotError(f"unexpected verdict label: {verdict}")
 
     valid_rows = [r for r in rows if r.get("invalid_reason") is None]
+    baseline_blocked = bool(len(valid_rows) == 0)
     summary = {
         "tool": "run_walk_f_turn_cycle_rollout_eval",
         "run_name": str(args.run_name),
@@ -749,6 +726,7 @@ def main() -> int:
         "total_rows": int(len(rows)),
         "valid_rows": int(len(valid_rows)),
         "invalid_rows": int(len(invalid_rows)),
+        "baseline_blocked_no_valid_paired_rows": baseline_blocked,
         "failure_taxonomy_verdict": verdict,
         "failure_taxonomy_evidence": verdict_evidence,
         "frozen_sources": {
@@ -769,6 +747,7 @@ def main() -> int:
         "notes": [
             "Evaluator consumes C.1/C.2 raw primitives and does not use C.1 verdict status fields as labels.",
             "Teacher loss curve is tiled-cycle MSEnormY from teacher rollout artifact; free-run curve uses first usable metric from metrics_per_step.",
+            "Band/return-like metrics are schema_unavailable_metric_scale_mismatch until same-scale primitive recomputation is implemented.",
             "This pilot is offline rollout-eval only, not runtime arbiter/handoff/EventHead/attractor proof.",
         ],
     }
@@ -809,6 +788,11 @@ def main() -> int:
 
     print(f"[rollout-eval] out_dir={out_dir}")
     print(f"[rollout-eval] verdict={verdict} valid_rows={len(valid_rows)}/{len(rows)}")
+    if args.baseline_strict_valid_rows and baseline_blocked:
+        raise PilotError(
+            "baseline_blocked_no_valid_paired_rows: no valid paired teacher/free-run rows. "
+            "No compatible fixed checkpoint found for existing run_teacher_rollout + run_freerun_cycles pair under tested schema."
+        )
     return 0
 
 
