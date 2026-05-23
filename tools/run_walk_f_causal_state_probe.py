@@ -29,19 +29,22 @@ CONTRACT = "walk_f_causal_state_scaffold_v1"
 TOOL_NAME = "run_walk_f_causal_state_probe"
 REFERENCE_FAMILY = ["Walk_F"]
 
-SUPPORTED_MODES = ("yaw_debug", "gauge_check")
+SUPPORTED_MODES = ("yaw_debug", "gauge_check", "reference_scale_check")
 
 TRACK_BY_MODE = {
     "yaw_debug": "yaw_activity_debug",
     "gauge_check": "walk_f_causal_state_scaffold_prerequisite",
+    "reference_scale_check": "walk_f_reference_scale_and_degeneracy",
 }
 TRACK_ROLE_BY_MODE = {
     "yaw_debug": "debug_only_not_attractor_definition",
     "gauge_check": "gauge_sanity_prerequisite_not_attractor_definition",
+    "reference_scale_check": "reference_scale_and_degeneracy_prerequisite_not_membership",
 }
 SCOPE_BY_MODE = {
     "yaw_debug": "walk_turn_yaw_activity_descriptive_oracle",
     "gauge_check": "canonical_yaw_quotient_invariance_sanity",
+    "reference_scale_check": "walk_f_per_feature_group_reference_scale_and_degeneracy",
 }
 
 # yaw_debug constants -----------------------------------------------------
@@ -77,6 +80,56 @@ GAUGE_MAX_ABS_ERR_TOL = 1.0e-8
 # A frame-to-frame jump in the wrapped yaw signal larger than this is
 # treated as a wrap event for diagnostic purposes only.
 WRAP_JUMP_DETECT_RAD = math.pi
+
+# reference_scale_check (Layer B) constants -------------------------------
+# Per-group absolute MAD thresholds. Below this, the group is marked
+# `reference_degenerate=True` on Walk_F. These are estimator-level
+# numeric thresholds and are NOT contract definition; the artifact
+# always reports the actual MAD / std / ptp / mean_abs so a reviewer
+# can re-judge the threshold. Each group's unit is documented inline.
+FEATURE_GROUPS_LAYER_B: dict[str, dict[str, Any]] = {
+    "root_body": {
+        "channels": (
+            "body_root_pos_xy.x",
+            "body_root_pos_xy.y",
+            "body_root_vel_xy.x",
+            "body_root_vel_xy.y",
+        ),
+        "unit_label": "meters_or_meters_per_second",
+        "epsilon_mad": 1.0e-6,
+        "source": "canonical_quotient_feature_layer_a",
+    },
+    "turn_dyn": {
+        "channels": (
+            "yaw_rel_rad",
+            "yaw_rate_rad_per_s",
+        ),
+        "unit_label": "radians_or_radians_per_second",
+        "epsilon_mad": 1.0e-6,
+        "source": "canonical_quotient_feature_layer_a",
+    },
+    "contact": {
+        "channels": (
+            "foot_L_soft_contact_score",
+            "foot_R_soft_contact_score",
+        ),
+        "unit_label": "dimensionless_in_unit_interval",
+        "epsilon_mad": 1.0e-4,
+        "source": "raw_data_foot_evidence_soft_contact_score",
+    },
+}
+# Feature groups defined by §5.2 but intentionally not run at Layer B.
+# pose_dyn requires bone angular velocity summaries (processed_data/*.npz),
+# which would add a second data source dependency outside Layer B's scope.
+# pose_rel needs relative pose delta summaries with explicit avoidance of
+# raw-pose templating; deferred.
+NOT_RUN_FEATURE_GROUPS_LAYER_B = ("pose_dyn", "pose_rel")
+# Minimum frame count under which phase estimability is not even
+# considered; Walk_F currently has 88 frames so this is informational.
+MIN_FRAMES_FOR_PHASE_ESTIMABILITY = 4
+# MAD-to-Gaussian-equivalent-sigma constant; reported alongside raw MAD
+# so a reviewer can compare against a std baseline if they want to.
+MAD_TO_GAUSSIAN_SIGMA = 1.4826
 
 
 class FailFastError(RuntimeError):
@@ -230,6 +283,74 @@ def _load_clip(raw_root: Path, clip: str) -> dict[str, Any]:
         "root_yaw_rad": yaw_arr,           # (T,)
         "root_pos_xy_m": pos_arr,          # (T, 2)
         "root_vel_xy_mps": vel_arr,        # (T, 2)
+    }
+
+
+def _load_clip_contact_signals(
+    raw_root: Path,
+    clip: str,
+) -> dict[str, np.ndarray]:
+    """Read per-frame ``FootEvidence.{L,R}.soft_contact_score`` for one clip.
+
+    Returns ``{"foot_L_soft_contact_score": (T,), "foot_R_soft_contact_score": (T,)}``
+    as float64 CPU numpy arrays. Fail-fast on missing file, missing
+    ``Frames``, missing ``FootEvidence``, missing per-side
+    ``soft_contact_score``, non-scalar value, or non-finite value. The
+    contract (§5.2 contact group) names this field explicitly, so we
+    refuse to silently default it.
+    """
+    path = raw_root / f"{clip}.json"
+    if not path.is_file():
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] raw clip missing for contact load: "
+            f"{path}."
+        )
+    raw = json.loads(path.read_text())
+    if "Frames" not in raw or not isinstance(raw["Frames"], list) or len(raw["Frames"]) == 0:
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] clip {clip!r} missing non-empty Frames "
+            f"for contact load in {path}."
+        )
+    left: list[float] = []
+    right: list[float] = []
+    for i, frame in enumerate(raw["Frames"]):
+        if "FootEvidence" not in frame or not isinstance(frame["FootEvidence"], dict):
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] clip {clip!r} frame {i} missing "
+                f"FootEvidence dict (contract §5.2) in {path}."
+            )
+        ev = frame["FootEvidence"]
+        for side, bucket in (("L", left), ("R", right)):
+            if side not in ev or not isinstance(ev[side], dict):
+                raise FailFastError(
+                    f"[walk_f_causal_state_probe] clip {clip!r} frame {i} "
+                    f"missing FootEvidence.{side} dict in {path}."
+                )
+            side_ev = ev[side]
+            if "soft_contact_score" not in side_ev:
+                raise FailFastError(
+                    f"[walk_f_causal_state_probe] clip {clip!r} frame {i} "
+                    f"missing FootEvidence.{side}.soft_contact_score in {path}."
+                )
+            v = side_ev["soft_contact_score"]
+            if isinstance(v, (list, tuple)) or not isinstance(v, (int, float)):
+                raise FailFastError(
+                    f"[walk_f_causal_state_probe] clip {clip!r} frame {i} "
+                    f"FootEvidence.{side}.soft_contact_score is not scalar "
+                    f"(got {type(v).__name__}) in {path}."
+                )
+            bucket.append(float(v))
+
+    left_arr = np.asarray(left, dtype=np.float64)
+    right_arr = np.asarray(right, dtype=np.float64)
+    if not (np.all(np.isfinite(left_arr)) and np.all(np.isfinite(right_arr))):
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] clip {clip!r} contains non-finite "
+            f"soft_contact_score in {path}."
+        )
+    return {
+        "foot_L_soft_contact_score": left_arr,
+        "foot_R_soft_contact_score": right_arr,
     }
 
 
@@ -993,6 +1114,240 @@ def _build_se2_gauge_sanity(
 
 
 # -----------------------------------------------------------------------
+# reference_scale_check (Layer B) — reference scale + degeneracy
+# -----------------------------------------------------------------------
+
+
+def _compute_channel_scale(arr: np.ndarray) -> dict[str, Any]:
+    """Per-channel robust + classical scale summary.
+
+    Returns MAD (median absolute deviation), MAD-derived Gaussian-equivalent
+    sigma, classical std, peak-to-peak, mean(|x|), min/max, and finite
+    counts. Non-finite handling: every statistic is computed on the
+    finite mask; ``all_finite`` is reported separately so Layer B can
+    route the channel to ``INSUFFICIENT_EVIDENCE``.
+    """
+    arr = np.asarray(arr, dtype=np.float64)
+    n_total = int(arr.size)
+    finite_mask = np.isfinite(arr)
+    n_finite = int(finite_mask.sum())
+    if n_finite == 0:
+        return {
+            "n_values": n_total,
+            "n_finite": 0,
+            "all_finite": False,
+            "median": None,
+            "mad": None,
+            "robust_std_from_mad": None,
+            "std": None,
+            "ptp": None,
+            "mean_abs": None,
+            "min": None,
+            "max": None,
+        }
+    finite = arr[finite_mask]
+    median = float(np.median(finite))
+    mad = float(np.median(np.abs(finite - median)))
+    robust_std = float(mad * MAD_TO_GAUSSIAN_SIGMA)
+    classical_std = float(np.std(finite))
+    ptp = float(np.ptp(finite))
+    mean_abs = float(np.mean(np.abs(finite)))
+    return {
+        "n_values": n_total,
+        "n_finite": n_finite,
+        "all_finite": bool(n_finite == n_total),
+        "median": median,
+        "mad": mad,
+        "robust_std_from_mad": robust_std,
+        "std": classical_std,
+        "ptp": ptp,
+        "mean_abs": mean_abs,
+        "min": float(finite.min()),
+        "max": float(finite.max()),
+    }
+
+
+def _extract_layer_b_channels(
+    quotient_features: dict[str, np.ndarray],
+    contact_signals: dict[str, np.ndarray],
+) -> dict[str, np.ndarray]:
+    """Map quotient feature arrays + raw contact arrays into the flat
+    channel dict that ``_compute_group_reference_scale`` consumes.
+    """
+    body_p = quotient_features["body_root_pos_xy"]
+    body_v = quotient_features["body_root_vel_xy"]
+    yaw_rel = quotient_features["yaw_rel_rad"]
+    yaw_rate = quotient_features["yaw_rate_rad_per_s"]
+    return {
+        "body_root_pos_xy.x": body_p[:, 0],
+        "body_root_pos_xy.y": body_p[:, 1],
+        "body_root_vel_xy.x": body_v[:, 0],
+        "body_root_vel_xy.y": body_v[:, 1],
+        "yaw_rel_rad": yaw_rel,
+        "yaw_rate_rad_per_s": yaw_rate,
+        "foot_L_soft_contact_score": contact_signals["foot_L_soft_contact_score"],
+        "foot_R_soft_contact_score": contact_signals["foot_R_soft_contact_score"],
+    }
+
+
+def _classify_phase_structure_status(
+    *,
+    n_frames: int,
+    group_all_finite: bool,
+    group_degenerate: bool,
+) -> tuple[str, bool]:
+    """Return the contract-§6 phase_structure_status enum plus a Layer C
+    candidate flag.
+
+    The contract enum (docs/aperiodic_transition/
+    2026-05-22_walk_f_causal_state_scaffold_v1.md:255) is exactly
+    ``{phase_structured, phase_degenerate, insufficient_evidence}``.
+    Layer B cannot return ``phase_structured`` because that requires a
+    predictive-loss comparison against a phase-agnostic baseline
+    (§3.4), which is Layer C's job. Layer B therefore only emits
+    ``phase_degenerate`` or ``insufficient_evidence``; non-degenerate
+    groups get ``insufficient_evidence`` plus
+    ``layer_c_candidate=True`` so a future Layer C knows where to look.
+    """
+    if n_frames < MIN_FRAMES_FOR_PHASE_ESTIMABILITY:
+        return ("insufficient_evidence", False)
+    if not group_all_finite:
+        return ("insufficient_evidence", False)
+    if group_degenerate:
+        return ("phase_degenerate", False)
+    # Non-degenerate at Layer B does NOT prove phase-structured. We mark
+    # it as insufficient_evidence and flag the group as a Layer C
+    # candidate so reviewers see the distinction.
+    return ("insufficient_evidence", True)
+
+
+def _compute_group_reference_scale(
+    group_name: str,
+    group_def: dict[str, Any],
+    channel_arrays: dict[str, np.ndarray],
+    n_frames: int,
+) -> dict[str, Any]:
+    """Aggregate per-channel scale into a group-level reference scale.
+
+    Group-level degeneracy: a channel is degenerate iff its MAD
+    ``<= epsilon`` (so the boundary value counts as degenerate); the
+    group is degenerate iff every channel is degenerate. The
+    phase_structure_status enum is the contract §6 set and does NOT
+    involve any predictive distance.
+    """
+    epsilon = float(group_def["epsilon_mad"])
+    channel_summaries: dict[str, Any] = {}
+    max_mad = 0.0
+    any_not_all_finite = False
+    all_channel_degenerate = True
+    channel_degenerate_count = 0
+    for channel_name in group_def["channels"]:
+        if channel_name not in channel_arrays:
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] Layer B channel {channel_name!r} "
+                f"missing for group {group_name!r}; refusing silent skip."
+            )
+        stats = _compute_channel_scale(channel_arrays[channel_name])
+        channel_mad = stats["mad"]
+        # `<=` not `<`: the boundary value counts as degenerate so the
+        # tolerance is upper-inclusive, matching tolerance conventions
+        # used elsewhere in this probe (e.g. gauge tol).
+        channel_degenerate = bool(channel_mad is not None and channel_mad <= epsilon)
+        if channel_degenerate:
+            channel_degenerate_count += 1
+        if channel_mad is None:
+            all_channel_degenerate = False
+        elif not channel_degenerate:
+            all_channel_degenerate = False
+        if channel_mad is not None and channel_mad > max_mad:
+            max_mad = float(channel_mad)
+        if not stats["all_finite"]:
+            any_not_all_finite = True
+        channel_summaries[channel_name] = {
+            **stats,
+            "epsilon_mad_estimator_only": epsilon,
+            "channel_degenerate_by_epsilon_mad": channel_degenerate,
+        }
+
+    group_degenerate = bool(all_channel_degenerate)
+    phase_status, layer_c_candidate = _classify_phase_structure_status(
+        n_frames=n_frames,
+        group_all_finite=not any_not_all_finite,
+        group_degenerate=group_degenerate,
+    )
+    return {
+        "group": group_name,
+        "unit_label": group_def["unit_label"],
+        "source": group_def["source"],
+        "epsilon_mad_estimator_only": epsilon,
+        "channels": channel_summaries,
+        "group_max_channel_mad": float(max_mad),
+        "group_reference_degenerate": group_degenerate,
+        "channel_degenerate_count": int(channel_degenerate_count),
+        "channel_total_count": int(len(group_def["channels"])),
+        "phase_structure_status": phase_status,
+        "phase_structure_status_enum_source": (
+            "docs/aperiodic_transition/"
+            "2026-05-22_walk_f_causal_state_scaffold_v1.md:255"
+        ),
+        "layer_c_candidate": bool(layer_c_candidate),
+        "phase_estimable_candidate": bool(layer_c_candidate),
+        "phase_structure_layer_b_definition": (
+            "Layer B emits only {phase_degenerate, insufficient_evidence}. "
+            "phase_structured requires a predictive-loss comparison vs a "
+            "phase-agnostic baseline (§3.4) and is Layer C's job. "
+            "Non-degenerate groups get insufficient_evidence with "
+            "layer_c_candidate=True."
+        ),
+    }
+
+
+def _process_clip_reference_scale_check(
+    clip_info: dict[str, Any],
+    contact_signals: dict[str, np.ndarray],
+    *,
+    is_reference: bool,
+) -> dict[str, Any]:
+    """Compute Layer B per-clip channel summaries.
+
+    For reference-family clips the group reference scale is the
+    authoritative output. For non-reference (query) clips we still
+    emit per-channel scale numbers so a reviewer can sanity-check the
+    extraction, but the artifact must NOT promote them into a
+    Walk_F reference scale.
+    """
+    yaw_rad: np.ndarray = clip_info["root_yaw_rad"]
+    pos_xy: np.ndarray = clip_info["root_pos_xy_m"]
+    vel_xy: np.ndarray = clip_info["root_vel_xy_mps"]
+    fps: float = clip_info["fps"]
+    n_frames: int = int(clip_info["frame_count"])
+
+    quotient = _canonical_quotient_features(yaw_rad, pos_xy, vel_xy, fps)
+    channels = _extract_layer_b_channels(quotient, contact_signals)
+
+    per_group: dict[str, Any] = {}
+    for group_name, group_def in FEATURE_GROUPS_LAYER_B.items():
+        per_group[group_name] = _compute_group_reference_scale(
+            group_name, group_def, channels, n_frames
+        )
+
+    return {
+        "clip": clip_info["clip"],
+        "raw_json_path": clip_info["raw_json_path"],
+        "fps": fps,
+        "frame_count": n_frames,
+        "track": TRACK_BY_MODE["reference_scale_check"],
+        "track_role": TRACK_ROLE_BY_MODE["reference_scale_check"],
+        "clip_role": "reference_clip" if is_reference else "query_clip_not_reference",
+        "contributes_to_reference_scale": bool(is_reference),
+        "feature_groups_layer_b": per_group,
+        "not_run_feature_groups_layer_b": list(NOT_RUN_FEATURE_GROUPS_LAYER_B),
+        "membership_status": "not_implemented_layerB",
+        "predictive_loss_status": "not_implemented_layerB",
+    }
+
+
+# -----------------------------------------------------------------------
 # Artifact writers
 # -----------------------------------------------------------------------
 
@@ -1472,6 +1827,333 @@ def _build_summary_gauge_check(
     return summary
 
 
+def _build_summary_reference_scale_check(
+    raw_root: Path,
+    clips: list[str],
+    per_clip: list[dict[str, Any]],
+    per_clip_paths: list[str],
+) -> dict[str, Any]:
+    """Layer B summary: reference scale and degeneracy on Walk_F only.
+
+    Reference scale is computed exclusively from clips with
+    ``clip_role == "reference_clip"``. Query (non-reference) clips
+    are present in per_clip for inspection but DO NOT contribute to
+    the reference scale or to the degeneracy / phase_structure
+    decision. Layer B emits no membership, no phase library, no
+    predictive loss.
+    """
+    reference_clips = [e for e in per_clip if e["contributes_to_reference_scale"]]
+    query_clips = [e for e in per_clip if not e["contributes_to_reference_scale"]]
+
+    # Reference-family aggregation. With v1 data, reference_family =
+    # {Walk_F} contains exactly one clip; with future multi-take data,
+    # aggregation across reference clips would happen here.
+    if len(reference_clips) == 0:
+        ref_status = "INSUFFICIENT_EVIDENCE"
+        ref_status_reason = (
+            "No reference-family clip was supplied. Layer B requires "
+            "Walk_F in --clips to compute a reference scale; "
+            "reference_family is locked to {Walk_F} by §1.1."
+        )
+        reference_per_group: dict[str, Any] = {}
+    else:
+        ref_status = "single_trajectory_reference_only"
+        ref_status_reason = (
+            "Walk_F is a single trajectory (§4); class-level recurrence "
+            "is INSUFFICIENT_EVIDENCE. Layer B reports single-trajectory "
+            "reference scale only."
+        )
+        # With more than one reference clip in the future, we would
+        # aggregate per group (e.g. union of per-channel MADs). For now,
+        # surface the single reference clip's per-group block verbatim
+        # and refuse to silently average if multiple reference clips
+        # were somehow supplied (defensive; reference_family is len==1).
+        if len(reference_clips) > 1:
+            raise FailFastError(
+                "[walk_f_causal_state_probe] Layer B received "
+                f"{len(reference_clips)} reference clips; reference_family is "
+                f"locked to {REFERENCE_FAMILY} (length 1) by §1.1. Refusing "
+                "to silently average across multiple reference clips."
+            )
+        reference_per_group = reference_clips[0]["feature_groups_layer_b"]
+
+    feature_groups_layer_b_meta = {
+        name: {
+            "channels": list(group_def["channels"]),
+            "unit_label": group_def["unit_label"],
+            "epsilon_mad_estimator_only": group_def["epsilon_mad"],
+            "source": group_def["source"],
+        }
+        for name, group_def in FEATURE_GROUPS_LAYER_B.items()
+    }
+
+    # Summarise the contract §6 phase_structure_status enum per group,
+    # plus the Layer-B-only layer_c_candidate flag.
+    phase_status_summary: dict[str, Any] = {}
+    for name in FEATURE_GROUPS_LAYER_B:
+        if name in reference_per_group:
+            phase_status_summary[name] = {
+                "phase_structure_status": reference_per_group[name][
+                    "phase_structure_status"
+                ],
+                "layer_c_candidate": reference_per_group[name]["layer_c_candidate"],
+                "phase_estimable_candidate": reference_per_group[name][
+                    "phase_estimable_candidate"
+                ],
+                "group_reference_degenerate": reference_per_group[name][
+                    "group_reference_degenerate"
+                ],
+                "group_max_channel_mad": reference_per_group[name][
+                    "group_max_channel_mad"
+                ],
+                "epsilon_mad_estimator_only": reference_per_group[name][
+                    "epsilon_mad_estimator_only"
+                ],
+                "channel_degenerate_count": reference_per_group[name][
+                    "channel_degenerate_count"
+                ],
+                "channel_total_count": reference_per_group[name][
+                    "channel_total_count"
+                ],
+            }
+        else:
+            phase_status_summary[name] = {
+                "phase_structure_status": "insufficient_evidence",
+                "layer_c_candidate": False,
+                "phase_estimable_candidate": False,
+                "group_reference_degenerate": None,
+                "group_max_channel_mad": None,
+                "epsilon_mad_estimator_only": FEATURE_GROUPS_LAYER_B[name][
+                    "epsilon_mad"
+                ],
+                "channel_degenerate_count": None,
+                "channel_total_count": len(FEATURE_GROUPS_LAYER_B[name]["channels"]),
+            }
+
+    insufficient: list[dict[str, Any]] = []
+    if len(reference_clips) == 0:
+        insufficient.append(
+            {
+                "clip": None,
+                "where": "reference_family_presence",
+                "status": "insufficient_evidence",
+                "reason": ref_status_reason,
+            }
+        )
+    for name, summary_entry in phase_status_summary.items():
+        if summary_entry["phase_structure_status"] == "insufficient_evidence":
+            if summary_entry.get("layer_c_candidate"):
+                reason = (
+                    "Group is non-degenerate on Walk_F (MAD above "
+                    "estimator-level epsilon), but Layer B cannot promote "
+                    "this to phase_structured: that requires a "
+                    "predictive-loss comparison against a phase-agnostic "
+                    "baseline (§3.4). Marked layer_c_candidate=True."
+                )
+            else:
+                reason = (
+                    "Either insufficient frames (< "
+                    f"{MIN_FRAMES_FOR_PHASE_ESTIMABILITY}) or non-finite "
+                    "values, or no reference clip in --clips. No predictive "
+                    "loss or phase library is attempted here."
+                )
+            insufficient.append(
+                {
+                    "clip": REFERENCE_FAMILY[0] if reference_clips else None,
+                    "where": f"feature_groups_layer_b.{name}.phase_structure_status",
+                    "status": "insufficient_evidence",
+                    "layer_c_candidate": bool(summary_entry.get("layer_c_candidate")),
+                    "reason": reason,
+                }
+            )
+        elif summary_entry["phase_structure_status"] == "phase_degenerate":
+            insufficient.append(
+                {
+                    "clip": REFERENCE_FAMILY[0],
+                    "where": f"feature_groups_layer_b.{name}.phase_structure_status",
+                    "status": "phase_degenerate",
+                    "reason": (
+                        "Reference scale at or below estimator-level "
+                        "absolute MAD epsilon; the group must NOT be used "
+                        "as combined membership evidence or normalised by "
+                        "a zero-variance reference (§3.3)."
+                    ),
+                }
+            )
+    insufficient.extend(
+        [
+            {
+                "clip": None,
+                "where": "membership_status",
+                "status": "not_implemented_layerB",
+                "reason": (
+                    "Layer B computes reference scale + degeneracy + "
+                    "three-valued phase_structure_status only. Membership "
+                    "claims are out of scope; see §5.3 / Layer C."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "phase_library / leave_one_phase_baseline / predictive_loss",
+                "status": "not_implemented_layerB",
+                "reason": (
+                    "Numerical phase score and leave-one-phase baseline "
+                    "are deferred to Layer C."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "pose_dyn / pose_rel",
+                "status": "not_run_layerB",
+                "reason": (
+                    "pose_dyn requires processed_data/*.npz (bone angular "
+                    "velocity summaries); pose_rel requires explicit "
+                    "non-templating handling. Both deferred to Layer B.1."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "event_head_target_status",
+                "status": "not_emitted_by_this_tool",
+                "reason": (
+                    "Layer B is read-only and produces no EventHead "
+                    "target, no handoff_ready, no transition_done (§7)."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "transition_truth_promotion",
+                "status": "forbidden_by_contract",
+                "reason": (
+                    "Reference scale / degeneracy tags MUST NOT be promoted "
+                    "to transition truth."
+                ),
+            },
+        ]
+    )
+
+    summary = _common_summary_root(
+        "reference_scale_check", raw_root, clips, per_clip_paths
+    )
+    summary.update(
+        {
+            "definition_layer": {
+                "attractor_definition_status": "not_implemented_layerB",
+                "causal_state_definition_status": "not_implemented_layerB",
+                "current_reference_family": REFERENCE_FAMILY,
+                "membership_evidence_status": "not_implemented_layerB",
+                "scope_caveat": (
+                    "Walk_F is a single trajectory; class-level recurrence "
+                    "remains INSUFFICIENT_EVIDENCE on current data (§4). "
+                    "Layer B only emits per-feature-group reference scale, "
+                    "degeneracy, and a three-valued phase_structure_status."
+                ),
+            },
+            "estimation_grid": {
+                "feature_groups_layer_b": feature_groups_layer_b_meta,
+                "not_run_feature_groups_layer_b": list(NOT_RUN_FEATURE_GROUPS_LAYER_B),
+                "min_frames_for_phase_estimability_estimator_only": (
+                    MIN_FRAMES_FOR_PHASE_ESTIMABILITY
+                ),
+                "mad_to_gaussian_sigma_constant": MAD_TO_GAUSSIAN_SIGMA,
+                "note": (
+                    "Per-group epsilon_mad values are estimator-level "
+                    "numeric thresholds and are NOT contract definition. "
+                    "MAD / std / ptp / mean_abs are always reported per "
+                    "channel so a reviewer can re-judge."
+                ),
+            },
+            "feature_groups": list(FEATURE_GROUPS_LAYER_B.keys()),
+            "feature_groups_meta": feature_groups_layer_b_meta,
+            "quotient_definition": "see_gauge_check_mode_summary",
+            "reference_family": REFERENCE_FAMILY,
+            "reference_clip_names_resolved": [e["clip"] for e in reference_clips],
+            "query_clip_names": [e["clip"] for e in query_clips],
+            "reference_scale_source": (
+                "reference_clips_only"
+                if reference_clips
+                else "no_reference_clip_present"
+            ),
+            "reference_clip_status": ref_status,
+            "reference_clip_status_reason": ref_status_reason,
+            "reference_scale_per_group": reference_per_group,
+            "phase_structure_status_per_group": phase_status_summary,
+            "phase_structure_status_enum": [
+                "phase_structured",
+                "phase_degenerate",
+                "insufficient_evidence",
+            ],
+            "phase_structure_status_enum_source": (
+                "docs/aperiodic_transition/"
+                "2026-05-22_walk_f_causal_state_scaffold_v1.md:255"
+            ),
+            "walk_f_baseline": "not_implemented_layerB",
+            "per_clip": [
+                {
+                    "clip": e["clip"],
+                    "clip_role": e["clip_role"],
+                    "frame_count": e["frame_count"],
+                    "fps": e["fps"],
+                    "feature_groups_layer_b": e["feature_groups_layer_b"],
+                }
+                for e in per_clip
+            ],
+            "query_clip_inspection_only": [
+                {
+                    "clip": e["clip"],
+                    "frame_count": e["frame_count"],
+                    "note": (
+                        "Per-channel scale numbers for non-reference clips "
+                        "are present for inspection only. They MUST NOT be "
+                        "aggregated into the Walk_F reference scale "
+                        "(reference_family is locked to Walk_F by §1.1)."
+                    ),
+                }
+                for e in query_clips
+            ],
+            "sensitivity_summary": {
+                "epsilon_mad_grid_status": "single_point_per_group_layerB",
+                "rotation_grid_sensitivity_status": "not_emitted_in_this_mode",
+                "translation_grid_sensitivity_status": "not_emitted_in_this_mode",
+                "predictive_loss_sensitivity_status": "not_implemented_layerB",
+                "yaw_activity_threshold_grid_status": "not_emitted_in_this_mode",
+            },
+            "causal_state_track_status": "not_implemented_layerB",
+            "quotient_definition_status": (
+                "inherited_from_layerA_se2_quotient_sanity_gate"
+            ),
+            "attractor_membership_status": "not_implemented_layerB",
+            "phase_library_status": "not_implemented_layerB",
+            "predictive_loss_status": "not_implemented_layerB",
+            "event_head_target_status": "not_emitted_by_this_tool",
+            "handoff_ready_status": "not_emitted_by_this_tool",
+            "transition_done_status": "not_emitted_by_this_tool",
+            "transition_truth_promotion": "forbidden_by_contract",
+            "insufficient_evidence": insufficient,
+            "notes": [
+                "Layer B emits per-feature-group reference_scale + "
+                "reference_degenerate + phase_structure_status drawn from "
+                "the contract §6 enum {phase_structured, phase_degenerate, "
+                "insufficient_evidence}. Layer B never emits "
+                "phase_structured (that needs predictive-loss vs a "
+                "phase-agnostic baseline; §3.4 / Layer C). Non-degenerate "
+                "groups are emitted as insufficient_evidence with "
+                "layer_c_candidate=True.",
+                "Reference scale is computed exclusively from "
+                "reference_clip_names_resolved (must equal "
+                "reference_family). query_clip_names are present for "
+                "inspection only and never aggregated.",
+                "Epsilon_mad thresholds per group are estimator-level "
+                "numeric; raw MAD / std / ptp / mean_abs are always "
+                "reported so a reviewer can re-judge.",
+                "pose_dyn and pose_rel groups are intentionally not_run at "
+                "Layer B; see Layer B.1.",
+            ],
+        }
+    )
+    return summary
+
+
 # -----------------------------------------------------------------------
 # CLI dispatch
 # -----------------------------------------------------------------------
@@ -1504,9 +2186,12 @@ def main(argv: list[str] | None = None) -> int:
             "Modes: yaw_debug (Layer 0 / Track 1, Walk-turn descriptive "
             "oracle on RootYaw); gauge_check (Layer A, canonical SE(2) "
             "yaw quotient + synthetic-rotation invariance + +/-pi wrap "
-            "boundary). Neither mode estimates causal-state membership, "
-            "attractor membership, phase library, predictive loss, or "
-            "EventHead targets."
+            "boundary + planar translation invariance); "
+            "reference_scale_check (Layer B, Walk_F per-feature-group "
+            "reference scale + degeneracy + contract-§6 "
+            "phase_structure_status enum). NONE of these modes estimate "
+            "causal-state membership, attractor membership, phase "
+            "library, predictive loss, or EventHead targets."
         ),
     )
     parser.add_argument(
@@ -1514,8 +2199,8 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         type=str,
         help=(
-            "yaw_debug | gauge_check. Unknown mode -> fail-fast "
-            "(docs/removal_policy.md §3-§4)."
+            "yaw_debug | gauge_check | reference_scale_check. "
+            "Unknown mode -> fail-fast (docs/removal_policy.md §3-§4)."
         ),
     )
     parser.add_argument(
@@ -1550,6 +2235,20 @@ def main(argv: list[str] | None = None) -> int:
     # This avoids leaving an empty out_dir on a failing raw-data sanity.
     clip_infos = [_load_clip(args.raw_root, clip) for clip in args.clips]
 
+    # Mode-specific pre-mkdir sanity. reference_scale_check requires
+    # the reference_family (Walk_F) to be present in --clips; otherwise
+    # the run would silently emit INSUFFICIENT_EVIDENCE everywhere.
+    if mode == "reference_scale_check":
+        missing_reference = [r for r in REFERENCE_FAMILY if r not in args.clips]
+        if missing_reference:
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] --mode reference_scale_check "
+                f"requires reference_family clips {REFERENCE_FAMILY} to be "
+                f"present in --clips; missing: {missing_reference}. "
+                "No silent INSUFFICIENT_EVIDENCE fallback by §1.1 + "
+                "docs/removal_policy.md §3-§4."
+            )
+
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     if mode == "yaw_debug":
@@ -1560,6 +2259,26 @@ def main(argv: list[str] | None = None) -> int:
         per_clip = [_process_clip_gauge_check(info) for info in clip_infos]
         per_clip_paths = _write_per_clip(args.out_dir, per_clip, "gauge_check")
         summary = _build_summary_gauge_check(args.raw_root, args.clips, per_clip, per_clip_paths)
+    elif mode == "reference_scale_check":
+        # Layer B needs the FootEvidence.{L,R}.soft_contact_score channel.
+        # Fail-fast on missing contact for ANY clip, including query
+        # clips — we refuse to silently load partial data.
+        contact_by_clip = {
+            info["clip"]: _load_clip_contact_signals(args.raw_root, info["clip"])
+            for info in clip_infos
+        }
+        per_clip = [
+            _process_clip_reference_scale_check(
+                info,
+                contact_by_clip[info["clip"]],
+                is_reference=info["clip"] in REFERENCE_FAMILY,
+            )
+            for info in clip_infos
+        ]
+        per_clip_paths = _write_per_clip(args.out_dir, per_clip, "reference_scale_check")
+        summary = _build_summary_reference_scale_check(
+            args.raw_root, args.clips, per_clip, per_clip_paths
+        )
     else:
         # Unreachable; _validate_mode already raises. Kept as defense in depth.
         raise FailFastError(
@@ -1583,6 +2302,30 @@ def main(argv: list[str] | None = None) -> int:
                 f"peak_frame={entry['summary']['peak_abs_yaw_rate_frame']} "
                 f"direction={entry['summary']['turn_direction_by_yaw']} "
                 f"window_stability={entry['window_stability_summary']['status']}"
+            )
+    elif mode == "reference_scale_check":
+        print(
+            f"[walk_f_causal_state_probe] reference_family={REFERENCE_FAMILY} "
+            f"reference_clip_names_resolved={summary['reference_clip_names_resolved']} "
+            f"query_clip_names={summary['query_clip_names']} "
+            f"reference_scale_source={summary['reference_scale_source']} "
+            f"reference_clip_status={summary['reference_clip_status']}"
+        )
+        for name, st in summary["phase_structure_status_per_group"].items():
+            print(
+                f"[walk_f_causal_state_probe] group={name} "
+                f"phase_structure_status={st['phase_structure_status']} "
+                f"layer_c_candidate={st['layer_c_candidate']} "
+                f"reference_degenerate={st['group_reference_degenerate']} "
+                f"max_channel_mad={st['group_max_channel_mad']!r} "
+                f"epsilon_mad_estimator_only={st['epsilon_mad_estimator_only']:.3e} "
+                f"degenerate_channels={st['channel_degenerate_count']}/{st['channel_total_count']}"
+            )
+        for entry in per_clip:
+            print(
+                f"[walk_f_causal_state_probe] clip={entry['clip']} "
+                f"frames={entry['frame_count']} "
+                f"role={entry['clip_role']}"
             )
     else:
         print(
