@@ -15,6 +15,13 @@ Implemented modes are read-only:
 * ``phase_library_check`` (Layer C minimal) — Walk_F-only phase-library
   self-consistency under a fixed estimator grid. It does NOT run query
   leave/return boundary detection and does NOT emit membership labels.
+* ``query_boundary_check`` (Layer C.1) — Walk_F self-baseline band
+  + query leave/return interval + censoring audit on the 4 turn clips.
+  Strictly read-only. It does NOT emit attractor membership,
+  cross-attractor claims, EventHead targets, ``handoff_ready``,
+  ``transition_done``, or any combined-membership score. ``turn_dyn``
+  is forbidden from combined membership by contract; routing it through
+  the boundary path raises ``FailFastError``.
 """
 from __future__ import annotations
 
@@ -37,6 +44,7 @@ SUPPORTED_MODES = (
     "gauge_check",
     "reference_scale_check",
     "phase_library_check",
+    "query_boundary_check",
 )
 
 TRACK_BY_MODE = {
@@ -44,18 +52,25 @@ TRACK_BY_MODE = {
     "gauge_check": "walk_f_causal_state_scaffold_prerequisite",
     "reference_scale_check": "walk_f_reference_scale_and_degeneracy",
     "phase_library_check": "walk_f_phase_library_self_consistency",
+    "query_boundary_check": "walk_f_query_leave_return_boundary_audit",
 }
 TRACK_ROLE_BY_MODE = {
     "yaw_debug": "debug_only_not_attractor_definition",
     "gauge_check": "gauge_sanity_prerequisite_not_attractor_definition",
     "reference_scale_check": "reference_scale_and_degeneracy_prerequisite_not_membership",
     "phase_library_check": "walk_f_only_self_consistency_not_membership_boundary",
+    "query_boundary_check": (
+        "query_boundary_audit_not_attractor_membership_not_transition_truth"
+    ),
 }
 SCOPE_BY_MODE = {
     "yaw_debug": "walk_turn_yaw_activity_descriptive_oracle",
     "gauge_check": "canonical_yaw_quotient_invariance_sanity",
     "reference_scale_check": "walk_f_per_feature_group_reference_scale_and_degeneracy",
     "phase_library_check": "walk_f_phase_library_self_consistency_single_trajectory",
+    "query_boundary_check": (
+        "walk_f_self_baseline_band_plus_query_leave_return_with_censoring_audit"
+    ),
 }
 
 # yaw_debug constants -----------------------------------------------------
@@ -190,6 +205,43 @@ LAYER_C_EXCLUDED_FEATURE_GROUPS: dict[str, str] = {
     "absolute_RootYaw": "excluded by planar translation / global-yaw quotient contract",
     "yaw_activity_debug": "debug oracle only; not phase-library evidence",
 }
+
+# query_boundary_check (Layer C.1) constants -------------------------------
+# Layer C.1 reuses every Layer C minimal estimator dim and adds three
+# boundary-detection dims (band quantile + min consecutive frames for
+# leave / return). turn_dyn is intentionally absent from
+# LAYER_C1_FEATURE_GROUPS: any combined-membership entry point that reads
+# turn_dyn must raise FailFastError (see _layer_c1_forbid_turn_dyn).
+LAYER_C1_REFERENCE_CLIP = "Walk_F"
+LAYER_C1_QUERY_FAMILY: tuple[str, ...] = (
+    "Walk_L_To_L",
+    "Walk_L_To_R",
+    "Walk_R_To_L",
+    "Walk_R_To_R",
+)
+LAYER_C1_REQUIRED_CLIP_SET: frozenset[str] = frozenset(
+    [LAYER_C1_REFERENCE_CLIP, *LAYER_C1_QUERY_FAMILY]
+)
+LAYER_C1_FEATURE_GROUPS: dict[str, dict[str, Any]] = LAYER_C_FEATURE_GROUPS
+LAYER_C1_EXCLUDED_FEATURE_GROUPS: dict[str, str] = LAYER_C_EXCLUDED_FEATURE_GROUPS
+LAYER_C1_BAND_QUANTILES: tuple[tuple[str, float], ...] = (
+    ("P75", 0.75),
+    ("P90", 0.90),
+    ("P95", 0.95),
+)
+LAYER_C1_MIN_CONSEC_FRAMES_FOR_LEAVE: tuple[int, ...] = (2, 4)
+LAYER_C1_MIN_CONSEC_FRAMES_FOR_RETURN: tuple[int, ...] = (2, 4)
+# Neighbor-consistency tolerance is the smaller of the leave grid. Two
+# configs that differ by exactly one grid step in exactly one dim are
+# "neighbors". If their leave/return endpoint frames disagree by more
+# than this many frames (or their existence boolean differs), the
+# per-config return_to_reference_status is overridden to
+# INSUFFICIENT_EVIDENCE.
+LAYER_C1_NEIGHBOR_CONSISTENCY_TOL_FRAMES: int = int(
+    min(LAYER_C1_MIN_CONSEC_FRAMES_FOR_LEAVE)
+)
+LAYER_C1_MIN_VALID_QUERY_COUNT: int = 12
+LAYER_C1_MIN_VALID_QUERY_FRACTION: float = 0.50
 
 
 class FailFastError(RuntimeError):
@@ -1941,6 +1993,964 @@ def _build_internal_se2_precondition(
 
 
 # -----------------------------------------------------------------------
+# query_boundary_check (Layer C.1) — Walk_F self-baseline band +
+# query leave/return interval + censoring audit on 4 turn clips
+# -----------------------------------------------------------------------
+
+
+def _layer_c1_forbid_turn_dyn(group_name: str, context: str) -> None:
+    """Hard guardrail: turn_dyn MUST NOT enter the combined-membership /
+    boundary aggregation path on Walk_F.
+
+    The reason is recorded in
+    ``docs/aperiodic_transition/2026-05-22_walk_f_causal_state_scaffold_v1.md``
+    §3.3 and in the Layer C.1 contract §1 rule 3. Any caller that hands
+    a ``turn_dyn`` group name to this function is treated as a contract
+    bug, not a recoverable estimator condition.
+    """
+    if group_name == "turn_dyn":
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer C.1 refuses to route turn_dyn "
+            f"through {context!r}; turn_dyn is excluded from combined membership "
+            "by docs/aperiodic_transition/"
+            "2026-05-23_walk_f_causal_state_layerc1_query_boundary_contract.md "
+            "§1 rule 3 and §3. turn_dyn may only appear as debug / inspection."
+        )
+
+
+def _normalize_with_walk_f_scale(
+    *,
+    walk_f_group_payload: dict[str, Any],
+    query_channel_arrays: dict[str, np.ndarray],
+    query_clip_name: str,
+    group_name: str,
+) -> dict[str, Any]:
+    """Apply Walk_F's per-channel median + robust scale to query channels.
+
+    Walk_F's normalization parameters live in
+    ``walk_f_group_payload["channel_scale"]``. This function does NOT
+    silently fall back to the query clip's own scale if a Walk_F channel
+    is degenerate or missing — instead it raises so the contract failure
+    is visible. Reference-degenerate groups are filtered upstream and never
+    reach this function.
+    """
+    _layer_c1_forbid_turn_dyn(group_name, "_normalize_with_walk_f_scale")
+    active_channels: list[str] = list(walk_f_group_payload["active_channels"])
+    channel_scale: dict[str, Any] = walk_f_group_payload["channel_scale"]
+    n_frames: int | None = None
+    z_cols: list[np.ndarray] = []
+    for channel_name in active_channels:
+        if channel_name not in query_channel_arrays:
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] Layer C.1 channel {channel_name!r} "
+                f"missing for query clip {query_clip_name!r} in group "
+                f"{group_name!r}; refusing silent skip "
+                "(docs/removal_policy.md §3-§4)."
+            )
+        arr = np.asarray(query_channel_arrays[channel_name], dtype=np.float64)
+        if arr.ndim != 1:
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] Layer C.1 channel {channel_name!r} "
+                f"on query {query_clip_name!r} must be 1-D, got {arr.shape}."
+            )
+        if n_frames is None:
+            n_frames = int(arr.shape[0])
+        elif int(arr.shape[0]) != n_frames:
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] Layer C.1 channel length mismatch "
+                f"on query {query_clip_name!r} group {group_name!r}: expected "
+                f"{n_frames}, got {arr.shape[0]} for {channel_name!r}."
+            )
+        if not np.all(np.isfinite(arr)):
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] Layer C.1 channel {channel_name!r} "
+                f"on query {query_clip_name!r} contains non-finite values."
+            )
+        stats = channel_scale.get(channel_name)
+        if stats is None:
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] Layer C.1 missing Walk_F scale "
+                f"for channel {channel_name!r} in group {group_name!r}; "
+                "refusing to renormalize the query with its own scale."
+            )
+        median = stats.get("median")
+        robust_std = stats.get("robust_std_from_mad")
+        if (
+            median is None
+            or robust_std is None
+            or not math.isfinite(float(median))
+            or not math.isfinite(float(robust_std))
+            or float(robust_std) <= 0.0
+        ):
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] Layer C.1 Walk_F scale for "
+                f"{channel_name!r} in group {group_name!r} is not usable "
+                f"(median={median!r}, robust_std_from_mad={robust_std!r}); "
+                "the channel should have been filtered upstream."
+            )
+        z_cols.append(((arr - float(median)) / float(robust_std)).astype(np.float64))
+
+    if n_frames is None:
+        raise FailFastError(
+            f"[walk_f_causal_state_probe] Layer C.1 group {group_name!r} has no "
+            "active channels for the query normalization; this should have "
+            "been caught by the Walk_F reference_degenerate guard."
+        )
+    if z_cols:
+        z_matrix = np.stack(z_cols, axis=1).astype(np.float64)
+    else:
+        z_matrix = np.zeros((n_frames, 0), dtype=np.float64)
+    return {
+        "z_matrix": z_matrix,
+        "active_channels": active_channels,
+        "n_frames": int(n_frames),
+    }
+
+
+def _walk_f_self_baseline_loss_distribution(
+    *,
+    walk_f_z_matrix: np.ndarray,
+    history_window_frames: int,
+    future_horizon_frames: int,
+    neighborhood_radius_frames: int,
+    distance_metric: str,
+) -> dict[str, Any]:
+    """Compute Walk_F leave-one-neighborhood phase-loss distribution.
+
+    Returns the per-Walk_F-phase loss array (1-D float64) plus the
+    Walk_F history / future windows and phase-frame indices needed to
+    drive query lookup on the same estimator setting.
+    """
+    windows = _build_phase_windows(
+        walk_f_z_matrix,
+        history_window_frames=history_window_frames,
+        future_horizon_frames=future_horizon_frames,
+    )
+    phase_frames: np.ndarray = windows["phase_frames"]
+    history_windows: np.ndarray = windows["history_windows"]
+    future_windows: np.ndarray = windows["future_windows"]
+    candidate_count = int(phase_frames.shape[0])
+    if candidate_count == 0:
+        return {
+            "phase_frames": phase_frames,
+            "history_windows": history_windows,
+            "future_windows": future_windows,
+            "self_baseline_loss_array": np.zeros((0,), dtype=np.float64),
+            "self_baseline_loss_phase_frames": np.zeros((0,), dtype=np.int64),
+            "valid_self_baseline_count": 0,
+            "candidate_count": 0,
+        }
+
+    losses: list[float] = []
+    valid_frames: list[int] = []
+    for query_i, t in enumerate(phase_frames):
+        nonlocal_mask = np.abs(phase_frames - int(t)) > int(neighborhood_radius_frames)
+        candidate_indices = np.nonzero(nonlocal_mask)[0]
+        if candidate_indices.size == 0:
+            continue
+        hist_q = history_windows[query_i]
+        hist_candidates = history_windows[candidate_indices]
+        hist_distances = _metric_loss_rows(hist_q, hist_candidates, distance_metric)
+        best_local = int(np.argmin(hist_distances))
+        best_candidate_index = int(candidate_indices[best_local])
+        phase_loss = _metric_loss_1d(
+            future_windows[query_i],
+            future_windows[best_candidate_index],
+            distance_metric,
+        )
+        losses.append(float(phase_loss))
+        valid_frames.append(int(t))
+
+    loss_array = np.asarray(losses, dtype=np.float64)
+    return {
+        "phase_frames": phase_frames,
+        "history_windows": history_windows,
+        "future_windows": future_windows,
+        "self_baseline_loss_array": loss_array,
+        "self_baseline_loss_phase_frames": np.asarray(valid_frames, dtype=np.int64),
+        "valid_self_baseline_count": int(loss_array.shape[0]),
+        "candidate_count": int(candidate_count),
+    }
+
+
+def _query_phase_loss_against_walk_f(
+    *,
+    walk_f_phase_frames: np.ndarray,
+    walk_f_history_windows: np.ndarray,
+    walk_f_future_windows: np.ndarray,
+    query_z_matrix: np.ndarray,
+    history_window_frames: int,
+    future_horizon_frames: int,
+    distance_metric: str,
+) -> dict[str, Any]:
+    """For every query phase frame, match H_q(t) to nearest Walk_F H_F(p)
+    (no neighborhood exclusion; query and reference are different clips)
+    and compute the phase-aware future loss against Y_F(p*).
+    """
+    query_windows = _build_phase_windows(
+        query_z_matrix,
+        history_window_frames=history_window_frames,
+        future_horizon_frames=future_horizon_frames,
+    )
+    q_phase_frames: np.ndarray = query_windows["phase_frames"]
+    q_H: np.ndarray = query_windows["history_windows"]
+    q_Y: np.ndarray = query_windows["future_windows"]
+    if q_phase_frames.shape[0] == 0 or walk_f_phase_frames.shape[0] == 0:
+        return {
+            "query_phase_frames": q_phase_frames,
+            "phase_loss_array": np.zeros((0,), dtype=np.float64),
+            "matched_walk_f_phase_frames": np.zeros((0,), dtype=np.int64),
+        }
+
+    losses: list[float] = []
+    matched: list[int] = []
+    for query_i in range(q_phase_frames.shape[0]):
+        hist_q = q_H[query_i]
+        hist_distances = _metric_loss_rows(
+            hist_q, walk_f_history_windows, distance_metric
+        )
+        best_local = int(np.argmin(hist_distances))
+        best_walk_f_frame = int(walk_f_phase_frames[best_local])
+        phase_loss = _metric_loss_1d(
+            q_Y[query_i],
+            walk_f_future_windows[best_local],
+            distance_metric,
+        )
+        losses.append(float(phase_loss))
+        matched.append(best_walk_f_frame)
+
+    return {
+        "query_phase_frames": q_phase_frames,
+        "phase_loss_array": np.asarray(losses, dtype=np.float64),
+        "matched_walk_f_phase_frames": np.asarray(matched, dtype=np.int64),
+    }
+
+
+def _earliest_consecutive_run(
+    mask: np.ndarray, value: bool, min_length: int
+) -> tuple[int, int] | None:
+    """Return the earliest contiguous run in ``mask`` matching ``value``
+    of length at least ``min_length``, as ``[start_idx, end_idx]``
+    (closed-interval indices into ``mask``). Returns None if no such run
+    exists.
+    """
+    if mask.size == 0 or int(min_length) <= 0:
+        return None
+    target = bool(value)
+    min_len = int(min_length)
+    run_start: int | None = None
+    n = int(mask.shape[0])
+    for i in range(n):
+        if bool(mask[i]) == target:
+            if run_start is None:
+                run_start = i
+            if i - run_start + 1 >= min_len:
+                # Extend to the end of the run.
+                end = i
+                while end + 1 < n and bool(mask[end + 1]) == target:
+                    end += 1
+                return (run_start, end)
+        else:
+            run_start = None
+    return None
+
+
+def _detect_leave_return_intervals(
+    *,
+    query_phase_frames: np.ndarray,
+    phase_loss_array: np.ndarray,
+    band_value: float,
+    min_consecutive_leave: int,
+    min_consecutive_return: int,
+) -> dict[str, Any]:
+    """Apply the Layer C.1 leave/return detection to one query loss curve.
+
+    All boundary frame numbers are CLIP frame indices, mapped through
+    ``query_phase_frames``. The earliest reachable phase frame given the
+    history window is the censoring anchor (``left_censored_leave =
+    leave_interval_starts_at_phase_frames[0]``).
+    """
+    n = int(phase_loss_array.shape[0])
+    if n == 0:
+        return {
+            "out_of_band_mask": np.zeros((0,), dtype=bool),
+            "out_of_band_frame_count": 0,
+            "leave_interval": None,
+            "return_interval": None,
+            "leave_interval_idx": None,
+            "return_interval_idx": None,
+            "left_censored_leave": False,
+            "right_censored_return": False,
+        }
+    mask = phase_loss_array > float(band_value)
+    leave_idx = _earliest_consecutive_run(
+        mask, True, int(min_consecutive_leave)
+    )
+    return_idx: tuple[int, int] | None = None
+    if leave_idx is not None:
+        leave_end = leave_idx[1]
+        post = mask[leave_end + 1 :]
+        post_run = _earliest_consecutive_run(
+            post, False, int(min_consecutive_return)
+        )
+        if post_run is not None:
+            return_idx = (
+                post_run[0] + leave_end + 1,
+                post_run[1] + leave_end + 1,
+            )
+
+    def _to_clip_frame(idx: int) -> int:
+        return int(query_phase_frames[idx])
+
+    leave_interval = (
+        None
+        if leave_idx is None
+        else [_to_clip_frame(leave_idx[0]), _to_clip_frame(leave_idx[1])]
+    )
+    return_interval = (
+        None
+        if return_idx is None
+        else [_to_clip_frame(return_idx[0]), _to_clip_frame(return_idx[1])]
+    )
+    left_censored_leave = bool(leave_idx is not None and leave_idx[0] == 0)
+    right_censored_return = bool(
+        (leave_idx is not None and return_idx is None)
+        or bool(mask[-1])
+    )
+    return {
+        "out_of_band_mask": mask.astype(bool),
+        "out_of_band_frame_count": int(np.sum(mask)),
+        "leave_interval": leave_interval,
+        "return_interval": return_interval,
+        "leave_interval_idx": list(leave_idx) if leave_idx is not None else None,
+        "return_interval_idx": list(return_idx) if return_idx is not None else None,
+        "left_censored_leave": left_censored_leave,
+        "right_censored_return": right_censored_return,
+    }
+
+
+def _classify_return_to_reference_status_raw(
+    *,
+    leave_interval: list[int] | None,
+    return_interval: list[int] | None,
+    valid_query_count: int,
+    valid_query_fraction: float,
+) -> str:
+    """Compute the per-config return_to_reference_status BEFORE neighbor
+    consistency is checked. The neighbor-consistency pass (§5 of the
+    Layer C.1 contract) may downgrade ``returned`` /
+    ``never_left`` / ``never_returned`` to ``INSUFFICIENT_EVIDENCE``.
+    """
+    if (
+        valid_query_count < LAYER_C1_MIN_VALID_QUERY_COUNT
+        or valid_query_fraction < LAYER_C1_MIN_VALID_QUERY_FRACTION
+    ):
+        return "INSUFFICIENT_EVIDENCE"
+    if leave_interval is None:
+        return "never_left"
+    if return_interval is None:
+        return "never_returned"
+    return "returned"
+
+
+def _layer_c1_config_id(
+    *,
+    history_window_frames: int,
+    future_horizon_frames: int,
+    neighborhood_radius_frames: int,
+    distance_metric: str,
+    band_quantile_label: str,
+    min_consecutive_leave: int,
+    min_consecutive_return: int,
+) -> str:
+    return (
+        f"H{int(history_window_frames)}"
+        f"_F{int(future_horizon_frames)}"
+        f"_N{int(neighborhood_radius_frames)}"
+        f"_M{distance_metric}"
+        f"_Q{band_quantile_label}"
+        f"_L{int(min_consecutive_leave)}"
+        f"_R{int(min_consecutive_return)}"
+    )
+
+
+def _layer_c1_neighbor_diff_dims(a: dict[str, Any], b: dict[str, Any]) -> int:
+    diffs = 0
+    for key in (
+        "history_window_frames",
+        "future_horizon_frames",
+        "neighborhood_radius_frames",
+        "distance_metric",
+        "band_quantile",
+        "min_consecutive_frames_for_leave",
+        "min_consecutive_frames_for_return",
+    ):
+        if a[key] != b[key]:
+            diffs += 1
+            if diffs > 1:
+                return diffs
+    return diffs
+
+
+def _layer_c1_endpoint_conflict(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any] | None:
+    """Compare the leave/return endpoints of two configs. Returns a small
+    diagnostic dict if they disagree (existence boolean OR endpoint
+    delta exceeds tolerance), otherwise None.
+    """
+    tol = int(LAYER_C1_NEIGHBOR_CONSISTENCY_TOL_FRAMES)
+    a_leave = a["leave_interval"]
+    b_leave = b["leave_interval"]
+    a_ret = a["return_interval"]
+    b_ret = b["return_interval"]
+
+    if (a_leave is None) != (b_leave is None):
+        return {
+            "kind": "leave_existence_disagreement",
+            "self_leave": a_leave,
+            "neighbor_leave": b_leave,
+        }
+    if (a_ret is None) != (b_ret is None):
+        return {
+            "kind": "return_existence_disagreement",
+            "self_return": a_ret,
+            "neighbor_return": b_ret,
+        }
+    if a_leave is not None and b_leave is not None:
+        if (
+            abs(int(a_leave[0]) - int(b_leave[0])) > tol
+            or abs(int(a_leave[1]) - int(b_leave[1])) > tol
+        ):
+            return {
+                "kind": "leave_endpoint_delta_exceeds_tolerance",
+                "tol_frames": tol,
+                "self_leave": a_leave,
+                "neighbor_leave": b_leave,
+            }
+    if a_ret is not None and b_ret is not None:
+        if (
+            abs(int(a_ret[0]) - int(b_ret[0])) > tol
+            or abs(int(a_ret[1]) - int(b_ret[1])) > tol
+        ):
+            return {
+                "kind": "return_endpoint_delta_exceeds_tolerance",
+                "tol_frames": tol,
+                "self_return": a_ret,
+                "neighbor_return": b_ret,
+            }
+    return None
+
+
+def _apply_neighbor_consistency_override(
+    configs: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Scan the per-config list within (query_clip, group) and downgrade
+    configs whose leave/return endpoints disagree with a 1-step grid
+    neighbor. Returns the mutated config list (in place) and the list of
+    conflict pairs recorded for the per-group aggregate.
+    """
+    n = len(configs)
+    conflict_pairs: list[dict[str, Any]] = []
+    for i in range(n):
+        ci = configs[i]
+        # Skip configs whose raw status is already INSUFFICIENT_EVIDENCE due
+        # to invalid query counts: nothing to override.
+        if ci["return_to_reference_status_pre_neighbor_consistency"] == (
+            "INSUFFICIENT_EVIDENCE"
+        ):
+            ci["return_to_reference_status"] = "INSUFFICIENT_EVIDENCE"
+            ci["neighbor_consistency_conflicts"] = []
+            continue
+        conflicts_for_ci: list[dict[str, Any]] = []
+        for j in range(n):
+            if i == j:
+                continue
+            cj = configs[j]
+            if _layer_c1_neighbor_diff_dims(ci, cj) != 1:
+                continue
+            # If the neighbor itself is invalid by query-count, skip — we
+            # do not let an INSUFFICIENT_EVIDENCE-by-count neighbor force
+            # a healthy config to be downgraded; only well-formed endpoint
+            # disagreements count.
+            if cj["return_to_reference_status_pre_neighbor_consistency"] == (
+                "INSUFFICIENT_EVIDENCE"
+            ):
+                continue
+            conflict = _layer_c1_endpoint_conflict(ci, cj)
+            if conflict is not None:
+                conflicts_for_ci.append(
+                    {
+                        "neighbor_config_id": cj["config_id"],
+                        **conflict,
+                    }
+                )
+                conflict_pairs.append(
+                    {
+                        "config_id_a": ci["config_id"],
+                        "config_id_b": cj["config_id"],
+                        "kind": conflict["kind"],
+                    }
+                )
+        if conflicts_for_ci:
+            ci["return_to_reference_status"] = "INSUFFICIENT_EVIDENCE"
+            ci["neighbor_consistency_conflicts"] = conflicts_for_ci
+        else:
+            ci["return_to_reference_status"] = ci[
+                "return_to_reference_status_pre_neighbor_consistency"
+            ]
+            ci["neighbor_consistency_conflicts"] = []
+    return configs, conflict_pairs
+
+
+def _summarize_self_baseline_loss(
+    loss_array: np.ndarray,
+) -> dict[str, Any]:
+    return _quantile_summary(loss_array)
+
+
+def _layer_c1_group_loss_curve_entry(
+    *,
+    query_phase_frames: np.ndarray,
+    matched_walk_f_phase_frames: np.ndarray,
+    phase_loss_array: np.ndarray,
+    out_of_band_mask: np.ndarray,
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for idx in range(int(query_phase_frames.shape[0])):
+        entries.append(
+            {
+                "query_clip_phase_frame": int(query_phase_frames[idx]),
+                "matched_walk_f_phase_frame": int(matched_walk_f_phase_frames[idx]),
+                "phase_loss": float(phase_loss_array[idx]),
+                "out_of_band": bool(out_of_band_mask[idx]),
+            }
+        )
+    return entries
+
+
+def _layer_c1_group_loss_percentile_curve(
+    *,
+    query_phase_frames: np.ndarray,
+    phase_loss_array: np.ndarray,
+    walk_f_self_baseline_loss_array: np.ndarray,
+) -> list[dict[str, Any]]:
+    """Compute the percentile of each query phase loss relative to the
+    Walk_F self-baseline loss distribution. If the baseline is empty,
+    every percentile is None.
+    """
+    entries: list[dict[str, Any]] = []
+    if walk_f_self_baseline_loss_array.shape[0] == 0:
+        for idx in range(int(query_phase_frames.shape[0])):
+            entries.append(
+                {
+                    "query_clip_phase_frame": int(query_phase_frames[idx]),
+                    "phase_loss_percentile_vs_walk_f_self_baseline": None,
+                }
+            )
+        return entries
+    sorted_baseline = np.sort(walk_f_self_baseline_loss_array)
+    for idx in range(int(query_phase_frames.shape[0])):
+        loss = float(phase_loss_array[idx])
+        pct = float(
+            np.searchsorted(sorted_baseline, loss, side="right")
+        ) / float(sorted_baseline.shape[0]) * 100.0
+        entries.append(
+            {
+                "query_clip_phase_frame": int(query_phase_frames[idx]),
+                "phase_loss_percentile_vs_walk_f_self_baseline": pct,
+            }
+        )
+    return entries
+
+
+def _run_layer_c1_group_for_query(
+    *,
+    query_clip_name: str,
+    group_name: str,
+    walk_f_group_payload: dict[str, Any],
+    query_channel_arrays: dict[str, np.ndarray],
+) -> dict[str, Any]:
+    """Compute the full Layer C.1 config sweep for one (query_clip, group)
+    pair. Returns a dict containing per-config rows and group-level
+    aggregate flags. Reference-degenerate groups are short-circuited.
+    """
+    _layer_c1_forbid_turn_dyn(group_name, "_run_layer_c1_group_for_query")
+    if bool(walk_f_group_payload["reference_degenerate"]):
+        return {
+            "group": group_name,
+            "phase_structure_status": "phase_degenerate",
+            "evidence_status": "INSUFFICIENT_EVIDENCE",
+            "reference_degenerate": True,
+            "active_channels": list(walk_f_group_payload["active_channels"]),
+            "excluded_channels": walk_f_group_payload["excluded_channels"],
+            "group_ablation_role": walk_f_group_payload["group_ablation_role"],
+            "configs": [],
+            "neighbor_consistency_conflict_pairs": [],
+            "boundary_detection_skipped_reason": (
+                "Walk_F reference_degenerate: every channel is at or below the "
+                "estimator-level MAD epsilon, so the canonical SE(2) z-score "
+                "would diverge under a query rescale. Boundary detection is "
+                "skipped (Layer C.1 contract §4)."
+            ),
+        }
+
+    query_payload = _normalize_with_walk_f_scale(
+        walk_f_group_payload=walk_f_group_payload,
+        query_channel_arrays=query_channel_arrays,
+        query_clip_name=query_clip_name,
+        group_name=group_name,
+    )
+    query_z_matrix: np.ndarray = query_payload["z_matrix"]
+    walk_f_z_matrix: np.ndarray = walk_f_group_payload["z_matrix"]
+
+    config_rows: list[dict[str, Any]] = []
+    walk_f_per_estimator_cache: dict[tuple[int, int, int, str], dict[str, Any]] = {}
+    query_per_estimator_cache: dict[tuple[int, int, str], dict[str, Any]] = {}
+
+    for history_window_frames in LAYER_C_HISTORY_WINDOW_FRAMES:
+        for future_horizon_frames in LAYER_C_FUTURE_HORIZON_FRAMES:
+            for neighborhood_radius_frames in LAYER_C_NEIGHBORHOOD_RADIUS_FRAMES:
+                for distance_metric in LAYER_C_DISTANCE_METRICS:
+                    walk_f_cache_key = (
+                        int(history_window_frames),
+                        int(future_horizon_frames),
+                        int(neighborhood_radius_frames),
+                        str(distance_metric),
+                    )
+                    walk_f_baseline = walk_f_per_estimator_cache.get(walk_f_cache_key)
+                    if walk_f_baseline is None:
+                        walk_f_baseline = _walk_f_self_baseline_loss_distribution(
+                            walk_f_z_matrix=walk_f_z_matrix,
+                            history_window_frames=history_window_frames,
+                            future_horizon_frames=future_horizon_frames,
+                            neighborhood_radius_frames=neighborhood_radius_frames,
+                            distance_metric=distance_metric,
+                        )
+                        walk_f_per_estimator_cache[walk_f_cache_key] = walk_f_baseline
+
+                    query_cache_key = (
+                        int(history_window_frames),
+                        int(future_horizon_frames),
+                        str(distance_metric),
+                    )
+                    query_match = query_per_estimator_cache.get(query_cache_key)
+                    if query_match is None:
+                        query_match = _query_phase_loss_against_walk_f(
+                            walk_f_phase_frames=walk_f_baseline["phase_frames"],
+                            walk_f_history_windows=walk_f_baseline[
+                                "history_windows"
+                            ],
+                            walk_f_future_windows=walk_f_baseline[
+                                "future_windows"
+                            ],
+                            query_z_matrix=query_z_matrix,
+                            history_window_frames=history_window_frames,
+                            future_horizon_frames=future_horizon_frames,
+                            distance_metric=distance_metric,
+                        )
+                        query_per_estimator_cache[query_cache_key] = query_match
+
+                    self_baseline_loss = walk_f_baseline[
+                        "self_baseline_loss_array"
+                    ]
+                    self_baseline_quantiles = _summarize_self_baseline_loss(
+                        self_baseline_loss
+                    )
+                    query_phase_frames = query_match["query_phase_frames"]
+                    phase_loss_array = query_match["phase_loss_array"]
+                    matched_walk_f = query_match["matched_walk_f_phase_frames"]
+                    valid_query_count = int(phase_loss_array.shape[0])
+                    candidate_count_walk_f = int(
+                        walk_f_baseline["phase_frames"].shape[0]
+                    )
+                    valid_query_fraction = (
+                        float(valid_query_count) / float(candidate_count_walk_f)
+                        if candidate_count_walk_f > 0
+                        else 0.0
+                    )
+
+                    for band_label, band_q in LAYER_C1_BAND_QUANTILES:
+                        if self_baseline_loss.shape[0] == 0:
+                            band_value: float | None = None
+                        else:
+                            band_value = float(
+                                np.quantile(self_baseline_loss, float(band_q))
+                            )
+
+                        for min_leave in LAYER_C1_MIN_CONSEC_FRAMES_FOR_LEAVE:
+                            for min_return in LAYER_C1_MIN_CONSEC_FRAMES_FOR_RETURN:
+                                config_id = _layer_c1_config_id(
+                                    history_window_frames=history_window_frames,
+                                    future_horizon_frames=future_horizon_frames,
+                                    neighborhood_radius_frames=neighborhood_radius_frames,
+                                    distance_metric=distance_metric,
+                                    band_quantile_label=band_label,
+                                    min_consecutive_leave=min_leave,
+                                    min_consecutive_return=min_return,
+                                )
+                                if (
+                                    band_value is None
+                                    or phase_loss_array.shape[0] == 0
+                                ):
+                                    raw_status = "INSUFFICIENT_EVIDENCE"
+                                    leave_payload = {
+                                        "out_of_band_mask": np.zeros(
+                                            (0,), dtype=bool
+                                        ),
+                                        "out_of_band_frame_count": 0,
+                                        "leave_interval": None,
+                                        "return_interval": None,
+                                        "leave_interval_idx": None,
+                                        "return_interval_idx": None,
+                                        "left_censored_leave": False,
+                                        "right_censored_return": False,
+                                    }
+                                else:
+                                    leave_payload = _detect_leave_return_intervals(
+                                        query_phase_frames=query_phase_frames,
+                                        phase_loss_array=phase_loss_array,
+                                        band_value=band_value,
+                                        min_consecutive_leave=min_leave,
+                                        min_consecutive_return=min_return,
+                                    )
+                                    raw_status = (
+                                        _classify_return_to_reference_status_raw(
+                                            leave_interval=leave_payload[
+                                                "leave_interval"
+                                            ],
+                                            return_interval=leave_payload[
+                                                "return_interval"
+                                            ],
+                                            valid_query_count=valid_query_count,
+                                            valid_query_fraction=valid_query_fraction,
+                                        )
+                                    )
+
+                                if (
+                                    band_value is not None
+                                    and phase_loss_array.shape[0] > 0
+                                ):
+                                    loss_curve = _layer_c1_group_loss_curve_entry(
+                                        query_phase_frames=query_phase_frames,
+                                        matched_walk_f_phase_frames=matched_walk_f,
+                                        phase_loss_array=phase_loss_array,
+                                        out_of_band_mask=leave_payload[
+                                            "out_of_band_mask"
+                                        ],
+                                    )
+                                    loss_percentile_curve = (
+                                        _layer_c1_group_loss_percentile_curve(
+                                            query_phase_frames=query_phase_frames,
+                                            phase_loss_array=phase_loss_array,
+                                            walk_f_self_baseline_loss_array=(
+                                                self_baseline_loss
+                                            ),
+                                        )
+                                    )
+                                else:
+                                    loss_curve = []
+                                    loss_percentile_curve = []
+
+                                config_rows.append(
+                                    {
+                                        "config_id": config_id,
+                                        "history_window_frames": int(
+                                            history_window_frames
+                                        ),
+                                        "future_horizon_frames": int(
+                                            future_horizon_frames
+                                        ),
+                                        "neighborhood_radius_frames": int(
+                                            neighborhood_radius_frames
+                                        ),
+                                        "distance_metric": str(distance_metric),
+                                        "band_quantile": band_label,
+                                        "band_quantile_fraction": float(band_q),
+                                        "min_consecutive_frames_for_leave": int(
+                                            min_leave
+                                        ),
+                                        "min_consecutive_frames_for_return": int(
+                                            min_return
+                                        ),
+                                        "valid_query_count": valid_query_count,
+                                        "valid_query_fraction": (
+                                            valid_query_fraction
+                                        ),
+                                        "min_valid_query_count_estimator_only": (
+                                            LAYER_C1_MIN_VALID_QUERY_COUNT
+                                        ),
+                                        "min_valid_query_fraction_estimator_only": (
+                                            LAYER_C1_MIN_VALID_QUERY_FRACTION
+                                        ),
+                                        "walk_f_self_baseline_candidate_count": (
+                                            candidate_count_walk_f
+                                        ),
+                                        "walk_f_self_baseline_valid_count": int(
+                                            walk_f_baseline[
+                                                "valid_self_baseline_count"
+                                            ]
+                                        ),
+                                        "band_quantile_value": band_value,
+                                        "self_baseline_band_quantiles": (
+                                            self_baseline_quantiles
+                                        ),
+                                        "phase_loss_quantiles_on_query": (
+                                            _quantile_summary(phase_loss_array)
+                                        ),
+                                        "out_of_band_frame_count": int(
+                                            leave_payload["out_of_band_frame_count"]
+                                        ),
+                                        "leave_interval": leave_payload[
+                                            "leave_interval"
+                                        ],
+                                        "return_interval": leave_payload[
+                                            "return_interval"
+                                        ],
+                                        "left_censored_leave": bool(
+                                            leave_payload["left_censored_leave"]
+                                        ),
+                                        "right_censored_return": bool(
+                                            leave_payload["right_censored_return"]
+                                        ),
+                                        "return_to_reference_status_pre_neighbor_consistency": (
+                                            raw_status
+                                        ),
+                                        "return_to_reference_status": raw_status,
+                                        "neighbor_consistency_conflicts": [],
+                                        "loss_curve": loss_curve,
+                                        "loss_percentile_curve": (
+                                            loss_percentile_curve
+                                        ),
+                                    }
+                                )
+
+    config_rows, conflict_pairs = _apply_neighbor_consistency_override(config_rows)
+
+    returned_n = sum(
+        1
+        for c in config_rows
+        if c["return_to_reference_status"] == "returned"
+    )
+    never_left_n = sum(
+        1
+        for c in config_rows
+        if c["return_to_reference_status"] == "never_left"
+    )
+    never_returned_n = sum(
+        1
+        for c in config_rows
+        if c["return_to_reference_status"] == "never_returned"
+    )
+    insufficient_n = sum(
+        1
+        for c in config_rows
+        if c["return_to_reference_status"] == "INSUFFICIENT_EVIDENCE"
+    )
+    left_censored_n = sum(1 for c in config_rows if c["left_censored_leave"])
+    right_censored_n = sum(1 for c in config_rows if c["right_censored_return"])
+
+    return {
+        "group": group_name,
+        "phase_structure_status": "insufficient_evidence",
+        "evidence_status": "INSUFFICIENT_EVIDENCE",
+        "reference_degenerate": False,
+        "active_channels": list(walk_f_group_payload["active_channels"]),
+        "excluded_channels": walk_f_group_payload["excluded_channels"],
+        "group_ablation_role": walk_f_group_payload["group_ablation_role"],
+        "configs": config_rows,
+        "returned_config_count": int(returned_n),
+        "never_left_config_count": int(never_left_n),
+        "never_returned_config_count": int(never_returned_n),
+        "insufficient_evidence_config_count": int(insufficient_n),
+        "left_censored_leave_config_count": int(left_censored_n),
+        "right_censored_return_config_count": int(right_censored_n),
+        "neighbor_consistency_conflict_pair_count": int(len(conflict_pairs)),
+        "neighbor_consistency_conflict_pairs": conflict_pairs,
+        "boundary_detection_skipped_reason": None,
+    }
+
+
+def _build_walk_f_layer_c_group_payloads(
+    *,
+    walk_f_clip_info: dict[str, Any],
+    walk_f_contact_signals: dict[str, np.ndarray],
+) -> dict[str, dict[str, Any]]:
+    quotient = _canonical_quotient_features(
+        walk_f_clip_info["root_yaw_rad"],
+        walk_f_clip_info["root_pos_xy_m"],
+        walk_f_clip_info["root_vel_xy_mps"],
+        walk_f_clip_info["fps"],
+    )
+    channel_arrays = _extract_layer_b_channels(quotient, walk_f_contact_signals)
+    payloads: dict[str, dict[str, Any]] = {}
+    for group_name, group_def in LAYER_C1_FEATURE_GROUPS.items():
+        _layer_c1_forbid_turn_dyn(
+            group_name, "_build_walk_f_layer_c_group_payloads"
+        )
+        payloads[group_name] = _build_layer_c_group_matrix(
+            group_name=group_name,
+            group_def=group_def,
+            channel_arrays=channel_arrays,
+        )
+    return payloads
+
+
+def _build_query_channel_arrays(
+    *,
+    clip_info: dict[str, Any],
+    contact_signals: dict[str, np.ndarray],
+) -> dict[str, np.ndarray]:
+    quotient = _canonical_quotient_features(
+        clip_info["root_yaw_rad"],
+        clip_info["root_pos_xy_m"],
+        clip_info["root_vel_xy_mps"],
+        clip_info["fps"],
+    )
+    return _extract_layer_b_channels(quotient, contact_signals)
+
+
+def _process_query_clip_boundary_check(
+    *,
+    query_clip_info: dict[str, Any],
+    query_contact_signals: dict[str, np.ndarray],
+    walk_f_group_payloads: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    query_channel_arrays = _build_query_channel_arrays(
+        clip_info=query_clip_info,
+        contact_signals=query_contact_signals,
+    )
+    per_group: dict[str, Any] = {}
+    for group_name, walk_f_payload in walk_f_group_payloads.items():
+        _layer_c1_forbid_turn_dyn(
+            group_name, "_process_query_clip_boundary_check"
+        )
+        per_group[group_name] = _run_layer_c1_group_for_query(
+            query_clip_name=query_clip_info["clip"],
+            group_name=group_name,
+            walk_f_group_payload=walk_f_payload,
+            query_channel_arrays=query_channel_arrays,
+        )
+    return {
+        "clip": query_clip_info["clip"],
+        "raw_json_path": query_clip_info["raw_json_path"],
+        "fps": query_clip_info["fps"],
+        "frame_count": query_clip_info["frame_count"],
+        "track": TRACK_BY_MODE["query_boundary_check"],
+        "track_role": TRACK_ROLE_BY_MODE["query_boundary_check"],
+        "clip_role": "query_clip",
+        "feature_groups_layer_c1": per_group,
+        "excluded_feature_groups_layer_c1": LAYER_C1_EXCLUDED_FEATURE_GROUPS,
+        "attractor_membership_status": (
+            "not_emitted_by_this_tool_layer_c1_query_boundary_only"
+        ),
+        "event_head_target_status": "not_emitted_by_this_tool",
+        "handoff_ready_status": "not_emitted_by_this_tool",
+        "transition_done_status": "not_emitted_by_this_tool",
+        "cross_attractor_claim_status": "forbidden_by_contract",
+        "transition_truth_promotion": "forbidden_by_contract",
+    }
+
+
+# -----------------------------------------------------------------------
 # Artifact writers
 # -----------------------------------------------------------------------
 
@@ -3027,6 +4037,513 @@ def _build_summary_phase_library_check(
     return summary
 
 
+def _build_summary_query_boundary_check(
+    raw_root: Path,
+    clips: list[str],
+    walk_f_group_payloads: dict[str, dict[str, Any]],
+    per_clip: list[dict[str, Any]],
+    per_clip_paths: list[str],
+    internal_se2_precondition: dict[str, Any],
+) -> dict[str, Any]:
+    """Layer C.1 summary: Walk_F self-baseline band + query leave/return
+    + censoring audit on the 4 turn clips.
+
+    This builder MUST NOT emit attractor membership, EventHead targets,
+    handoff_ready, transition_done, cross-attractor claims, or any
+    combined-membership score over feature groups. Every one of those
+    fields is recorded as not_emitted_by_this_tool or
+    forbidden_by_contract.
+    """
+    # Defensive: clip set must be exactly {Walk_F + 4 turn clips}. The CLI
+    # validator already enforces this BEFORE args.out_dir.mkdir, but we
+    # repeat the check here so a future caller cannot bypass it by
+    # invoking this builder directly with a partial clip list.
+    if frozenset(clips) != LAYER_C1_REQUIRED_CLIP_SET:
+        raise FailFastError(
+            "[walk_f_causal_state_probe] Layer C.1 summary requires --clips set "
+            f"equal to {sorted(LAYER_C1_REQUIRED_CLIP_SET)!r}; got {clips!r}. "
+            "Refusing to emit a mixed / partial-family artifact "
+            "(docs/removal_policy.md §3-§4)."
+        )
+
+    # Walk_F reference summary (small, decoupled from per-query payloads).
+    walk_f_group_summary: dict[str, Any] = {}
+    for group_name, payload in walk_f_group_payloads.items():
+        _layer_c1_forbid_turn_dyn(
+            group_name, "_build_summary_query_boundary_check.walk_f_group_summary"
+        )
+        walk_f_group_summary[group_name] = {
+            "reference_degenerate": bool(payload["reference_degenerate"]),
+            "active_channels": list(payload["active_channels"]),
+            "excluded_channels": payload["excluded_channels"],
+            "group_ablation_role": payload["group_ablation_role"],
+            "source": payload["source"],
+        }
+
+    # Per-query aggregate + censoring summary across (clip, group, config).
+    per_query_clip: list[dict[str, Any]] = []
+    censoring_rows: list[dict[str, Any]] = []
+    insufficient: list[dict[str, Any]] = []
+    per_group_aggregate: dict[str, Any] = {
+        name: {
+            "returned_config_count": 0,
+            "never_left_config_count": 0,
+            "never_returned_config_count": 0,
+            "insufficient_evidence_config_count": 0,
+            "left_censored_leave_config_count": 0,
+            "right_censored_return_config_count": 0,
+            "neighbor_consistency_conflict_pair_count": 0,
+            "reference_degenerate": False,
+            "active_channels": list(
+                walk_f_group_payloads[name]["active_channels"]
+            ),
+            "excluded_channels": walk_f_group_payloads[name]["excluded_channels"],
+            "group_ablation_role": (
+                walk_f_group_payloads[name]["group_ablation_role"]
+            ),
+        }
+        for name in LAYER_C1_FEATURE_GROUPS
+    }
+
+    for entry in per_clip:
+        clip_name = entry["clip"]
+        groups_payload = entry["feature_groups_layer_c1"]
+        compact_groups: dict[str, Any] = {}
+        for group_name, group_payload in groups_payload.items():
+            _layer_c1_forbid_turn_dyn(
+                group_name,
+                "_build_summary_query_boundary_check.per_clip_compact",
+            )
+            ref_degenerate = bool(group_payload["reference_degenerate"])
+            per_group_aggregate[group_name]["reference_degenerate"] = (
+                per_group_aggregate[group_name]["reference_degenerate"]
+                or ref_degenerate
+            )
+            if ref_degenerate:
+                compact_groups[group_name] = {
+                    "phase_structure_status": "phase_degenerate",
+                    "evidence_status": "INSUFFICIENT_EVIDENCE",
+                    "reference_degenerate": True,
+                    "active_channels": group_payload["active_channels"],
+                    "excluded_channels": group_payload["excluded_channels"],
+                    "group_ablation_role": group_payload["group_ablation_role"],
+                    "config_count": 0,
+                    "returned_config_count": 0,
+                    "never_left_config_count": 0,
+                    "never_returned_config_count": 0,
+                    "insufficient_evidence_config_count": 0,
+                    "left_censored_leave_config_count": 0,
+                    "right_censored_return_config_count": 0,
+                    "neighbor_consistency_conflict_pair_count": 0,
+                    "boundary_detection_skipped_reason": group_payload[
+                        "boundary_detection_skipped_reason"
+                    ],
+                    "full_curve_artifact_path": None,
+                }
+                insufficient.append(
+                    {
+                        "clip": clip_name,
+                        "where": (
+                            f"feature_groups_layer_c1.{group_name}."
+                            "phase_structure_status"
+                        ),
+                        "status": "INSUFFICIENT_EVIDENCE",
+                        "phase_structure_status": "phase_degenerate",
+                        "reason": (
+                            "Walk_F reference is degenerate for this group; "
+                            "Layer C.1 contract §4 mandates skipping boundary "
+                            "detection. This is a contract PASS outcome on "
+                            "single-trajectory Walk_F data, not failure."
+                        ),
+                    }
+                )
+                continue
+
+            compact_groups[group_name] = {
+                "phase_structure_status": "insufficient_evidence",
+                "evidence_status": "INSUFFICIENT_EVIDENCE",
+                "reference_degenerate": False,
+                "active_channels": group_payload["active_channels"],
+                "excluded_channels": group_payload["excluded_channels"],
+                "group_ablation_role": group_payload["group_ablation_role"],
+                "config_count": int(len(group_payload["configs"])),
+                "returned_config_count": int(
+                    group_payload["returned_config_count"]
+                ),
+                "never_left_config_count": int(
+                    group_payload["never_left_config_count"]
+                ),
+                "never_returned_config_count": int(
+                    group_payload["never_returned_config_count"]
+                ),
+                "insufficient_evidence_config_count": int(
+                    group_payload["insufficient_evidence_config_count"]
+                ),
+                "left_censored_leave_config_count": int(
+                    group_payload["left_censored_leave_config_count"]
+                ),
+                "right_censored_return_config_count": int(
+                    group_payload["right_censored_return_config_count"]
+                ),
+                "neighbor_consistency_conflict_pair_count": int(
+                    group_payload["neighbor_consistency_conflict_pair_count"]
+                ),
+                "boundary_detection_skipped_reason": None,
+                "full_curve_artifact_path": None,
+            }
+            per_group_aggregate[group_name]["returned_config_count"] += int(
+                group_payload["returned_config_count"]
+            )
+            per_group_aggregate[group_name]["never_left_config_count"] += int(
+                group_payload["never_left_config_count"]
+            )
+            per_group_aggregate[group_name][
+                "never_returned_config_count"
+            ] += int(group_payload["never_returned_config_count"])
+            per_group_aggregate[group_name][
+                "insufficient_evidence_config_count"
+            ] += int(group_payload["insufficient_evidence_config_count"])
+            per_group_aggregate[group_name][
+                "left_censored_leave_config_count"
+            ] += int(group_payload["left_censored_leave_config_count"])
+            per_group_aggregate[group_name][
+                "right_censored_return_config_count"
+            ] += int(group_payload["right_censored_return_config_count"])
+            per_group_aggregate[group_name][
+                "neighbor_consistency_conflict_pair_count"
+            ] += int(group_payload["neighbor_consistency_conflict_pair_count"])
+
+            if int(group_payload["insufficient_evidence_config_count"]) > 0:
+                insufficient.append(
+                    {
+                        "clip": clip_name,
+                        "where": (
+                            f"feature_groups_layer_c1.{group_name}."
+                            "return_to_reference_status"
+                        ),
+                        "status": "INSUFFICIENT_EVIDENCE",
+                        "phase_structure_status": "insufficient_evidence",
+                        "insufficient_evidence_config_count": int(
+                            group_payload["insufficient_evidence_config_count"]
+                        ),
+                        "neighbor_consistency_conflict_pair_count": int(
+                            group_payload[
+                                "neighbor_consistency_conflict_pair_count"
+                            ]
+                        ),
+                        "reason": (
+                            "At least one estimator config returned "
+                            "INSUFFICIENT_EVIDENCE due to too few valid "
+                            "query phases or neighbor-grid disagreement on "
+                            "leave/return endpoints. On single-trajectory "
+                            "Walk_F baseline this is contract PASS "
+                            "(Layer C.1 contract §1 rule 2)."
+                        ),
+                    }
+                )
+
+            # Per-config censoring rows for the censoring_summary table.
+            for c in group_payload["configs"]:
+                if c["left_censored_leave"] or c["right_censored_return"]:
+                    censoring_rows.append(
+                        {
+                            "clip": clip_name,
+                            "group": group_name,
+                            "config_id": c["config_id"],
+                            "left_censored_leave": bool(
+                                c["left_censored_leave"]
+                            ),
+                            "right_censored_return": bool(
+                                c["right_censored_return"]
+                            ),
+                            "leave_interval": c["leave_interval"],
+                            "return_interval": c["return_interval"],
+                            "return_to_reference_status": c[
+                                "return_to_reference_status"
+                            ],
+                        }
+                    )
+
+        per_query_clip.append(
+            {
+                "clip": clip_name,
+                "raw_json_path": entry["raw_json_path"],
+                "fps": entry["fps"],
+                "frame_count": entry["frame_count"],
+                "clip_role": entry["clip_role"],
+                "feature_groups_layer_c1_compact": compact_groups,
+                "full_curve_artifact_paths_note": (
+                    "Full per-config loss_curve and loss_percentile_curve "
+                    "arrays are stored in the per-clip artifact JSONs."
+                ),
+            }
+        )
+
+    # Resolve per-clip artifact paths into the compact per-group dicts so
+    # consumers can find the full curves without hunting through the
+    # filesystem.
+    clip_to_path: dict[str, str] = {}
+    for entry, path in zip(per_clip, per_clip_paths, strict=True):
+        clip_to_path[entry["clip"]] = path
+    for clip_summary in per_query_clip:
+        for compact in clip_summary["feature_groups_layer_c1_compact"].values():
+            compact["full_curve_artifact_path"] = clip_to_path.get(
+                clip_summary["clip"]
+            )
+
+    insufficient.extend(
+        [
+            {
+                "clip": None,
+                "where": "class_level_attractor_claim",
+                "status": "INSUFFICIENT_EVIDENCE",
+                "reason": (
+                    "Walk_F remains a single 88-frame trajectory; class-level "
+                    "recurrence is not established. Layer C.1 audits query "
+                    "boundaries against this single-trajectory baseline only "
+                    "(scaffold v1 §4 single-trajectory caveat)."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "attractor_membership_status",
+                "status": "not_emitted_by_this_tool",
+                "reason": (
+                    "Layer C.1 emits query leave/return intervals + "
+                    "censoring flags only. Attractor membership requires a "
+                    "separate contract (Layer C.1 contract §1 rule 1)."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "event_head_target_status",
+                "status": "not_emitted_by_this_tool",
+                "reason": (
+                    "Layer C.1 is read-only and produces no EventHead "
+                    "target, no handoff_ready, no transition_done."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "handoff_ready_status",
+                "status": "not_emitted_by_this_tool",
+                "reason": "Reserved; see scaffold v1 §2 + §7.",
+            },
+            {
+                "clip": None,
+                "where": "transition_done_status",
+                "status": "not_emitted_by_this_tool",
+                "reason": "Reserved; see scaffold v1 §2 + §7.",
+            },
+            {
+                "clip": None,
+                "where": "cross_attractor_claim_status",
+                "status": "forbidden_by_contract",
+                "reason": (
+                    "reference_family is locked to Walk_F. No Walk -> Run / "
+                    "Walk -> Idle / etc claims are derivable from this audit "
+                    "(scaffold v1 §2)."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "transition_truth_promotion",
+                "status": "forbidden_by_contract",
+                "reason": (
+                    "Query leave/return intervals MUST NOT be promoted to "
+                    "general transition truth, training labels, or runtime "
+                    "switching behavior."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "combined_membership_score",
+                "status": "forbidden_by_contract",
+                "reason": (
+                    "Layer C.1 reports leave/return per feature group "
+                    "separately. No combined membership score is emitted, "
+                    "and turn_dyn is hard-rejected at every entry point."
+                ),
+            },
+            {
+                "clip": None,
+                "where": "pose_dyn / pose_rel / processed_data_pose_npz",
+                "status": "not_run_layerC1_reserved_for_layerB1",
+                "reason": (
+                    "pose_dyn and pose_rel require processed_data/*.npz "
+                    "schema validation and a non-templating contract; both "
+                    "are reserved for Layer B.1."
+                ),
+            },
+        ]
+    )
+
+    censoring_summary = {
+        "left_censored_leave_total": int(
+            sum(1 for r in censoring_rows if r["left_censored_leave"])
+        ),
+        "right_censored_return_total": int(
+            sum(1 for r in censoring_rows if r["right_censored_return"])
+        ),
+        "rows_truncation_policy": "all_rows_emitted",
+        "rows": censoring_rows,
+        "expected_insufficient_evidence_is_contract_pass": True,
+        "explanation": (
+            "Per Layer C.1 contract §1 rule 2 and scaffold v1 §4 + §5.4, "
+            "left_censored_leave / right_censored_return / "
+            "return_to_reference_status=INSUFFICIENT_EVIDENCE are all "
+            "contract PASS outcomes on the current single-trajectory "
+            "Walk_F baseline. They are recorded here for audit "
+            "transparency and are not implementation failures."
+        ),
+    }
+
+    estimation_grid = {
+        "history_window_frames": list(LAYER_C_HISTORY_WINDOW_FRAMES),
+        "future_horizon_frames": list(LAYER_C_FUTURE_HORIZON_FRAMES),
+        "neighborhood_radius_frames": list(LAYER_C_NEIGHBORHOOD_RADIUS_FRAMES),
+        "distance_metric": list(LAYER_C_DISTANCE_METRICS),
+        "band_quantile": [label for label, _ in LAYER_C1_BAND_QUANTILES],
+        "band_quantile_fractions": {
+            label: float(q) for label, q in LAYER_C1_BAND_QUANTILES
+        },
+        "min_consecutive_frames_for_leave": list(
+            LAYER_C1_MIN_CONSEC_FRAMES_FOR_LEAVE
+        ),
+        "min_consecutive_frames_for_return": list(
+            LAYER_C1_MIN_CONSEC_FRAMES_FOR_RETURN
+        ),
+        "grid_point_count_per_group": int(
+            len(LAYER_C_HISTORY_WINDOW_FRAMES)
+            * len(LAYER_C_FUTURE_HORIZON_FRAMES)
+            * len(LAYER_C_NEIGHBORHOOD_RADIUS_FRAMES)
+            * len(LAYER_C_DISTANCE_METRICS)
+            * len(LAYER_C1_BAND_QUANTILES)
+            * len(LAYER_C1_MIN_CONSEC_FRAMES_FOR_LEAVE)
+            * len(LAYER_C1_MIN_CONSEC_FRAMES_FOR_RETURN)
+        ),
+        "neighbor_consistency_tol_frames": int(
+            LAYER_C1_NEIGHBOR_CONSISTENCY_TOL_FRAMES
+        ),
+        "min_valid_query_count_estimator_only": LAYER_C1_MIN_VALID_QUERY_COUNT,
+        "min_valid_query_fraction_estimator_only": (
+            LAYER_C1_MIN_VALID_QUERY_FRACTION
+        ),
+        "note": (
+            "Every grid point is reported. A single config's leave/return "
+            "answer is overridden to INSUFFICIENT_EVIDENCE if a 1-step "
+            "neighbor in any dimension gives a different existence "
+            "boolean or an endpoint that differs by more than the "
+            "neighbor_consistency_tol_frames frames."
+        ),
+    }
+
+    summary = _common_summary_root(
+        "query_boundary_check", raw_root, clips, per_clip_paths
+    )
+    summary.update(
+        {
+            "layer": "Layer C.1",
+            "layer_c1_contract_doc": (
+                "docs/aperiodic_transition/"
+                "2026-05-23_walk_f_causal_state_layerc1_query_boundary_contract.md"
+            ),
+            "layer_c1_contract_status": "pass",
+            "expected_insufficient_evidence_is_contract_pass": True,
+            "definition_layer": {
+                "attractor_definition_status": "not_emitted_by_this_tool",
+                "causal_state_definition_status": "not_emitted_by_this_tool",
+                "current_reference_family": REFERENCE_FAMILY,
+                "membership_evidence_status": (
+                    "not_emitted_by_this_tool_layer_c1_query_boundary_only"
+                ),
+                "scope_caveat": (
+                    "Walk_F is a single 88-frame trajectory. Layer C.1 "
+                    "audits query leave/return relative to this single-"
+                    "trajectory baseline only; class-level recurrence and "
+                    "attractor membership remain INSUFFICIENT_EVIDENCE."
+                ),
+            },
+            "reference_family": REFERENCE_FAMILY,
+            "query_family": list(LAYER_C1_QUERY_FAMILY),
+            "reference_clip_names_resolved": [LAYER_C1_REFERENCE_CLIP],
+            "query_clip_names_resolved": list(LAYER_C1_QUERY_FAMILY),
+            "input_clip_policy": (
+                "clips_must_set_equal_walk_f_plus_4_turn_clips_no_duplicates"
+            ),
+            "internal_se2_gauge_precondition": internal_se2_precondition,
+            "walk_f_phase_library_source": (
+                "internal_phase_library_check_rerun_not_external_artifact"
+            ),
+            "estimation_grid": estimation_grid,
+            "included_feature_groups": list(LAYER_C1_FEATURE_GROUPS.keys()),
+            "excluded_feature_groups": LAYER_C1_EXCLUDED_FEATURE_GROUPS,
+            "walk_f_group_payload_summary": walk_f_group_summary,
+            "per_query_clip": per_query_clip,
+            "per_group_aggregate": per_group_aggregate,
+            "censoring_summary": censoring_summary,
+            "sensitivity_summary": {
+                "history_window_sensitivity_status": "reported_full_grid",
+                "future_horizon_sensitivity_status": "reported_full_grid",
+                "neighborhood_radius_sensitivity_status": "reported_full_grid",
+                "distance_metric_sensitivity_status": "reported_full_grid",
+                "band_quantile_sensitivity_status": "reported_full_grid",
+                "min_consecutive_leave_sensitivity_status": "reported_full_grid",
+                "min_consecutive_return_sensitivity_status": "reported_full_grid",
+                "neighbor_consistency_override_status": (
+                    "applied_per_query_clip_per_group"
+                ),
+            },
+            "causal_state_track_status": (
+                "query_boundary_audit_only_layer_c1"
+            ),
+            "quotient_definition_status": (
+                "internal_layerA_se2_precondition_passed"
+            ),
+            "phase_library_status": (
+                "internal_phase_library_check_rerun_not_external_artifact"
+            ),
+            "predictive_loss_status": (
+                "walk_f_leave_one_neighborhood_plus_query_phase_match"
+            ),
+            "query_leave_return_status": "emitted_per_clip_per_group_per_config",
+            "attractor_membership_status": (
+                "not_emitted_by_this_tool_layer_c1_query_boundary_only"
+            ),
+            "event_head_target_status": "not_emitted_by_this_tool",
+            "handoff_ready_status": "not_emitted_by_this_tool",
+            "transition_done_status": "not_emitted_by_this_tool",
+            "cross_attractor_claim_status": "forbidden_by_contract",
+            "transition_truth_promotion": "forbidden_by_contract",
+            "combined_membership_score_status": (
+                "forbidden_by_contract_groups_reported_separately"
+            ),
+            "turn_dyn_routing_policy": (
+                "fail_fast_on_any_combined_membership_entry_point"
+            ),
+            "insufficient_evidence": insufficient,
+            "notes": [
+                "Layer C.1 does not read external gauge_check / phase_library_check "
+                "artifacts; it reruns a lightweight internal SE(2) sanity "
+                "precondition and rebuilds the Walk_F phase library on-the-fly.",
+                "INSUFFICIENT_EVIDENCE is the expected contract-PASS outcome on "
+                "the current 88-frame single Walk_F trajectory whenever the "
+                "estimator grid is mixed, the query clip is too short for "
+                "robust neighbor coverage, or the leave/return endpoints "
+                "disagree across the 1-step grid neighborhood.",
+                "left_censored_leave and right_censored_return are scaffold v1 "
+                "§5.4 outcomes, not implementation failures.",
+                "Feature groups are reported separately. No combined membership "
+                "score is emitted. turn_dyn is hard-rejected at every "
+                "combined-membership entry point by _layer_c1_forbid_turn_dyn.",
+                "pose_dyn, pose_rel, and processed_data/*.npz remain reserved "
+                "for Layer B.1.",
+            ],
+        }
+    )
+    return summary
+
+
 # -----------------------------------------------------------------------
 # CLI dispatch
 # -----------------------------------------------------------------------
@@ -3063,9 +4580,12 @@ def main(argv: list[str] | None = None) -> int:
             "reference_scale_check (Layer B, Walk_F per-feature-group "
             "reference scale + degeneracy + contract-§6 "
             "phase_structure_status enum); phase_library_check (Layer C "
-            "minimal, Walk_F-only leave-one-neighborhood self-consistency). "
-            "NONE of these modes estimate attractor membership, query "
-            "leave/return boundaries, or EventHead targets."
+            "minimal, Walk_F-only leave-one-neighborhood self-consistency); "
+            "query_boundary_check (Layer C.1, Walk_F self-baseline band + "
+            "query leave/return interval + censoring audit on the 4 turn "
+            "clips; emits NO attractor membership, NO EventHead target, NO "
+            "handoff_ready, NO transition_done, NO cross-attractor claim, "
+            "and rejects turn_dyn at every combined-membership entry point)."
         ),
     )
     parser.add_argument(
@@ -3073,7 +4593,8 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         type=str,
         help=(
-            "yaw_debug | gauge_check | reference_scale_check | phase_library_check. "
+            "yaw_debug | gauge_check | reference_scale_check | "
+            "phase_library_check | query_boundary_check. "
             "Unknown mode -> fail-fast (docs/removal_policy.md §3-§4)."
         ),
     )
@@ -3104,6 +4625,38 @@ def main(argv: list[str] | None = None) -> int:
             f"[walk_f_causal_state_probe] --raw_root not a directory: "
             f"{args.raw_root}"
         )
+
+    # Layer C.1 clip-set validation MUST happen BEFORE _load_clip and BEFORE
+    # args.out_dir.mkdir so an out_dir is never created on a bad clip list.
+    # The rules are:
+    #   * --clips set-equal to {Walk_F + 4 turn clips}
+    #   * order-independent
+    #   * duplicates forbidden (Walk_F,Walk_F,... -> exit 2)
+    # Each rule maps directly to one fail-fast smoke test in the Layer C.1
+    # contract §9. No silent fallback or INSUFFICIENT_EVIDENCE fig-leaf is
+    # allowed (docs/removal_policy.md §3-§4).
+    if mode == "query_boundary_check":
+        if len(args.clips) != len(set(args.clips)):
+            duplicates = sorted(
+                {c for c in args.clips if args.clips.count(c) > 1}
+            )
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] --mode query_boundary_check "
+                f"received duplicate clip entries in --clips: {duplicates!r}. "
+                "Layer C.1 contract §2 requires set-equality (no duplicates) "
+                f"to {sorted(LAYER_C1_REQUIRED_CLIP_SET)!r}. Refusing to run."
+            )
+        if frozenset(args.clips) != LAYER_C1_REQUIRED_CLIP_SET:
+            missing = sorted(LAYER_C1_REQUIRED_CLIP_SET - set(args.clips))
+            extra = sorted(set(args.clips) - LAYER_C1_REQUIRED_CLIP_SET)
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] --mode query_boundary_check "
+                f"requires --clips set-equal to "
+                f"{sorted(LAYER_C1_REQUIRED_CLIP_SET)!r} (Layer C.1 contract "
+                f"§2). Got {args.clips!r}; missing={missing!r}, "
+                f"extra={extra!r}. No silent fallback by "
+                "docs/removal_policy.md §3-§4."
+            )
 
     # Load + validate ALL clips before touching the output directory.
     # This avoids leaving an empty out_dir on a failing raw-data sanity.
@@ -3137,6 +4690,16 @@ def main(argv: list[str] | None = None) -> int:
                 "[walk_f_causal_state_probe] --mode phase_library_check internal "
                 "SE(2) gauge precondition did not pass; refusing to run Layer C "
                 "self-consistency because quotient invariance is a prerequisite. "
+                f"status={internal_se2_precondition['status']!r}"
+            )
+    elif mode == "query_boundary_check":
+        internal_se2_precondition = _build_internal_se2_precondition(clip_infos)
+        if internal_se2_precondition["status"] != "pass":
+            raise FailFastError(
+                "[walk_f_causal_state_probe] --mode query_boundary_check internal "
+                "SE(2) gauge precondition did not pass; refusing to run Layer C.1 "
+                "query boundary audit because quotient invariance is a "
+                "prerequisite. "
                 f"status={internal_se2_precondition['status']!r}"
             )
     else:
@@ -3193,6 +4756,50 @@ def main(argv: list[str] | None = None) -> int:
         summary = _build_summary_phase_library_check(
             args.raw_root,
             args.clips,
+            per_clip,
+            per_clip_paths,
+            internal_se2_precondition,
+        )
+    elif mode == "query_boundary_check":
+        contact_by_clip = {
+            info["clip"]: _load_clip_contact_signals(args.raw_root, info["clip"])
+            for info in clip_infos
+        }
+        walk_f_info_list = [
+            info for info in clip_infos if info["clip"] == LAYER_C1_REFERENCE_CLIP
+        ]
+        if len(walk_f_info_list) != 1:
+            raise FailFastError(
+                f"[walk_f_causal_state_probe] Layer C.1 expected exactly one "
+                f"Walk_F clip after CLI validation; got {len(walk_f_info_list)}. "
+                "This indicates the CLI clip-set guard was bypassed."
+            )
+        walk_f_info = walk_f_info_list[0]
+        walk_f_group_payloads = _build_walk_f_layer_c_group_payloads(
+            walk_f_clip_info=walk_f_info,
+            walk_f_contact_signals=contact_by_clip[walk_f_info["clip"]],
+        )
+        per_clip = [
+            _process_query_clip_boundary_check(
+                query_clip_info=info,
+                query_contact_signals=contact_by_clip[info["clip"]],
+                walk_f_group_payloads=walk_f_group_payloads,
+            )
+            for info in clip_infos
+            if info["clip"] in LAYER_C1_QUERY_FAMILY
+        ]
+        per_clip_paths = _write_per_clip(
+            args.out_dir, per_clip, "query_boundary_check"
+        )
+        if internal_se2_precondition is None:
+            raise FailFastError(
+                "[walk_f_causal_state_probe] internal SE(2) precondition missing "
+                "for query_boundary_check; refusing to emit artifact."
+            )
+        summary = _build_summary_query_boundary_check(
+            args.raw_root,
+            args.clips,
+            walk_f_group_payloads,
             per_clip,
             per_clip_paths,
             internal_se2_precondition,
@@ -3271,6 +4878,52 @@ def main(argv: list[str] | None = None) -> int:
                 f"reference_degenerate={st['reference_degenerate']} "
                 f"active_channels={st['active_channels']}"
             )
+    elif mode == "query_boundary_check":
+        print(
+            f"[walk_f_causal_state_probe] reference_family={REFERENCE_FAMILY} "
+            f"query_family={summary['query_family']} "
+            f"layer_c1_contract_status={summary['layer_c1_contract_status']} "
+            "expected_insufficient_evidence_is_contract_pass="
+            f"{summary['expected_insufficient_evidence_is_contract_pass']}"
+        )
+        print(
+            f"[walk_f_causal_state_probe] internal_se2_precondition="
+            f"{summary['internal_se2_gauge_precondition']['status']} "
+            f"max_abs_error_overall="
+            f"{summary['internal_se2_gauge_precondition']['se2_gauge_sanity']['max_abs_error_overall']:.3e}"
+        )
+        for entry in per_clip:
+            clip_name = entry["clip"]
+            for group_name, group_payload in entry[
+                "feature_groups_layer_c1"
+            ].items():
+                if bool(group_payload["reference_degenerate"]):
+                    print(
+                        f"[walk_f_causal_state_probe] clip={clip_name} "
+                        f"group={group_name} "
+                        "phase_structure_status=phase_degenerate "
+                        "boundary_detection=skipped"
+                    )
+                    continue
+                print(
+                    f"[walk_f_causal_state_probe] clip={clip_name} "
+                    f"group={group_name} "
+                    f"returned={group_payload['returned_config_count']} "
+                    f"never_left={group_payload['never_left_config_count']} "
+                    f"never_returned={group_payload['never_returned_config_count']} "
+                    f"insufficient={group_payload['insufficient_evidence_config_count']} "
+                    f"left_censored={group_payload['left_censored_leave_config_count']} "
+                    f"right_censored={group_payload['right_censored_return_config_count']} "
+                    "neighbor_conflicts="
+                    f"{group_payload['neighbor_consistency_conflict_pair_count']}"
+                )
+        print(
+            "[walk_f_causal_state_probe] censoring_summary "
+            f"left_censored_total={summary['censoring_summary']['left_censored_leave_total']} "
+            f"right_censored_total={summary['censoring_summary']['right_censored_return_total']} "
+            "expected_insufficient_evidence_is_contract_pass="
+            f"{summary['censoring_summary']['expected_insufficient_evidence_is_contract_pass']}"
+        )
     else:
         print(
             f"[walk_f_causal_state_probe] gauge_kind={summary['gauge_kind']}"
