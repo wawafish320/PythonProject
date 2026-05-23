@@ -41,6 +41,10 @@ LOCKED_C2_SUMMARY_PATH = Path(
     "debug_output/walk_f_causal_state_scaffold_v1_20260524_layerC2_pose_phase_library_check/summary.json"
 )
 
+RUNNER_VERSION = "v1_neighborhood_proxy_only_no_band_blind"
+CONTRACT_DOC_PATH = "docs/aperiodic_transition/2026-05-24_walk_f_turn_cycle_rollout_eval_pilot_contract.md"
+CONTRACT_SECTION_ACKNOWLEDGED = CONTRACT_DOC_PATH + " §4.1"
+
 FAILURE_LABELS = {
     "PROMISING_IN_FAMILY",
     "TRAINING_MECHANISM_FAIL.EXPOSURE_BIAS_DRIFT",
@@ -512,6 +516,9 @@ def main() -> int:
     run_manifest: dict[str, Any] = {
         "tool": "run_walk_f_turn_cycle_rollout_eval",
         "contract": "2026-05-24_walk_f_turn_cycle_rollout_eval_pilot_contract",
+        "runner_version": RUNNER_VERSION,
+        "contract_doc_path": CONTRACT_DOC_PATH,
+        "contract_section_acknowledged": CONTRACT_SECTION_ACKNOWLEDGED,
         "scope": "5-clip in-family rollout-eval pilot only",
         "do_not_retrain_during_evaluator_pilot": True,
         "checkpoint": {
@@ -718,6 +725,9 @@ def main() -> int:
     baseline_blocked = bool(len(valid_rows) == 0)
     summary = {
         "tool": "run_walk_f_turn_cycle_rollout_eval",
+        "runner_version": RUNNER_VERSION,
+        "contract_doc_path": CONTRACT_DOC_PATH,
+        "contract_section_acknowledged": CONTRACT_SECTION_ACKNOWLEDGED,
         "run_name": str(args.run_name),
         "out_dir": str(out_dir),
         "checkpoint": str(ckpt),

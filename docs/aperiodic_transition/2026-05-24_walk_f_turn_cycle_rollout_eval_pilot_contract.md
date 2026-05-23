@@ -80,6 +80,38 @@
   - per-(clip, group) return-rate 在 phase_start 网格上 `std/mean > 0.5`；且
   - band-violation curve 在 2 个 estimator-config 邻域上方向不一致。
 
+## §4.1 Runner v1 Band-Primitive Deferral (Normative)
+
+1. Runner v1 标签：
+- 当前 runner v1 暂不做 same-scale band primitive recomputation。
+- Runner v1 必须在 `summary.json` 和 `run_manifest.json` 顶层 emit：
+  - `runner_version = "v1_neighborhood_proxy_only_no_band_blind"`
+  - `contract_section_acknowledged = "docs/aperiodic_transition/2026-05-24_walk_f_turn_cycle_rollout_eval_pilot_contract.md §4.1"`
+- 目的：未来 runner v2 恢复 full §4 taxonomy 后，旧 artifact 可被 grep 区分。
+
+2. `OBJECTIVE_BLIND_TO_BAND` 暂停：
+- `TRAINING_MECHANISM_FAIL.OBJECTIVE_BLIND_TO_BAND` 在 runner v1 中是 reserved / not emitted。
+- findings memo 若使用 runner v1 artifact，禁止声明 objective-blind-to-band 结论。
+- 只有 same-scale band primitive recomputation 落地后，才允许重新启用该 classifier path。
+
+3. `AMBIGUOUS` 是更松的 proxy：
+- Runner v1 的 `DATA_INSUFFICIENT_OR_AMBIGUOUS` 判据是完整 §4 conjunctive criterion 的 strict subset / looser proxy：
+  - 当前只使用 neighborhood-direction conflict（part-2）。
+  - `std/mean > 0.5` return-rate criterion（part-1）被短路为 `True`。
+- 任何 findings memo 引用 runner v1 artifact 的 AMBIGUOUS 标签时，必须显式声明：`"v1 looser AMBIGUOUS criterion"`。
+- 不得把 runner v1 的 AMBIGUOUS 当作完整 §4 判定。
+
+4. Reopen criterion（normative, grep-able）：
+- “Runner v1 的 `_classify_failure` 中 `part1 = True` 短路以及 `OBJECTIVE_BLIND_TO_BAND` emit path 的恢复，MUST 先由一份独立 memo 签下并 merge：`docs/aperiodic_transition/YYYY-MM-DD_walk_f_rollout_eval_same_scale_band_recompute_contract.md`。在该 memo 落地前，移除 `part1 = True`、重新引入 `band_violation_rate_by_group` 数值消费、或恢复 `_band_thresholds_from_c1` / `_band_metrics_from_curve` helper，均视为违反 removal_policy §3-§4 + scaffold v1 §6 的 contract-versioning 规则。”
+
+5. Code locations under §4.1 deferral：
+
+| item | location | status |
+| --- | --- | --- |
+| `_classify_failure` part1 short-circuit | `tools/run_walk_f_turn_cycle_rollout_eval.py:370` | reserved under §4.1; do not remove without same-scale recompute contract |
+| `OBJECTIVE_BLIND_TO_BAND` emit path | removed; was in `_classify_failure` | reserved under §4.1; do not re-add without same-scale recompute contract |
+| `_band_thresholds_from_c1` / `_band_metrics_from_curve` | removed by `23a57dd` | reserved under §4.1; only restorable via same-scale recompute contract |
+
 ## §5 Posttrain Gate
 
 - Posttrain pilot 禁止在 evaluator 前启动。
