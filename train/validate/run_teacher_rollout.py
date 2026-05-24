@@ -511,12 +511,34 @@ class TeacherRolloutRunner:
             ),
             default_direct_pose_arm_bones=str(STAGE6_3WAY_ARMCHAIN_BONES_CSV),
             use_ckpt_direct_pose_posttrain_cfg=False,
+            include_direct_pose_leg_cfg=True,
         )
         contact_plan_enable = bool(
             build_state.contact_plan_cfg.enable
             or build_state.contact_plan_cfg.inject != "none"
             or build_state.direct_pose_cfg.enable
         )
+
+        direct_pose_leg_enable = bool(build_state.direct_pose_leg_cfg.enable)
+        direct_pose_leg_bones = build_state.direct_pose_leg_cfg.bones
+        direct_pose_leg_mode = str(build_state.direct_pose_leg_cfg.mode)
+        direct_pose_leg_stopgrad_main = bool(build_state.direct_pose_leg_cfg.stopgrad_main)
+        direct_pose_leg_detach_feat = bool(build_state.direct_pose_leg_cfg.detach_feat)
+        direct_pose_leg_max_deg = float(build_state.direct_pose_leg_cfg.max_deg)
+        direct_pose_leg_side_routing = bool(build_state.direct_pose_leg_cfg.side_routing)
+        direct_pose_leg_contact_order = str(build_state.direct_pose_leg_cfg.contact_order)
+        direct_pose_leg_side_embed_dim = int(build_state.direct_pose_leg_cfg.side_embed_dim)
+        direct_pose_leg_side_plan_other = bool(build_state.direct_pose_leg_cfg.side_plan_other)
+        direct_pose_leg_side_phase_other = bool(build_state.direct_pose_leg_cfg.side_phase_other)
+        direct_pose_leg_side_phase_rel = bool(build_state.direct_pose_leg_cfg.side_phase_rel)
+        direct_pose_leg_side_cue = str(build_state.direct_pose_leg_cfg.side_cue)
+        direct_pose_leg_side_cue_tau = float(build_state.direct_pose_leg_cfg.side_cue_tau)
+        direct_pose_leg_side_sign_gate = bool(build_state.direct_pose_leg_cfg.side_sign_gate)
+        direct_pose_leg_side_rank1 = bool(build_state.direct_pose_leg_cfg.side_rank1)
+        direct_pose_leg_gate_mode = str(build_state.direct_pose_leg_cfg.gate_mode)
+        direct_pose_leg_gate_power = float(build_state.direct_pose_leg_cfg.gate_power)
+        direct_pose_leg_scale_log_clip = float(build_state.direct_pose_leg_cfg.scale_log_clip)
+        direct_pose_leg_scale_clamp_k = float(build_state.direct_pose_leg_cfg.scale_clamp_k)
 
         model = EventMotionModel(
             in_state_dim=Dx,
@@ -557,6 +579,26 @@ class TeacherRolloutRunner:
             direct_pose_nonleg_proj_dim=int(build_state.direct_pose_cfg.nonleg_proj_dim),
             direct_pose_arm_split_enable=bool(build_state.direct_pose_cfg.arm_split_enable),
             direct_pose_arm_bones=build_state.direct_pose_cfg.arm_bones,
+            direct_pose_leg_enable=bool(direct_pose_leg_enable),
+            direct_pose_leg_bones=direct_pose_leg_bones,
+            direct_pose_leg_mode=str(direct_pose_leg_mode),
+            direct_pose_leg_stopgrad_main=bool(direct_pose_leg_stopgrad_main),
+            direct_pose_leg_detach_feat=bool(direct_pose_leg_detach_feat),
+            direct_pose_leg_max_deg=float(direct_pose_leg_max_deg),
+            direct_pose_leg_gate_mode=str(direct_pose_leg_gate_mode),
+            direct_pose_leg_gate_power=float(direct_pose_leg_gate_power),
+            direct_pose_leg_scale_log_clip=float(direct_pose_leg_scale_log_clip),
+            direct_pose_leg_scale_clamp_k=float(direct_pose_leg_scale_clamp_k),
+            direct_pose_leg_side_routing=bool(direct_pose_leg_side_routing),
+            direct_pose_leg_contact_order=str(direct_pose_leg_contact_order),
+            direct_pose_leg_side_embed_dim=int(direct_pose_leg_side_embed_dim),
+            direct_pose_leg_side_plan_other=bool(direct_pose_leg_side_plan_other),
+            direct_pose_leg_side_phase_other=bool(direct_pose_leg_side_phase_other),
+            direct_pose_leg_side_phase_rel=bool(direct_pose_leg_side_phase_rel),
+            direct_pose_leg_side_cue=str(direct_pose_leg_side_cue),
+            direct_pose_leg_side_cue_tau=float(direct_pose_leg_side_cue_tau),
+            direct_pose_leg_side_sign_gate=bool(direct_pose_leg_side_sign_gate),
+            direct_pose_leg_side_rank1=bool(direct_pose_leg_side_rank1),
         ).to(self.device)
         validate_and_fix_model_(model, Dx, Dc)
         legacy_phase_root = _legacy_phase_state_root()
@@ -581,7 +623,8 @@ class TeacherRolloutRunner:
             direct_pose_cfg=build_state.direct_pose_cfg,
             load_options=DirectPoseLoadCompatOptions(
                 train_direct_pose=False,
-                leg_enable=False,
+                leg_enable=bool(direct_pose_leg_enable),
+                leg_bones=direct_pose_leg_bones,
             ),
             encoder_bundle=self.encoder_bundle_path if (self.encoder_bundle_path and self.encoder_bundle_path.is_file()) else None,
         )
