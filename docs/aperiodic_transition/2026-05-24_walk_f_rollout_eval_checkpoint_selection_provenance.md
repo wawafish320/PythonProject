@@ -1,3 +1,5 @@
+> TRIAGE: KEEP-AS-PROVENANCE. Historical evidence / anti-relitigation note; preserve to explain why this path was rejected or bounded. Do not use as a live plan unless a new decision record explicitly reopens it.
+
 # Walk_F rollout-eval checkpoint selection — provenance memo (2026-05-24)
 
 Status: provenance / audit trail only.  

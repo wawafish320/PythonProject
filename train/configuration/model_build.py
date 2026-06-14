@@ -126,6 +126,7 @@ DEFAULT_DIRECT_POSE_MEAS_MODE = "concat"
 DEFAULT_DIRECT_POSE_FEAT_SOURCE = "cond"
 DEFAULT_DIRECT_POSE_TIME_PE_DIM = 0
 DEFAULT_DIRECT_POSE_TIME_PE_BASE = 10000.0
+DEFAULT_DIRECT_POSE_SIDE_CHANNEL_DIM = 0
 
 DEFAULT_DIRECT_POSE_LEG_MODE = "rot6d_add"
 DEFAULT_DIRECT_POSE_LEG_GATE_MODE = "none"
@@ -302,6 +303,7 @@ class DirectPoseConfig:
     feat_source: str
     time_pe_dim: int
     time_pe_base: float
+    side_channel_dim: int
     use_phase_z: bool
     phase_z_mode: str
     split_enable: bool
@@ -378,7 +380,7 @@ class ModelBuildConfig:
     so3_corr_gate_logit_init: float = DEFAULT_SO3_CORR_GATE_LOGIT_INIT
 
     def to_model_kwargs(self) -> dict[str, Any]:
-        return {
+        kwargs = {
             "in_state_dim": int(self.facts.dx),
             "out_motion_dim": int(self.facts.dy),
             "cond_dim": int(self.facts.dc),
@@ -456,6 +458,9 @@ class ModelBuildConfig:
             "so3_corr_dropout": float(self.so3_corr_dropout),
             "so3_corr_gate_logit_init": float(self.so3_corr_gate_logit_init),
         }
+        if int(self.direct_pose.side_channel_dim) > 0:
+            kwargs["direct_pose_side_channel_dim"] = int(self.direct_pose.side_channel_dim)
+        return kwargs
 
 
 @dataclass(frozen=True)
@@ -1215,6 +1220,12 @@ def resolve_train_model_build_config(*, args: Any, dataset_facts: DatasetModelFa
             field="direct_pose_time_pe_dim",
         ),
         time_pe_base=_cfg_float(args, "direct_pose_time_pe_base", DEFAULT_DIRECT_POSE_TIME_PE_BASE, min_value=0.0),
+        side_channel_dim=_cfg_int(
+            args,
+            "direct_pose_side_channel_dim",
+            DEFAULT_DIRECT_POSE_SIDE_CHANNEL_DIM,
+            min_value=0,
+        ),
         use_phase_z=False,
         phase_z_mode="concat",
         split_enable=_cfg_bool(args, "direct_pose_split_enable", False),
@@ -1512,6 +1523,12 @@ def resolve_current_model_build_config_with_trace(
             field="direct_pose_time_pe_dim",
         ),
         time_pe_base=_cfg_float(cfg, "direct_pose_time_pe_base", DEFAULT_DIRECT_POSE_TIME_PE_BASE, min_value=0.0),
+        side_channel_dim=_cfg_int(
+            cfg,
+            "direct_pose_side_channel_dim",
+            DEFAULT_DIRECT_POSE_SIDE_CHANNEL_DIM,
+            min_value=0,
+        ),
         use_phase_z=_cfg_bool(cfg, "direct_pose_use_phase_z", False),
         phase_z_mode=normalize_direct_pose_phase_z_mode(
             _cfg_value(cfg, "direct_pose_phase_z_mode", "concat"),

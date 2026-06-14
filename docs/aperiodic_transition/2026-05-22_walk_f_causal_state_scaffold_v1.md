@@ -1,3 +1,5 @@
+> TRIAGE: DOWNGRADE-SUPERSEDED. Historical design/probe/planning note only; do not treat as live action-handoff delivery plan. Superseded by `2026-06-07_action_handoff_inbetween_closeout_decision_record.md` §1/§7/§9 under its stated read-only / zero-new-injection scope.
+
 # Walk_F Causal-State Attractor Scaffold v1 (2026-05-22)
 
 > 本 memo 是 **CONTRACT drafting / research-audit planning**。不写 Python 代码、不新增 probe、不跑训练、不新增 EventHead / `arbiter_head` 模块、不改 checkpoint slot / fingerprint / CLI / config / freeze policy、不 commit。本文只为后续 v1 probe 定义 semantic scaffold，避免把 yaw-rate / energy / Walk_F template 误写成通用 transition truth。

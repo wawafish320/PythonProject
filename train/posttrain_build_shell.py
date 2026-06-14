@@ -129,6 +129,7 @@ class PostTrainModelArtifacts:
     direct_pose_feat_source: str
     direct_pose_time_pe_dim: int
     direct_pose_time_pe_base: float
+    direct_pose_side_channel_dim: int
     direct_pose_use_phase_z: bool
     direct_pose_phase_z_mode: str
     direct_pose_split_enable: bool
@@ -335,6 +336,19 @@ def _build_posttrain_current_fingerprints(
         }
     finally:
         _restore_parameter_requires_grad(model, saved_requires_grad)
+
+
+def _attach_encoder_bundle_if_available(cfg: Any, model: EventMotionModel) -> None:
+    encoder_bundle_path = getattr(cfg, "encoder_bundle", None)
+    has_encoder_bundle = bool(
+        encoder_bundle_path is not None and encoder_bundle_path.expanduser().is_file()
+    )
+    if not has_encoder_bundle:
+        return
+    _attach_motion_encoder_bundle(
+        model,
+        torch.load(str(encoder_bundle_path.expanduser()), map_location="cpu"),
+    )
 
 
 def _compare_posttrain_checkpoint_fingerprints(
@@ -656,14 +670,7 @@ def _load_posttrain_checkpoint_into_model(
 ) -> None:
     direct_pose_cfg = build_state.direct_pose_cfg
     state_dict = build_state.state_dict
-    encoder_bundle_path = getattr(cfg, "encoder_bundle", None)
-    has_encoder_bundle = bool(encoder_bundle_path is not None and encoder_bundle_path.expanduser().is_file())
-
-    if has_encoder_bundle:
-        _attach_motion_encoder_bundle(
-            model,
-            torch.load(str(encoder_bundle_path.expanduser()), map_location="cpu"),
-        )
+    _attach_encoder_bundle_if_available(cfg, model)
     _validate_strict_current_direct_pose_checkpoint_shapes(
         model=model,
         state_dict=state_dict,
@@ -767,6 +774,7 @@ def _build_posttrain_model_from_ckpt(
         fields = len(trace) if isinstance(trace, (list, tuple)) else 0
         print(f"[posttrain][build] resolved model build manifest available: fields={fields}")
     model = _instantiate_posttrain_model(cfg=cfg, ds=ds, device=device, build_state=build_state)
+    _attach_encoder_bundle_if_available(cfg, model)
     current_fingerprints, fingerprint_compare_summary = _compare_posttrain_checkpoint_fingerprints(
         cfg=cfg,
         model=model,
@@ -783,6 +791,16 @@ def _build_posttrain_model_from_ckpt(
         load_context=load_context,
     )
     _load_posttrain_checkpoint_into_model(cfg=cfg, model=model, build_state=build_state)
+    side_mode = str(getattr(cfg, "direct_pose_side_channel_mode", "none") or "none").strip().lower()
+    if side_mode not in ("none", "zeros", "delta_dir"):
+        raise SystemExit(
+            "[FATAL] direct_pose_side_channel_mode must be one of none|zeros|delta_dir; "
+            f"got {side_mode!r}."
+        )
+    side_dim = int(getattr(model, "direct_pose_side_channel_dim", 0) or 0)
+    if side_dim <= 0:
+        side_mode = "none"
+    setattr(model, "direct_pose_side_channel_mode", side_mode)
     direct_pose_cfg = build_state.direct_pose_cfg
     return PostTrainModelArtifacts(
         model=model,
@@ -790,6 +808,7 @@ def _build_posttrain_model_from_ckpt(
         direct_pose_feat_source=str(direct_pose_cfg.feat_source),
         direct_pose_time_pe_dim=int(direct_pose_cfg.time_pe_dim),
         direct_pose_time_pe_base=float(direct_pose_cfg.time_pe_base),
+        direct_pose_side_channel_dim=int(getattr(direct_pose_cfg, "side_channel_dim", 0) or 0),
         direct_pose_use_phase_z=bool(direct_pose_cfg.use_phase_z),
         direct_pose_phase_z_mode=str(direct_pose_cfg.phase_z_mode),
         direct_pose_split_enable=bool(direct_pose_cfg.split_enable),

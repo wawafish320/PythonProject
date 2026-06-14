@@ -236,6 +236,7 @@ class RolloutStepInputs:
     contacts_in_t: Optional[torch.Tensor]
     angvel_t: Optional[torch.Tensor]
     pose_history_t: Optional[torch.Tensor]
+    direct_pose_side_channel: Optional[torch.Tensor]
     cond_raw_for_env: Any
     prev_foot_pos_meas: Optional[torch.Tensor]
     time_index_t: Optional[torch.Tensor]
@@ -269,6 +270,73 @@ def _slice_width(value: slice, *, name: str) -> int:
     if not isinstance(value, slice) or value.start is None or value.stop is None:
         raise ValueError(f"{name} must be a concrete slice")
     return int(value.stop - value.start)
+
+
+def _cond_dir_from_raw_command(cond_raw: torch.Tensor) -> torch.Tensor:
+    if not torch.is_tensor(cond_raw):
+        raise TypeError("cond_raw must be a Tensor for direct-pose side-channel derivation.")
+    if cond_raw.shape[-1] < 3:
+        raise ValueError(
+            "direct_pose side-channel requires raw cond with trailing [dir_x, dir_y, speed] command fields."
+        )
+    action_dim = max(0, int(cond_raw.shape[-1]) - 3)
+    return cond_raw[..., action_dim:action_dim + 2]
+
+
+def causal_delta_dir_side_channel_from_raw_cond(cond_raw_seq: torch.Tensor) -> torch.Tensor:
+    if not torch.is_tensor(cond_raw_seq):
+        raise TypeError("cond_raw_seq must be a Tensor.")
+    if cond_raw_seq.ndim != 3:
+        raise ValueError(
+            "causal_delta_dir_side_channel_from_raw_cond expects shape (B, T, C); "
+            f"got ndim={int(cond_raw_seq.ndim)}, shape={tuple(int(dim) for dim in cond_raw_seq.shape)}."
+        )
+    cond_dir = _cond_dir_from_raw_command(cond_raw_seq).to(dtype=torch.float32)
+    delta = torch.zeros_like(cond_dir)
+    if int(cond_dir.shape[1]) > 1:
+        delta[:, 1:] = cond_dir[:, 1:] - cond_dir[:, :-1]
+        delta[:, 0] = delta[:, 1]
+    return delta.to(device=cond_raw_seq.device)
+
+
+def resolve_rollout_direct_pose_side_channel(
+    model: Any,
+    *,
+    cond_raw_seq: Optional[torch.Tensor],
+    cond_raw_step: Optional[torch.Tensor],
+    frame_idx: int,
+    cond_raw_offset: int,
+    include_boundary: bool,
+    cycle_len: int,
+) -> Optional[torch.Tensor]:
+    side_dim = int(getattr(model, "direct_pose_side_channel_dim", 0) or 0)
+    if side_dim <= 0:
+        return None
+    if side_dim != 2:
+        raise ValueError(f"direct_pose side-channel expects dim=2 for Δdir, got {side_dim}.")
+
+    if torch.is_tensor(cond_raw_seq) and cond_raw_seq.ndim == 3:
+        idx = int(frame_idx)
+        if bool(include_boundary):
+            limit = max(1, int(cycle_len))
+            curr_idx = int((idx + int(cond_raw_offset)) % limit)
+            prev_idx = int((curr_idx - 1) % limit)
+        else:
+            max_idx = int(cond_raw_seq.shape[1]) - 1
+            curr_idx = min(max_idx, idx + int(cond_raw_offset))
+            prev_idx = max(0, curr_idx - 1)
+        curr = cond_raw_seq[:, curr_idx]
+        prev = cond_raw_seq[:, prev_idx]
+    elif torch.is_tensor(cond_raw_step):
+        curr = cond_raw_step
+        prev = cond_raw_step
+    else:
+        return None
+
+    curr_dir = _cond_dir_from_raw_command(curr).to(dtype=torch.float32)
+    prev_dir = _cond_dir_from_raw_command(prev).to(device=curr_dir.device, dtype=torch.float32)
+    delta = curr_dir - prev_dir
+    return delta.to(device=curr_dir.device).unsqueeze(1)
 
 
 def apply_free_carry_raw(
@@ -806,6 +874,7 @@ def forward_rollout_model_step(
     meas_logits_prev: Any,
     time_index_t: Any,
     rollout_step_t: Optional[torch.Tensor],
+    direct_pose_side_channel: Optional[torch.Tensor] = None,
 ) -> tuple[Mapping[str, Any], torch.Tensor, Optional[torch.Tensor]]:
     ret = model(
         motion,
@@ -813,6 +882,7 @@ def forward_rollout_model_step(
         contacts=contacts_in_t,
         angvel=angvel_t,
         pose_history=pose_history_t,
+        direct_pose_side_channel=direct_pose_side_channel,
         plan_z=plan_z,
         meas_logits_prev=meas_logits_prev,
         time_index=time_index_t,
@@ -887,6 +957,15 @@ def execute_rollout_model_step(
         time_base=time_base_local,
         time_index_seed=time_index_seed,
     )
+    direct_pose_side_channel = resolve_rollout_direct_pose_side_channel(
+        model,
+        cond_raw_seq=request.cond_raw_seq,
+        cond_raw_step=cond_raw_step,
+        frame_idx=int(request.frame_idx),
+        cond_raw_offset=int(request.cond_raw_offset),
+        include_boundary=bool(request.include_boundary),
+        cycle_len=int(request.cycle_len),
+    )
 
     ret, _, _ = forward_rollout_model_step(
         model,
@@ -895,6 +974,7 @@ def execute_rollout_model_step(
         contacts_in_t=contacts_in_t,
         angvel_t=ensure_rollout_time_axis(angvel_t),
         pose_history_t=ensure_rollout_time_axis(pose_hist_t),
+        direct_pose_side_channel=direct_pose_side_channel,
         plan_z=request.state.get("plan_z", None),
         meas_logits_prev=request.state.get("meas_logits_prev", None),
         time_index_t=time_index_t,
@@ -934,7 +1014,7 @@ def resolve_rollout_step_inputs(
         pose_hist_t=pose_history_t,
         inject_dropout=bool(inject_dropout),
     )
-    cond_input, cond_raw_for_env, _, reprojection_applied = prepare_rollout_cond(
+    cond_input, cond_raw_for_env, cond_raw_step, reprojection_applied = prepare_rollout_cond(
         trainer,
         cond_seq=rollout_inputs.cond_seq,
         cond_raw_seq=rollout_inputs.cond_raw_seq,
@@ -954,6 +1034,16 @@ def resolve_rollout_step_inputs(
         ),
         yaw_gt_fn=yaw_gt_fn,
     )
+    model_ref = model if model is not None else getattr(trainer, "model", None)
+    direct_pose_side_channel = resolve_rollout_direct_pose_side_channel(
+        model_ref,
+        cond_raw_seq=rollout_inputs.cond_raw_seq,
+        cond_raw_step=cond_raw_step,
+        frame_idx=int(step_idx),
+        cond_raw_offset=1,
+        include_boundary=False,
+        cycle_len=int(rollout.total_steps),
+    )
     time_index_t, rollout_step_t = build_rollout_step_time_inputs(
         rollout.motion,
         total_steps=rollout.total_steps,
@@ -972,6 +1062,7 @@ def resolve_rollout_step_inputs(
             has_time_dim=bool(rollout.has_time_dim["angvel"]),
         ),
         pose_history_t=pose_history_t,
+        direct_pose_side_channel=direct_pose_side_channel,
         cond_raw_for_env=cond_raw_for_env,
         prev_foot_pos_meas=rollout.prev_foot_pos_meas,
         time_index_t=time_index_t,

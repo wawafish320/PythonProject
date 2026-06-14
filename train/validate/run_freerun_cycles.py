@@ -71,6 +71,15 @@ from train.models import EventMotionModel, MotionJointLoss
 from train.data.layout import LayoutCenter, DataNormalizer
 from train.data.contact_signals import ttc_to_next_event_np
 from train.utils import resolve_device
+from train.validate.injection_contracts import (
+    InjectionApplyRecord,
+    InjectionPayload,
+    InjectionRequest,
+    InjectionTensorSpec,
+    parse_inject_fields,
+    validate_injection_request,
+    validate_payload_against_slices,
+)
 
 
 # ---- Helpers (mostly mirrored from run_teacher_rollout) ---------------------
@@ -518,6 +527,99 @@ def _merge_contact_step_into_metrics_entry(
             entry[key] = contact_step.get(key)
     if "ContactMeasWhitebox" in contact_step:
         entry["ContactMeasWhitebox"] = contact_step.get("ContactMeasWhitebox")
+
+
+def _extract_contact_channel_value(vec: Any, idx: int) -> Optional[float]:
+    if not isinstance(vec, (list, tuple)):
+        return None
+    if idx < 0 or idx >= len(vec):
+        return None
+    try:
+        v = float(vec[idx])
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
+def _resolve_contact_left_right_indices(contact_step: Any) -> Tuple[Optional[int], Optional[int]]:
+    if not isinstance(contact_step, dict):
+        return None, None
+    cands = []
+    for key in ("ContactGTPerC", "ContactMeasPerC", "ContactPlanPerC"):
+        v = contact_step.get(key)
+        if isinstance(v, (list, tuple)):
+            cands.append(v)
+    c_dim = max((len(v) for v in cands), default=0)
+    if c_dim <= 0:
+        return None, None
+    # Current eval contract uses channel0=right, channel1=left for foot contacts.
+    if c_dim >= 2:
+        return 1, 0
+    return 0, None
+
+
+def _compute_contact_mismatch_metrics(contact_step: Any) -> Tuple[Optional[float], Optional[float]]:
+    if not isinstance(contact_step, dict):
+        return None, None
+    gt = contact_step.get("ContactGTPerC")
+    meas = contact_step.get("ContactMeasPerC")
+    if not isinstance(gt, (list, tuple)) or not isinstance(meas, (list, tuple)):
+        return None, None
+    n = min(len(gt), len(meas))
+    if n <= 0:
+        return None, None
+    mismatches = 0
+    valid = 0
+    for i in range(int(n)):
+        gv = _extract_contact_channel_value(gt, i)
+        mv = _extract_contact_channel_value(meas, i)
+        if gv is None or mv is None:
+            continue
+        valid += 1
+        if (gv > 0.5) != (mv > 0.5):
+            mismatches += 1
+    if valid <= 0:
+        return None, None
+    rate = float(mismatches) / float(valid)
+    frame_or = 1.0 if mismatches > 0 else 0.0
+    return rate, frame_or
+
+
+def _compute_footslip_pair_metrics(
+    *,
+    contact_step_t: Any,
+    contact_step_next: Any,
+) -> Tuple[Optional[float], Optional[float]]:
+    if not isinstance(contact_step_t, dict) or not isinstance(contact_step_next, dict):
+        return None, None
+    wb = contact_step_t.get("ContactMeasWhitebox")
+    if not isinstance(wb, dict):
+        return None, None
+    vxy = wb.get("VxyCmpsMean")
+    if not isinstance(vxy, (list, tuple)):
+        return None, None
+    l_idx, r_idx = _resolve_contact_left_right_indices(contact_step_t)
+    if l_idx is None and r_idx is None:
+        return None, None
+    gt_t = contact_step_t.get("ContactGTPerC")
+    gt_next = contact_step_next.get("ContactGTPerC")
+    if not isinstance(gt_t, (list, tuple)) or not isinstance(gt_next, (list, tuple)):
+        return None, None
+
+    def _foot_slip_value(ch_idx: Optional[int]) -> Optional[float]:
+        if ch_idx is None:
+            return None
+        gp = _extract_contact_channel_value(gt_t, ch_idx)
+        gc = _extract_contact_channel_value(gt_next, ch_idx)
+        vv = _extract_contact_channel_value(vxy, ch_idx)
+        if gp is None or gc is None or vv is None:
+            return None
+        # Canonical skip contract: require dual-frame GT contact.
+        if not (gp > 0.5 and gc > 0.5):
+            return None
+        return float(vv) / 100.0
+
+    return _foot_slip_value(l_idx), _foot_slip_value(r_idx)
 
 
 def _contact_override_zeros(
@@ -1851,6 +1953,39 @@ class FreeRunCycleRunner:
 
         # Construct a single "full‑cycle" sample equivalent to MotionEventDataset.__getitem__ at s=0.
         base_sample = _build_full_cycle_sample(ds, clip, seq_len=T_base)
+        injection_payload = None
+        injection_apply_step = None
+        inject_turn_npz_raw = str(getattr(self.args, "inject_turn_npz", "") or "").strip()
+        if inject_turn_npz_raw:
+            request = InjectionRequest(
+                source_npz=Path(inject_turn_npz_raw).expanduser().resolve(),
+                inject_at_step=int(getattr(self.args, "inject_at_step", 0) or 0),
+                inject_from_step=int(getattr(self.args, "inject_from_step", 0) or 0),
+                inject_fields=parse_inject_fields(
+                    str(getattr(self.args, "inject_fields", "rootvel,rot6d,angvel") or "rootvel,rot6d,angvel")
+                ),
+                inject_label=str(getattr(self.args, "inject_label", "") or "").strip() or "inject",
+                inject_pose_hist_full=False,
+                length=1,
+            )
+            validate_injection_request(request)
+            injection_payload = _build_injection_payload_from_npz(
+                request=request,
+                device=self.device,
+                dtype=torch.float32,
+            )
+            rot_slice_val = getattr(self.trainer, "rot6d_y_slice", None)
+            rootvel_slice_val = getattr(self.trainer, "rootvel_slice", None)
+            angvel_slice_val = getattr(self.trainer, "angvel_slice", None)
+            if not isinstance(angvel_slice_val, slice) and injection_payload.angvel_raw is not None:
+                angvel_slice_val = slice(0, int(injection_payload.angvel_raw.shape[-1]))
+            validate_payload_against_slices(
+                injection_payload,
+                rot6d_x_slice=rot_slice_val,
+                angvel_x_slice=angvel_slice_val,
+                rootvel_x_slice=rootvel_slice_val,
+            )
+            injection_apply_step = int(request.inject_at_step)
 
         # Run free‑run for N cycles without reset.
         metrics_per_round, per_step, extra = _run_freerun_cycles(
@@ -1964,6 +2099,8 @@ class FreeRunCycleRunner:
                 or ""
             ),
             direct_alignment_include_round0=bool(getattr(self.args, "direct_alignment_include_round0", False)),
+            injection_payload=injection_payload,
+            injection_apply_step=injection_apply_step,
         )
         if bool(getattr(self.args, "direct_align_inc0", False)):
             try:
@@ -2136,6 +2273,17 @@ class FreeRunCycleRunner:
             "contact_meas_ground_z_quantile": float(getattr(self, "contact_meas_ground_z_quantile", 0.2) or 0.2),
             "contact_meas_ground_z_slew_up_cm": float(getattr(self, "contact_meas_ground_z_slew_up_cm", 0.0) or 0.0),
             "contact_meas_ground_z_slew_down_cm": float(getattr(self, "contact_meas_ground_z_slew_down_cm", 0.0) or 0.0),
+            "inject_turn_npz": str(Path(inject_turn_npz_raw).expanduser().resolve()) if inject_turn_npz_raw else None,
+            "inject_at_step": int(getattr(self.args, "inject_at_step", 0) or 0) if inject_turn_npz_raw else None,
+            "inject_from_step": int(getattr(self.args, "inject_from_step", 0) or 0) if inject_turn_npz_raw else None,
+            "inject_fields": (
+                list(parse_inject_fields(str(getattr(self.args, "inject_fields", "rootvel,rot6d,angvel") or "rootvel,rot6d,angvel")))
+                if inject_turn_npz_raw
+                else None
+            ),
+            "inject_label": (
+                str(getattr(self.args, "inject_label", "") or "").strip() or None
+            ) if inject_turn_npz_raw else None,
             "model": str(Path(self.args.model).expanduser().resolve()),
             "metrics_per_round": metrics_per_round,
             "metrics_per_step": per_step,
@@ -2231,6 +2379,202 @@ def _build_full_cycle_sample(ds: MotionEventDataset, clip, seq_len: int) -> Dict
     return sample
 
 
+def _build_injection_payload_from_npz(
+    *,
+    request: InjectionRequest,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> InjectionPayload:
+    npz = np.load(str(request.source_npz), allow_pickle=True)
+    frame = int(request.inject_from_step)
+
+    def _frame_vec(name: str, *, rank: int) -> np.ndarray:
+        arr = np.asarray(npz[name], dtype=np.float32)
+        if arr.ndim != rank:
+            raise ValueError(f"{name} rank mismatch: got {arr.ndim}, expected {rank}")
+        if frame < 0 or frame >= int(arr.shape[0]):
+            raise ValueError(f"{name} frame index out of range: frame={frame}, len={int(arr.shape[0])}")
+        return arr[frame]
+
+    rot6d_tensor = None
+    if "rot6d" in request.inject_fields:
+        rot = _frame_vec("bone_rot6d", rank=3).reshape(1, -1)
+        rot6d_tensor = torch.as_tensor(rot, device=device, dtype=dtype)
+
+    rootvel_tensor = None
+    if "rootvel" in request.inject_fields:
+        rv = _frame_vec("root_vel", rank=2).reshape(1, -1)
+        rootvel_tensor = torch.as_tensor(rv, device=device, dtype=dtype)
+
+    angvel_tensor = None
+    if "angvel" in request.inject_fields:
+        av = _frame_vec("bone_ang_vel", rank=3).reshape(1, -1)
+        angvel_tensor = torch.as_tensor(av, device=device, dtype=dtype)
+
+    spec = InjectionTensorSpec(
+        rot6d_shape=tuple(rot6d_tensor.shape) if rot6d_tensor is not None else (1, 0),
+        rootvel_shape=tuple(rootvel_tensor.shape) if rootvel_tensor is not None else (1, 0),
+        angvel_shape=tuple(angvel_tensor.shape) if angvel_tensor is not None else (1, 0),
+        dtype=dtype,
+        device=device,
+    )
+    return InjectionPayload(
+        rot6d_raw=rot6d_tensor,
+        rootvel_raw=rootvel_tensor,
+        angvel_raw=angvel_tensor,
+        source_frame_index=frame,
+        spec=spec,
+    )
+
+
+def _apply_injection_payload_hook(
+    *,
+    y_used_raw: torch.Tensor,
+    payload: Optional[InjectionPayload],
+    requested_fields: Optional[Set[str]],
+    step: int,
+    step_in_cycle: int,
+    rot6d_y_slice: slice,
+    rootvel_y_slice: Optional[slice],
+    angvel_y_slice: Optional[slice],
+) -> tuple[torch.Tensor, Optional[InjectionApplyRecord]]:
+    if payload is None:
+        return y_used_raw, None
+    if not torch.is_tensor(y_used_raw):
+        raise ValueError("y_used_raw must be torch.Tensor when applying injection payload")
+    if not isinstance(rot6d_y_slice, slice):
+        raise ValueError("rot6d_y_slice must be a concrete slice")
+
+    out = y_used_raw.clone()
+    fields_applied: list[dict] = []
+    requested_set = set(requested_fields or [])
+
+    def _apply_one(
+        *,
+        field_name: str,
+        tensor_value: Optional[torch.Tensor],
+        target_slice: Optional[slice],
+    ) -> None:
+        requested = bool(field_name in requested_set) if requested_set else bool(tensor_value is not None)
+        target_slice_meta = (
+            {"start": int(target_slice.start), "stop": int(target_slice.stop)}
+            if isinstance(target_slice, slice) and target_slice.start is not None and target_slice.stop is not None
+            else None
+        )
+        payload_shape = list(tensor_value.shape) if torch.is_tensor(tensor_value) else None
+        payload_dtype = (
+            str(tensor_value.dtype).replace("torch.", "") if torch.is_tensor(tensor_value) else None
+        )
+        payload_device = str(tensor_value.device) if torch.is_tensor(tensor_value) else None
+
+        if not requested:
+            fields_applied.append(
+                {
+                    "field": field_name,
+                    "requested": False,
+                    "applied": False,
+                    "reason": "field_not_requested",
+                    "target_slice": target_slice_meta,
+                    "payload_shape": payload_shape,
+                    "slice_start": target_slice_meta["start"] if target_slice_meta is not None else None,
+                    "slice_stop": target_slice_meta["stop"] if target_slice_meta is not None else None,
+                    "tensor_shape": payload_shape,
+                    "payload_dtype": payload_dtype,
+                    "payload_device": payload_device,
+                    "target_dtype": str(out.dtype).replace("torch.", ""),
+                    "target_device": str(out.device),
+                }
+            )
+            return
+
+        if tensor_value is None:
+            fields_applied.append(
+                {
+                    "field": field_name,
+                    "requested": True,
+                    "applied": False,
+                    "reason": "payload_missing",
+                    "target_slice": target_slice_meta,
+                    "payload_shape": payload_shape,
+                    "slice_start": target_slice_meta["start"] if target_slice_meta is not None else None,
+                    "slice_stop": target_slice_meta["stop"] if target_slice_meta is not None else None,
+                    "tensor_shape": payload_shape,
+                    "payload_dtype": payload_dtype,
+                    "payload_device": payload_device,
+                    "target_dtype": str(out.dtype).replace("torch.", ""),
+                    "target_device": str(out.device),
+                }
+            )
+            return
+        if not isinstance(target_slice, slice) or target_slice.start is None or target_slice.stop is None:
+            fields_applied.append(
+                {
+                    "field": field_name,
+                    "requested": True,
+                    "applied": False,
+                    "reason": "target_slice_missing",
+                    "target_slice": None,
+                    "payload_shape": payload_shape,
+                    "slice_start": None,
+                    "slice_stop": None,
+                    "tensor_shape": payload_shape,
+                    "payload_dtype": payload_dtype,
+                    "payload_device": payload_device,
+                    "target_dtype": str(out.dtype).replace("torch.", ""),
+                    "target_device": str(out.device),
+                }
+            )
+            return
+
+        expected_width = int(target_slice.stop - target_slice.start)
+        if expected_width <= 0:
+            raise ValueError(f"{field_name} target slice width must be > 0")
+        if tensor_value.ndim != 2:
+            raise ValueError(f"{field_name} payload tensor must be rank-2, got {tensor_value.ndim}")
+        if int(tensor_value.shape[-1]) != expected_width:
+            raise ValueError(
+                f"{field_name} payload width mismatch: got={int(tensor_value.shape[-1])} expected={expected_width}"
+            )
+        if int(tensor_value.shape[0]) not in (1, int(out.shape[0])):
+            raise ValueError(
+                f"{field_name} payload batch mismatch: got={int(tensor_value.shape[0])} expected 1 or {int(out.shape[0])}"
+            )
+        src = tensor_value
+        if int(src.shape[0]) == 1 and int(out.shape[0]) > 1:
+            src = src.expand(int(out.shape[0]), -1)
+        src = src.to(device=out.device, dtype=out.dtype)
+        out[..., target_slice] = src
+        fields_applied.append(
+            {
+                "field": field_name,
+                "requested": True,
+                "applied": True,
+                "reason": "applied",
+                "target_slice": target_slice_meta,
+                "payload_shape": payload_shape,
+                "slice_start": int(target_slice.start),
+                "slice_stop": int(target_slice.stop),
+                "tensor_shape": payload_shape,
+                "payload_dtype": payload_dtype,
+                "payload_device": payload_device,
+                "target_dtype": str(out.dtype).replace("torch.", ""),
+                "target_device": str(out.device),
+            }
+        )
+
+    _apply_one(field_name="rootvel", tensor_value=payload.rootvel_raw, target_slice=rootvel_y_slice)
+    _apply_one(field_name="rot6d", tensor_value=payload.rot6d_raw, target_slice=rot6d_y_slice)
+    _apply_one(field_name="angvel", tensor_value=payload.angvel_raw, target_slice=angvel_y_slice)
+
+    record = InjectionApplyRecord(
+        step=int(step),
+        step_in_cycle=int(step_in_cycle),
+        fields_applied=fields_applied,
+        pose_hist_tail_rewrite=None,
+    )
+    return out, record
+
+
 def _run_freerun_cycles(
     trainer: Trainer,
     sample: Dict[str, torch.Tensor],
@@ -2314,6 +2658,8 @@ def _run_freerun_cycles(
     direct_alignment_max_shift: int = 2,
     direct_alignment_joints: str = "upperarm_l,lowerarm_l,hand_l,upperarm_r,lowerarm_r,hand_r",
     direct_alignment_include_round0: bool = False,
+    injection_payload: Optional[InjectionPayload] = None,
+    injection_apply_step: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
     """
     Core free‑run loop: autoregress over `rounds * T` steps without reset,
@@ -2532,6 +2878,7 @@ def _run_freerun_cycles(
     event_clock_lambda_corr_log: List[Optional[torch.Tensor]] = []  # (B,1) on CPU
     so3_debug_log: List[Optional[Dict[str, Any]]] = []
     rot_gain_debug_log: List[Optional[Dict[str, Any]]] = []
+    injection_apply_records: List[Dict[str, Any]] = []
     plan_z_in_log: List[Optional[List[float]]] = []
     phase_z_in_log: List[Optional[List[float]]] = []
     phase_event_age_in_log: List[Optional[List[float]]] = []
@@ -6648,6 +6995,32 @@ def _run_freerun_cycles(
 
         # Choose the actual rollout state update.
         y_used_raw = y_blend_raw if bool(lambda_fusion_apply) else y_inc_raw
+        if injection_payload is not None and injection_apply_step is not None and int(t) == int(injection_apply_step):
+            y_used_raw, injection_record = _apply_injection_payload_hook(
+                y_used_raw=y_used_raw,
+                payload=injection_payload,
+                requested_fields=set(
+                    (
+                        "rootvel" if injection_payload.rootvel_raw is not None else "",
+                        "rot6d" if injection_payload.rot6d_raw is not None else "",
+                        "angvel" if injection_payload.angvel_raw is not None else "",
+                    )
+                ),
+                step=int(t),
+                step_in_cycle=int(t % max(int(T_cycle), 1)),
+                rot6d_y_slice=rot_slice,
+                rootvel_y_slice=getattr(trainer, "rootvel_slice", None),
+                angvel_y_slice=getattr(trainer, "angvel_slice", None),
+            )
+            if injection_record is not None:
+                injection_apply_records.append(
+                    {
+                        "step": int(injection_record.step),
+                        "step_in_cycle": int(injection_record.step_in_cycle),
+                        "fields_applied": list(injection_record.fields_applied),
+                        "pose_hist_tail_rewrite": injection_record.pose_hist_tail_rewrite,
+                    }
+                )
         y_raw_prev = y_used_raw.detach() if torch.is_tensor(y_used_raw) else None
 
         if torch.is_tensor(direct_norm_step):
@@ -6913,6 +7286,8 @@ def _run_freerun_cycles(
     extra["direct_alignment_max_shift"] = int(direct_alignment_max_shift)
     extra["direct_alignment_joints"] = str(direct_alignment_joints or "")
     extra["direct_alignment_include_round0"] = bool(direct_alignment_include_round0)
+    if injection_apply_records:
+        extra["injection_apply_records"] = list(injection_apply_records)
     if root_pos_round_offset_cycle_disp_xyz is not None:
         rootpos_contract: Dict[str, Any] = {
             "method": "gt_rootpos_plus_cycle_idx_times_cycle_net_disp",
@@ -9410,6 +9785,22 @@ def _run_freerun_cycles(
         if contact_steps:
             c = contact_steps[t] if t < len(contact_steps) else None
             _merge_contact_step_into_metrics_entry(entry, c)
+            try:
+                mismatch_rate_t, mismatch_frame_or_t = _compute_contact_mismatch_metrics(c)
+            except Exception:
+                mismatch_rate_t, mismatch_frame_or_t = (None, None)
+            entry["ContactMismatchRate"] = mismatch_rate_t
+            entry["ContactMismatchFrameOr"] = mismatch_frame_or_t
+            try:
+                c_next = contact_steps[t + 1] if (t + 1) < len(contact_steps) else None
+                foot_slip_l_t, foot_slip_r_t = _compute_footslip_pair_metrics(
+                    contact_step_t=c,
+                    contact_step_next=c_next,
+                )
+            except Exception:
+                foot_slip_l_t, foot_slip_r_t = (None, None)
+            entry["FootSlipBallL"] = foot_slip_l_t
+            entry["FootSlipBallR"] = foot_slip_r_t
         if keybone_geo:
             entry["KeyBoneGeoDeg"] = keybone_geo
         if keybone_geo_local:
@@ -10134,6 +10525,36 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=5,
         help="Number of full animation cycles to free‑run without reset.",
+    )
+    parser.add_argument(
+        "--inject-turn-npz",
+        type=str,
+        default=None,
+        help="Optional target clip npz used for one-step synthetic-boundary injection.",
+    )
+    parser.add_argument(
+        "--inject-at-step",
+        type=int,
+        default=0,
+        help="Global rollout step (0-based) where injection is applied once.",
+    )
+    parser.add_argument(
+        "--inject-from-step",
+        type=int,
+        default=0,
+        help="Source frame index (0-based) read from --inject-turn-npz.",
+    )
+    parser.add_argument(
+        "--inject-fields",
+        type=str,
+        default="rootvel,rot6d,angvel",
+        help="Comma-separated injection fields subset of {rootvel,rot6d,angvel}.",
+    )
+    parser.add_argument(
+        "--inject-label",
+        type=str,
+        default=None,
+        help="Optional injection label written to output JSON metadata.",
     )
     parser.add_argument(
         "--time-index-mode",

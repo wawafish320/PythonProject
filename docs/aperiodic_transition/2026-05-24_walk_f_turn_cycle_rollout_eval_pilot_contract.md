@@ -1,3 +1,5 @@
+> TRIAGE: KEEP-AS-PROVENANCE. Historical evidence / anti-relitigation note; preserve to explain why this path was rejected or bounded. Do not use as a live plan unless a new decision record explicitly reopens it.
+
 # Walk_F Turn-Cycle Rollout-Eval Pilot Contract (2026-05-24)
 
 ## §0 Scope

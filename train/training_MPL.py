@@ -1124,6 +1124,7 @@ class Trainer:
                 contacts_in_t=step_inputs.contacts_in_t,
                 angvel_t=step_inputs.angvel_t,
                 pose_history_t=step_inputs.pose_history_t,
+                direct_pose_side_channel=step_inputs.direct_pose_side_channel,
                 plan_z=rollout.plan_z,
                 meas_logits_prev=rollout.meas_prev_prob,
                 time_index_t=step_inputs.time_index_t,

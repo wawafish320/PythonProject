@@ -1,3 +1,5 @@
+> TRIAGE: DOWNGRADE-SUPERSEDED. Historical design/probe/planning note only; do not treat as live action-handoff delivery plan. Superseded by `2026-06-07_action_handoff_inbetween_closeout_decision_record.md` §1/§2 under its stated read-only / zero-new-injection scope.
+
 # Walk_F Causal-State Scaffold v1 Layer B.1 Pose Reference-Scale + Degeneracy Audit Contract (2026-05-23)
 
 > 本 memo 是 **CONTRACT + IMPL scope** for the first Layer B.1 probe. It is

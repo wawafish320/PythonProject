@@ -1,3 +1,5 @@
+> TRIAGE: KEEP-AS-PROVENANCE. Historical evidence / anti-relitigation note; preserve to explain why this path was rejected or bounded. Do not use as a live plan unless a new decision record explicitly reopens it.
+
 # Action Handoff z Probe Closeout / Decision Record (P0-P6)
 
 Date: 2026-05-26

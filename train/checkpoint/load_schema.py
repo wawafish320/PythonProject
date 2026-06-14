@@ -299,6 +299,7 @@ class DirectPoseBuildConfig:
     arm_bones: Any
     nonleg_proj_dim: int
     drop_ckpt_weights: bool
+    side_channel_dim: int = 0
 
 
 @dataclass(frozen=True)
@@ -315,6 +316,7 @@ class DirectPoseCkptInference:
     split_enable: bool
     arm_split_enable: bool
     nonleg_proj_dim: int
+    side_channel_dim: int = 0
 
 
 @dataclass(frozen=True)
@@ -332,6 +334,7 @@ class DirectPoseBuildOverrides:
     arm_split_enable: Optional[bool] = None
     arm_bones: Any = None
     nonleg_proj_dim: Optional[int] = None
+    side_channel_dim: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -925,6 +928,7 @@ def _infer_direct_pose_ckpt_layout(
         split_enable=bool(split_enable),
         arm_split_enable=bool(arm_split_enable),
         nonleg_proj_dim=int(nonleg_proj_dim),
+        side_channel_dim=0,
     )
 
 
@@ -939,6 +943,7 @@ def _reject_removed_direct_pose_ckpt_semantic_policy(
     direct_pose_split_enable: bool,
     direct_pose_arm_split_enable: bool,
     direct_pose_nonleg_proj_dim: int,
+    direct_pose_side_channel_dim: int,
 ) -> None:
     if bool(direct_pose_reinit) and bool(ckpt_layout.has_weights):
         _raise_removed_checkpoint_field(
@@ -958,6 +963,7 @@ def _reject_removed_direct_pose_ckpt_semantic_policy(
             or str(direct_pose_feat_source).replace("_pre", "")
             != str(ckpt_layout.feat_source).replace("_pre", "")
             or int(direct_pose_time_pe_dim) != int(ckpt_layout.time_pe_dim)
+            or int(direct_pose_side_channel_dim) != int(getattr(ckpt_layout, "side_channel_dim", 0) or 0)
         )
     )
     nonleg_proj_mismatch = bool(int(direct_pose_nonleg_proj_dim) != int(ckpt_layout.nonleg_proj_dim))
@@ -1086,6 +1092,11 @@ def resolve_direct_pose_build_cfg(
         if overrides.nonleg_proj_dim is not None
         else int(ckpt_layout.nonleg_proj_dim)
     )
+    direct_pose_side_channel_dim = (
+        max(0, int(overrides.side_channel_dim))
+        if overrides.side_channel_dim is not None
+        else int(getattr(ckpt_layout, "side_channel_dim", 0) or 0)
+    )
     if direct_pose_phase_z_mode in ("", "auto"):
         direct_pose_phase_z_mode = str(ckpt_layout.phase_z_mode or "concat").strip().lower() or "concat"
     if direct_pose_phase_z_mode in ("replace", "replace_contacts", "phase", "phase_only"):
@@ -1126,6 +1137,7 @@ def resolve_direct_pose_build_cfg(
         direct_pose_split_enable=direct_pose_split_enable,
         direct_pose_arm_split_enable=direct_pose_arm_split_enable,
         direct_pose_nonleg_proj_dim=direct_pose_nonleg_proj_dim,
+        direct_pose_side_channel_dim=direct_pose_side_channel_dim,
     )
 
     return DirectPoseBuildConfig(
@@ -1142,6 +1154,7 @@ def resolve_direct_pose_build_cfg(
         arm_bones=direct_pose_arm_bones,
         nonleg_proj_dim=int(direct_pose_nonleg_proj_dim),
         drop_ckpt_weights=False,
+        side_channel_dim=int(direct_pose_side_channel_dim),
     )
 
 
@@ -1887,6 +1900,7 @@ def resolve_event_motion_build_state_from_ckpt(
             arm_bones=default_direct_pose_arm_bones,
             nonleg_proj_dim=int(direct_pose_cfg.nonleg_proj_dim),
             drop_ckpt_weights=bool(direct_pose_cfg.drop_ckpt_weights),
+            side_channel_dim=int(getattr(direct_pose_cfg, "side_channel_dim", 0) or 0),
         )
     contact_plan_model_enable = bool(
         contact_plan_cfg.enable
