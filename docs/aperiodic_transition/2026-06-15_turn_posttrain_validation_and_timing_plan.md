@@ -6,7 +6,38 @@ Status: EXECUTION DIRECTION / HANDOFF PLAN. This document is intended to be
 committed and pushed with the current PR branch so a new environment can
 continue from a stable written plan. It does not introduce production code.
 
-## 1. Decision
+## 1. Problem Statement
+
+The current project problem is not generic motion quality and not full
+Walk_F retraining. The open problem is:
+
+> Given a frozen Walk_F-capable anchor, can the model perform action-handoff
+> goal-conditioned inbetweening for turn transitions in free rollout, while
+> preserving strict zero accumulation on Walk_F?
+
+The practical failure mode is that turn clips need a sizeable SO(3) correction
+on top of the anchor, but the correction must remain temporally coherent under
+free-run own-carry. Earlier per-frame residual probes showed the two symptoms
+separately:
+
+- low caps under-repair the turn target, especially `Walk_L_To_L`;
+- higher caps can repair more, but per-frame residuals create step jitter and
+  miss the free-run band.
+
+The newest local harness result suggests the issue is not that the target is
+intrinsically unsmooth. The target correction is large but smooth. The real
+question is whether a recurrent, gate-active residual can preserve that
+smoothness and close the repair/stability gap in a reproducible posttrain path.
+
+This document therefore separates two workstreams:
+
+- mechanism validation: turn-aware frozen-anchor residual posttrain;
+- environment timing: full basetrain/posttrain wall-clock measurement in a new
+  Windows environment.
+
+Only the first workstream answers the action-handoff inbetweening problem.
+
+## 2. Decision
 
 Do not use a full basetrain to answer the next mechanism question first.
 
@@ -30,7 +61,7 @@ The recommended next training direction is:
 This means "turn enters posttrain" is the right direction, but "restart
 basetrain and then run complete posttrain" is not the first validation step.
 
-## 2. Why Full Basetrain Is Not The First Mechanism Test
+## 3. Why Full Basetrain Is Not The First Mechanism Test
 
 Full basetrain would mix at least four variables:
 
@@ -48,7 +79,7 @@ posttrain can learn the turn-active residual under free rollout. Only if this
 fails for representation reasons should turn be moved back into basetrain
 curriculum.
 
-## 3. Current Evidence To Preserve
+## 4. Current Evidence To Preserve
 
 The latest local harness artifact was intentionally ignored by Git:
 
@@ -95,7 +126,7 @@ Interpretation: the current best hypothesis is not "more basetrain". It is
 "posttrain needs an explicitly turn-active recurrent residual objective with
 Walk_F zero-leak guardrails".
 
-## 4. Refactor Recommendation
+## 5. Refactor Recommendation
 
 Before productionizing, refactor the ignored harness idea into a tracked,
 reproducible runner. This should be treated as a bridge step, not as final
@@ -119,7 +150,7 @@ If the bridge reproduces the harness result, then productionization can move
 into `train/posttrain.py` and model/config/checkpoint contracts with a smaller
 diff.
 
-## 5. Turn-Aware Posttrain Spec
+## 6. Turn-Aware Posttrain Spec
 
 ### Owner Boundary
 
@@ -221,7 +252,7 @@ Verdict labels:
 - `RECURRENCE-NULL`;
 - `RECURRENT-STATE-UNSTABLE`.
 
-## 6. New Windows Environment Timing Plan
+## 7. New Windows Environment Timing Plan
 
 This lane answers a different question:
 
@@ -286,7 +317,7 @@ The full-flow timing report should include:
 - final posttrain metrics path;
 - whether any stage used reduced epochs/steps.
 
-## 7. Recommended Next Work Order
+## 8. Recommended Next Work Order
 
 1. Commit this document to the current PR branch.
 2. On Windows, pull the PR branch and run the timing smoke stages first.
@@ -297,7 +328,7 @@ The full-flow timing report should include:
    move the path into production posttrain code.
 7. Run full basetrain/posttrain timing as a separate environment report.
 
-## 8. Escalation Conditions
+## 9. Escalation Conditions
 
 Escalate back to owner decision before productionizing if any of these happen:
 
@@ -310,7 +341,7 @@ Escalate back to owner decision before productionizing if any of these happen:
 - Windows full-flow timing shows dependency or hardware behavior materially
   different from the current Mac run.
 
-## 9. One-Line Handoff
+## 10. One-Line Handoff
 
 The correct next validation is not "train everything longer"; it is a
 turn-aware, frozen-anchor posttrain residual bridge with explicit Walk_F
