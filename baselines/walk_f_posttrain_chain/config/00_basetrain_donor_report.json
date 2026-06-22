@@ -1,0 +1,14 @@
+{
+  "method": "fresh_root_migration_time_direct_pose_reinit",
+  "missing_after_load_count": 29,
+  "removed_direct_pose_keys_count": 10,
+  "removed_keys": [
+    "contact_plan_init_head.0.bias",
+    "contact_plan_init_head.0.weight",
+    "contact_plan_init_head.1.bias",
+    "contact_plan_init_head.1.weight",
+    "contact_plan_init_head.4.bias",
+    "contact_plan_init_head.4.weight"
+  ],
+  "unexpected_after_load_count": 14
+}

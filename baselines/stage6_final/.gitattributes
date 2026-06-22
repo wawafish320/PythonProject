@@ -1,3 +1,0 @@
-# Protect checkpoint binary from any line-ending/text conversion (esp. Windows checkout)
-*.pth binary
-*.meta.json text eol=lf
