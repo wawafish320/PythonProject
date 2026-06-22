@@ -1,0 +1,9 @@
+{
+  "file": "model/stage6_final.pth",
+  "sha256": "bc7209a5463dd93632dcddebbe2856c9c3dbabf6bbb0bc69a4b80e35ea2bc2c8",
+  "size_bytes": 21162382,
+  "source_run": "stage6_from0504_strictcfg_dropout_hidden010_20260510_2 (ckpt_last)",
+  "dropout_route": "hidden",
+  "dropout_prob": 0.1,
+  "resolved_build_manifest_hash": "6bf22f36981e84a183df8b585c64500057102fb62714ed55601e308852181753"
+}
