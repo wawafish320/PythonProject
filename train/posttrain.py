@@ -323,6 +323,8 @@ class PostTrainConfig:
     direct_pose_meas_mode: str
     direct_pose_time_pe_dim: int
     direct_pose_time_pe_base: float
+    direct_pose_side_channel_dim: int
+    direct_pose_side_channel_mode: str
     # If true, concatenate phase_z_in (2*contact_dim) into direct head input.
     direct_pose_use_phase_z: bool
     # How to route phase_z_in into direct conditioning:
@@ -658,7 +660,6 @@ def _cfg_reject_strict_direct_pose_shape_inference_boundary(payload: Dict[str, A
             "time-PE semantics can no longer be inferred from checkpoint shape/posttrain_cfg. Migration: set "
             "`direct_pose_time_pe_dim` explicitly with a non-negative even value; no replacement."
         )
-
     if _as_bool(payload.get("direct_pose_use_phase_z", False), default=False) and ("direct_pose_phase_z_mode" not in payload):
         raise SystemExit(
             "[FATAL][Removed] strict/current posttrain config is missing required field `direct_pose_phase_z_mode`. "
@@ -714,6 +715,17 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
             ("event_clock_hidden_dim", _cfg_get_int, {"key": "event_clock_hidden_dim", "default": None, "allow_none": True}),
             ("event_clock_gate_hidden_dim", _cfg_get_int, {"key": "event_clock_gate_hidden_dim", "default": None, "allow_none": True}),
             ("direct_pose_time_pe_dim", _cfg_get_int, {"key": "direct_pose_time_pe_dim", "default": -1}),
+            ("direct_pose_side_channel_dim", _cfg_get_int, {"key": "direct_pose_side_channel_dim", "default": 0, "min_value": 0}),
+            (
+                "direct_pose_side_channel_mode",
+                _cfg_get_enum,
+                {
+                    "key": "direct_pose_side_channel_mode",
+                    "default": "none",
+                    "alias_map": {"": "none", "off": "none", "disable": "none", "disabled": "none", "zero": "zeros", "delta": "delta_dir"},
+                    "choices": ("none", "zeros", "delta_dir"),
+                },
+            ),
             ("direct_pose_hidden_override", _cfg_get_int, {"key": "direct_pose_hidden_override", "default": None, "allow_none": True}),
             ("direct_pose_nonleg_proj_dim", _cfg_get_int, {"key": "direct_pose_nonleg_proj_dim", "default": 0, "min_value": 0}),
             ("direct_pose_split_enable", _cfg_get_bool, {"key": "direct_pose_split_enable", "default": False}),
@@ -733,6 +745,18 @@ def _cfg_parse_direct_pose(payload: Dict[str, Any]) -> Dict[str, Any]:
         ],
     )
     cfg["direct_pose_arm_bones"] = _normalize_optional_csv(payload.get("direct_pose_arm_bones", None))
+    if int(cfg["direct_pose_side_channel_dim"]) <= 0:
+        cfg["direct_pose_side_channel_mode"] = "none"
+    elif int(cfg["direct_pose_side_channel_dim"]) != 2:
+        raise ValueError(
+            "direct_pose_side_channel_dim must be 0 or 2 for the causal Δdir experiment "
+            f"(got {cfg['direct_pose_side_channel_dim']!r})."
+        )
+    elif str(cfg["direct_pose_side_channel_mode"]) not in ("zeros", "delta_dir"):
+        raise ValueError(
+            "direct_pose_side_channel_mode must be zeros|delta_dir when direct_pose_side_channel_dim=2 "
+            f"(got {cfg['direct_pose_side_channel_mode']!r})."
+        )
     cfg["direct_pose_leg_bones"] = payload.get("direct_pose_leg_bones", None)
     trunk_mode = str(cfg["direct_pose_nonleg_trunk_mode"] or "none").strip().lower()
     if trunk_mode in ("", "off", "false", "0"):
@@ -3636,6 +3660,7 @@ def _build_posttrain_contract_build_state(
             feat_source=str(direct_pose_cfg.feat_source),
             time_pe_dim=int(direct_pose_cfg.time_pe_dim),
             time_pe_base=float(direct_pose_cfg.time_pe_base),
+            side_channel_dim=int(getattr(direct_pose_cfg, "side_channel_dim", 0) or 0),
             use_phase_z=bool(direct_pose_cfg.use_phase_z),
             phase_z_mode=str(direct_pose_cfg.phase_z_mode),
             split_enable=bool(direct_pose_cfg.split_enable),
@@ -3683,9 +3708,18 @@ def _build_posttrain_checkpoint_payload(
 ) -> dict[str, Any]:
     model = artifacts.model
     cfg_jsonable = _cfg_to_jsonable(cfg)
+    for retired_key in (
+        "contact_plan_init_hidden",
+        "contact_plan_init_dropout",
+        "direct_pose_hidden_override",
+        "direct_pose_meas_mode_override",
+    ):
+        cfg_jsonable.pop(retired_key, None)
     cfg_jsonable["direct_pose_feat_source"] = str(artifacts.direct_pose_feat_source)
     cfg_jsonable["direct_pose_time_pe_dim"] = int(artifacts.direct_pose_time_pe_dim)
     cfg_jsonable["direct_pose_time_pe_base"] = float(artifacts.direct_pose_time_pe_base)
+    cfg_jsonable["direct_pose_side_channel_dim"] = int(getattr(artifacts, "direct_pose_side_channel_dim", 0) or 0)
+    cfg_jsonable["direct_pose_side_channel_mode"] = str(getattr(cfg, "direct_pose_side_channel_mode", "none") or "none")
     cfg_jsonable["direct_pose_use_phase_z"] = bool(artifacts.direct_pose_use_phase_z)
     cfg_jsonable["direct_pose_phase_z_mode"] = str(artifacts.direct_pose_phase_z_mode)
     cfg_jsonable["direct_pose_split_enable"] = bool(artifacts.direct_pose_split_enable)
@@ -3698,11 +3732,26 @@ def _build_posttrain_checkpoint_payload(
     cfg_jsonable["direct_pose_leg_gate_power"] = float(artifacts.direct_pose_leg_gate_power_model)
 
     model_state = _clone_model_state_dict_to_cpu(model)
-    trainable_slot_map = (
-        {str(key): bool(value) for key, value in trainable_slots.items()}
-        if trainable_slots is not None
-        else _posttrain_build_shell._build_component_slot_trainable_map(model)
-    )
+    saved_requires_grad = _posttrain_build_shell._capture_parameter_requires_grad(model)
+    try:
+        _freeze_all(model)
+        _unfreeze_for_train_mode(
+            model,
+            train_mode=str(train_mode),
+            direct_pose_leg_train_only=bool(getattr(cfg, "direct_pose_leg_train_only", False)),
+            direct_pose_leg_gate_train_only=bool(getattr(cfg, "direct_pose_leg_gate_train_only", False)),
+            direct_pose_nonleg_train_only=bool(getattr(cfg, "direct_pose_nonleg_train_only", False)),
+            direct_pose_nonleg_trunk_mode=str(getattr(cfg, "direct_pose_nonleg_trunk_mode", "none") or "none"),
+        )
+        trainable_slot_map = (
+            {str(key): bool(value) for key, value in trainable_slots.items()}
+            if trainable_slots is not None
+            else _posttrain_build_shell._build_component_slot_trainable_map(model)
+        )
+        io_signature_manifest = build_event_motion_model_io_signature_manifest(model)
+        module_graph_manifest = build_event_motion_model_module_graph_manifest(model)
+    finally:
+        _posttrain_build_shell._restore_parameter_requires_grad(model, saved_requires_grad)
     contract_build_state = _build_posttrain_contract_build_state(
         cfg=cfg,
         artifacts=artifacts,
@@ -3723,8 +3772,8 @@ def _build_posttrain_checkpoint_payload(
     }
     payload.update(
         build_checkpoint_fingerprint_metadata(
-            io_signature=build_event_motion_model_io_signature_manifest(model),
-            module_graph=build_event_motion_model_module_graph_manifest(model),
+            io_signature=io_signature_manifest,
+            module_graph=module_graph_manifest,
             build_trace=build_posttrain_build_trace_manifest(
                 structural_flags=_posttrain_build_shell._build_posttrain_structural_flags(
                     build_state=artifacts.build_state
@@ -4048,6 +4097,14 @@ _POSTTRAIN_ARG_SPECS_DIRECT_POSE_BUILD = (
     (
         ("--direct_pose_meas_mode",),
         dict(type=str, help="Current-build direct pose measurement mode: concat|mode_select."),
+    ),
+    (
+        ("--direct_pose_side_channel_dim",),
+        dict(type=int, help="Experiment-only direct-pose side-channel dim; 0 disables, 2 enables causal Δdir."),
+    ),
+    (
+        ("--direct_pose_side_channel_mode",),
+        dict(type=str, choices=("none", "zeros", "delta_dir"), help="Experiment-only side-channel value mode."),
     ),
     (
         ("--direct_pose_split_enable",),

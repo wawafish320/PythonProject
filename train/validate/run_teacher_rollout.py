@@ -267,6 +267,66 @@ def _min_length(*arrays: Optional[np.ndarray]) -> int:
     return min(lengths)
 
 
+_COND_RAW_RESOLVER_VERSION = "explicit_cond_raw_source_v1"
+_COND_RAW_SOURCE_EXPLICIT_RAW = "teacher.cond_raw"
+_COND_RAW_SOURCE_EXPLICIT_TGT_RAW = "teacher.cond_tgt_raw"
+_COND_RAW_SOURCE_FALLBACK_COND = "teacher.cond_as_raw_carry"
+
+
+def resolve_cond_raw_carry(
+    teacher_block: Dict[str, object],
+    *,
+    cond_arr: np.ndarray,
+    teacher_path: Path,
+) -> Tuple[np.ndarray, str]:
+    """Resolve the raw carry condition sequence for teacher rollout in an explicit, auditable way.
+
+    Selection priority (no silent fallback to None / zeros):
+      1. ``teacher.cond_raw`` — explicit raw carry contract field.
+      2. ``teacher.cond_tgt_raw`` — explicit target-time raw contract field.
+      3. ``teacher.cond`` — current export contract emits raw ``cond_in`` here
+         (export_teacher_batches.py L224-L253). Marked as ``teacher.cond_as_raw_carry``
+         so callers can audit that it was the load-bearing source.
+
+    Raises ValueError if none of the three is present / well-shaped. Never silently
+    substitutes zeros — that would mask a teacher-batch contract regression.
+
+    Returns (cond_raw_arr, cond_raw_source).
+      - cond_raw_arr: np.ndarray shape=[T, Dc], dtype=float32, device=cpu (numpy).
+      - cond_raw_source: one of the three string markers above.
+    """
+    candidates: List[Tuple[str, object]] = [
+        (_COND_RAW_SOURCE_EXPLICIT_RAW, teacher_block.get("cond_raw")),
+        (_COND_RAW_SOURCE_EXPLICIT_TGT_RAW, teacher_block.get("cond_tgt_raw")),
+        (_COND_RAW_SOURCE_FALLBACK_COND, teacher_block.get("cond")),
+    ]
+    chosen_source: Optional[str] = None
+    chosen_arr: Optional[np.ndarray] = None
+    for source, payload in candidates:
+        if payload is None:
+            continue
+        arr = np.asarray(payload, dtype=np.float32)
+        if arr.ndim != 2:
+            raise ValueError(
+                f"{teacher_path}: raw condition source '{source}' has invalid ndim={arr.ndim}; "
+                f"expected 2 ([T, Dc])."
+            )
+        chosen_source = source
+        chosen_arr = arr
+        break
+    if chosen_arr is None or chosen_source is None:
+        raise ValueError(
+            f"{teacher_path}: no raw condition source available "
+            f"(missing cond_raw / cond_tgt_raw / cond). Refuse silent zero fallback."
+        )
+    if chosen_arr.shape[1] != cond_arr.shape[1]:
+        raise ValueError(
+            f"{teacher_path}: raw condition dim mismatch from source '{chosen_source}': "
+            f"raw={chosen_arr.shape[1]} teacher.cond={cond_arr.shape[1]}."
+        )
+    return chosen_arr, chosen_source
+
+
 def _shift_time_axis(x: np.ndarray, shift: int) -> np.ndarray:
     """Shift along time axis with edge padding. new[t] = old[clip(t - shift)]."""
     if x is None or not isinstance(x, np.ndarray):
@@ -451,12 +511,34 @@ class TeacherRolloutRunner:
             ),
             default_direct_pose_arm_bones=str(STAGE6_3WAY_ARMCHAIN_BONES_CSV),
             use_ckpt_direct_pose_posttrain_cfg=False,
+            include_direct_pose_leg_cfg=True,
         )
         contact_plan_enable = bool(
             build_state.contact_plan_cfg.enable
             or build_state.contact_plan_cfg.inject != "none"
             or build_state.direct_pose_cfg.enable
         )
+
+        direct_pose_leg_enable = bool(build_state.direct_pose_leg_cfg.enable)
+        direct_pose_leg_bones = build_state.direct_pose_leg_cfg.bones
+        direct_pose_leg_mode = str(build_state.direct_pose_leg_cfg.mode)
+        direct_pose_leg_stopgrad_main = bool(build_state.direct_pose_leg_cfg.stopgrad_main)
+        direct_pose_leg_detach_feat = bool(build_state.direct_pose_leg_cfg.detach_feat)
+        direct_pose_leg_max_deg = float(build_state.direct_pose_leg_cfg.max_deg)
+        direct_pose_leg_side_routing = bool(build_state.direct_pose_leg_cfg.side_routing)
+        direct_pose_leg_contact_order = str(build_state.direct_pose_leg_cfg.contact_order)
+        direct_pose_leg_side_embed_dim = int(build_state.direct_pose_leg_cfg.side_embed_dim)
+        direct_pose_leg_side_plan_other = bool(build_state.direct_pose_leg_cfg.side_plan_other)
+        direct_pose_leg_side_phase_other = bool(build_state.direct_pose_leg_cfg.side_phase_other)
+        direct_pose_leg_side_phase_rel = bool(build_state.direct_pose_leg_cfg.side_phase_rel)
+        direct_pose_leg_side_cue = str(build_state.direct_pose_leg_cfg.side_cue)
+        direct_pose_leg_side_cue_tau = float(build_state.direct_pose_leg_cfg.side_cue_tau)
+        direct_pose_leg_side_sign_gate = bool(build_state.direct_pose_leg_cfg.side_sign_gate)
+        direct_pose_leg_side_rank1 = bool(build_state.direct_pose_leg_cfg.side_rank1)
+        direct_pose_leg_gate_mode = str(build_state.direct_pose_leg_cfg.gate_mode)
+        direct_pose_leg_gate_power = float(build_state.direct_pose_leg_cfg.gate_power)
+        direct_pose_leg_scale_log_clip = float(build_state.direct_pose_leg_cfg.scale_log_clip)
+        direct_pose_leg_scale_clamp_k = float(build_state.direct_pose_leg_cfg.scale_clamp_k)
 
         model = EventMotionModel(
             in_state_dim=Dx,
@@ -497,6 +579,26 @@ class TeacherRolloutRunner:
             direct_pose_nonleg_proj_dim=int(build_state.direct_pose_cfg.nonleg_proj_dim),
             direct_pose_arm_split_enable=bool(build_state.direct_pose_cfg.arm_split_enable),
             direct_pose_arm_bones=build_state.direct_pose_cfg.arm_bones,
+            direct_pose_leg_enable=bool(direct_pose_leg_enable),
+            direct_pose_leg_bones=direct_pose_leg_bones,
+            direct_pose_leg_mode=str(direct_pose_leg_mode),
+            direct_pose_leg_stopgrad_main=bool(direct_pose_leg_stopgrad_main),
+            direct_pose_leg_detach_feat=bool(direct_pose_leg_detach_feat),
+            direct_pose_leg_max_deg=float(direct_pose_leg_max_deg),
+            direct_pose_leg_gate_mode=str(direct_pose_leg_gate_mode),
+            direct_pose_leg_gate_power=float(direct_pose_leg_gate_power),
+            direct_pose_leg_scale_log_clip=float(direct_pose_leg_scale_log_clip),
+            direct_pose_leg_scale_clamp_k=float(direct_pose_leg_scale_clamp_k),
+            direct_pose_leg_side_routing=bool(direct_pose_leg_side_routing),
+            direct_pose_leg_contact_order=str(direct_pose_leg_contact_order),
+            direct_pose_leg_side_embed_dim=int(direct_pose_leg_side_embed_dim),
+            direct_pose_leg_side_plan_other=bool(direct_pose_leg_side_plan_other),
+            direct_pose_leg_side_phase_other=bool(direct_pose_leg_side_phase_other),
+            direct_pose_leg_side_phase_rel=bool(direct_pose_leg_side_phase_rel),
+            direct_pose_leg_side_cue=str(direct_pose_leg_side_cue),
+            direct_pose_leg_side_cue_tau=float(direct_pose_leg_side_cue_tau),
+            direct_pose_leg_side_sign_gate=bool(direct_pose_leg_side_sign_gate),
+            direct_pose_leg_side_rank1=bool(direct_pose_leg_side_rank1),
         ).to(self.device)
         validate_and_fix_model_(model, Dx, Dc)
         legacy_phase_root = _legacy_phase_state_root()
@@ -521,7 +623,8 @@ class TeacherRolloutRunner:
             direct_pose_cfg=build_state.direct_pose_cfg,
             load_options=DirectPoseLoadCompatOptions(
                 train_direct_pose=False,
-                leg_enable=False,
+                leg_enable=bool(direct_pose_leg_enable),
+                leg_bones=direct_pose_leg_bones,
             ),
             encoder_bundle=self.encoder_bundle_path if (self.encoder_bundle_path and self.encoder_bundle_path.is_file()) else None,
         )
@@ -667,6 +770,15 @@ class TeacherRolloutRunner:
         cond_arr = np.asarray(teacher_block.get("cond"), dtype=np.float32)
         if state_arr.ndim != 2 or cond_arr.ndim != 2:
             raise ValueError(f"{teacher_path}: invalid state/cond shapes.")
+        cond_raw_arr, cond_raw_source = resolve_cond_raw_carry(
+            teacher_block, cond_arr=cond_arr, teacher_path=teacher_path
+        )
+        if not quiet:
+            print(
+                f"[INFO] {clip_name}: cond_raw_source={cond_raw_source} "
+                f"resolver={_COND_RAW_RESOLVER_VERSION} "
+                f"shape={tuple(cond_raw_arr.shape)} dtype={cond_raw_arr.dtype}"
+            )
         npz_path = resolve_npz_path(clip_name, data.get("source_json"), npz_root)
         ds, clip = self._build_dataset(npz_path)
         self._ensure_model_ready(ds)
@@ -675,11 +787,12 @@ class TeacherRolloutRunner:
         angvel = clip.angvel_norm if clip.angvel_norm is not None else np.zeros((state_arr.shape[0], self.angvel_dim or 0), dtype=np.float32)
         pose_hist = clip.pose_hist_norm if clip.pose_hist_norm is not None else np.zeros((state_arr.shape[0], self.pose_hist_dim or 0), dtype=np.float32)
         gt_norm = clip.Y
-        usable_len = _min_length(state_arr, cond_arr, contacts, angvel, pose_hist, gt_norm)
+        usable_len = _min_length(state_arr, cond_arr, cond_raw_arr, contacts, angvel, pose_hist, gt_norm)
         if usable_len < state_arr.shape[0]:
             print(f"[WARN] {clip_name}: trimming teacher sequence from {state_arr.shape[0]} to {usable_len} frames.")
         state_arr = state_arr[:usable_len]
         cond_arr = cond_arr[:usable_len]
+        cond_raw_arr = cond_raw_arr[:usable_len]
         contacts = contacts[:usable_len]
         angvel = angvel[:usable_len]
         pose_hist = pose_hist[:usable_len]
@@ -712,6 +825,7 @@ class TeacherRolloutRunner:
         else:
             state_t = torch.from_numpy(state_arr).unsqueeze(0).to(self.device)
             cond_t = torch.from_numpy(cond_arr).unsqueeze(0).to(self.device)
+            cond_raw_t = torch.from_numpy(cond_raw_arr).unsqueeze(0).to(self.device)
             contacts_t = (
                 torch.from_numpy(contacts).unsqueeze(0).to(self.device) if contacts.shape[1] > 0 else None
             )
@@ -749,6 +863,7 @@ class TeacherRolloutRunner:
                 preds, _ = self.trainer._rollout_sequence(
                     state_t,
                     cond_t,
+                    cond_raw_seq=cond_raw_t,
                     contacts_seq=contacts_t,
                     angvel_seq=angvel_t,
                     pose_hist_seq=pose_hist_t,
@@ -812,6 +927,12 @@ class TeacherRolloutRunner:
             },
             "layouts": data.get("layouts", {}),
             "teacher": teacher_block,
+            "teacher_runner_contract": {
+                "cond_raw_source": cond_raw_source,
+                "cond_raw_resolver_version": _COND_RAW_RESOLVER_VERSION,
+                "cond_raw_shape": [int(x) for x in cond_raw_arr.shape],
+                "cond_raw_dtype": str(cond_raw_arr.dtype),
+            },
             "aux_inputs": {
                 "contacts": contacts.tolist() if contacts.shape[1] > 0 else [],
                 "angvel_norm": angvel.tolist() if angvel.shape[1] > 0 else [],

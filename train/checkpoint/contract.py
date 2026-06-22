@@ -425,6 +425,7 @@ class DirectPoseBuildConfig:
     arm_bones: Any
     nonleg_proj_dim: int
     drop_ckpt_weights: bool
+    side_channel_dim: int = 0
 
 
 @dataclass(frozen=True)
@@ -646,6 +647,7 @@ def dump_posttrain_build_cfg(
             "feat_source": str(getattr(model, "direct_pose_feat_source", direct_pose_cfg.feat_source) or direct_pose_cfg.feat_source),
             "time_pe_dim": int(getattr(model, "direct_pose_time_pe_dim", direct_pose_cfg.time_pe_dim)),
             "time_pe_base": float(getattr(model, "_direct_pose_time_pe_base", direct_pose_cfg.time_pe_base) or direct_pose_cfg.time_pe_base),
+            "side_channel_dim": int(getattr(model, "direct_pose_side_channel_dim", getattr(direct_pose_cfg, "side_channel_dim", 0)) or 0),
             "use_phase_z": bool(getattr(model, "direct_pose_use_phase_z", direct_pose_cfg.use_phase_z)),
             "phase_z_mode": str(getattr(model, "direct_pose_phase_z_mode", direct_pose_cfg.phase_z_mode) or direct_pose_cfg.phase_z_mode),
             "split_enable": bool(getattr(model, "direct_pose_split_enable", direct_pose_cfg.split_enable)),
@@ -962,6 +964,7 @@ def resolve_posttrain_build_state_from_contract(
             feat_source=str(direct_pose_feat_source),
             time_pe_dim=_require_contract_int(direct_pose_raw, "time_pe_dim", context="build_cfg.direct_pose"),
             time_pe_base=_require_contract_float(direct_pose_raw, "time_pe_base", context="build_cfg.direct_pose"),
+            side_channel_dim=int(direct_pose_raw.get("side_channel_dim", 0) or 0),
             use_phase_z=_require_contract_bool(direct_pose_raw, "use_phase_z", context="build_cfg.direct_pose"),
             phase_z_mode=str(direct_pose_phase_z_mode),
             split_enable=_require_contract_bool(direct_pose_raw, "split_enable", context="build_cfg.direct_pose"),
@@ -1058,6 +1061,7 @@ def load_posttrain_effective_cfg(
             "direct_pose_feat_source": str(direct_pose_cfg.feat_source),
             "direct_pose_time_pe_dim": int(direct_pose_cfg.time_pe_dim),
             "direct_pose_time_pe_base": float(direct_pose_cfg.time_pe_base),
+            "direct_pose_side_channel_dim": int(getattr(direct_pose_cfg, "side_channel_dim", 0) or 0),
             "direct_pose_use_phase_z": bool(direct_pose_cfg.use_phase_z),
             "direct_pose_phase_z_mode": str(direct_pose_cfg.phase_z_mode),
             "direct_pose_split_enable": bool(direct_pose_cfg.split_enable),

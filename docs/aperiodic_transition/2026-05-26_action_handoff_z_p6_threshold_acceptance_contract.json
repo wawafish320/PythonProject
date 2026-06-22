@@ -1,0 +1,45 @@
+{
+  "contract_version": "p6_smoke_v0.1",
+  "scope": "provisional_smoke_acceptance",
+  "source_artifact": "debug_output/_tmp_action_handoff_p6_synthetic_boundary_eval_20260525_runner_injected_full_matrix_v3/p6_synthetic_boundary_eval_summary.json",
+  "threshold_derivation": "calibration-on-current-smoke: no signed threshold found; threshold(metric)=max(normal_rows(metric))*1.10 for nonzero metrics",
+  "metrics": {
+    "ContactMismatchRate": {
+      "unit": "fraction",
+      "direction": "lower_better",
+      "threshold": 0.42795389048991356,
+      "tier": 1
+    },
+    "FootSlipBallL": {
+      "unit": "m_per_s",
+      "direction": "lower_better",
+      "threshold": 2.4616703116893768,
+      "tier": 1
+    },
+    "FootSlipBallR": {
+      "unit": "m_per_s",
+      "direction": "lower_better",
+      "threshold": 1.629058708712586,
+      "tier": 1
+    },
+    "RootStepDispErr": {
+      "unit": "m",
+      "direction": "lower_better",
+      "threshold": 0.004635973210293552,
+      "tier": 2
+    },
+    "GeoLocalDeg": {
+      "unit": "deg",
+      "direction": "lower_better",
+      "threshold": 0.5552212246170306,
+      "tier": 3
+    }
+  },
+  "expected_warnings": {
+    "angvel_target_slice_missing": true
+  },
+  "row_class_policy": {
+    "normal": "must_pass_thresholds",
+    "weak_stress": "may_fail_as_known_risk_but_must_be_classified_fallback_required"
+  }
+}

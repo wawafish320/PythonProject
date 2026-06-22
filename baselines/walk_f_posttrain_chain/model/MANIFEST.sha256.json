@@ -1,0 +1,68 @@
+{
+  "chain": [
+    {
+      "file": "model/00_basetrain_donor.pth",
+      "sha256": "d08dba84a9326f9206e3ef8e986b23e3843aca08e6884dfc8b67131c31a19943",
+      "size_bytes": 21159448,
+      "dropout_mode": null,
+      "dropout_prob": null,
+      "manifest_hash": "6bf22f36981e84a183df8b585c64500057102fb62714ed55601e308852181753"
+    },
+    {
+      "file": "model/01_stage6.pth",
+      "sha256": "dd85e73956fb11ba3bbee09ebf9c2b8cad90637354b6813e72df26dd4e5b4527",
+      "size_bytes": 21172830,
+      "dropout_mode": "hidden",
+      "dropout_prob": 0.1,
+      "manifest_hash": "6bf22f36981e84a183df8b585c64500057102fb62714ed55601e308852181753"
+    },
+    {
+      "file": "model/02_stage7_70a.pth",
+      "sha256": "e1914d3757c8a89ca3e6016c2ffe4b396f3178175bf06b65aa6c998adf2296d4",
+      "size_bytes": 21159720,
+      "dropout_mode": "hidden",
+      "dropout_prob": 0.1,
+      "manifest_hash": "6bf22f36981e84a183df8b585c64500057102fb62714ed55601e308852181753"
+    },
+    {
+      "file": "model/03_stage7_replace.pth",
+      "sha256": "6c79affbec7d35ede373d01ca16682db2da33a75acd936cda8230f6338acc140",
+      "size_bytes": 21177488,
+      "dropout_mode": "hidden",
+      "dropout_prob": 0.1,
+      "manifest_hash": "aec1f1e8d5b617cc989ab581b5f1a5b077574cb1fb5be2101cf59b04e17a8a39"
+    },
+    {
+      "file": "model/04_stage7_70R.pth",
+      "sha256": "cbf189950f385d1d5b87cbc637225e4b59da2adbfb2988a0d1bc9c6381192d91",
+      "size_bytes": 21161168,
+      "dropout_mode": "hidden",
+      "dropout_prob": 0.1,
+      "manifest_hash": "71df7b02eacee4d328cd9a0d0ba62135784589d7a720b4e2b6f8a7e272521960"
+    },
+    {
+      "file": "model/05_stage7_71.pth",
+      "sha256": "a277a5fcf18cb8b2601c78adc07aeb3b1b8026d64e1df556dbaca6431cac5ead",
+      "size_bytes": 21160295,
+      "dropout_mode": "hidden",
+      "dropout_prob": 0.1,
+      "manifest_hash": "71df7b02eacee4d328cd9a0d0ba62135784589d7a720b4e2b6f8a7e272521960"
+    },
+    {
+      "file": "model/06_stage7_72.pth",
+      "sha256": "9e278e09a1d11be32e251d02b2f29b3eb5a900b9bf77a7a52ef890cff0f9cd3a",
+      "size_bytes": 21160210,
+      "dropout_mode": "hidden",
+      "dropout_prob": 0.1,
+      "manifest_hash": "71df7b02eacee4d328cd9a0d0ba62135784589d7a720b4e2b6f8a7e272521960"
+    },
+    {
+      "file": "model/07_stage7_lambda_final.pth",
+      "sha256": "e4b49a4ceb6b4a98e9aa9fb7bf3ad16fc0c82ec80e88b538e5ea5085b78d3396",
+      "size_bytes": 21455488,
+      "dropout_mode": "hidden",
+      "dropout_prob": 0.1,
+      "manifest_hash": "282e71823c1f00161d0df5d1274dcfea30976afbad266a15071850e8c241f8a2"
+    }
+  ]
+}

@@ -615,6 +615,7 @@ def build_event_motion_model_io_signature_manifest(model: Any) -> IOSignatureMan
     lambda_joint_count = int(getattr(model, "lambda_fusion_joint_count", 0) or 0)
     so3_joint_count = int(getattr(model, "so3_corr_joint_count", 0) or 0)
     phase_dim = int(getattr(model, "_direct_pose_phase_dim", 0) or 0)
+    direct_side_dim = int(getattr(model, "direct_pose_side_channel_dim", 0) or 0)
     direct_pose_enabled = getattr(model, "direct_pose_head", None) is not None
     leg_mode = normalize_direct_pose_leg_mode(getattr(model, "direct_pose_leg_mode", "rot6d_add"))
     gate_mode = normalize_direct_pose_leg_gate_mode(getattr(model, "direct_pose_leg_gate_mode", "none"))
@@ -830,7 +831,7 @@ def build_event_motion_model_io_signature_manifest(model: Any) -> IOSignatureMan
                 dims={"period_dim": period_dim},
             )
         )
-    inputs = (
+    inputs_list = [
         IOFieldManifest(
             key="state",
             optional=False,
@@ -908,8 +909,18 @@ def build_event_motion_model_io_signature_manifest(model: Any) -> IOSignatureMan
             dims={"scalar_dim": 1},
             accepted_forms=("scalar", "batch_scalar", "batch_time_scalar", "batch_time_feature"),
         ),
-    )
-    return IOSignatureManifest(inputs=inputs, outputs=tuple(outputs))
+    ]
+    if direct_side_dim > 0:
+        inputs_list.append(
+            IOFieldManifest(
+                key="direct_pose_side_channel",
+                optional=True,
+                shape_semantics=("batch", "query_steps", "direct_pose_side_channel_dim"),
+                dims={"direct_pose_side_channel_dim": int(direct_side_dim)},
+                accepted_forms=("broadcastable_seq",),
+            )
+        )
+    return IOSignatureManifest(inputs=tuple(inputs_list), outputs=tuple(outputs))
 
 
 def build_event_motion_model_module_graph_manifest(model: Any) -> ModuleGraphManifest:
@@ -1126,6 +1137,7 @@ def build_event_motion_model_module_graph_manifest(model: Any) -> ModuleGraphMan
     direct_phase_mode = normalize_direct_pose_phase_z_mode(getattr(model, "direct_pose_phase_z_mode", "concat"))
     direct_meas_mode = str(getattr(model, "direct_pose_meas_mode", "concat") or "concat").strip().lower()
     direct_use_phase = bool(getattr(model, "direct_pose_use_phase_z", False)) and int(getattr(model, "_direct_pose_phase_dim", 0) or 0) > 0
+    direct_side_dim = int(getattr(model, "direct_pose_side_channel_dim", 0) or 0)
     direct_consumes: list[str] = []
     if direct_feat_source == "cond":
         direct_consumes.append("cond")
@@ -1139,6 +1151,8 @@ def build_event_motion_model_module_graph_manifest(model: Any) -> ModuleGraphMan
         direct_consumes.extend(("cond", "h_temporal"))
     if int(getattr(model, "direct_pose_time_pe_dim", 0) or 0) > 0:
         direct_consumes.append("time_pe")
+    if direct_side_dim > 0:
+        direct_consumes.append("direct_pose_side_channel")
     if direct_phase_mode == "replace_contacts" and direct_use_phase:
         direct_consumes.append("phase_z")
     else:
@@ -1153,27 +1167,30 @@ def build_event_motion_model_module_graph_manifest(model: Any) -> ModuleGraphMan
         direct_produces = ("mode_select_logits",)
     else:
         direct_produces = ("out_direct",)
+    direct_pose_normalized_config = {
+        "hidden_dim": int(getattr(model, "direct_pose_hidden", 0) or 0),
+        "feat_source": direct_feat_source,
+        "meas_mode": direct_meas_mode,
+        "time_pe_dim": int(getattr(model, "direct_pose_time_pe_dim", 0) or 0),
+        "use_phase_z": direct_use_phase,
+        "phase_z_mode": direct_phase_mode,
+        "split_enable": bool(getattr(model, "direct_pose_split_enable", False)),
+        "arm_split_enable": bool(getattr(model, "direct_pose_arm_split_enable", False)),
+        "nonleg_proj_dim": int(getattr(model, "direct_pose_nonleg_proj_dim", 0) or 0),
+        "leg_side_routing": bool(getattr(model, "direct_pose_leg_side_routing", False)),
+        "leg_mode": normalize_direct_pose_leg_mode(getattr(model, "direct_pose_leg_mode", "rot6d_add")),
+        "structure": _module_structure_signature(direct_pose_head) if direct_pose_head is not None else {},
+        **_first_linear_features(direct_pose_head),
+    }
+    if direct_side_dim > 0:
+        direct_pose_normalized_config["side_channel_dim"] = int(direct_side_dim)
     _append_component(
         components,
         slot="direct_pose_head",
         enabled=bool(getattr(model, "contact_plan_enable", False)) and bool(getattr(model, "direct_pose_enable", False)) and direct_pose_head is not None,
         consumes=direct_consumes,
         produces=direct_produces,
-        normalized_config={
-            "hidden_dim": int(getattr(model, "direct_pose_hidden", 0) or 0),
-            "feat_source": direct_feat_source,
-            "meas_mode": direct_meas_mode,
-            "time_pe_dim": int(getattr(model, "direct_pose_time_pe_dim", 0) or 0),
-            "use_phase_z": direct_use_phase,
-            "phase_z_mode": direct_phase_mode,
-            "split_enable": bool(getattr(model, "direct_pose_split_enable", False)),
-            "arm_split_enable": bool(getattr(model, "direct_pose_arm_split_enable", False)),
-            "nonleg_proj_dim": int(getattr(model, "direct_pose_nonleg_proj_dim", 0) or 0),
-            "leg_side_routing": bool(getattr(model, "direct_pose_leg_side_routing", False)),
-            "leg_mode": normalize_direct_pose_leg_mode(getattr(model, "direct_pose_leg_mode", "rot6d_add")),
-            "structure": _module_structure_signature(direct_pose_head) if direct_pose_head is not None else {},
-            **_first_linear_features(direct_pose_head),
-        },
+        normalized_config=direct_pose_normalized_config,
         order_sensitive_consumes=True,
     )
     direct_pose_leg_terminal = getattr(model, "direct_pose_leg_terminal", None)

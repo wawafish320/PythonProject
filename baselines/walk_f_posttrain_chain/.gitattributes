@@ -1,0 +1,2 @@
+# Protect checkpoint binaries from any line-ending/text conversion (esp. Windows checkout)
+*.pth binary

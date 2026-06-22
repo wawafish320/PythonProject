@@ -246,6 +246,7 @@ class _EventMotionForwardInputPrep:
     plan_z: Optional[torch.Tensor]
     phase_z: Optional[torch.Tensor]
     phase_event_age: Optional[torch.Tensor]
+    direct_pose_side_channel: Optional[torch.Tensor]
     is_single: bool
     device: torch.device
     dtype: torch.dtype
@@ -321,6 +322,7 @@ class _ForwardState:
     plan_z: Optional[torch.Tensor]
     phase_z: Optional[torch.Tensor]
     phase_event_age: Optional[torch.Tensor]
+    direct_pose_side_channel: Optional[torch.Tensor]
     is_single: bool
     device: torch.device
     dtype: torch.dtype
@@ -733,6 +735,8 @@ class EventMotionModel(nn.Module):
         # Optional: explicit time/clock embedding concatenated into direct head input (uses time_index in forward).
         direct_pose_time_pe_dim: int = 0,  # 0 disables; recommended 8/16
         direct_pose_time_pe_base: float = 10000.0,
+        direct_pose_side_channel_dim: int = 0,
+        direct_pose_side_channel_mode: str = "none",
         # Optional: also concatenate explicit phase state (phase_z_in) into direct head input.
         # This is higher-bandwidth than 2D contact probs and is already maintained as a step-stateful clock.
         # Shape: phase_z_in = flatten([sinφ_L, cosφ_L, sinφ_R, cosφ_R, ...]) => dim = 2*contact_dim.
@@ -900,6 +904,18 @@ class EventMotionModel(nn.Module):
             # sin/cos pairs
             self.direct_pose_time_pe_dim += 1
         self._direct_pose_time_pe_base = float(direct_pose_time_pe_base or 10000.0)
+        self.direct_pose_side_channel_dim = max(0, int(direct_pose_side_channel_dim or 0))
+        side_mode = str(direct_pose_side_channel_mode or "none").strip().lower()
+        if side_mode in ("off", "disable", "disabled", "false", "0", ""):
+            side_mode = "none"
+        if side_mode not in ("none", "zeros", "delta_dir"):
+            raise ValueError(
+                "direct_pose_side_channel_mode must be one of {'none', 'zeros', 'delta_dir'}; "
+                f"got {direct_pose_side_channel_mode!r}."
+            )
+        if self.direct_pose_side_channel_dim <= 0:
+            side_mode = "none"
+        self.direct_pose_side_channel_mode = str(side_mode)
         # Optional: feed the explicit phase state into the direct head (dim = 2*contact_dim).
         self.direct_pose_use_phase_z = bool(direct_pose_use_phase_z) and int(self.contact_dim) > 0
         # How phase_z is used in the direct head input (append vs replace contact hints).
@@ -1919,11 +1935,12 @@ class EventMotionModel(nn.Module):
         elif self.direct_pose_feat_source in ("cond+hidden", "cond+hidden_pre"):
             base_dim = int(self.cond_dim + self.hidden_dim)
         time_dim = int(getattr(self, "direct_pose_time_pe_dim", 0) or 0)
+        side_dim = int(getattr(self, "direct_pose_side_channel_dim", 0) or 0)
         phase_dim = int(getattr(self, "_direct_pose_phase_dim", 0) or 0)
         if self.direct_pose_phase_z_mode == "replace_contacts":
-            in_dim = int(base_dim + time_dim + phase_dim)
+            in_dim = int(base_dim + time_dim + side_dim + phase_dim)
         else:
-            in_dim = int(base_dim + self.contact_dim + (self.contact_dim if want_meas else 0) + time_dim + phase_dim)
+            in_dim = int(base_dim + self.contact_dim + (self.contact_dim if want_meas else 0) + time_dim + side_dim + phase_dim)
         hid = int(self.direct_pose_hidden)
         drop = float(self._direct_pose_dropout)
 
@@ -2586,6 +2603,7 @@ class EventMotionModel(nn.Module):
         plan_z: Optional[torch.Tensor],
         phase_z: Optional[torch.Tensor],
         phase_event_age: Optional[torch.Tensor],
+        direct_pose_side_channel: Optional[torch.Tensor],
     ) -> _EventMotionForwardInputPrep:
         if not torch.is_tensor(state):
             raise TypeError(
@@ -2631,6 +2649,21 @@ class EventMotionModel(nn.Module):
             phase_z = phase_z.unsqueeze(0)
         if phase_event_age is not None and phase_event_age.ndim == 1:
             phase_event_age = phase_event_age.unsqueeze(0)
+        side_channel_dim = int(getattr(self, "direct_pose_side_channel_dim", 0) or 0)
+        if direct_pose_side_channel is not None:
+            if not torch.is_tensor(direct_pose_side_channel):
+                raise TypeError(
+                    self._forward_input_shape_error(
+                        "direct_pose_side_channel",
+                        direct_pose_side_channel,
+                        f"a torch.Tensor with shape (B, Tq, {side_channel_dim}) or (B, {side_channel_dim})",
+                        "direct_pose_side_channel must be a Tensor when provided.",
+                    )
+                )
+            if direct_pose_side_channel.ndim == 1:
+                direct_pose_side_channel = direct_pose_side_channel.unsqueeze(0)
+            if direct_pose_side_channel.ndim == 2 and state.ndim == 3:
+                direct_pose_side_channel = direct_pose_side_channel.unsqueeze(1)
         if cond is None and self.cond_dim > 0:
             cond = torch.zeros(state.shape[:-1] + (self.cond_dim,), device=state.device, dtype=state.dtype)
         if cond is not None and cond.ndim == 2 and state.ndim == 3:
@@ -2663,6 +2696,25 @@ class EventMotionModel(nn.Module):
                         "cond batch/time axes and feature dim must match state and model cond_dim.",
                     )
                 )
+        if torch.is_tensor(direct_pose_side_channel):
+            expected_side = (
+                f"shape (B={int(state.shape[0])}, Tq={int(state.shape[1])}, "
+                f"direct_pose_side_channel_dim={side_channel_dim}) after 2D input normalization"
+            )
+            if (
+                direct_pose_side_channel.ndim != 3
+                or int(direct_pose_side_channel.shape[0]) != int(state.shape[0])
+                or int(direct_pose_side_channel.shape[1]) != int(state.shape[1])
+                or int(direct_pose_side_channel.shape[-1]) != side_channel_dim
+            ):
+                raise RuntimeError(
+                    self._forward_input_shape_error(
+                        "direct_pose_side_channel",
+                        direct_pose_side_channel,
+                        expected_side,
+                        "direct_pose_side_channel batch/time axes and feature dim must match state and configured side-channel dim.",
+                    )
+                )
 
         device = state.device
         dtype = state.dtype
@@ -2679,6 +2731,7 @@ class EventMotionModel(nn.Module):
             plan_z=plan_z,
             phase_z=phase_z,
             phase_event_age=phase_event_age,
+            direct_pose_side_channel=direct_pose_side_channel,
             is_single=is_single,
             device=device,
             dtype=dtype,
@@ -2700,6 +2753,7 @@ class EventMotionModel(nn.Module):
         plan_z: Optional[torch.Tensor],
         phase_z: Optional[torch.Tensor],
         phase_event_age: Optional[torch.Tensor],
+        direct_pose_side_channel: Optional[torch.Tensor],
         meas_logits_prev: Optional[torch.Tensor],
         time_index: Optional[torch.Tensor | int | float],
         rollout_step: Optional[torch.Tensor | int | float],
@@ -2713,6 +2767,7 @@ class EventMotionModel(nn.Module):
             plan_z=plan_z,
             phase_z=phase_z,
             phase_event_age=phase_event_age,
+            direct_pose_side_channel=direct_pose_side_channel,
         )
         return _ForwardState(
             state=forward_inputs.state,
@@ -2722,6 +2777,7 @@ class EventMotionModel(nn.Module):
             plan_z=forward_inputs.plan_z,
             phase_z=forward_inputs.phase_z,
             phase_event_age=forward_inputs.phase_event_age,
+            direct_pose_side_channel=forward_inputs.direct_pose_side_channel,
             is_single=forward_inputs.is_single,
             device=forward_inputs.device,
             dtype=forward_inputs.dtype,
@@ -5243,6 +5299,31 @@ class EventMotionModel(nn.Module):
                         f"time_pe_direct.shape={tuple(int(dim) for dim in fw.time_pe_direct.shape)}, "
                         f"time_pe_dim={int(getattr(self, 'direct_pose_time_pe_dim', 0) or 0)})"
                     ) from exc
+            side_in_direct = None
+            side_dim = int(getattr(self, "direct_pose_side_channel_dim", 0) or 0)
+            if side_dim > 0:
+                side_in_direct = fw.direct_pose_side_channel
+                if side_in_direct is None:
+                    side_in_direct = torch.zeros((B, Tq, side_dim), device=device, dtype=dtype)
+                elif side_in_direct.ndim == 2:
+                    side_in_direct = side_in_direct.unsqueeze(1)
+                if side_in_direct.ndim == 3 and side_in_direct.shape[1] == 1 and Tq > 1:
+                    side_in_direct = side_in_direct.expand(-1, Tq, -1)
+                if torch.is_tensor(side_in_direct):
+                    if (
+                        side_in_direct.ndim != 3
+                        or int(side_in_direct.shape[0]) != B
+                        or int(side_in_direct.shape[1]) != Tq
+                        or int(side_in_direct.shape[-1]) != side_dim
+                    ):
+                        raise RuntimeError(
+                            "direct_pose side-channel contract failed: "
+                            f"expected shape (B={B}, Tq={Tq}, side_dim={side_dim}), "
+                            f"got {tuple(int(dim) for dim in side_in_direct.shape)}."
+                        )
+                    side_in_direct = side_in_direct.to(device=device, dtype=dtype)
+                if str(getattr(self, "direct_pose_side_channel_mode", "none") or "none").strip().lower() == "zeros":
+                    side_in_direct = torch.zeros((B, Tq, side_dim), device=device, dtype=dtype)
             phase_in_direct = None
             if bool(getattr(self, "direct_pose_use_phase_z", False)) and int(getattr(self, "_direct_pose_phase_dim", 0) or 0) > 0:
                 phase_in_direct = fw.phase_z_in_direct
@@ -5265,21 +5346,36 @@ class EventMotionModel(nn.Module):
                         hint = torch.zeros(
                             (B, Tq, int(getattr(self, "_direct_pose_phase_dim", 0) or 0)), device=device, dtype=dtype
                         )
-                    direct_in = torch.cat([direct_feat, hint], dim=-1)
+                    if torch.is_tensor(side_in_direct):
+                        direct_in = torch.cat([direct_feat, side_in_direct, hint], dim=-1)
+                    else:
+                        direct_in = torch.cat([direct_feat, hint], dim=-1)
                 else:
                     if torch.is_tensor(phase_in_direct):
-                        direct_in = torch.cat(
-                            [direct_feat, plan_in.to(device=device, dtype=dtype), meas_in, phase_in_direct], dim=-1
-                        )
+                        parts = [direct_feat, plan_in.to(device=device, dtype=dtype), meas_in]
+                        if torch.is_tensor(side_in_direct):
+                            parts.append(side_in_direct)
+                        parts.append(phase_in_direct)
+                        direct_in = torch.cat(parts, dim=-1)
                     else:
-                        direct_in = torch.cat([direct_feat, plan_in.to(device=device, dtype=dtype), meas_in], dim=-1)
+                        parts = [direct_feat, plan_in.to(device=device, dtype=dtype), meas_in]
+                        if torch.is_tensor(side_in_direct):
+                            parts.append(side_in_direct)
+                        direct_in = torch.cat(parts, dim=-1)
                 direct_flat = direct_in.reshape(-1, direct_in.shape[-1])
                 direct_out = self._forward_direct_pose_readout(direct_flat, B=B, Tq=Tq)
             elif mode == "mode_select":
                 if torch.is_tensor(phase_in_direct):
-                    direct_in = torch.cat([direct_feat, plan_in.to(device=device, dtype=dtype), phase_in_direct], dim=-1)
+                    parts = [direct_feat, plan_in.to(device=device, dtype=dtype)]
+                    if torch.is_tensor(side_in_direct):
+                        parts.append(side_in_direct)
+                    parts.append(phase_in_direct)
+                    direct_in = torch.cat(parts, dim=-1)
                 else:
-                    direct_in = torch.cat([direct_feat, plan_in.to(device=device, dtype=dtype)], dim=-1)
+                    parts = [direct_feat, plan_in.to(device=device, dtype=dtype)]
+                    if torch.is_tensor(side_in_direct):
+                        parts.append(side_in_direct)
+                    direct_in = torch.cat(parts, dim=-1)
                 direct_flat = direct_in.reshape(-1, direct_in.shape[-1])
                 modes = self.direct_pose_head(direct_flat).view(B, Tq, -1)
                 Dy = int(self.out_motion_dim)
@@ -5307,9 +5403,16 @@ class EventMotionModel(nn.Module):
                     direct_out = modes
             else:
                 if torch.is_tensor(phase_in_direct):
-                    direct_in = torch.cat([direct_feat, plan_in.to(device=device, dtype=dtype), meas_in, phase_in_direct], dim=-1)
+                    parts = [direct_feat, plan_in.to(device=device, dtype=dtype), meas_in]
+                    if torch.is_tensor(side_in_direct):
+                        parts.append(side_in_direct)
+                    parts.append(phase_in_direct)
+                    direct_in = torch.cat(parts, dim=-1)
                 else:
-                    direct_in = torch.cat([direct_feat, plan_in.to(device=device, dtype=dtype), meas_in], dim=-1)
+                    parts = [direct_feat, plan_in.to(device=device, dtype=dtype), meas_in]
+                    if torch.is_tensor(side_in_direct):
+                        parts.append(side_in_direct)
+                    direct_in = torch.cat(parts, dim=-1)
                 direct_flat = direct_in.reshape(-1, direct_in.shape[-1])
                 direct_out = self._forward_direct_pose_readout(direct_flat, B=B, Tq=Tq)
 
@@ -5482,6 +5585,7 @@ class EventMotionModel(nn.Module):
         plan_z: Optional[torch.Tensor] = None,
         phase_z: Optional[torch.Tensor] = None,
         phase_event_age: Optional[torch.Tensor] = None,
+        direct_pose_side_channel: Optional[torch.Tensor] = None,
         meas_logits_prev: Optional[torch.Tensor] = None,
         time_index: Optional[torch.Tensor | int | float] = None,
         rollout_step: Optional[torch.Tensor | int | float] = None,
@@ -5495,6 +5599,7 @@ class EventMotionModel(nn.Module):
             plan_z=plan_z,
             phase_z=phase_z,
             phase_event_age=phase_event_age,
+            direct_pose_side_channel=direct_pose_side_channel,
             meas_logits_prev=meas_logits_prev,
             time_index=time_index,
             rollout_step=rollout_step,
