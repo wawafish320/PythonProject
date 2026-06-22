@@ -1,0 +1,128 @@
+{
+  "name": "recommended dropout schedule (70R=0.03, 71+ off)",
+  "source": "doc/analysis/2026-05-10_dropout_branch_summary.md section 4",
+  "derivation": "C full-chain configs (lineage-consistent) with only the contact-pretrain dropout fields overridden",
+  "schedule": {
+    "01_stage6": {
+      "mode": "hidden",
+      "prob": 0.1
+    },
+    "02_stage7_70a": {
+      "mode": "hidden",
+      "prob": 0.1
+    },
+    "03_stage7_replace": {
+      "mode": "hidden",
+      "prob": 0.1
+    },
+    "04_stage7_70R": {
+      "mode": "hidden",
+      "prob": 0.03
+    },
+    "05_stage7_71": {
+      "mode": "off",
+      "prob": 0.0
+    },
+    "06_stage7_72": {
+      "mode": "off",
+      "prob": 0.0
+    },
+    "07_stage7_lambda": {
+      "mode": "off",
+      "prob": 0.0
+    }
+  },
+  "field_overrides": {
+    "01_stage6": {
+      "before": {
+        "mode": "hidden",
+        "prob": 0.1,
+        "dropout": 0.1
+      },
+      "after": {
+        "mode": "hidden",
+        "prob": 0.1,
+        "dropout": 0.1
+      },
+      "changed": false
+    },
+    "02_stage7_70a": {
+      "before": {
+        "mode": "hidden",
+        "prob": 0.1,
+        "dropout": 0.1
+      },
+      "after": {
+        "mode": "hidden",
+        "prob": 0.1,
+        "dropout": 0.1
+      },
+      "changed": false
+    },
+    "03_stage7_replace": {
+      "before": {
+        "mode": "hidden",
+        "prob": 0.1,
+        "dropout": 0.1
+      },
+      "after": {
+        "mode": "hidden",
+        "prob": 0.1,
+        "dropout": 0.1
+      },
+      "changed": false
+    },
+    "04_stage7_70R": {
+      "before": {
+        "mode": "hidden",
+        "prob": 0.1,
+        "dropout": 0.1
+      },
+      "after": {
+        "mode": "hidden",
+        "prob": 0.03,
+        "dropout": 0.03
+      },
+      "changed": true
+    },
+    "05_stage7_71": {
+      "before": {
+        "mode": "hidden",
+        "prob": 0.1,
+        "dropout": 0.1
+      },
+      "after": {
+        "mode": "off",
+        "prob": 0.0,
+        "dropout": 0.0
+      },
+      "changed": true
+    },
+    "06_stage7_72": {
+      "before": {
+        "mode": "hidden",
+        "prob": 0.1,
+        "dropout": 0.1
+      },
+      "after": {
+        "mode": "off",
+        "prob": 0.0,
+        "dropout": 0.0
+      },
+      "changed": true
+    },
+    "07_stage7_lambda": {
+      "before": {
+        "mode": "hidden",
+        "prob": 0.1,
+        "dropout": 0.1
+      },
+      "after": {
+        "mode": "off",
+        "prob": 0.0,
+        "dropout": 0.0
+      },
+      "changed": true
+    }
+  }
+}
